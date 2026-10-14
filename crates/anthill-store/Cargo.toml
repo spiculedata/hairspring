@@ -1,0 +1,11 @@
+[package]
+name = "anthill-store"
+version = "0.1.0"
+edition = "2021"
+description = "Anthill persistence: runs, failures, blobs, job queue and events (SQLite; Postgres behind a feature)"
+license = "Apache-2.0"
+
+[dependencies]
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+sha2 = "0.11.1"

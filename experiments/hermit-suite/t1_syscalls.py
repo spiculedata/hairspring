@@ -1,0 +1,12 @@
+import os, time, random, uuid, socket, tempfile
+def p(k, v): print(f"{k}={v}")
+p("pid", os.getpid()); p("ppid", os.getppid())
+p("time_s", int(time.time())); p("time_ns_low", time.time_ns() % 1000)
+t0 = time.monotonic_ns(); sum(range(200000)); p("busy_ms", (time.monotonic_ns() - t0) // 1_000_000)
+t0 = time.monotonic_ns(); time.sleep(0.05); p("sleep_ms", (time.monotonic_ns() - t0) // 1_000_000)
+p("urandom", os.urandom(8).hex()); p("random", random.random()); p("uuid4", uuid.uuid4())
+p("hash_abc", hash("abc")); p("hostname", socket.gethostname()); p("cpu_count", os.cpu_count())
+d = tempfile.mkdtemp()
+for i in range(20): open(os.path.join(d, f"f{i:02}"), "w").write(str(i))
+p("listdir", ",".join(os.listdir(d))); p("dir_ino", os.stat(d).st_ino); p("dir_mtime", int(os.stat(d).st_mtime))
+print("DONE")

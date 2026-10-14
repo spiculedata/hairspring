@@ -1,0 +1,6 @@
+[workspace]
+resolver = "2"
+members = ["experiments", "crates/anthill-core", "crates/anthill-pubsub", "crates/anthill-engine", "crates/anthill-store", "crates/anthill-service", "crates/anthill-cli"]
+
+[profile.release]
+opt-level = 3
