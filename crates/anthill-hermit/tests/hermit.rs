@@ -310,8 +310,9 @@ fn a_hang_is_reported_as_a_violation() {
         .to_lowercase()
         .contains("timed out"));
     assert!(
-        started.elapsed() < Duration::from_secs(15),
-        "the hung process was killed, not waited for"
+        started.elapsed() < Duration::from_secs(8),
+        "the hung process group was killed, not waited for (took {:?})",
+        started.elapsed()
     );
 }
 
