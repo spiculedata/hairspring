@@ -15,6 +15,7 @@ use std::time::Duration;
 const FAKE_HERMIT: &str = r#"#!/bin/sh
 # usage: fake-hermit run [--flag=value ...] -- cmd args...
 echo "$@" >> "${FAKE_HERMIT_LOG:-/dev/null}"
+echo "ANTHILL_SEED=$ANTHILL_SEED" >> "${FAKE_HERMIT_LOG:-/dev/null}"
 [ "$1" = "run" ] || { echo "fake hermit: unsupported subcommand" >&2; exit 64; }
 shift
 seed=0
@@ -82,6 +83,7 @@ fn engine_for(
                 .collect(),
             cwd: None,
             hermit_args: vec![],
+            trial_timeout_secs: None,
         },
         budget,
     };
@@ -287,6 +289,7 @@ fn a_hang_is_reported_as_a_violation() {
                 env: BTreeMap::new(),
                 cwd: None,
                 hermit_args: vec![],
+                trial_timeout_secs: None,
             },
             budget: budget(2),
         };
@@ -375,6 +378,7 @@ fn hermit_is_invoked_with_a_pinned_epoch_random_scheduling_and_user_args() {
             env: BTreeMap::new(),
             cwd: None,
             hermit_args: vec!["--chaos".into()],
+            trial_timeout_secs: None,
         },
         budget: budget(1),
     };
@@ -396,6 +400,7 @@ fn hermit_is_invoked_with_a_pinned_epoch_random_scheduling_and_user_args() {
         "--sched-seed=42",
         "--chaos",
         "-- /bin/true",
+        "ANTHILL_SEED=42",
     ] {
         assert!(line.contains(needle), "missing `{needle}` in `{line}`");
     }
@@ -454,4 +459,38 @@ fn rejects_non_process_targets() {
         backend.run(&spec, &RunRequest::new("w", 1), budget(1), &mut |_| true),
         Err(EngineError::BackendUnavailable(_))
     ));
+}
+
+#[test]
+fn a_target_can_set_its_own_trial_timeout() {
+    let d = scratch("pertarget");
+    let spec = TargetSpec {
+        name: "svc".into(),
+        description: String::new(),
+        kind: TargetKind::Process {
+            command: vec!["/bin/sh".into(), "-c".into(), "sleep 30".into()],
+            env: BTreeMap::new(),
+            cwd: None,
+            hermit_args: vec![],
+            trial_timeout_secs: Some(1),
+        },
+        budget: budget(1),
+    };
+    // The backend-wide default is a generous 60s; the target's own 1s limit must win.
+    let e = Engine::new(
+        Arc::new(Registry::new()),
+        Config {
+            targets: BTreeMap::from([("svc".to_string(), spec)]),
+        },
+    )
+    .with_backend(Arc::new(HermitBackend::new(settings(fake(&d)))));
+    let started = std::time::Instant::now();
+    let out = e.run(&RunRequest::new("svc", 1), &mut |_| true).unwrap();
+    assert_eq!(out.status, RunStatus::Failed);
+    assert!(out.failure.unwrap().message.contains("timed out after 1s"));
+    assert!(
+        started.elapsed() < Duration::from_secs(12),
+        "took {:?}",
+        started.elapsed()
+    );
 }

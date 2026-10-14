@@ -1,0 +1,20 @@
+# Three orders delivered to the app while the simulated sidecar duplicates, reorders and crashes it.
+[app]
+env = { EXPECTED_IDS = "1,2,3", PYTHONDONTWRITEBYTECODE = "1", PYTHONPYCACHEPREFIX = "/anthill-empty-pycache", PYTHONHASHSEED = "0" }
+
+[faults]
+duplicate = 0.5
+reorder = 0.4
+crash_app = 0.3
+
+[[publish]]
+topic = "orders"
+data = { id = 1 }
+
+[[publish]]
+topic = "orders"
+data = { id = 2 }
+
+[[publish]]
+topic = "orders"
+data = { id = 3 }

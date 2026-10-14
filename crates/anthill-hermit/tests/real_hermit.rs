@@ -52,6 +52,7 @@ fn engine(bin: &PathBuf, trials: u64) -> Engine {
             env: BTreeMap::new(),
             cwd: None,
             hermit_args: vec![],
+            trial_timeout_secs: None,
         },
         budget: Budget {
             max_steps: 1,

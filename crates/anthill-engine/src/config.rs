@@ -49,6 +49,8 @@ pub enum TargetKind {
         env: BTreeMap<String, String>,
         cwd: Option<String>,
         hermit_args: Vec<String>,
+        /// Longest a single trial may run before it counts as a hang (default set by the backend).
+        trial_timeout_secs: Option<u64>,
     },
     Wasm {
         module: String,
@@ -116,6 +118,7 @@ struct RawTarget {
     cwd: Option<String>,
     #[serde(default)]
     hermit_args: Vec<String>,
+    trial_timeout_secs: Option<u64>,
     module: Option<String>,
     #[serde(default)]
     budget: Budget,
@@ -160,6 +163,7 @@ fn convert(name: String, raw: RawTarget) -> Result<TargetSpec, ConfigError> {
                 env: raw.env,
                 cwd: raw.cwd,
                 hermit_args: raw.hermit_args,
+                trial_timeout_secs: raw.trial_timeout_secs,
             }
         }
         RawKind::Wasm => TargetKind::Wasm {

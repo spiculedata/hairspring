@@ -69,6 +69,7 @@ sim = "lock-lease"
 kind = "process"
 command = ["./svc", "--flag"]
 env = { MODE = "test" }
+trial_timeout_secs = 900
 [target.b.budget]
 max_trials = 50
 [target.c]
@@ -80,7 +81,7 @@ module = "m.wat"
     assert_eq!(c.targets.len(), 3);
     assert!(matches!(&c.targets["a"].kind, TargetKind::Sim { sim } if sim == "lock-lease"));
     assert!(
-        matches!(&c.targets["b"].kind, TargetKind::Process { command, env, .. } if command.len() == 2 && env["MODE"] == "test")
+        matches!(&c.targets["b"].kind, TargetKind::Process { command, env, trial_timeout_secs: Some(900), .. } if command.len() == 2 && env["MODE"] == "test")
     );
     assert_eq!(c.targets["b"].budget.max_trials, 50);
     assert_eq!(c.targets["a"].budget, Budget::default());

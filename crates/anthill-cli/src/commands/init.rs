@@ -22,6 +22,7 @@ wall_secs = 60
 # kind = "process"
 # command = ["/opt/app/bin/service", "--test-mode"]
 # env = { MODE = "test" }
+# trial_timeout_secs = 120   # Hermit is slow; raise this for heavy programs
 #
 # [target.my-service.budget]
 # max_trials = 100

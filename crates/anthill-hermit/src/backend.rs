@@ -34,14 +34,23 @@ impl HermitBackend {
                 env,
                 cwd,
                 hermit_args,
+                trial_timeout_secs,
             } => Ok(ProcessSpec {
                 command,
                 env,
                 cwd: cwd.as_deref(),
                 hermit_args,
+                trial_timeout_secs: *trial_timeout_secs,
             }),
             other => Err(EngineError::BackendUnavailable(other.name().to_string())),
         }
+    }
+
+    /// The target's own limit if it set one, otherwise the backend default.
+    fn trial_timeout(&self, p: &ProcessSpec) -> Duration {
+        p.trial_timeout_secs
+            .map(Duration::from_secs)
+            .unwrap_or(self.settings.trial_timeout)
     }
 
     fn trial(&self, p: &ProcessSpec, seed: u64, timeout: Duration) -> Result<Trial, SpawnError> {
@@ -133,8 +142,7 @@ impl Backend for HermitBackend {
                 ));
             }
             let timeout = self
-                .settings
-                .trial_timeout
+                .trial_timeout(&p)
                 .min(remaining.max(Duration::from_secs(1)));
             let trial = match self.trial(&p, seed, timeout) {
                 Ok(t) => t,
@@ -180,7 +188,7 @@ impl Backend for HermitBackend {
         if let Some(epoch) = bundle.params.get("epoch") {
             settings.epoch = epoch.clone();
         }
-        let timeout = settings.trial_timeout;
+        let timeout = self.trial_timeout(&p);
         let trial = run_trial(&settings, &p, seed, timeout)
             .map_err(|e| EngineError::Backend(e.to_string()))?;
         let verdict = classify(&trial, timeout.as_secs());
@@ -211,7 +219,7 @@ impl Backend for HermitBackend {
         _steps: usize,
     ) -> Result<DoctorReport, EngineError> {
         let p = self.process(spec)?;
-        let timeout = self.settings.trial_timeout;
+        let timeout = self.trial_timeout(&p);
         let backend_err = |e: SpawnError| EngineError::Backend(e.to_string());
         for i in 0..seeds.max(1) {
             let seed = u64::from(i) + 1;

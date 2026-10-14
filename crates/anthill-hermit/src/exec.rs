@@ -16,6 +16,7 @@ pub struct ProcessSpec<'a> {
     pub env: &'a BTreeMap<String, String>,
     pub cwd: Option<&'a str>,
     pub hermit_args: &'a [String],
+    pub trial_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -75,11 +76,31 @@ fn drain(mut stream: impl Read + Send + 'static, cap: usize, tx: mpsc::Sender<St
 }
 
 fn kill_group(pid: u32) {
-    // Negative pid addresses the whole process group, so grandchildren die with the guest.
+    // A negative pid addresses the whole process group, so grandchildren die with the guest.
+    // The `--` matters: without it Linux's kill parses `-<pid>` as an option and does nothing.
     let _ = Command::new("kill")
-        .args(["-KILL", &format!("-{pid}")])
+        .args(["-KILL", "--", &format!("-{pid}")])
         .stderr(Stdio::null())
         .status();
+}
+
+/// `ETXTBSY` (os error 26): the executable was written moments ago and another thread's `fork` still holds
+/// the write handle. It clears as soon as that child execs, so a short retry is the right response.
+const TEXT_FILE_BUSY: i32 = 26;
+const SPAWN_RETRIES: u32 = 10;
+const SPAWN_RETRY_PAUSE: Duration = Duration::from_millis(25);
+
+fn spawn_with_retry(cmd: &mut Command) -> std::io::Result<std::process::Child> {
+    let mut attempt = 0;
+    loop {
+        match cmd.spawn() {
+            Err(e) if e.raw_os_error() == Some(TEXT_FILE_BUSY) && attempt < SPAWN_RETRIES => {
+                attempt += 1;
+                std::thread::sleep(SPAWN_RETRY_PAUSE);
+            }
+            other => return other,
+        }
+    }
 }
 
 pub fn run_trial(
@@ -92,6 +113,8 @@ pub fn run_trial(
     cmd.args(hermit_args(settings, spec, seed))
         .env_clear()
         .envs(guest_env(spec.command, spec.env))
+        // The trial seed is an input like any other; tools such as anthill-dapr-sim derive their faults from it.
+        .env("ANTHILL_SEED", seed.to_string())
         .envs(settings.extra_env.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -100,7 +123,7 @@ pub fn run_trial(
     if let Some(dir) = spec.cwd {
         cmd.current_dir(dir);
     }
-    let mut child = cmd.spawn().map_err(|e| match e.kind() {
+    let mut child = spawn_with_retry(&mut cmd).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => SpawnError::NotFound(settings.bin.display().to_string()),
         _ => SpawnError::Other(e.to_string()),
     })?;
