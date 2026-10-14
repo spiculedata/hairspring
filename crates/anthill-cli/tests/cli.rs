@@ -566,3 +566,56 @@ fn wasm_targets_are_explored_shrunk_and_replayed_through_the_cli() {
         Some(0)
     );
 }
+
+// ---- PostgreSQL (runs only with ANTHILL_TEST_PG_URL) ----
+#[test]
+fn the_database_can_be_postgres_selected_by_environment() {
+    let Ok(url) = std::env::var("ANTHILL_TEST_PG_URL") else {
+        eprintln!("skipped: set ANTHILL_TEST_PG_URL");
+        return;
+    };
+    let d = scratch("pg");
+    let schema = format!("cli_{}_{}", std::process::id(), anthill_store::now_ms());
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_anthill"))
+            .args(args)
+            .current_dir(&d)
+            .env("ANTHILL_DATABASE_URL", &url)
+            .env("ANTHILL_DATABASE_SCHEMA", &schema)
+            .output()
+            .expect("binary runs")
+    };
+    let o = run(&["test", "lock-lease", "--seed", "7"]);
+    assert_eq!(o.status.code(), Some(1), "{}{}", out(&o), err(&o));
+    assert!(
+        !d.join(".anthill/anthill.db").exists(),
+        "the local SQLite file must not be created when Postgres is configured"
+    );
+    let r = run(&["results"]);
+    assert!(
+        out(&r).contains("lock-lease") && out(&r).contains("failed"),
+        "{}{}",
+        out(&r),
+        err(&r)
+    );
+    assert!(
+        !err(&r).contains(&url) && !out(&r).contains(&url),
+        "the connection URL (with its password) is never printed"
+    );
+}
+
+#[test]
+fn a_bad_database_url_fails_cleanly_without_echoing_secrets() {
+    let d = scratch("pgbad");
+    let o = Command::new(env!("CARGO_BIN_EXE_anthill"))
+        .args(["results"])
+        .current_dir(&d)
+        .env(
+            "ANTHILL_DATABASE_URL",
+            "postgres://user:topsecret-pw@127.0.0.1:1/nope",
+        )
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(2));
+    assert!(!err(&o).contains("topsecret-pw"), "{}", err(&o));
+}

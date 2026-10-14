@@ -17,7 +17,7 @@ path = "src/bin/anthill.rs"
 anthill-core = { path = "../anthill-core" }
 anthill-engine = { path = "../anthill-engine" }
 anthill-service = { path = "../anthill-service" }
-anthill-store = { path = "../anthill-store" }
+anthill-store = { path = "../anthill-store", features = ["postgres"] }
 anthill-hermit = { path = "../anthill-hermit" }
 anthill-mcp = { path = "../anthill-mcp" }
 anthill-server = { path = "../anthill-server" }

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "anthill": {
+      "command": "anthill",
+      "args": ["mcp"]
+    }
+  }
+}

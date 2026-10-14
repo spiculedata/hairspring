@@ -3,9 +3,13 @@
 //! One [`Store`] trait, implemented for SQLite (default, zero config) and
 //! Postgres (added in a later phase). All time values are milliseconds since the
 //! Unix epoch and are passed in explicitly so behaviour is testable.
+#[cfg(feature = "postgres")]
+mod pg;
 mod sqlite;
 mod types;
 
+#[cfg(feature = "postgres")]
+pub use pg::PgStore;
 pub use sqlite::SqliteStore;
 pub use types::*;
 

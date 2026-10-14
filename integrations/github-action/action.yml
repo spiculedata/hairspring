@@ -1,0 +1,87 @@
+name: "Anthill deterministic tests"
+description: "Explore targets for property violations; upload SARIF annotations and replayable bundles."
+author: "Anthill contributors"
+branding:
+  icon: "search"
+  color: "orange"
+
+inputs:
+  targets:
+    description: "Space-separated target names (default: all targets in anthill.toml)"
+    required: false
+    default: ""
+  seed:
+    description: "Exploration seed. Empty = random (the seed is printed so failures can be reproduced)."
+    required: false
+    default: ""
+  config:
+    description: "Path to anthill.toml"
+    required: false
+    default: "anthill.toml"
+  anthill-bin:
+    description: "Path to the anthill executable. Build or download it in an earlier step."
+    required: false
+    default: "anthill"
+  upload-sarif:
+    description: "Upload findings as code-scanning alerts (needs security-events: write)"
+    required: false
+    default: "true"
+
+outputs:
+  exit-code:
+    description: "0 = all properties held, 1 = a violation was found, 2 = error"
+    value: ${{ steps.run.outputs.exit-code }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Run anthill
+      id: run
+      shell: bash
+      env:
+        INPUT_TARGETS: ${{ inputs.targets }}
+        INPUT_SEED: ${{ inputs.seed }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_BIN: ${{ inputs.anthill-bin }}
+      run: |
+        # Inputs arrive through the environment, never interpolated into the script, so a hostile
+        # target name or seed cannot inject shell commands.
+        set +e
+        args=(test)
+        read -r -a targets <<< "$INPUT_TARGETS"
+        [ ${#targets[@]} -gt 0 ] && args+=("${targets[@]}")
+        [ -n "$INPUT_SEED" ] && args+=(--seed "$INPUT_SEED")
+        args+=(--config "$INPUT_CONFIG" --db .anthill/anthill.db --bundle-dir .anthill/bundles)
+        "$INPUT_BIN" "${args[@]}" --format sarif > anthill.sarif
+        code=$?
+        "$INPUT_BIN" "${args[@]}" --format junit > anthill-junit.xml 2>/dev/null || true
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        exit 0
+
+    - name: Upload findings to code scanning
+      if: ${{ inputs.upload-sarif == 'true' && always() }}
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: anthill.sarif
+        category: anthill
+
+    - name: Upload reproduction bundles and reports
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: anthill-results
+        path: |
+          .anthill/bundles/
+          anthill.sarif
+          anthill-junit.xml
+        if-no-files-found: ignore
+
+    - name: Fail if a property was violated
+      shell: bash
+      env:
+        CODE: ${{ steps.run.outputs.exit-code }}
+      run: |
+        if [ "$CODE" != "0" ]; then
+          echo "anthill exited with $CODE (1 = property violated, 2 = error). Replay with: anthill replay <bundle>"
+          exit 1
+        fi

@@ -1,0 +1,60 @@
+# A small cluster: PostgreSQL, one server (API, UI, MCP) and two workers.
+#
+#   cp .env.example .env        # then set real secrets
+#   docker compose up --build -d
+#   open http://127.0.0.1:7878  # sign in with the admin token
+#
+# The server is published on localhost only. Put a TLS-terminating reverse proxy in front before
+# exposing it: bearer tokens and the database connection are plain TCP inside this compose network.
+name: anthill
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: anthill
+      POSTGRES_PASSWORD: ${ANTHILL_DB_PASSWORD:?set ANTHILL_DB_PASSWORD in .env}
+      POSTGRES_DB: anthill
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anthill -d anthill"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    networks: [internal]
+
+  server:
+    build: .
+    restart: unless-stopped
+    # --workers 0: runs are executed by the worker containers, not inside the server.
+    command: ["serve", "--addr", "0.0.0.0:7878", "--workers", "0"]
+    environment:
+      ANTHILL_DATABASE_URL: postgres://anthill:${ANTHILL_DB_PASSWORD}@db/anthill
+      # "token:role,token:role" - roles are read, run, admin (tokens must be 16+ characters)
+      ANTHILL_TOKENS: ${ANTHILL_ADMIN_TOKEN:?set ANTHILL_ADMIN_TOKEN}:admin,${ANTHILL_WORKER_TOKEN:?set ANTHILL_WORKER_TOKEN}:run
+    ports:
+      - "127.0.0.1:7878:7878"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+
+  worker:
+    build: .
+    restart: unless-stopped
+    command: ["worker", "--server", "http://server:7878", "--poll-ms", "500"]
+    environment:
+      ANTHILL_TOKEN: ${ANTHILL_WORKER_TOKEN}
+    depends_on:
+      - server
+    deploy:
+      replicas: 2
+    networks: [internal]
+
+volumes:
+  pgdata:
+
+networks:
+  internal:
