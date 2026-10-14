@@ -291,6 +291,22 @@ impl Service {
         Ok(())
     }
 
+    /// Progress from a (possibly remote) worker; only the current lease holder may report.
+    pub fn report_job_progress(&self, job_id: &str, worker_id: &str, p: &Progress) -> Result<()> {
+        let job = self
+            .store
+            .get_job(job_id)?
+            .ok_or_else(|| ServiceError::NotFound(format!("job {job_id}")))?;
+        if job.status != JobStatus::Running || job.lease_owner.as_deref() != Some(worker_id) {
+            return Err(ServiceError::InvalidRequest(
+                "job is not leased by this worker".to_string(),
+            ));
+        }
+        self.report_progress(&job.run_id, p)?;
+        self.heartbeat(job_id, worker_id)?;
+        Ok(())
+    }
+
     /// Records the outcome of a leased job (used by local and remote workers alike).
     pub fn complete(&self, job_id: &str, worker_id: &str, outcome: &RunOutcome) -> Result<()> {
         let job = self

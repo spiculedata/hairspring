@@ -12,8 +12,13 @@ fn doctor_flags_the_naive_hashmap_variant() {
     // only about half the time per opportunity, so a single seed can miss it. Like the CLI
     // (`anthill doctor --seeds N`), check many seeds; a leak must show up in at least one.
     let root = PubSub::new(Mode::Buggy, Order::HashMap);
-    let detected = (1..=40).filter(|seed| doctor(&root, *seed, 40).is_err()).count();
-    assert!(detected >= 5, "expected the leak to be detected on many seeds, got {detected}/40");
+    let detected = (1..=40)
+        .filter(|seed| doctor(&root, *seed, 40).is_err())
+        .count();
+    assert!(
+        detected >= 5,
+        "expected the leak to be detected on many seeds, got {detected}/40"
+    );
 }
 
 #[test]

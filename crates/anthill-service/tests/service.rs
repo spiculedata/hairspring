@@ -307,3 +307,49 @@ fn outcome_is_rebuilt_from_stored_data_for_reporting() {
     assert!(o.failure.is_none() && o.steps_executed > 0);
     assert!(svc.outcome("nope").unwrap().is_none());
 }
+
+#[test]
+fn roles_are_ordered_and_parse_strictly() {
+    use anthill_service::Role;
+    assert!(
+        Role::Admin.allows(Role::Run)
+            && Role::Run.allows(Role::Read)
+            && Role::Admin.allows(Role::Admin)
+    );
+    assert!(!Role::Read.allows(Role::Run) && !Role::Run.allows(Role::Admin));
+    assert_eq!(Role::parse("read"), Some(Role::Read));
+    assert_eq!(Role::parse("RUN"), Some(Role::Run));
+    assert_eq!(Role::parse("admin"), Some(Role::Admin));
+    assert_eq!(Role::parse("root"), None);
+    assert_eq!(Role::parse(""), None);
+}
+
+#[test]
+fn job_progress_requires_lease_ownership() {
+    use anthill_engine::backend::Progress;
+    let (svc, _, engine) = service();
+    let run = svc.start_run(&engine, &start("pubsub-atomic", 3)).unwrap();
+    let leased = svc.lease(&engine, "remote-1").unwrap().unwrap();
+    let p = Progress {
+        steps: 500,
+        trials: 2,
+        message: "halfway".into(),
+    };
+    assert!(matches!(
+        svc.report_job_progress(&leased.job_id, "intruder", &p),
+        Err(ServiceError::InvalidRequest(_))
+    ));
+    svc.report_job_progress(&leased.job_id, "remote-1", &p)
+        .unwrap();
+    let r = svc.get_run(&run.id).unwrap().unwrap().run;
+    assert_eq!((r.steps, r.trials), (500, 2));
+    assert!(svc
+        .events(&run.id, 0, 50)
+        .unwrap()
+        .iter()
+        .any(|e| e.kind == "progress" && e.payload_json.contains("halfway")));
+    assert!(matches!(
+        svc.report_job_progress("job_nope", "remote-1", &p),
+        Err(ServiceError::NotFound(_))
+    ));
+}

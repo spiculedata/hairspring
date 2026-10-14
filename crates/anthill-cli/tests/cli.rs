@@ -200,3 +200,240 @@ fn config_file_targets_are_runnable_aliases() {
     assert_eq!(o.status.code(), Some(1), "{}{}", out(&o), err(&o));
     assert!(out(&o).contains("my-lock"));
 }
+
+// ---- serve / worker / mcp / token ----
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Child, Stdio};
+use std::time::{Duration, Instant};
+
+struct Guard(Child);
+impl Drop for Guard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn spawn(dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> Guard {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_anthill"));
+    cmd.args(args)
+        .current_dir(dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::piped());
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    Guard(cmd.spawn().expect("spawn"))
+}
+
+/// Reads stdout lines until one contains `needle`, with a timeout.
+fn wait_for_line(g: &mut Guard, needle: &str) -> String {
+    let stdout = g.0.stdout.take().expect("stdout piped");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(left) {
+            Ok(line) if line.contains(needle) => return line,
+            Ok(_) => continue,
+            Err(_) => panic!("never saw `{needle}` in output"),
+        }
+    }
+}
+
+fn http(method: &str, url: &str, token: Option<&str>, body: Option<&str>) -> (u16, String) {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_global(Some(Duration::from_secs(20)))
+        .build()
+        .into();
+    let mut resp = match method {
+        "GET" => {
+            let mut r = agent.get(url);
+            if let Some(t) = token {
+                r = r.header("Authorization", format!("Bearer {t}"));
+            }
+            r.call()
+        }
+        _ => {
+            let mut r = agent.post(url).header("Content-Type", "application/json");
+            if let Some(t) = token {
+                r = r.header("Authorization", format!("Bearer {t}"));
+            }
+            r.send(body.unwrap_or("{}"))
+        }
+    }
+    .expect("http ok");
+    (
+        resp.status().as_u16(),
+        resp.body_mut().read_to_string().unwrap_or_default(),
+    )
+}
+
+fn url_of(line: &str) -> String {
+    line.split_whitespace()
+        .find(|w| w.starts_with("http://"))
+        .expect("url in line")
+        .to_string()
+}
+
+#[test]
+fn serve_runs_a_run_end_to_end_over_http() {
+    let d = scratch("serve");
+    let mut g = spawn(&d, &["serve", "--addr", "127.0.0.1:0"], &[]);
+    let base = url_of(&wait_for_line(&mut g, "listening on"));
+    assert_eq!(
+        http("GET", &format!("{base}/api/health"), None, None).0,
+        200
+    );
+    let (status, body) = http(
+        "POST",
+        &format!("{base}/api/runs"),
+        None,
+        Some("{\"target\":\"lock-lease\",\"seed\":7}"),
+    );
+    assert_eq!(status, 201, "{body}");
+    let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["run"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let (_, b) = http("GET", &format!("{base}/api/runs/{id}"), None, None);
+        if serde_json::from_str::<serde_json::Value>(&b).unwrap()["run"]["state"] == "failed" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "run never finished: {b}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // results persisted by the server are visible to the CLI afterwards
+    assert!(out(&anthill(&d, &["results"])).contains("lock-lease"));
+}
+
+#[test]
+fn serve_refuses_a_public_address_without_tokens() {
+    let d = scratch("serve-public");
+    let o = anthill(&d, &["serve", "--addr", "0.0.0.0:0"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(err(&o).contains("token"), "{}", err(&o));
+}
+
+#[test]
+fn serve_enforces_tokens_from_the_environment() {
+    let d = scratch("serve-auth");
+    let tok = "env-token-0123456789abcdef";
+    let mut g = spawn(
+        &d,
+        &["serve", "--addr", "127.0.0.1:0"],
+        &[("ANTHILL_TOKENS", &format!("{tok}:admin"))],
+    );
+    let base = url_of(&wait_for_line(&mut g, "listening on"));
+    assert_eq!(
+        http("GET", &format!("{base}/api/targets"), None, None).0,
+        401
+    );
+    assert_eq!(
+        http("GET", &format!("{base}/api/targets"), Some(tok), None).0,
+        200
+    );
+}
+
+#[test]
+fn token_command_prints_distinct_strong_tokens() {
+    let d = scratch("token");
+    let a = out(&anthill(&d, &["token", "--role", "run"]));
+    let b = out(&anthill(&d, &["token", "--role", "run"]));
+    let tok = |s: &str| {
+        s.split_whitespace()
+            .find(|w| w.contains(":run"))
+            .map(|w| w.trim_start_matches("ANTHILL_TOKENS=").to_string())
+            .unwrap_or_default()
+    };
+    let (ta, tb) = (tok(&a), tok(&b));
+    assert!(ta.len() >= 40 && ta.ends_with(":run"), "{a}");
+    assert_ne!(ta, tb);
+    assert_eq!(
+        anthill(&d, &["token", "--role", "root"]).status.code(),
+        Some(2)
+    );
+}
+
+#[test]
+fn mcp_stdio_serves_the_agent_loop() {
+    let d = scratch("mcp");
+    let mut g = spawn(&d, &["mcp"], &[]);
+    let mut stdin = g.0.stdin.take().unwrap();
+    let msgs = [
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"start_run","arguments":{"target":"lock-lease","seed":7}}}"#,
+    ];
+    for m in msgs {
+        writeln!(stdin, "{m}").unwrap();
+    }
+    drop(stdin);
+    let reader = BufReader::new(g.0.stdout.take().unwrap());
+    let lines: Vec<serde_json::Value> = reader
+        .lines()
+        .map_while(Result::ok)
+        .map(|l| serde_json::from_str(&l).unwrap())
+        .collect();
+    assert_eq!(
+        lines.len(),
+        2,
+        "one reply per request, none for the notification"
+    );
+    assert_eq!(lines[0]["result"]["serverInfo"]["name"], "anthill");
+    assert_eq!(
+        lines[1]["result"]["structuredContent"]["run"]["state"],
+        "failed"
+    );
+}
+
+#[test]
+fn a_cli_worker_executes_runs_for_a_server_without_embedded_workers() {
+    let d = scratch("worker");
+    let tok = "worker-token-0123456789abcdef";
+    let mut srv = spawn(
+        &d,
+        &["serve", "--addr", "127.0.0.1:0", "--workers", "0"],
+        &[("ANTHILL_TOKENS", &format!("{tok}:admin"))],
+    );
+    let base = url_of(&wait_for_line(&mut srv, "listening on"));
+    let _worker = spawn(
+        &d,
+        &["worker", "--server", &base, "--poll-ms", "50"],
+        &[("ANTHILL_TOKEN", tok)],
+    );
+    let (status, body) = http(
+        "POST",
+        &format!("{base}/api/runs"),
+        Some(tok),
+        Some("{\"target\":\"pubsub-buggy\",\"seed\":5}"),
+    );
+    assert_eq!(status, 201, "{body}");
+    let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["run"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let (_, b) = http("GET", &format!("{base}/api/runs/{id}"), Some(tok), None);
+        if serde_json::from_str::<serde_json::Value>(&b).unwrap()["run"]["state"] == "failed" {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "worker never completed the run: {b}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}

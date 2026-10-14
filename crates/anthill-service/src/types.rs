@@ -58,3 +58,35 @@ pub struct LeasedJob {
     pub seed: u64,
     pub budget: Option<Budget>,
 }
+
+/// Access level of a caller. Higher roles include every lower one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    Read,
+    Run,
+    Admin,
+}
+
+impl Role {
+    pub fn allows(self, needed: Role) -> bool {
+        self >= needed
+    }
+
+    pub fn parse(s: &str) -> Option<Role> {
+        match s.to_ascii_lowercase().as_str() {
+            "read" => Some(Role::Read),
+            "run" => Some(Role::Run),
+            "admin" => Some(Role::Admin),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Role::Read => "read",
+            Role::Run => "run",
+            Role::Admin => "admin",
+        }
+    }
+}
