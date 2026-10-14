@@ -510,3 +510,59 @@ fn process_targets_report_a_missing_hermit_clearly() {
         err(&o)
     );
 }
+
+// ---- wasm targets ----
+const LOST_UPDATE_WAT: &str = r#"
+(module
+  (import "anthill" "choose" (func $choose (param i32) (result i32)))
+  (import "anthill" "fail" (func $fail (param i32 i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "lost update")
+  (global $bal (mut i32) (i32.const 100))
+  (global $atmp (mut i32) (i32.const 0))
+  (global $btmp (mut i32) (i32.const 0))
+  (global $apc (mut i32) (i32.const 0))
+  (global $bpc (mut i32) (i32.const 0))
+  (func $step_a
+    (if (i32.eqz (global.get $apc)) (then (global.set $atmp (global.get $bal)) (global.set $apc (i32.const 1)) (return)))
+    (if (i32.eq (global.get $apc) (i32.const 1)) (then (global.set $bal (i32.add (global.get $atmp) (i32.const 10))) (global.set $apc (i32.const 2)))))
+  (func $step_b
+    (if (i32.eqz (global.get $bpc)) (then (global.set $btmp (global.get $bal)) (global.set $bpc (i32.const 1)) (return)))
+    (if (i32.eq (global.get $bpc) (i32.const 1)) (then (global.set $bal (i32.add (global.get $btmp) (i32.const 10))) (global.set $bpc (i32.const 2)))))
+  (func (export "run") (result i32)
+    (block $done (loop $l
+      (br_if $done (i32.and (i32.eq (global.get $apc) (i32.const 2)) (i32.eq (global.get $bpc) (i32.const 2))))
+      (if (i32.eq (call $choose (i32.const 2)) (i32.const 0)) (then (call $step_a)) (else (call $step_b)))
+      (br $l)))
+    (if (i32.ne (global.get $bal) (i32.const 120)) (then (call $fail (i32.const 0) (i32.const 11))))
+    (i32.const 0)))
+"#;
+
+#[test]
+fn wasm_targets_are_explored_shrunk_and_replayed_through_the_cli() {
+    let d = scratch("wasm");
+    std::fs::write(d.join("lost.wat"), LOST_UPDATE_WAT).unwrap();
+    std::fs::write(d.join("anthill.toml"), "[target.bank]\nkind = \"wasm\"\nmodule = \"lost.wat\"\ndescription = \"two writers, lost update\"\n[target.bank.budget]\nmax_trials = 200\n").unwrap();
+    let o = anthill(&d, &["test", "bank", "--seed", "1"]);
+    assert_eq!(o.status.code(), Some(1), "{}{}", out(&o), err(&o));
+    let s = out(&o);
+    assert!(
+        s.contains("lost update") && s.contains("choose(2)") && s.contains("backend=wasm"),
+        "{s}"
+    );
+    let file = std::fs::read_dir(d.join(".anthill/bundles"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let r = anthill(&d, &["replay", file.to_str().unwrap()]);
+    assert_eq!(r.status.code(), Some(1), "{}{}", out(&r), err(&r));
+    assert!(out(&r).contains("reproduced"));
+    assert_eq!(
+        anthill(&d, &["doctor", "bank", "--seeds", "5"])
+            .status
+            .code(),
+        Some(0)
+    );
+}

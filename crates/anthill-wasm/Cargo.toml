@@ -1,0 +1,11 @@
+[package]
+name = "anthill-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "WebAssembly backend for Anthill: deterministic, portable, snapshot/fork-able execution (macOS and Linux)"
+license = "Apache-2.0"
+
+[dependencies]
+anthill-core = { path = "../anthill-core" }
+anthill-engine = { path = "../anthill-engine" }
+wasmtime = { version = "49.0.2", default-features = false, features = ["cranelift", "runtime", "wat", "std"] }

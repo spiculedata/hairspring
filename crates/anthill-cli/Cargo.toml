@@ -21,6 +21,7 @@ anthill-store = { path = "../anthill-store" }
 anthill-hermit = { path = "../anthill-hermit" }
 anthill-mcp = { path = "../anthill-mcp" }
 anthill-server = { path = "../anthill-server" }
+anthill-wasm = { path = "../anthill-wasm" }
 anthill-worker = { path = "../anthill-worker" }
 clap = { version = "4.6.7", features = ["derive"] }
 serde_json = "1.0.154"
