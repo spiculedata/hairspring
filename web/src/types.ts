@@ -62,7 +62,8 @@ export interface ReplayResult {
 }
 
 export interface Worker {
-  id: string;
+  /** Hidden from read-only tokens (it doubles as a lease credential). */
+  id?: string;
   name: string;
   last_seen: number;
   registered_at: number;

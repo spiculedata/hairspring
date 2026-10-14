@@ -26,8 +26,12 @@ impl RateLimiter {
         }
         let now = Instant::now();
         let mut map = self.windows.lock().unwrap_or_else(|e| e.into_inner());
-        if map.len() > MAX_KEYS {
+        if map.len() >= MAX_KEYS {
             map.retain(|_, (start, _)| now.duration_since(*start) < WINDOW);
+            // Still full of live windows: fail closed for new callers rather than grow without bound.
+            if map.len() >= MAX_KEYS && !map.contains_key(key) {
+                return false;
+            }
         }
         let entry = map.entry(key.to_string()).or_insert((now, 0));
         if now.duration_since(entry.0) >= WINDOW {

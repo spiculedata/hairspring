@@ -361,12 +361,10 @@ fn mcp_over_http_respects_roles() {
 fn a_remote_worker_executes_queued_runs() {
     let (srv, engine) = boot(tokens(), 0, 0);
     let stop = Arc::new(AtomicBool::new(false));
-    let cfg = anthill_worker::WorkerConfig {
-        server: format!("http://{}", srv.addr()),
-        token: Some(RUN.to_string()),
-        name: "remote-test".into(),
-        poll: Duration::from_millis(50),
-    };
+    let mut cfg =
+        anthill_worker::WorkerConfig::new(format!("http://{}", srv.addr()), "remote-test");
+    cfg.token = Some(RUN.to_string());
+    cfg.poll = Duration::from_millis(50);
     let (stop2, cfg2) = (stop.clone(), cfg.clone());
     let handle = std::thread::spawn(move || anthill_worker::run_loop(&engine, &cfg2, &stop2));
     let c = client(srv.addr(), Some(RUN));
@@ -392,24 +390,68 @@ fn a_remote_worker_executes_queued_runs() {
 fn worker_endpoints_enforce_lease_ownership() {
     let (srv, _) = boot(tokens(), 0, 0);
     let c = client(srv.addr(), Some(RUN));
-    c.post("/api/runs", &json!({"target": "pubsub-atomic", "seed": 1}));
+    let run_id = c
+        .post("/api/runs", &json!({"target": "pubsub-atomic", "seed": 1}))
+        .json()["run"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let w1 = c
         .post("/api/worker/register", &json!({"name": "w1"}))
         .json()["worker_id"]
         .as_str()
         .unwrap()
         .to_string();
-    let job = c
+    let w2 = c
+        .post("/api/worker/register", &json!({"name": "w2"}))
+        .json()["worker_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let job_id = c
         .post("/api/worker/lease", &json!({"worker_id": w1}))
-        .json();
-    let job_id = job["job_id"].as_str().expect("job leased").to_string();
-    let bad = c.post(&format!("/api/worker/jobs/{job_id}/complete"), &json!({"worker_id": "wrk_intruder", "outcome": {"status": "passed", "steps_executed": 1, "trials": 1, "elapsed_ms": 1, "failure": null, "error": null}}));
-    assert_eq!(bad.status, 400);
+        .json()["job_id"]
+        .as_str()
+        .expect("job leased")
+        .to_string();
+    let outcome = json!({"status": "passed", "steps_executed": 1, "trials": 1, "elapsed_ms": 1, "failure": null, "error": null});
+    // w2 is a REAL registered worker with a valid id: it must still be refused because w1 holds the lease.
+    for action in ["complete", "fail", "progress", "heartbeat"] {
+        let body = match action {
+            "complete" => json!({"worker_id": w2, "outcome": outcome}),
+            "fail" => json!({"worker_id": w2, "error": "x"}),
+            "progress" => json!({"worker_id": w2, "steps": 1, "trials": 1}),
+            _ => json!({"worker_id": w2}),
+        };
+        let r = c.post(&format!("/api/worker/jobs/{job_id}/{action}"), &body);
+        let rejected = r.status == 400
+            || (action == "heartbeat" && r.json()["ok"] == false)
+            || (action == "fail" && r.status == 200);
+        assert!(
+            rejected,
+            "{action} by a non-owner must be rejected or a no-op: {} {}",
+            r.status, r.body
+        );
+    }
     assert_eq!(
-        c.post("/api/worker/lease", &json!({"worker_id": w1}))
+        c.get(&format!("/api/runs/{run_id}")).json()["run"]["state"],
+        "running",
+        "the non-owner changed nothing"
+    );
+    assert_eq!(
+        c.post("/api/worker/lease", &json!({"worker_id": w2}))
             .status,
         204,
-        "queue empty now"
+        "queue empty: the job is still leased by w1"
+    );
+    let ok = c.post(
+        &format!("/api/worker/jobs/{job_id}/complete"),
+        &json!({"worker_id": w1, "outcome": outcome}),
+    );
+    assert_eq!(ok.status, 200, "{}", ok.body);
+    assert_eq!(
+        c.get(&format!("/api/runs/{run_id}")).json()["run"]["state"],
+        "passed"
     );
 }
 
@@ -445,4 +487,181 @@ fn ui_is_served_with_spa_fallback_and_no_directory_escape() {
     );
     assert_ne!(c.get("/../../etc/passwd").status, 500);
     assert!(!c.get("/..%2f..%2fetc/passwd").body.contains("root:"));
+}
+
+// ---- hardening (security review) ----
+use std::io::{Read, Write};
+use std::net::TcpStream;
+
+fn raw(addr: SocketAddr, request: &str) -> String {
+    let mut s = TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    s.write_all(request.as_bytes()).unwrap();
+    let mut out = String::new();
+    let _ = s.read_to_string(&mut out);
+    out
+}
+
+#[test]
+fn rate_limit_cannot_be_bypassed_with_garbage_tokens() {
+    let (srv, _) = boot(tokens(), 0, 5);
+    let statuses: Vec<u16> = (0..14)
+        .map(|i| {
+            client(srv.addr(), Some(&format!("garbage-token-number-{i:04}")))
+                .get("/api/targets")
+                .status
+        })
+        .collect();
+    assert!(
+        statuses.contains(&429),
+        "unique bad tokens must still be throttled per client: {statuses:?}"
+    );
+    assert!(
+        statuses.iter().all(|s| *s == 401 || *s == 429),
+        "{statuses:?}"
+    );
+    let good = client(srv.addr(), Some(READ));
+    assert_eq!(
+        good.get("/api/targets").status,
+        200,
+        "a valid token has its own bucket and is unaffected by the noise"
+    );
+}
+
+#[test]
+fn mcp_requires_a_json_content_type() {
+    let (srv, _) = boot(Auth::open(), 0, 0);
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}).to_string();
+    let req = |ct: &str| {
+        format!("POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: {ct}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+    };
+    assert!(
+        raw(srv.addr(), &req("text/plain")).starts_with("HTTP/1.1 415"),
+        "text/plain is a CSRF-able 'simple' content type"
+    );
+    assert!(raw(srv.addr(), &req("application/x-www-form-urlencoded")).starts_with("HTTP/1.1 415"));
+    assert!(raw(srv.addr(), &req("application/json")).starts_with("HTTP/1.1 200"));
+    assert!(raw(srv.addr(), &req("application/json; charset=utf-8")).starts_with("HTTP/1.1 200"));
+}
+
+#[test]
+fn open_loopback_mode_rejects_foreign_hosts_and_origins() {
+    let (srv, _) = boot(Auth::open(), 0, 0);
+    let get = |extra: &str, host: &str| {
+        raw(
+            srv.addr(),
+            &format!(
+                "GET /api/targets HTTP/1.1\r\nHost: {host}\r\n{extra}Connection: close\r\n\r\n"
+            ),
+        )
+    };
+    assert!(get("", &format!("127.0.0.1:{}", srv.addr().port())).starts_with("HTTP/1.1 200"));
+    assert!(get("", &format!("localhost:{}", srv.addr().port())).starts_with("HTTP/1.1 200"));
+    assert!(
+        get("", "evil.example").starts_with("HTTP/1.1 403"),
+        "DNS rebinding: unknown Host"
+    );
+    let host = format!("127.0.0.1:{}", srv.addr().port());
+    assert!(
+        get("Origin: http://evil.example\r\n", &host).starts_with("HTTP/1.1 403"),
+        "cross-site Origin"
+    );
+    assert!(
+        get(&format!("Origin: http://{host}\r\n"), &host).starts_with("HTTP/1.1 200"),
+        "same-origin is fine"
+    );
+}
+
+#[test]
+fn tokens_make_origin_checks_unnecessary_because_browsers_cannot_attach_them() {
+    let (srv, _) = boot(tokens(), 0, 0);
+    let r = raw(srv.addr(), &format!("GET /api/targets HTTP/1.1\r\nHost: api.example.com\r\nAuthorization: Bearer {READ}\r\nConnection: close\r\n\r\n"));
+    assert!(
+        r.starts_with("HTTP/1.1 200"),
+        "token auth works behind any hostname: {r}"
+    );
+}
+
+#[test]
+fn worker_ids_are_hidden_from_read_only_tokens() {
+    let (srv, _) = boot(tokens(), 0, 0);
+    let run = client(srv.addr(), Some(RUN));
+    let id = run
+        .post("/api/worker/register", &json!({"name": "w"}))
+        .json()["worker_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let as_read = client(srv.addr(), Some(READ)).get("/api/workers");
+    assert!(
+        !as_read.body.contains(&id),
+        "a read token must not learn worker ids: {}",
+        as_read.body
+    );
+    assert_eq!(as_read.json()["workers"][0]["name"], "w");
+    assert!(
+        run.get("/api/workers").body.contains(&id),
+        "run tokens may see them"
+    );
+}
+
+#[test]
+fn concurrent_event_streams_are_capped() {
+    let engine = engine();
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut cfg = ServerConfig::new("127.0.0.1:0".parse().unwrap(), Auth::open());
+    cfg.embedded_workers = 1;
+    cfg.rate_limit_per_min = 0;
+    cfg.max_sse_streams = 1;
+    let srv = start(cfg, Service::new(store), engine).unwrap();
+    let c = client(srv.addr(), None);
+    let id = c.post("/api/runs", &json!({"target": "pubsub-atomic", "seed": 1, "budget": {"max_steps": 40000000, "max_trials": 1000, "wall_secs": 30}})).json()["run"]["id"].as_str().unwrap().to_string();
+    wait_for_state(&c, &id, "running");
+    let addr = srv.addr();
+    let first = std::thread::spawn({
+        let id = id.clone();
+        move || {
+            client(addr, None)
+                .get(&format!("/api/runs/{id}/events"))
+                .status
+        }
+    });
+    std::thread::sleep(Duration::from_millis(500)); // let the first stream attach
+    assert_eq!(
+        c.get(&format!("/api/runs/{id}/events")).status,
+        429,
+        "second concurrent stream is refused"
+    );
+    assert_eq!(
+        c.post(&format!("/api/runs/{id}/cancel"), &json!({})).json()["cancelled"],
+        true
+    );
+    assert_eq!(
+        first.join().unwrap(),
+        200,
+        "the first stream ends once the run does"
+    );
+}
+
+#[test]
+fn a_cancelled_running_run_is_stopped_by_the_embedded_worker() {
+    let (srv, _) = boot(Auth::open(), 1, 0);
+    let c = client(srv.addr(), None);
+    let id = c.post("/api/runs", &json!({"target": "pubsub-atomic", "seed": 1, "budget": {"max_steps": 40000000, "max_trials": 1000, "wall_secs": 30}})).json()["run"]["id"].as_str().unwrap().to_string();
+    wait_for_state(&c, &id, "running");
+    let t0 = Instant::now();
+    c.post(&format!("/api/runs/{id}/cancel"), &json!({}));
+    wait_for_state(&c, &id, "cancelled");
+    // the worker must free itself: a follow-up run completes quickly
+    let id2 = c
+        .post("/api/runs", &json!({"target": "lock-lease", "seed": 7}))
+        .json()["run"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    wait_for_state(&c, &id2, "failed");
+    assert!(
+        t0.elapsed() < Duration::from_secs(20),
+        "worker was freed by cancellation"
+    );
 }

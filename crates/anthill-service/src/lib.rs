@@ -2,36 +2,65 @@
 //! record an outcome / replay a bundle" into store and engine calls. The CLI,
 //! the REST server, remote workers and the MCP server all go through it.
 mod error;
+mod jobs;
+pub mod sanitize;
 mod types;
 
 pub use error::ServiceError;
 pub use types::*;
 
 use anthill_core::bundle::Bundle;
-use anthill_engine::backend::Progress;
 use anthill_engine::config::{Budget, TargetKind};
-use anthill_engine::engine::{Engine, RunRequest};
-use anthill_engine::report::{ReplayOutcome, RunOutcome, RunStatus, Step};
+use anthill_engine::engine::Engine;
+use anthill_engine::report::{FailureReport, ReplayOutcome, RunOutcome, RunStatus, Step};
 use anthill_store::{
-    now_ms, random_seed, EventRecord, FailureRecord, JobStatus, NewFailure, NewRun, RunRecord,
-    RunState, Store, WorkerRecord,
+    now_ms, random_seed, EventRecord, FailureRecord, NewRun, RunRecord, RunState, Store,
+    WorkerRecord,
 };
-use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// Largest bundle text accepted from a caller.
 pub const MAX_BUNDLE_BYTES: usize = 1024 * 1024;
+/// Longest reproduction path a caller may ask the server to replay.
+pub const MAX_REPLAY_STEPS: usize = 20_000;
 const MAX_TARGET_LEN: usize = 64;
-const LEASE_SECS: u64 = 120;
 const MAX_LIST: u32 = 500;
 const MAX_EVENTS: u32 = 1000;
 const JOB_KIND_RUN: &str = "run";
+const STALE_WORKER_AGE_MS: i64 = 24 * 60 * 60 * 1000;
 
 pub type Result<T> = std::result::Result<T, ServiceError>;
+
+/// Tunables with safe defaults.
+#[derive(Debug, Clone)]
+pub struct ServiceConfig {
+    /// How long a worker may hold a job without a heartbeat.
+    pub lease_secs: u64,
+    /// Runs waiting for a worker; further submissions are refused.
+    pub max_queued: u64,
+    pub max_workers: u64,
+    /// Minimum spacing of stored progress events per run.
+    pub progress_event_interval: Duration,
+}
+
+impl Default for ServiceConfig {
+    fn default() -> Self {
+        ServiceConfig {
+            lease_secs: 120,
+            max_queued: 1000,
+            max_workers: 1000,
+            progress_event_interval: Duration::from_millis(500),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct Service {
     store: Arc<dyn Store>,
+    cfg: Arc<ServiceConfig>,
+    progress_seen: Arc<Mutex<HashMap<String, Instant>>>,
 }
 
 fn backend_name(kind: &TargetKind) -> &'static str {
@@ -57,11 +86,27 @@ fn summary(f: &FailureRecord) -> FailureSummary {
 
 impl Service {
     pub fn new(store: Arc<dyn Store>) -> Service {
-        Service { store }
+        Service {
+            store,
+            cfg: Arc::new(ServiceConfig::default()),
+            progress_seen: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub fn with_config(self, cfg: ServiceConfig) -> Service {
+        Service {
+            cfg: Arc::new(cfg),
+            ..self
+        }
     }
 
     pub fn store(&self) -> &Arc<dyn Store> {
         &self.store
+    }
+
+    /// Lease-owner identity for in-process execution; unique per OS process.
+    pub fn local_worker_id() -> String {
+        format!("local-{}", std::process::id())
     }
 
     pub fn list_targets(&self, engine: &Engine) -> Vec<TargetInfo> {
@@ -87,6 +132,12 @@ impl Service {
         let spec = engine.config().targets.get(&req.target).ok_or_else(|| {
             ServiceError::InvalidRequest(format!("unknown target `{}`", req.target))
         })?;
+        let queued = self.store.queued_job_count()?;
+        if queued >= self.cfg.max_queued {
+            return Err(ServiceError::InvalidRequest(format!(
+                "the queue is full ({queued} runs waiting); try again later"
+            )));
+        }
         let payload = JobPayload {
             target: req.target.clone(),
             seed: req.seed.unwrap_or_else(random_seed),
@@ -135,7 +186,9 @@ impl Service {
         };
         let steps: Vec<Step> = serde_json::from_str(&record.steps_json)
             .map_err(|e| ServiceError::Internal(format!("corrupt steps: {e}")))?;
-        let bundle = self.get_bundle(&record.bundle_hash)?.unwrap_or_default();
+        let bundle = self.get_bundle(&record.bundle_hash)?.ok_or_else(|| {
+            ServiceError::Internal(format!("bundle blob {} is missing", record.bundle_hash))
+        })?;
         Ok(Some(FailureDetail {
             record: summary(&record),
             steps,
@@ -162,17 +215,15 @@ impl Service {
             _ => RunStatus::Error,
         };
         let failure = match detail.failures.first() {
-            Some(f) => self
-                .get_failure(&f.id)?
-                .map(|d| anthill_engine::report::FailureReport {
-                    target: d.record.target,
-                    backend: run.backend.clone(),
-                    message: d.record.message,
-                    original_len: d.record.original_len,
-                    shrunk_len: d.record.shrunk_len,
-                    steps: d.steps,
-                    bundle: d.bundle,
-                }),
+            Some(f) => self.get_failure(&f.id)?.map(|d| FailureReport {
+                target: d.record.target,
+                backend: run.backend.clone(),
+                message: d.record.message,
+                original_len: d.record.original_len,
+                shrunk_len: d.record.shrunk_len,
+                steps: d.steps,
+                bundle: d.bundle,
+            }),
             None => None,
         };
         let elapsed_ms = match (run.started_at, run.finished_at) {
@@ -200,7 +251,12 @@ impl Service {
     }
 
     pub fn cancel_run(&self, id: &str) -> Result<bool> {
-        Ok(self.store.cancel_run(id, now_ms())?)
+        let now = now_ms();
+        let cancelled = self.store.cancel_run(id, now)?;
+        if cancelled {
+            self.store.add_event(id, "cancelled", "{}", now)?;
+        }
+        Ok(cancelled)
     }
 
     pub fn register_worker(&self, name: &str, caps_json: &str) -> Result<WorkerRecord> {
@@ -209,7 +265,16 @@ impl Service {
                 "worker name must be 1-64 characters".to_string(),
             ));
         }
-        Ok(self.store.register_worker(name, caps_json, now_ms())?)
+        let now = now_ms();
+        if self.store.worker_count()? >= self.cfg.max_workers {
+            self.store.prune_workers(now - STALE_WORKER_AGE_MS)?;
+            if self.store.worker_count()? >= self.cfg.max_workers {
+                return Err(ServiceError::InvalidRequest(
+                    "worker limit reached".to_string(),
+                ));
+            }
+        }
+        Ok(self.store.register_worker(name, caps_json, now)?)
     }
 
     pub fn list_workers(&self) -> Result<Vec<WorkerRecord>> {
@@ -228,208 +293,12 @@ impl Service {
         }
         let bundle =
             Bundle::decode(text).map_err(|e| ServiceError::InvalidRequest(e.to_string()))?;
+        if bundle.path.len() > MAX_REPLAY_STEPS {
+            return Err(ServiceError::InvalidRequest(format!(
+                "bundle has {} steps; the replay limit is {MAX_REPLAY_STEPS} steps",
+                bundle.path.len()
+            )));
+        }
         Ok(engine.replay(&bundle)?)
-    }
-
-    // ---- job execution ----
-
-    /// Leases the next runnable job and marks its run as started.
-    pub fn lease(&self, _engine: &Engine, worker_id: &str) -> Result<Option<LeasedJob>> {
-        loop {
-            let Some(job) = self.store.lease_job(worker_id, LEASE_SECS, now_ms())? else {
-                return Ok(None);
-            };
-            let payload: JobPayload = match serde_json::from_str(&job.payload_json) {
-                Ok(p) => p,
-                Err(e) => {
-                    self.fail(&job.id, worker_id, &format!("unreadable job payload: {e}"))?;
-                    continue;
-                }
-            };
-            match self.store.get_run(&job.run_id)? {
-                Some(run) if run.state.is_terminal() => {
-                    self.store.complete_job(&job.id, worker_id)?;
-                    continue;
-                }
-                None => {
-                    self.store
-                        .fail_job(&job.id, worker_id, "run no longer exists", now_ms())?;
-                    continue;
-                }
-                Some(_) => {}
-            }
-            let now = now_ms();
-            self.store.mark_running(&job.run_id, now)?;
-            self.store.add_event(
-                &job.run_id,
-                "started",
-                &format!("{{\"worker\":{}}}", serde_json::json!(worker_id)),
-                now,
-            )?;
-            return Ok(Some(LeasedJob {
-                job_id: job.id,
-                run_id: job.run_id,
-                target: payload.target,
-                seed: payload.seed,
-                budget: payload.budget,
-            }));
-        }
-    }
-
-    pub fn heartbeat(&self, job_id: &str, worker_id: &str) -> Result<bool> {
-        Ok(self
-            .store
-            .heartbeat_job(job_id, worker_id, LEASE_SECS, now_ms())?)
-    }
-
-    pub fn report_progress(&self, run_id: &str, p: &Progress) -> Result<()> {
-        self.store.update_progress(run_id, p.steps, p.trials)?;
-        let payload =
-            serde_json::json!({ "steps": p.steps, "trials": p.trials, "message": p.message });
-        self.store
-            .add_event(run_id, "progress", &payload.to_string(), now_ms())?;
-        Ok(())
-    }
-
-    /// Progress from a (possibly remote) worker; only the current lease holder may report.
-    pub fn report_job_progress(&self, job_id: &str, worker_id: &str, p: &Progress) -> Result<()> {
-        let job = self
-            .store
-            .get_job(job_id)?
-            .ok_or_else(|| ServiceError::NotFound(format!("job {job_id}")))?;
-        if job.status != JobStatus::Running || job.lease_owner.as_deref() != Some(worker_id) {
-            return Err(ServiceError::InvalidRequest(
-                "job is not leased by this worker".to_string(),
-            ));
-        }
-        self.report_progress(&job.run_id, p)?;
-        self.heartbeat(job_id, worker_id)?;
-        Ok(())
-    }
-
-    /// Records the outcome of a leased job (used by local and remote workers alike).
-    pub fn complete(&self, job_id: &str, worker_id: &str, outcome: &RunOutcome) -> Result<()> {
-        let job = self
-            .store
-            .get_job(job_id)?
-            .ok_or_else(|| ServiceError::NotFound(format!("job {job_id}")))?;
-        if job.status != JobStatus::Running || job.lease_owner.as_deref() != Some(worker_id) {
-            return Err(ServiceError::InvalidRequest(
-                "job is not leased by this worker".to_string(),
-            ));
-        }
-        let now = now_ms();
-        let state = match outcome.status {
-            RunStatus::Passed => RunState::Passed,
-            RunStatus::Failed => RunState::Failed,
-            RunStatus::Error => RunState::Error,
-        };
-        if let Some(f) = &outcome.failure {
-            let hash = self.store.put_blob(f.bundle.as_bytes())?;
-            let steps_json = serde_json::to_string(&f.steps)
-                .map_err(|e| ServiceError::Internal(e.to_string()))?;
-            self.store.add_failure(
-                &NewFailure {
-                    run_id: job.run_id.clone(),
-                    target: f.target.clone(),
-                    message: f.message.clone(),
-                    original_len: f.original_len,
-                    shrunk_len: f.shrunk_len,
-                    bundle_hash: hash,
-                    steps_json,
-                },
-                now,
-            )?;
-        }
-        // A run cancelled while executing keeps its Cancelled state.
-        if let Err(e) = self.store.finish_run(
-            &job.run_id,
-            state,
-            outcome.steps_executed,
-            outcome.trials,
-            outcome.error.as_deref(),
-            now,
-        ) {
-            if self.store.get_run(&job.run_id)?.map(|r| r.state) != Some(RunState::Cancelled) {
-                return Err(e.into());
-            }
-        }
-        self.store.add_event(
-            &job.run_id,
-            "finished",
-            &serde_json::json!({ "state": state.as_str() }).to_string(),
-            now,
-        )?;
-        self.store.complete_job(job_id, worker_id)?;
-        Ok(())
-    }
-
-    /// Records a transient worker failure; the job is retried until attempts run out.
-    pub fn fail(&self, job_id: &str, worker_id: &str, error: &str) -> Result<()> {
-        let now = now_ms();
-        self.store.fail_job(job_id, worker_id, error, now)?;
-        if let Some(job) = self.store.get_job(job_id)? {
-            if job.status == JobStatus::Failed {
-                let _ = self
-                    .store
-                    .finish_run(&job.run_id, RunState::Error, 0, 0, Some(error), now);
-                self.store.add_event(
-                    &job.run_id,
-                    "finished",
-                    &serde_json::json!({ "state": "error" }).to_string(),
-                    now,
-                )?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Leases and executes one job locally. Returns false when the queue is empty.
-    pub fn execute_next(&self, engine: &Engine, worker_id: &str) -> Result<bool> {
-        let Some(job) = self.lease(engine, worker_id)? else {
-            return Ok(false);
-        };
-        let req = RunRequest {
-            target: job.target.clone(),
-            seed: job.seed,
-            budget: job.budget,
-        };
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            engine.run(&req, &mut |p| {
-                // Progress and heartbeat are best effort; a storage hiccup must not kill the run.
-                let _ = self.report_progress(&job.run_id, &p);
-                let _ = self.heartbeat(&job.job_id, worker_id);
-            })
-        }));
-        match result {
-            Ok(Ok(outcome)) => self.complete(&job.job_id, worker_id, &outcome)?,
-            Ok(Err(e)) => {
-                self.complete(&job.job_id, worker_id, &RunOutcome::error(e.to_string()))?
-            }
-            Err(_) => self.fail(
-                &job.job_id,
-                worker_id,
-                "worker panicked while running the target",
-            )?,
-        }
-        Ok(true)
-    }
-
-    /// Starts a run and drives the queue until that run is finished (CLI / local mode).
-    pub fn run_sync(&self, engine: &Engine, req: &StartRun) -> Result<RunDetail> {
-        let run = self.start_run(engine, req)?;
-        loop {
-            let detail = self
-                .get_run(&run.id)?
-                .ok_or_else(|| ServiceError::NotFound(run.id.clone()))?;
-            if detail.run.state.is_terminal() {
-                return Ok(detail);
-            }
-            if !self.execute_next(engine, "local")? {
-                return Err(ServiceError::Internal(
-                    "queue drained but the run is not finished".to_string(),
-                ));
-            }
-        }
     }
 }

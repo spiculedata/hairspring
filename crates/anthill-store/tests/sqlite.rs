@@ -34,3 +34,16 @@ fn sqlite_store_persists_across_reopen_and_migrates_idempotently() {
     assert_eq!(s.get_run(&id).unwrap().unwrap().target, "t");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn random_seeds_are_exactly_representable_in_javascript() {
+    // Browsers and LLM tool clients parse JSON numbers as doubles: integers above 2^53 lose precision.
+    const JS_SAFE: u64 = 1 << 53;
+    let seeds: Vec<u64> = (0..2000).map(|_| anthill_store::random_seed()).collect();
+    assert!(
+        seeds.iter().all(|s| *s < JS_SAFE),
+        "seed above 2^53 would be corrupted by JSON consumers"
+    );
+    let distinct: std::collections::HashSet<_> = seeds.iter().collect();
+    assert!(distinct.len() > 1990, "still varied: {}", distinct.len());
+}

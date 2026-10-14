@@ -33,7 +33,10 @@ impl RunRequest {
     }
 }
 
-/// An execution backend: knows how to run and replay one or more target kinds.
+/// An execution backend. `progress` is called periodically; returning `false` asks the backend to stop
+/// (cancellation or shutdown) and it returns an error outcome with the message `cancelled`.
+///
+/// A backend: knows how to run and replay one or more target kinds.
 pub trait Backend: Send + Sync {
     fn name(&self) -> &'static str;
     fn supports(&self, kind: &TargetKind) -> bool;
@@ -42,7 +45,7 @@ pub trait Backend: Send + Sync {
         spec: &TargetSpec,
         req: &RunRequest,
         budget: Budget,
-        progress: &mut dyn FnMut(Progress),
+        progress: &mut dyn FnMut(Progress) -> bool,
     ) -> Result<RunOutcome, EngineError>;
     fn replay(&self, spec: &TargetSpec, bundle: &Bundle) -> Result<ReplayOutcome, EngineError>;
     /// Determinism self-check. Backends that cannot do this in-process say so.

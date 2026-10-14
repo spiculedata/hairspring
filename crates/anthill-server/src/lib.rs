@@ -29,6 +29,10 @@ use std::time::{Duration, Instant};
 
 /// Request bodies larger than this are rejected with 413.
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
+/// Default cap on concurrent event streams.
+const DEFAULT_MAX_SSE_STREAMS: usize = 64;
+/// Cap on threads used for blocking storage and engine work.
+const MAX_BLOCKING_THREADS: usize = 128;
 const WORKER_IDLE: Duration = Duration::from_millis(200);
 const WORKER_TOUCH: Duration = Duration::from_secs(5);
 
@@ -40,6 +44,8 @@ pub struct ServerConfig {
     pub embedded_workers: usize,
     /// Requests per minute per caller; 0 disables limiting.
     pub rate_limit_per_min: u32,
+    /// Concurrent server-sent-event streams allowed in total.
+    pub max_sse_streams: usize,
     /// Shut down on Ctrl-C (for the CLI).
     pub handle_ctrl_c: bool,
 }
@@ -51,6 +57,7 @@ impl ServerConfig {
             auth,
             embedded_workers: 1,
             rate_limit_per_min: 1200,
+            max_sse_streams: DEFAULT_MAX_SSE_STREAMS,
             handle_ctrl_c: false,
         }
     }
@@ -74,6 +81,7 @@ pub struct AppState {
     pub auth: Arc<Auth>,
     pub stopping: Arc<AtomicBool>,
     limiter: Arc<RateLimiter>,
+    pub sse_slots: Arc<tokio::sync::Semaphore>,
 }
 
 /// Handle to a running server. Dropping it shuts the server down.
@@ -130,6 +138,17 @@ fn digest_prefix(s: &str) -> String {
         .collect()
 }
 
+/// Who a request counts against. A valid token gets its own bucket; everything else (no token, a wrong
+/// token, a made-up token) shares one bucket per client address, so guessing cannot dodge the limit.
+fn limit_key(state: &AppState, peer: SocketAddr, authorization: Option<&str>) -> String {
+    if !state.auth.is_open() && state.auth.authenticate(authorization).is_some() {
+        if let Some(h) = authorization {
+            return format!("t:{}", digest_prefix(h));
+        }
+    }
+    format!("ip:{}", peer.ip())
+}
+
 async fn limit_requests(
     State(s): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -139,21 +158,53 @@ async fn limit_requests(
     let path = req.uri().path();
     let limited = (path.starts_with("/api/") && path != "/api/health") || path == "/mcp";
     if limited {
-        let key = match req
+        let authorization = req
             .headers()
             .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-        {
-            Some(h) => format!("t:{}", digest_prefix(h)),
-            None => format!("ip:{}", peer.ip()),
-        };
-        if !s.limiter.check(&key) {
+            .and_then(|v| v.to_str().ok());
+        if !s.limiter.check(&limit_key(&s, peer, authorization)) {
             return (
                 StatusCode::TOO_MANY_REQUESTS,
                 [(header::RETRY_AFTER, "60")],
                 "{\"error\":\"rate limit exceeded\"}",
             )
                 .into_response();
+        }
+    }
+    next.run(req).await
+}
+
+/// `host` or `host:port` -> true if it names a loopback address.
+fn is_loopback_host(authority: &str) -> bool {
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else {
+        authority.rsplit_once(':').map_or(authority, |(h, _)| h)
+    };
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// Without tokens the server trusts anything that can reach it, so it must not be drivable from a
+/// web page: reject unknown Host headers (DNS rebinding) and cross-site Origins (CSRF).
+async fn guard_open_mode(State(s): State<AppState>, req: Request, next: Next) -> Response {
+    if s.auth.is_open() {
+        let headers = req.headers();
+        let host = headers
+            .get(header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let origin_ok = match headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+            None => true,
+            Some(o) => o
+                .strip_prefix("http://")
+                .or_else(|| o.strip_prefix("https://"))
+                .is_some_and(|a| a.eq_ignore_ascii_case(host)),
+        };
+        if !is_loopback_host(host) || !origin_ok {
+            return (StatusCode::FORBIDDEN, "{\"error\":\"forbidden: this server has no API tokens and only accepts same-origin local requests\"}").into_response();
         }
     }
     next.run(req).await
@@ -208,6 +259,10 @@ fn router(state: AppState) -> Router {
         .route("/mcp", post(api::mcp))
         .fallback(ui::handler)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            guard_open_mode,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             limit_requests,
@@ -271,12 +326,13 @@ pub fn start(config: ServerConfig, svc: Service, engine: Engine) -> io::Result<R
         auth: Arc::new(config.auth.clone()),
         stopping: stopping.clone(),
         limiter: Arc::new(RateLimiter::new(config.rate_limit_per_min)),
+        sse_slots: Arc::new(tokio::sync::Semaphore::new(config.max_sse_streams)),
     };
     let workers = spawn_workers(config.embedded_workers, &svc, &engine, &stopping);
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
     let ctrl_c = config.handle_ctrl_c;
     let thread = std::thread::Builder::new().name("anthill-server".to_string()).spawn(move || {
-        let rt = match tokio::runtime::Builder::new_multi_thread().worker_threads(4).enable_all().build() {
+        let rt = match tokio::runtime::Builder::new_multi_thread().worker_threads(4).max_blocking_threads(MAX_BLOCKING_THREADS).enable_all().build() {
             Ok(rt) => rt,
             Err(e) => {
                 eprintln!("anthill-server: cannot start the async runtime: {e}");

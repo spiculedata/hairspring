@@ -1,7 +1,7 @@
 //! Anthill persistence layer.
 //!
 //! One [`Store`] trait, implemented for SQLite (default, zero config) and
-//! Postgres (feature `postgres`). All time values are milliseconds since the
+//! Postgres (added in a later phase). All time values are milliseconds since the
 //! Unix epoch and are passed in explicitly so behaviour is testable.
 mod sqlite;
 mod types;
@@ -38,10 +38,15 @@ pub fn new_id(prefix: &str) -> String {
     format!("{prefix}_{}", hex(&digest[..8]))
 }
 
+/// Seeds are limited to 53 bits so JSON consumers that parse numbers as doubles (browsers, LLM tool
+/// clients) see exactly the value we stored.
+const JS_SAFE_MASK: u64 = (1 << 53) - 1;
+
 /// Unpredictable-enough seed for runs that do not specify one (not for secrets).
 pub fn random_seed() -> u64 {
     let id = new_id("seed");
-    u64::from_str_radix(id.trim_start_matches("seed_"), 16).unwrap_or(0x5eed)
+    let raw = u64::from_str_radix(id.trim_start_matches("seed_"), 16).unwrap_or(0x5eed);
+    raw & JS_SAFE_MASK
 }
 
 pub fn sha256_hex(data: &[u8]) -> String {
@@ -59,6 +64,7 @@ pub trait Store: Send + Sync {
     fn list_runs(&self, limit: u32) -> Result<Vec<RunRecord>>;
     fn mark_running(&self, id: &str, now: i64) -> Result<()>;
     fn update_progress(&self, id: &str, steps: u64, trials: u64) -> Result<()>;
+    /// Moves a queued or running run to a final state. Returns false (changing nothing) if it was already final.
     fn finish_run(
         &self,
         id: &str,
@@ -67,7 +73,7 @@ pub trait Store: Send + Sync {
         trials: u64,
         error: Option<&str>,
         now: i64,
-    ) -> Result<()>;
+    ) -> Result<bool>;
     /// Cancels a queued or running run. Returns false if it was already terminal.
     fn cancel_run(&self, id: &str, now: i64) -> Result<bool>;
 
@@ -86,6 +92,18 @@ pub trait Store: Send + Sync {
     fn lease_job(&self, worker_id: &str, lease_secs: u64, now: i64) -> Result<Option<Job>>;
     fn heartbeat_job(&self, id: &str, worker_id: &str, lease_secs: u64, now: i64) -> Result<bool>;
     fn complete_job(&self, id: &str, worker_id: &str) -> Result<bool>;
+    /// Fails running jobs whose lease expired after their last permitted attempt, and reports them
+    /// (exactly once) so their runs can be finalised.
+    fn fail_expired_jobs(&self, now: i64) -> Result<Vec<ExpiredJob>>;
+    /// Atomically records a worker's result: failure row, run state and `finished` event, and closes the job.
+    fn finish_job(
+        &self,
+        id: &str,
+        worker_id: &str,
+        result: &JobResult,
+        now: i64,
+    ) -> Result<FinishOutcome>;
+    fn queued_job_count(&self) -> Result<u64>;
     /// Records a failure; requeues the job until [`MAX_JOB_ATTEMPTS`] is reached.
     fn fail_job(&self, id: &str, worker_id: &str, error: &str, now: i64) -> Result<bool>;
 
@@ -97,4 +115,7 @@ pub trait Store: Send + Sync {
     fn register_worker(&self, name: &str, caps_json: &str, now: i64) -> Result<WorkerRecord>;
     fn touch_worker(&self, id: &str, now: i64) -> Result<()>;
     fn list_workers(&self) -> Result<Vec<WorkerRecord>>;
+    fn worker_count(&self) -> Result<u64>;
+    /// Deletes workers not seen since `before`; returns how many were removed.
+    fn prune_workers(&self, before: i64) -> Result<u64>;
 }

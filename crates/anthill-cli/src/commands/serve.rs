@@ -23,9 +23,25 @@ pub struct ServeArgs {
     pub tokens_file: Option<PathBuf>,
 }
 
+/// A readable-by-others secrets file is a leak waiting to happen; say so (Unix only).
+pub(crate) fn loose_permissions_warning(path: &std::path::Path) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(path).ok()?.permissions().mode();
+    (mode & 0o077 != 0).then(|| {
+        format!(
+            "warning: {} is readable by other users (mode {:o}); run `chmod 600` on it",
+            path.display(),
+            mode & 0o777
+        )
+    })
+}
+
 fn auth_from(args: &ServeArgs) -> CmdResult<Auth> {
     let spec = match &args.tokens_file {
         Some(path) => {
+            if let Some(w) = loose_permissions_warning(path) {
+                eprintln!("anthill: {w}");
+            }
             let text = std::fs::read_to_string(path)
                 .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
             text.lines()
@@ -77,4 +93,28 @@ pub fn run_mcp_stdio(ctx: &Ctx) -> CmdResult<i32> {
     let stdin = std::io::stdin();
     anthill_mcp::serve_stdio(&server, Role::Admin, stdin.lock(), std::io::stdout().lock())?;
     Ok(crate::EXIT_OK)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::loose_permissions_warning;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn warns_only_for_files_others_can_read() {
+        let dir = std::env::temp_dir().join(format!(
+            "anthill-perm-{}-{}",
+            std::process::id(),
+            anthill_store::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("tokens");
+        std::fs::write(&f, "x").unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(loose_permissions_warning(&f).unwrap().contains("chmod 600"));
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(loose_permissions_warning(&f).is_none());
+        assert!(loose_permissions_warning(&dir.join("missing")).is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

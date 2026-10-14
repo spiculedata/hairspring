@@ -395,3 +395,125 @@ fn stdio_loop_processes_lines_and_stops_at_eof() {
     assert_eq!(lines.len(), 2);
     assert_eq!(lines[1]["id"], 2);
 }
+
+// ---- hardening (security review) ----
+#[test]
+fn batches_are_capped() {
+    let s = server();
+    let ping = |n: usize| {
+        Value::Array(
+            (0..n)
+                .map(|i| json!({"jsonrpc": "2.0", "id": i, "method": "ping"}))
+                .collect(),
+        )
+    };
+    let ok: Value =
+        serde_json::from_str(&s.handle_message(&ping(16).to_string(), Role::Read).unwrap())
+            .unwrap();
+    assert_eq!(ok.as_array().unwrap().len(), 16);
+    let too_many: Value =
+        serde_json::from_str(&s.handle_message(&ping(17).to_string(), Role::Read).unwrap())
+            .unwrap();
+    assert_eq!(too_many["error"]["code"], -32600, "{too_many}");
+    assert!(too_many["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("batch"));
+}
+
+#[test]
+fn concurrent_waits_are_bounded_so_they_cannot_exhaust_the_server() {
+    let registry = Arc::new(default_registry());
+    let engine = Engine::new(registry.clone(), Config::from_registry(&registry));
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let s = McpServer::new(Service::new(store), engine, false).with_max_waits(0);
+    let r = tool(
+        &s,
+        Role::Run,
+        "start_run",
+        json!({"target": "lock-lease", "wait": true}),
+    );
+    assert_eq!(r["result"]["isError"], json!(true), "{r}");
+    assert!(
+        r["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("too many"),
+        "{r}"
+    );
+    let queued = tool(&s, Role::Run, "start_run", json!({"target": "lock-lease"}));
+    assert_eq!(
+        structured(&queued)["run"]["state"],
+        "queued",
+        "non-waiting submissions still work"
+    );
+}
+
+#[test]
+fn agent_facing_text_marks_system_output_as_untrusted() {
+    let s = server();
+    let init = rpc(&s, Role::Read, "initialize", json!({}));
+    assert!(init["result"]["instructions"]
+        .as_str()
+        .unwrap()
+        .to_lowercase()
+        .contains("untrusted"));
+    let run = tool(
+        &s,
+        Role::Run,
+        "start_run",
+        json!({"target": "lock-lease", "seed": 7}),
+    );
+    let fid = structured(&run)["failures"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let f = tool(&s, Role::Read, "get_failure", json!({"failure_id": fid}));
+    let explanation = structured(&f)["explanation"]
+        .as_str()
+        .unwrap()
+        .to_lowercase();
+    assert!(explanation.contains("untrusted"), "{explanation}");
+}
+
+#[test]
+fn internal_errors_are_not_leaked_through_tool_results() {
+    // A run id that exists in the format but whose lookup path hits storage must never echo SQL text.
+    let s = server();
+    let r = tool(
+        &s,
+        Role::Read,
+        "get_run",
+        json!({"run_id": "run_0123456789abcdef"}),
+    );
+    let text = r["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_lowercase();
+    assert!(
+        !text.contains("sqlite") && !text.contains("rusqlite") && !text.contains("sql"),
+        "{text}"
+    );
+}
+
+#[test]
+fn stdio_survives_an_oversized_line_and_keeps_serving() {
+    let s = server();
+    let huge = "x".repeat(MAX + 1000);
+    let input = format!(
+        "{huge}\n{}\n",
+        json!({"jsonrpc": "2.0", "id": 9, "method": "ping"})
+    );
+    let mut out = Vec::new();
+    anthill_mcp::serve_stdio(&s, Role::Admin, std::io::Cursor::new(input), &mut out).unwrap();
+    let lines: Vec<Value> = String::from_utf8(out)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0]["error"]["code"], -32600);
+    assert_eq!(lines[1]["id"], 9, "the next message is still handled");
+}
+
+const MAX: usize = anthill_mcp::MAX_MESSAGE_BYTES;

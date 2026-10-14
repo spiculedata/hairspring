@@ -13,8 +13,9 @@ use serde::Deserialize;
 use std::convert::Infallible;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
+use tokio::sync::OwnedSemaphorePermit;
 
-const POLL: Duration = Duration::from_millis(200);
+const POLL: Duration = Duration::from_millis(400);
 const PAGE: u32 = 100;
 const MAX_STREAM: Duration = Duration::from_secs(600);
 
@@ -29,6 +30,8 @@ struct Cursor {
     last_id: i64,
     started: Instant,
     done: bool,
+    /// Held for the life of the stream; released when it ends.
+    _slot: OwnedSemaphorePermit,
 }
 
 pub async fn events(
@@ -45,6 +48,12 @@ pub async fn events(
     blocking(move || svc.get_run(&id))
         .await?
         .ok_or_else(ApiError::not_found)?;
+    let slot = s.sse_slots.clone().try_acquire_owned().map_err(|_| {
+        ApiError::new(
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "too many open event streams",
+        )
+    })?;
 
     let cursor = Cursor {
         state: s,
@@ -52,6 +61,7 @@ pub async fn events(
         last_id: q.after.unwrap_or(0).max(0),
         started: Instant::now(),
         done: false,
+        _slot: slot,
     };
     let stream = stream::unfold(cursor, |mut c| async move {
         if c.done {

@@ -9,7 +9,7 @@ use anthill_mcp::validate;
 use anthill_service::{Role, ServiceError, StartRun};
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{FromRequest, Path, Query, Request, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::de::DeserializeOwned;
@@ -190,18 +190,48 @@ pub async fn replay(
     Ok(Json(serde_json::to_value(out).unwrap_or_default()))
 }
 
+/// Worker ids act as lease credentials for the worker endpoints, so only `run`+ callers may see them.
 pub async fn workers(State(s): State<AppState>, caller: Caller) -> Result<Json<Value>, ApiError> {
     caller.need(Role::Read)?;
+    let reveal_ids = caller.role.allows(Role::Run);
     let workers = blocking(move || s.svc.list_workers()).await?;
-    Ok(Json(json!({ "workers": workers })))
+    let items: Vec<Value> = workers
+        .into_iter()
+        .map(|w| {
+            let mut v = serde_json::to_value(w).unwrap_or_default();
+            if !reveal_ids {
+                if let Some(o) = v.as_object_mut() {
+                    o.remove("id");
+                }
+            }
+            v
+        })
+        .collect();
+    Ok(Json(json!({ "workers": items })))
 }
 
 /// MCP over HTTP: one JSON-RPC message (or batch) per POST.
 pub async fn mcp(
     State(s): State<AppState>,
     caller: Caller,
+    headers: HeaderMap,
     body: String,
 ) -> Result<Response, ApiError> {
+    // Browsers can send text/plain and form posts cross-site without a preflight; JSON-RPC must be application/json.
+    let is_json = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| {
+            ct.trim()
+                .to_ascii_lowercase()
+                .starts_with("application/json")
+        });
+    if !is_json {
+        return Err(ApiError::new(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "Content-Type must be application/json",
+        ));
+    }
     let role = caller.role;
     let mcp = s.mcp.clone();
     let reply = tokio::task::spawn_blocking(move || mcp.handle_message(&body, role))

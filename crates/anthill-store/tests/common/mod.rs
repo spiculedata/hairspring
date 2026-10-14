@@ -27,6 +27,12 @@ pub fn run_all(make: &dyn Fn() -> Arc<dyn Store>) {
     workers_register_and_touch(&*make());
     cancel_run_cancels_queued_job(&*make());
     hostile_strings_are_stored_verbatim(&*make());
+    finish_run_is_guarded_against_terminal_overwrite(&*make());
+    expired_exhausted_jobs_are_reported_for_finalisation(&*make());
+    finish_job_is_atomic_and_idempotent(&*make());
+    finish_job_leaves_cancelled_runs_alone(&*make());
+    counts_for_admission_control(&*make());
+    stale_workers_can_be_pruned(&*make());
     concurrent_leases_never_duplicate(make());
 }
 
@@ -278,4 +284,195 @@ pub fn concurrent_leases_never_duplicate(s: Arc<dyn Store>) {
     all.sort();
     all.dedup();
     assert_eq!(all.len(), 40, "every job leased exactly once");
+}
+
+pub fn finish_run_is_guarded_against_terminal_overwrite(s: &dyn Store) {
+    let r = new_run(s, "t", 1);
+    s.mark_running(&r.id, 2).unwrap();
+    assert!(s
+        .finish_run(&r.id, RunState::Passed, 5, 1, None, 3)
+        .unwrap());
+    assert!(
+        !s.finish_run(&r.id, RunState::Error, 0, 0, Some("late"), 4)
+            .unwrap(),
+        "a finished run cannot be overwritten"
+    );
+    let g = s.get_run(&r.id).unwrap().unwrap();
+    assert_eq!((g.state, g.steps, g.error), (RunState::Passed, 5, None));
+}
+
+pub fn expired_exhausted_jobs_are_reported_for_finalisation(s: &dyn Store) {
+    let r = new_run(s, "t", 1);
+    let j = s.enqueue_job(&r.id, "run", "{}", 0).unwrap();
+    for (n, t) in [1_000, 20_000, 40_000].into_iter().enumerate() {
+        assert_eq!(
+            s.lease_job("w", 10, t).unwrap().expect("leased").attempts as usize,
+            n + 1
+        );
+    }
+    assert!(
+        s.lease_job("w", 10, 60_000).unwrap().is_none(),
+        "attempts exhausted"
+    );
+    assert!(
+        s.fail_expired_jobs(30_000).unwrap().is_empty(),
+        "lease from attempt 3 has not expired yet"
+    );
+    let expired = s.fail_expired_jobs(60_000).unwrap();
+    assert_eq!(expired.len(), 1);
+    assert_eq!(
+        (expired[0].job_id.as_str(), expired[0].run_id.as_str()),
+        (j.id.as_str(), r.id.as_str())
+    );
+    assert_eq!(s.get_job(&j.id).unwrap().unwrap().status, JobStatus::Failed);
+    assert!(
+        s.fail_expired_jobs(70_000).unwrap().is_empty(),
+        "reported exactly once"
+    );
+}
+
+fn result(state: RunState, failure: Option<NewFailure>) -> JobResult {
+    JobResult {
+        state,
+        steps: 42,
+        trials: 3,
+        error: None,
+        failure,
+        event_payload_json: format!("{{\"state\":\"{}\"}}", state.as_str()),
+    }
+}
+
+/// The run id in the failure is deliberately bogus: the store must attach failures to the job's own run.
+fn failure_for(_run_id: &str) -> NewFailure {
+    NewFailure {
+        run_id: "run_ignored".into(),
+        target: "t".into(),
+        message: "m".into(),
+        original_len: 9,
+        shrunk_len: 3,
+        bundle_hash: "h".into(),
+        steps_json: "[]".into(),
+    }
+}
+
+pub fn finish_job_is_atomic_and_idempotent(s: &dyn Store) {
+    let r = new_run(s, "t", 1);
+    s.enqueue_job(&r.id, "run", "{}", 2).unwrap();
+    let job = s.lease_job("w1", 60, 10).unwrap().unwrap();
+    s.mark_running(&r.id, 10).unwrap();
+
+    let r_fail = result(RunState::Failed, Some(failure_for(&r.id)));
+    assert_eq!(
+        s.finish_job(&job.id, "intruder", &r_fail, 20).unwrap(),
+        FinishOutcome::NotLeased
+    );
+    assert!(
+        s.list_failures(&r.id).unwrap().is_empty(),
+        "nothing written for a non-owner"
+    );
+    assert_eq!(s.get_run(&r.id).unwrap().unwrap().state, RunState::Running);
+
+    assert_eq!(
+        s.finish_job(&job.id, "w1", &r_fail, 30).unwrap(),
+        FinishOutcome::Applied
+    );
+    let g = s.get_run(&r.id).unwrap().unwrap();
+    assert_eq!(
+        (g.state, g.steps, g.trials, g.finished_at),
+        (RunState::Failed, 42, 3, Some(30))
+    );
+    let fails = s.list_failures(&r.id).unwrap();
+    assert_eq!(fails.len(), 1);
+    assert_eq!(
+        fails[0].run_id, r.id,
+        "failure is attached to the job's run, not a caller-supplied one"
+    );
+    let kinds: Vec<_> = s
+        .list_events(&r.id, 0, 10)
+        .unwrap()
+        .into_iter()
+        .map(|e| e.kind)
+        .collect();
+    assert_eq!(kinds, vec!["finished"]);
+    assert_eq!(s.get_job(&job.id).unwrap().unwrap().status, JobStatus::Done);
+
+    assert_eq!(
+        s.finish_job(&job.id, "w1", &r_fail, 40).unwrap(),
+        FinishOutcome::NotLeased,
+        "second call is a no-op"
+    );
+    assert_eq!(
+        s.list_failures(&r.id).unwrap().len(),
+        1,
+        "no duplicate failure"
+    );
+    assert_eq!(
+        s.list_events(&r.id, 0, 10).unwrap().len(),
+        1,
+        "no duplicate event"
+    );
+}
+
+pub fn finish_job_leaves_cancelled_runs_alone(s: &dyn Store) {
+    let r = new_run(s, "t", 1);
+    s.enqueue_job(&r.id, "run", "{}", 2).unwrap();
+    let job = s.lease_job("w1", 60, 10).unwrap().unwrap();
+    s.mark_running(&r.id, 10).unwrap();
+    assert!(s.cancel_run(&r.id, 15).unwrap());
+    let out = s
+        .finish_job(
+            &job.id,
+            "w1",
+            &result(RunState::Failed, Some(failure_for(&r.id))),
+            20,
+        )
+        .unwrap();
+    assert_eq!(out, FinishOutcome::RunAlreadyFinal);
+    assert_eq!(
+        s.get_run(&r.id).unwrap().unwrap().state,
+        RunState::Cancelled
+    );
+    assert!(s.list_failures(&r.id).unwrap().is_empty());
+    assert!(s.list_events(&r.id, 0, 10).unwrap().is_empty());
+    assert_eq!(
+        s.get_job(&job.id).unwrap().unwrap().status,
+        JobStatus::Done,
+        "the job itself is closed"
+    );
+}
+
+pub fn counts_for_admission_control(s: &dyn Store) {
+    assert_eq!(s.queued_job_count().unwrap(), 0);
+    let r = new_run(s, "t", 1);
+    s.enqueue_job(&r.id, "run", "{}", 1).unwrap();
+    s.enqueue_job(&r.id, "run", "{}", 2).unwrap();
+    assert_eq!(s.queued_job_count().unwrap(), 2);
+    s.lease_job("w", 10, 5).unwrap().unwrap();
+    assert_eq!(
+        s.queued_job_count().unwrap(),
+        1,
+        "leased jobs are not queued"
+    );
+    assert_eq!(s.worker_count().unwrap(), 0);
+    s.register_worker("a", "{}", 1).unwrap();
+    assert_eq!(s.worker_count().unwrap(), 1);
+}
+
+pub fn stale_workers_can_be_pruned(s: &dyn Store) {
+    let old = s.register_worker("old", "{}", 100).unwrap();
+    let fresh = s.register_worker("fresh", "{}", 100).unwrap();
+    s.touch_worker(&fresh.id, 10_000).unwrap();
+    assert_eq!(
+        s.prune_workers(5_000).unwrap(),
+        1,
+        "only the worker not seen since before the cutoff"
+    );
+    let names: Vec<_> = s
+        .list_workers()
+        .unwrap()
+        .into_iter()
+        .map(|w| w.name)
+        .collect();
+    assert_eq!(names, vec!["fresh".to_string()]);
+    assert!(s.touch_worker(&old.id, 1).is_err(), "pruned worker is gone");
 }

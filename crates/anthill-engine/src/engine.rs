@@ -53,7 +53,7 @@ impl Engine {
     pub fn run(
         &self,
         req: &RunRequest,
-        progress: &mut dyn FnMut(Progress),
+        progress: &mut dyn FnMut(Progress) -> bool,
     ) -> Result<RunOutcome, EngineError> {
         let spec = self
             .config

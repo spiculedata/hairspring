@@ -118,7 +118,10 @@ fn budget_clamp_caps_runaway_values() {
         wall_secs: u64::MAX,
     }
     .clamp();
-    assert!(b.max_steps <= 50_000_000 && b.wall_secs <= 3600 && b.max_trials <= 100_000);
+    assert!(
+        b.max_steps <= 50_000_000 && b.wall_secs <= 600 && b.max_trials <= 10_000,
+        "{b:?}"
+    );
     assert_eq!(Budget::default().clamp(), Budget::default());
 }
 
@@ -126,7 +129,7 @@ fn budget_clamp_caps_runaway_values() {
 #[test]
 fn engine_finds_shrinks_and_reports_the_lock_bug() {
     let out = engine()
-        .run(&RunRequest::new("lock-lease", 7), &mut |_| {})
+        .run(&RunRequest::new("lock-lease", 7), &mut |_| true)
         .unwrap();
     assert_eq!(out.status, RunStatus::Failed);
     let f = out.failure.expect("failure report");
@@ -149,7 +152,7 @@ fn engine_finds_shrinks_and_reports_the_lock_bug() {
 fn engine_replay_reproduces_a_bundle() {
     let e = engine();
     let f = e
-        .run(&RunRequest::new("pubsub-buggy", 5), &mut |_| {})
+        .run(&RunRequest::new("pubsub-buggy", 5), &mut |_| true)
         .unwrap()
         .failure
         .unwrap();
@@ -165,7 +168,7 @@ fn engine_passes_the_fixed_target_within_budget() {
         max_trials: 10,
         wall_secs: 30,
     });
-    let out = engine().run(&req, &mut |_| {}).unwrap();
+    let out = engine().run(&req, &mut |_| true).unwrap();
     assert_eq!(out.status, RunStatus::Passed);
     assert!(out.failure.is_none() && out.steps_executed > 0);
 }
@@ -173,13 +176,13 @@ fn engine_passes_the_fixed_target_within_budget() {
 #[test]
 fn engine_runs_are_deterministic_for_a_seed() {
     let a = engine()
-        .run(&RunRequest::new("lock-lease", 11), &mut |_| {})
+        .run(&RunRequest::new("lock-lease", 11), &mut |_| true)
         .unwrap()
         .failure
         .unwrap()
         .bundle;
     let b = engine()
-        .run(&RunRequest::new("lock-lease", 11), &mut |_| {})
+        .run(&RunRequest::new("lock-lease", 11), &mut |_| true)
         .unwrap()
         .failure
         .unwrap()
@@ -197,7 +200,10 @@ fn engine_emits_progress_events() {
                 max_trials: 1,
                 wall_secs: 30,
             }),
-            &mut |_| events += 1,
+            &mut |_| {
+                events += 1;
+                true
+            },
         )
         .unwrap();
     assert!(events >= 1);
@@ -207,14 +213,14 @@ fn engine_emits_progress_events() {
 fn engine_rejects_unknown_targets_and_missing_backends() {
     let e = engine();
     assert!(matches!(
-        e.run(&RunRequest::new("nope", 1), &mut |_| {}),
+        e.run(&RunRequest::new("nope", 1), &mut |_| true),
         Err(EngineError::UnknownTarget(_))
     ));
     let registry = Arc::new(default_registry());
     let cfg = Config::parse("[target.p]\nkind=\"process\"\ncommand=[\"/bin/true\"]\n").unwrap();
     let e2 = Engine::new(registry, cfg);
     assert!(matches!(
-        e2.run(&RunRequest::new("p", 1), &mut |_| {}),
+        e2.run(&RunRequest::new("p", 1), &mut |_| true),
         Err(EngineError::BackendUnavailable(_))
     ));
 }
@@ -228,7 +234,7 @@ fn engine_clamps_oversized_request_budgets() {
     });
     // must complete quickly and not error even though budget is tiny
     assert_eq!(
-        engine().run(&req, &mut |_| {}).unwrap().status,
+        engine().run(&req, &mut |_| true).unwrap().status,
         RunStatus::Passed
     );
 }
@@ -238,7 +244,7 @@ fn failed() -> (String, anthill_engine::report::RunOutcome) {
     (
         "lock-lease".to_string(),
         engine()
-            .run(&RunRequest::new("lock-lease", 7), &mut |_| {})
+            .run(&RunRequest::new("lock-lease", 7), &mut |_| true)
             .unwrap(),
     )
 }
@@ -331,4 +337,28 @@ fn doctor_rejects_unknown_targets_and_unsupported_backends() {
         Engine::new(registry, cfg).doctor("p", 1, 1),
         Err(EngineError::BackendUnavailable(_))
     ));
+}
+
+#[test]
+fn engine_stops_early_when_the_progress_callback_says_stop() {
+    let req = RunRequest::new("pubsub-atomic", 1).with_budget(Budget {
+        max_steps: 10_000_000,
+        max_trials: 1000,
+        wall_secs: 60,
+    });
+    let mut calls = 0;
+    let started = std::time::Instant::now();
+    let out = engine()
+        .run(&req, &mut |_| {
+            calls += 1;
+            false
+        })
+        .unwrap();
+    assert_eq!(calls, 1, "asked to stop at the first report");
+    assert_eq!(out.status, RunStatus::Error);
+    assert_eq!(out.error.as_deref(), Some("cancelled"));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "did not run the whole budget"
+    );
 }

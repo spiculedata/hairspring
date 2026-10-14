@@ -182,12 +182,15 @@ impl Store for SqliteStore {
         trials: u64,
         error: Option<&str>,
         now: i64,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let n = self.conn().execute(
-            "UPDATE runs SET state=?, steps=?, trials=?, error=?, finished_at=? WHERE id=? AND state NOT IN ('cancelled')",
+            "UPDATE runs SET state=?, steps=?, trials=?, error=?, finished_at=? WHERE id=? AND state IN ('queued','running')",
             params![state.as_str(), steps as i64, trials as i64, error, now, id],
         )?;
-        expect_changed(n, "run", id)
+        if n == 0 && self.get_run(id)?.is_none() {
+            return Err(StoreError::NotFound(format!("run {id}")));
+        }
+        Ok(n > 0)
     }
 
     fn cancel_run(&self, id: &str, now: i64) -> Result<bool> {
@@ -281,10 +284,6 @@ impl Store for SqliteStore {
     fn lease_job(&self, worker_id: &str, lease_secs: u64, now: i64) -> Result<Option<Job>> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        tx.execute(
-            "UPDATE jobs SET status='failed', last_error=COALESCE(last_error,'lease expired too many times') WHERE status='running' AND lease_until < ? AND attempts >= ?",
-            params![now, MAX_JOB_ATTEMPTS],
-        )?;
         let id: Option<String> = tx
             .query_row(
                 "SELECT id FROM jobs WHERE (status='queued' OR (status='running' AND lease_until < ?)) AND attempts < ? ORDER BY created_at, rowid LIMIT 1",
@@ -328,6 +327,100 @@ impl Store for SqliteStore {
             params![error, MAX_JOB_ATTEMPTS, id, worker_id],
         )?;
         Ok(n > 0)
+    }
+
+    fn fail_expired_jobs(&self, now: i64) -> Result<Vec<ExpiredJob>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let expired = {
+            let mut stmt = tx.prepare("SELECT id, run_id FROM jobs WHERE status='running' AND lease_until < ? AND attempts >= ?")?;
+            let rows = stmt
+                .query_map(params![now, MAX_JOB_ATTEMPTS], |r| {
+                    Ok(ExpiredJob {
+                        job_id: r.get(0)?,
+                        run_id: r.get(1)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            rows
+        };
+        for e in &expired {
+            tx.execute("UPDATE jobs SET status='failed', lease_until=NULL, last_error=COALESCE(last_error,'lease expired too many times') WHERE id=?", [&e.job_id])?;
+        }
+        tx.commit()?;
+        Ok(expired)
+    }
+
+    fn finish_job(
+        &self,
+        id: &str,
+        worker_id: &str,
+        result: &JobResult,
+        now: i64,
+    ) -> Result<FinishOutcome> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let job: Option<(String, String, Option<String>)> = tx
+            .query_row(
+                "SELECT run_id, status, lease_owner FROM jobs WHERE id=?",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        let Some((run_id, status, owner)) = job else {
+            return Ok(FinishOutcome::NotLeased);
+        };
+        if status != JobStatus::Running.as_str() || owner.as_deref() != Some(worker_id) {
+            return Ok(FinishOutcome::NotLeased);
+        }
+        let run_state: Option<String> = tx
+            .query_row("SELECT state FROM runs WHERE id=?", [&run_id], |r| r.get(0))
+            .optional()?;
+        let open = run_state
+            .as_deref()
+            .and_then(RunState::parse)
+            .is_some_and(|s| !s.is_terminal());
+        if open {
+            if let Some(f) = &result.failure {
+                tx.execute(
+                    "INSERT INTO failures(id,run_id,target,message,original_len,shrunk_len,bundle_hash,steps_json,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                    params![new_id("fail"), run_id, f.target, f.message, f.original_len as i64, f.shrunk_len as i64, f.bundle_hash, f.steps_json, now],
+                )?;
+            }
+            tx.execute(
+                "UPDATE runs SET state=?, steps=?, trials=?, error=?, finished_at=? WHERE id=?",
+                params![
+                    result.state.as_str(),
+                    result.steps as i64,
+                    result.trials as i64,
+                    result.error,
+                    now,
+                    run_id
+                ],
+            )?;
+            tx.execute(
+                "INSERT INTO events(run_id,ts,kind,payload_json) VALUES (?,?,?,?)",
+                params![run_id, now, "finished", result.event_payload_json],
+            )?;
+        }
+        tx.execute(
+            "UPDATE jobs SET status='done', lease_until=NULL WHERE id=?",
+            [id],
+        )?;
+        tx.commit()?;
+        Ok(if open {
+            FinishOutcome::Applied
+        } else {
+            FinishOutcome::RunAlreadyFinal
+        })
+    }
+
+    fn queued_job_count(&self) -> Result<u64> {
+        Ok(self
+            .conn()
+            .query_row("SELECT COUNT(*) FROM jobs WHERE status='queued'", [], |r| {
+                r.get::<_, i64>(0)
+            })? as u64)
     }
 
     fn add_event(&self, run_id: &str, kind: &str, payload_json: &str, now: i64) -> Result<i64> {
@@ -377,6 +470,19 @@ impl Store for SqliteStore {
             params![now, id],
         )?;
         expect_changed(n, "worker", id)
+    }
+
+    fn worker_count(&self) -> Result<u64> {
+        Ok(self
+            .conn()
+            .query_row("SELECT COUNT(*) FROM workers", [], |r| r.get::<_, i64>(0))?
+            as u64)
+    }
+
+    fn prune_workers(&self, before: i64) -> Result<u64> {
+        Ok(self
+            .conn()
+            .execute("DELETE FROM workers WHERE last_seen < ?", [before])? as u64)
     }
 
     fn list_workers(&self) -> Result<Vec<WorkerRecord>> {

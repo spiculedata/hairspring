@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 const MAX_STEPS_CAP: u64 = 50_000_000;
-const MAX_TRIALS_CAP: u64 = 100_000;
-const MAX_WALL_SECS_CAP: u64 = 3600;
+const MAX_TRIALS_CAP: u64 = 10_000;
+const MAX_WALL_SECS_CAP: u64 = 600;
 const MAX_NAME_LEN: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

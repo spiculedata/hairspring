@@ -8,6 +8,11 @@ const LIST_LIMIT: u32 = 20;
 const INVALID_PARAMS: i64 = -32602;
 const NOT_FOUND: i64 = -32002;
 
+fn internal_error(detail: impl std::fmt::Display) -> Reply {
+    eprintln!("anthill-mcp: internal error: {detail}");
+    Reply::Error(-32603, "internal error".to_string())
+}
+
 pub fn templates() -> Value {
     json!({ "resourceTemplates": [
         { "uriTemplate": "anthill://runs/{id}", "name": "Run", "description": "A stored run with its failures", "mimeType": "application/json" },
@@ -20,11 +25,11 @@ pub fn list(server: &McpServer) -> Reply {
     let svc = server.service();
     let runs = match svc.list_runs(LIST_LIMIT) {
         Ok(r) => r,
-        Err(e) => return Reply::Error(-32603, e.to_string()),
+        Err(e) => return internal_error(e),
     };
     let failures = match svc.recent_failures(LIST_LIMIT) {
         Ok(f) => f,
-        Err(e) => return Reply::Error(-32603, e.to_string()),
+        Err(e) => return internal_error(e),
     };
     let mut items: Vec<Value> = runs
         .iter()
@@ -76,6 +81,6 @@ pub fn read(server: &McpServer, params: &Value) -> Reply {
             Reply::Result(json!({ "contents": [{ "uri": uri, "mimeType": mime, "text": text }] }))
         }
         Ok(None) => Reply::Error(NOT_FOUND, "resource not found".to_string()),
-        Err(e) => Reply::Error(-32603, e.to_string()),
+        Err(e) => internal_error(e),
     }
 }

@@ -16,6 +16,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const ROUND_STEPS: u64 = 100_000;
+/// Error text of an outcome produced because the caller asked the run to stop.
+pub const CANCELLED: &str = "cancelled";
 const BUILD: &str = env!("CARGO_PKG_VERSION");
 
 pub struct SimBackend {
@@ -75,7 +77,7 @@ impl Backend for SimBackend {
         spec: &TargetSpec,
         req: &RunRequest,
         budget: Budget,
-        progress: &mut dyn FnMut(Progress),
+        progress: &mut dyn FnMut(Progress) -> bool,
     ) -> Result<RunOutcome, EngineError> {
         let root = self.root(spec)?;
         let started = Instant::now();
@@ -113,7 +115,7 @@ impl Backend for SimBackend {
                     steps,
                     bundle: bundle.encode(),
                 };
-                progress(Progress {
+                let _ = progress(Progress {
                     steps: steps_total,
                     trials: round,
                     message: "violation found".to_string(),
@@ -126,11 +128,13 @@ impl Backend for SimBackend {
                 ));
             }
             steps_total += max_steps;
-            progress(Progress {
+            if !progress(Progress {
                 steps: steps_total,
                 trials: round,
                 message: format!("explored {steps_total} steps"),
-            });
+            }) {
+                return Ok(RunOutcome::error(CANCELLED));
+            }
             if steps_total >= budget.max_steps
                 || started.elapsed() >= wall
                 || round >= budget.max_trials.max(1)

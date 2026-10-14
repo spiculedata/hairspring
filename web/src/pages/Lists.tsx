@@ -38,10 +38,10 @@ export function Workers() {
           <tr><th>Name</th><th>Id</th><th>Last seen</th></tr>
         </thead>
         <tbody>
-          {(w.data ?? []).map((x) => (
-            <tr key={x.id}>
+          {(w.data ?? []).map((x, i) => (
+            <tr key={x.id ?? `${x.name}-${i}`}>
               <td>{x.name}</td>
-              <td><code>{x.id}</code></td>
+              <td>{x.id ? <code>{x.id}</code> : <span className="muted">hidden</span>}</td>
               <td>{relativeTime(x.last_seen)}</td>
             </tr>
           ))}

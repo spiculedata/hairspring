@@ -76,7 +76,7 @@ pub async fn lease(
         s.svc
             .touch_worker(&b.worker_id)
             .map_err(|_| ServiceError::InvalidRequest("unknown worker".to_string()))?;
-        s.svc.lease(&s.engine, &b.worker_id)
+        s.svc.lease(&b.worker_id)
     })
     .await?;
     Ok(match job {
@@ -103,7 +103,7 @@ pub async fn progress(
     check_job(&job)?;
     check_worker(&b.worker_id)?;
     let message: String = b.message.unwrap_or_default().chars().take(200).collect();
-    blocking(move || {
+    let keep_going = blocking(move || {
         s.svc.report_job_progress(
             &job,
             &b.worker_id,
@@ -115,7 +115,7 @@ pub async fn progress(
         )
     })
     .await?;
-    Ok(Json(json!({ "ok": true })))
+    Ok(Json(json!({ "ok": true, "continue": keep_going })))
 }
 
 #[derive(Deserialize)]

@@ -26,7 +26,11 @@ fn token_from(args: &WorkerArgs) -> CmdResult<Option<String>> {
     if let Some(path) = &args.token_file {
         let text = std::fs::read_to_string(path)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        return Ok(Some(text.trim().to_string()));
+        let token = text.trim().to_string();
+        if token.is_empty() {
+            return Err(format!("{} is empty", path.display()).into());
+        }
+        return Ok(Some(token));
     }
     Ok(std::env::var("ANTHILL_TOKEN")
         .ok()
@@ -38,12 +42,9 @@ pub fn run(ctx: &Ctx, args: &WorkerArgs, out: &mut dyn Write) -> CmdResult<i32> 
         .name
         .clone()
         .unwrap_or_else(|| format!("worker-{}", std::process::id()));
-    let cfg = WorkerConfig {
-        server: args.server.clone(),
-        token: token_from(args)?,
-        name: name.clone(),
-        poll: Duration::from_millis(args.poll_ms.max(10)),
-    };
+    let mut cfg = WorkerConfig::new(args.server.clone(), name.clone());
+    cfg.token = token_from(args)?;
+    cfg.poll = Duration::from_millis(args.poll_ms.max(10));
     writeln!(out, "anthill: worker `{name}` serving {}", cfg.server)?;
     out.flush()?;
     // Runs until the process is terminated; an interrupted job's lease expires and it is retried elsewhere.

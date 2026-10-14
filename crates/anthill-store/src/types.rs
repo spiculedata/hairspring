@@ -123,3 +123,33 @@ pub struct WorkerRecord {
     pub registered_at: i64,
     pub last_seen: i64,
 }
+
+/// A job whose lease expired after its last permitted attempt; its run must be finalised.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpiredJob {
+    pub job_id: String,
+    pub run_id: String,
+}
+
+/// Everything recorded atomically when a worker finishes a job.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobResult {
+    pub state: RunState,
+    pub steps: u64,
+    pub trials: u64,
+    pub error: Option<String>,
+    /// Attached to the job's own run; `NewFailure::run_id` is ignored.
+    pub failure: Option<NewFailure>,
+    /// Payload of the `finished` event.
+    pub event_payload_json: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinishOutcome {
+    /// The caller does not hold the lease (never did, lost it, or already finished).
+    NotLeased,
+    /// The result was recorded.
+    Applied,
+    /// The lease was held but the run was already final (for example cancelled); the job is closed, nothing else changed.
+    RunAlreadyFinal,
+}
