@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-const NAV_EVENT = 'anthill:navigate';
+const NAV_EVENT = 'hairspring:navigate';
 
 export function navigate(path: string): void {
   if (window.location.pathname !== path) window.history.pushState({}, '', path);

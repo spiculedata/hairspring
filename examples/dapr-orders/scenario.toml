@@ -1,6 +1,6 @@
 # Three orders delivered to the app while the simulated sidecar duplicates, reorders and crashes it.
 [app]
-env = { EXPECTED_IDS = "1,2,3", PYTHONDONTWRITEBYTECODE = "1", PYTHONPYCACHEPREFIX = "/anthill-empty-pycache", PYTHONHASHSEED = "0" }
+env = { EXPECTED_IDS = "1,2,3", PYTHONDONTWRITEBYTECODE = "1", PYTHONPYCACHEPREFIX = "/hairspring-empty-pycache", PYTHONHASHSEED = "0" }
 
 [faults]
 duplicate = 0.5

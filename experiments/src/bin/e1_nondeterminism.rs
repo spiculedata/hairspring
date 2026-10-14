@@ -1,5 +1,5 @@
 //! Exp 1: how non-deterministic is an ordinary program, in-process?
-use anthill_experiments::fnv;
+use hairspring_experiments::fnv;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::thread;

@@ -19,7 +19,7 @@ From SQLite's WAL documentation: a data race that can corrupt a database or lose
 
 ## Why it is a good fit
 
-It is exactly the problem Anthill's Linux backend exists for: a rare interleaving of real, unmodified C code that
+It is exactly the problem Hairspring's Linux backend exists for: a rare interleaving of real, unmodified C code that
 needs controlled scheduling, found by a generic workload plus a strong property. On the Ubuntu 24.04 machine we used, Python's SQLite library reports 3.45.1, inside the affected
 range. A distribution may have backported the fix without changing the version string (check
 `apt changelog libsqlite3-0`), so the plan below builds 3.51.2 and 3.51.3 from source for a reliable comparison.
@@ -30,7 +30,7 @@ range. A distribution may have backported the fix without changing the version s
    unique, checkable rows, and one or two connections issuing `PRAGMA wal_checkpoint(...)` in a loop, all on one
    WAL-mode database file (in a directory outside `/tmp` and the home directory, which Hermit replaces/restricts).
 2. **Property**: after the workload, reopen the database; every committed transaction's rows must be present and
-   `PRAGMA integrity_check` must return `ok`. Print `ANTHILL_VIOLATION: <what is missing>` otherwise.
+   `PRAGMA integrity_check` must return `ok`. Print `HAIRSPRING_VIOLATION: <what is missing>` otherwise.
 3. **Targets**: `sqlite-3.51.2` (affected) and `sqlite-3.51.3` (fixed), same workload, built from the amalgamation.
 4. **Exploration**: `kind = "process"` under Hermit with random scheduling (and `--chaos`), 100s of seeds.
 5. **Success**: a failing seed on 3.51.2 that reproduces 3/3, and the same number of seeds passing on 3.51.3.

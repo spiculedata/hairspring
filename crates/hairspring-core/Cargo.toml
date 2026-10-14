@@ -1,0 +1,6 @@
+[package]
+name = "hairspring-core"
+version = "0.1.0"
+edition = "2021"
+description = "Deterministic simulation testing core: Sim trait, explorer, shrinker, replay bundles, determinism doctor"
+license = "Apache-2.0"

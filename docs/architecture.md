@@ -3,19 +3,19 @@
 ```mermaid
 flowchart LR
   subgraph clients
-    CLI[anthill CLI] --- UI[Web UI] --- MCP[MCP / AI agents] --- CI[GitHub Action]
+    CLI[hairspring CLI] --- UI[Web UI] --- MCP[MCP / AI agents] --- CI[GitHub Action]
   end
   clients --> SVC
-  subgraph server[anthill serve]
+  subgraph server[hairspring serve]
     SVC[Service layer<br/>runs, jobs, results, replay]
     SVC --> ST[(Store<br/>SQLite or PostgreSQL)]
     SVC --> ENG[Engine]
   end
-  W[anthill worker<br/>local or remote] -->|lease / progress / complete| SVC
+  W[hairspring worker<br/>local or remote] -->|lease / progress / complete| SVC
   ENG --> SIM[sim backend]
   ENG --> WASM[wasm backend]
   ENG --> HERMIT[hermit backend<br/>Linux x86-64]
-  HERMIT --> DAPR[anthill-dapr-sim]
+  HERMIT --> DAPR[hairspring-dapr-sim]
 ```
 
 ## One execution model, three ways to explore
@@ -33,13 +33,13 @@ flowchart LR
 
 | Crate | Responsibility | Depends on |
 |---|---|---|
-| `anthill-core` | `Sim`, explorer, shrinker, bundle format, doctor. Std only | nothing |
-| `anthill-engine` | Type-erased registry, `anthill.toml`, `Backend` trait, sim backend, JUnit/SARIF/text | core |
-| `anthill-store` | `Store` trait, SQLite, PostgreSQL, shared conformance suite | nothing |
-| `anthill-service` | The only place that mutates run/job state; validates and sanitises worker results | engine, store |
-| `anthill-hermit`, `anthill-wasm` | Additional backends | engine |
-| `anthill-mcp`, `anthill-server`, `anthill-worker`, `anthill-cli` | Front ends and plumbing | service |
-| `anthill-dapr` | Simulated Dapr sidecar (a standalone supervisor binary) | core |
+| `hairspring-core` | `Sim`, explorer, shrinker, bundle format, doctor. Std only | nothing |
+| `hairspring-engine` | Type-erased registry, `hairspring.toml`, `Backend` trait, sim backend, JUnit/SARIF/text | core |
+| `hairspring-store` | `Store` trait, SQLite, PostgreSQL, shared conformance suite | nothing |
+| `hairspring-service` | The only place that mutates run/job state; validates and sanitises worker results | engine, store |
+| `hairspring-hermit`, `hairspring-wasm` | Additional backends | engine |
+| `hairspring-mcp`, `hairspring-server`, `hairspring-worker`, `hairspring-cli` | Front ends and plumbing | service |
+| `hairspring-dapr` | Simulated Dapr sidecar (a standalone supervisor binary) | core |
 
 Dependencies point one way: front ends depend on the service, the service on the engine and store.
 
@@ -67,4 +67,4 @@ against different code where it can tell (the WASM module hash, the Hermit outpu
 
 1. Everything nondeterministic goes through the runtime: time, randomness, scheduling, network, files.
 2. Iteration order must be defined (no `HashMap` iteration in simulated code).
-3. `anthill doctor <target>` runs seeded walks twice and compares a per-step hash; run it in CI with several seeds.
+3. `hairspring doctor <target>` runs seeded walks twice and compares a per-step hash; run it in CI with several seeds.

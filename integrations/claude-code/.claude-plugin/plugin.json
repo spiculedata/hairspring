@@ -1,7 +1,7 @@
 {
-  "name": "anthill",
+  "name": "hairspring",
   "description": "Deterministic simulation testing for Claude Code: explore a system for property violations, read a minimal reproduction, fix, and replay it.",
   "version": "0.1.0",
-  "author": { "name": "Anthill contributors" },
+  "author": { "name": "Hairspring contributors" },
   "license": "Apache-2.0"
 }

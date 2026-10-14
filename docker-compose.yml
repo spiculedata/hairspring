@@ -6,20 +6,20 @@
 #
 # The server is published on localhost only. Put a TLS-terminating reverse proxy in front before
 # exposing it: bearer tokens and the database connection are plain TCP inside this compose network.
-name: anthill
+name: hairspring
 
 services:
   db:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: anthill
-      POSTGRES_PASSWORD: ${ANTHILL_DB_PASSWORD:?set ANTHILL_DB_PASSWORD in .env}
-      POSTGRES_DB: anthill
+      POSTGRES_USER: hairspring
+      POSTGRES_PASSWORD: ${HAIRSPRING_DB_PASSWORD:?set HAIRSPRING_DB_PASSWORD in .env}
+      POSTGRES_DB: hairspring
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U anthill -d anthill"]
+      test: ["CMD-SHELL", "pg_isready -U hairspring -d hairspring"]
       interval: 3s
       timeout: 3s
       retries: 20
@@ -31,9 +31,9 @@ services:
     # --workers 0: runs are executed by the worker containers, not inside the server.
     command: ["serve", "--addr", "0.0.0.0:7878", "--workers", "0"]
     environment:
-      ANTHILL_DATABASE_URL: postgres://anthill:${ANTHILL_DB_PASSWORD}@db/anthill
+      HAIRSPRING_DATABASE_URL: postgres://hairspring:${HAIRSPRING_DB_PASSWORD}@db/hairspring
       # "token:role,token:role" - roles are read, run, admin (tokens must be 16+ characters)
-      ANTHILL_TOKENS: ${ANTHILL_ADMIN_TOKEN:?set ANTHILL_ADMIN_TOKEN}:admin,${ANTHILL_WORKER_TOKEN:?set ANTHILL_WORKER_TOKEN}:run
+      HAIRSPRING_TOKENS: ${HAIRSPRING_ADMIN_TOKEN:?set HAIRSPRING_ADMIN_TOKEN}:admin,${HAIRSPRING_WORKER_TOKEN:?set HAIRSPRING_WORKER_TOKEN}:run
     ports:
       - "127.0.0.1:7878:7878"
     depends_on:
@@ -46,7 +46,7 @@ services:
     restart: unless-stopped
     command: ["worker", "--server", "http://server:7878", "--poll-ms", "500"]
     environment:
-      ANTHILL_TOKEN: ${ANTHILL_WORKER_TOKEN}
+      HAIRSPRING_TOKEN: ${HAIRSPRING_WORKER_TOKEN}
     depends_on:
       - server
     deploy:

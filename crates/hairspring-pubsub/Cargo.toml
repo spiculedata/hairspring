@@ -1,0 +1,9 @@
+[package]
+name = "hairspring-pubsub"
+version = "0.1.0"
+edition = "2021"
+description = "U4 target: at-least-once pub/sub consumer model for hairspring-core"
+license = "Apache-2.0"
+
+[dependencies]
+hairspring-core = { path = "../hairspring-core" }

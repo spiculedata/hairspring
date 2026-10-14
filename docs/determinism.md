@@ -26,7 +26,7 @@ Host: Scaleway Elastic Metal, Intel Xeon E5-1410 v2 (Ivy Bridge), Ubuntu 24.04, 
 Conclusions: `rr` gives exact replay of one captured failure but cannot steer or branch, so it is a debugger,
 not an exploration engine. Hermit's seeded scheduler is both: seeds explore, and a failing seed replays exactly.
 
-Real programs under Hermit (via the Anthill backend):
+Real programs under Hermit (via the Hairspring backend):
 
 - A check-then-act threading race in a C program was found at sched-seed 2, reproduced 3/3, and the fixed
   program passed all 60 seeds.

@@ -1,9 +1,9 @@
 {
-  "name": "anthill-web",
+  "name": "hairspring-web",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Low-fidelity web UI for Anthill (runs, failures, replay)",
+  "description": "Low-fidelity web UI for Hairspring (runs, failures, replay)",
   "license": "Apache-2.0",
   "scripts": {
     "dev": "vite",

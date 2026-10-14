@@ -1,0 +1,31 @@
+[package]
+name = "hairspring-cli"
+version = "0.1.0"
+edition = "2021"
+description = "The `hairspring` command line: test, replay, doctor, results"
+license = "Apache-2.0"
+
+[lib]
+name = "hairspring_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hairspring"
+path = "src/bin/hairspring.rs"
+
+[dependencies]
+hairspring-core = { path = "../hairspring-core" }
+hairspring-engine = { path = "../hairspring-engine" }
+hairspring-service = { path = "../hairspring-service" }
+hairspring-store = { path = "../hairspring-store", features = ["postgres"] }
+hairspring-hermit = { path = "../hairspring-hermit" }
+hairspring-mcp = { path = "../hairspring-mcp" }
+hairspring-server = { path = "../hairspring-server" }
+hairspring-wasm = { path = "../hairspring-wasm" }
+hairspring-worker = { path = "../hairspring-worker" }
+clap = { version = "4.6.7", features = ["derive"] }
+serde_json = "1.0.154"
+
+[dev-dependencies]
+serde_json = "1.0.154"
+ureq = "3.4.2"

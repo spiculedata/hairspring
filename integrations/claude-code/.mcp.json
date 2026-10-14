@@ -1,7 +1,7 @@
 {
   "mcpServers": {
-    "anthill": {
-      "command": "anthill",
+    "hairspring": {
+      "command": "hairspring",
       "args": ["mcp"]
     }
   }

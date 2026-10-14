@@ -1,16 +1,16 @@
-# Anthill Buildout Plan
+# Hairspring Buildout Plan
 
 Companion to `SPEC.md` (what and why, plus measurements). This is the how: interfaces, backend, frontend, frameworks, MCP, phasing. Status: draft for review. Items marked **(verify)** rest on my recollection of the ecosystem and must be checked before we commit.
 
 ## 0. Product shape in one paragraph
 
-Anthill explores many executions of a system under test, finds a violated property, shrinks it, and gives you a replayable repro. The system under test runs on one of several **backends** that differ in how much determinism they give. Everything above the backend (store, explorer scheduling, server, UI, MCP, CI integrations) is shared.
+Hairspring explores many executions of a system under test, finds a violated property, shrinks it, and gives you a replayable repro. The system under test runs on one of several **backends** that differ in how much determinism they give. Everything above the backend (store, explorer scheduling, server, UI, MCP, CI integrations) is shared.
 
 ```
             ┌──────────── clients ────────────┐
    CLI  ·  Web UI  ·  MCP (agents)  ·  CI Action  ·  Rust/other SDKs
             └──────────────┬───────────────────┘
-                     anthill-server  (REST + SSE, auth, scheduler)
+                     hairspring-server  (REST + SSE, auth, scheduler)
                  ┌───────────┼─────────────┐
               store        job queue     blob store
          (SQLite/Postgres) (PG SKIP LOCKED) (fs/S3)
@@ -38,30 +38,30 @@ Consequence for the data model: two exploration modes share a store. `Node` grap
 
 ```
 crates/
-  anthill-core      Sim trait, explore, shrink, replay, bundle, doctor   (done)
-  anthill-sim       simulated runtime: virtual clock, net, disk, fault plans
-  anthill-store     schema + migrations; SQLite and Postgres impls; blob store trait
-  anthill-backend   Backend trait + Sim/Wasm/Hermit adapters
-  anthill-server    axum REST + SSE, scheduler, auth, embeds web UI
-  anthill-worker    pulls jobs, runs backends, streams events
-  anthill-cli       `anthill` binary (local mode embeds server+worker)
-  anthill-mcp       MCP server (stdio local, streamable HTTP remote)
-  anthill-sdk       user-facing macros/assertions (always, sometimes, reachable)
+  hairspring-core      Sim trait, explore, shrink, replay, bundle, doctor   (done)
+  hairspring-sim       simulated runtime: virtual clock, net, disk, fault plans
+  hairspring-store     schema + migrations; SQLite and Postgres impls; blob store trait
+  hairspring-backend   Backend trait + Sim/Wasm/Hermit adapters
+  hairspring-server    axum REST + SSE, scheduler, auth, embeds web UI
+  hairspring-worker    pulls jobs, runs backends, streams events
+  hairspring-cli       `hairspring` binary (local mode embeds server+worker)
+  hairspring-mcp       MCP server (stdio local, streamable HTTP remote)
+  hairspring-sdk       user-facing macros/assertions (always, sometimes, reachable)
 web/                React SPA
 integrations/       github-action/, claude-code plugin/skill, dapr-sim/
 ```
 
-Rule: `anthill-core` stays dependency-free (std only). Each new dependency goes through a supply-chain check before it is added.
+Rule: `hairspring-core` stays dependency-free (std only). Each new dependency goes through a supply-chain check before it is added.
 
 ## 3. Interfaces
 
 ### 3.1 CLI
-`anthill init | test | run | replay <bundle> | shrink <bundle> | doctor | serve | worker | bundle export/import | results`
+`hairspring init | test | run | replay <bundle> | shrink <bundle> | doctor | serve | worker | bundle export/import | results`
 - Local mode: single process, SQLite, no network. This is the default dev experience.
 - `--remote <url>` submits to a server; the same command works either way.
 - Output formats: human, JSON, JUnit, SARIF (for CI annotations).
 
-### 3.2 Target definition: `anthill.toml`
+### 3.2 Target definition: `hairspring.toml`
 ```toml
 [target.pubsub]
 kind = "sim"            # sim | wasm | process
@@ -84,10 +84,10 @@ Core resources: `targets`, `runs`, `trials`/`nodes`, `failures`, `bundles`, `wor
 ### 3.5 MCP server (agent loop is a differentiator)
 Goal: let Claude Code (or any agent) run the loop *write property → explore → read minimal repro → fix → re-run* without a human relaying logs.
 Tools: `list_targets`, `start_run`, `get_run`, `list_failures`, `get_failure` (minimal trace plus structured explanation), `replay_bundle`, `shrink_bundle`, `diff_nodes`, `cancel_run`.
-Resources: `anthill://runs/{id}`, `anthill://failures/{id}`, `anthill://bundles/{id}`.
+Resources: `hairspring://runs/{id}`, `hairspring://failures/{id}`, `hairspring://bundles/{id}`.
 Transport: stdio for local, streamable HTTP with bearer token for server. Read-only token scope for CI bots. Use the official Rust MCP SDK **(verify its maturity)**, else a thin hand-rolled JSON-RPC layer.
-Safety: agent-supplied target commands execute code, so MCP `start_run` only runs targets already declared in `anthill.toml` or approved on the server. No arbitrary command strings.
-Also ship a Claude Code skill/plugin (`/anthill`) that wraps CLI and MCP.
+Safety: agent-supplied target commands execute code, so MCP `start_run` only runs targets already declared in `hairspring.toml` or approved on the server. No arbitrary command strings.
+Also ship a Claude Code skill/plugin (`/hairspring`) that wraps CLI and MCP.
 
 ## 4. Backend services
 
@@ -113,14 +113,14 @@ Also ship a Claude Code skill/plugin (`/anthill`) that wraps CLI and MCP.
 
 ## 6. Integrations
 - GitHub Action: run on PR, upload bundle artifacts, SARIF annotations, comment with the minimal repro.
-- `cargo anthill` wrapper for Rust projects.
+- `cargo hairspring` wrapper for Rust projects.
 - **Dapr simulation:** a simulated sidecar implementing pub/sub, state store, bindings, and secrets APIs with configurable faults (redelivery, timeout, partial failure). Apps under Hermit or WASM talk to the simulated sidecar on loopback. A natural first domain for Dapr-based microservices; do after the core path works.
 
 ## 7. Phasing (status)
 
 | Phase | Deliver | Status |
 |---|---|---|
-| M1 | `anthill-core` | Done |
+| M1 | `hairspring-core` | Done |
 | M2 | Store, engine, service, CLI (local mode, bundles, SQLite) | Done |
 | M3 | Server, remote worker, MCP (stdio and HTTP) | Done; security and code reviewed, findings fixed |
 | M4 | Web UI (runs, live activity via SSE, failure timeline, replay) | Done (low fidelity by design); checked in a real browser |

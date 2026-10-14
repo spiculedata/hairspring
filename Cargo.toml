@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["experiments", "crates/anthill-core", "crates/anthill-pubsub", "crates/anthill-engine", "crates/anthill-store", "crates/anthill-service", "crates/anthill-mcp", "crates/anthill-hermit", "crates/anthill-wasm", "crates/anthill-dapr", "crates/anthill-worker", "crates/anthill-server", "crates/anthill-cli"]
+members = ["experiments", "crates/hairspring-core", "crates/hairspring-pubsub", "crates/hairspring-engine", "crates/hairspring-store", "crates/hairspring-service", "crates/hairspring-mcp", "crates/hairspring-hermit", "crates/hairspring-wasm", "crates/hairspring-dapr", "crates/hairspring-worker", "crates/hairspring-server", "crates/hairspring-cli"]
 
 [profile.release]
 opt-level = 3

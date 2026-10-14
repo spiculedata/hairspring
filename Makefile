@@ -17,7 +17,7 @@ ui:
 	cd web && npm ci && npm run build
 
 release: ui
-	cargo build --release -p anthill-cli -p anthill-dapr
+	cargo build --release -p hairspring-cli -p hairspring-dapr
 
 audit:
 	cargo audit

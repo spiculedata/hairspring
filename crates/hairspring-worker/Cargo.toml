@@ -1,0 +1,13 @@
+[package]
+name = "hairspring-worker"
+version = "0.1.0"
+edition = "2021"
+description = "Remote worker for Hairspring: pulls jobs from a server, runs them locally, reports results"
+license = "Apache-2.0"
+
+[dependencies]
+hairspring-engine = { path = "../hairspring-engine" }
+hairspring-service = { path = "../hairspring-service" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+ureq = "3.4.2"

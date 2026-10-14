@@ -1,6 +1,6 @@
 //! Exp 2: seed -> trace -> hash is a pure function; replay from the recorded
 //! choices reproduces the run bit-for-bit, and a failing run can be found/shrunk.
-use anthill_experiments::*;
+use hairspring_experiments::*;
 
 fn run(seed: u64, max_steps: usize) -> (World, Vec<usize>, u64) {
     let (mut w, mut rng, mut choices, mut h) =

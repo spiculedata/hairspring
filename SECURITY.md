@@ -1,6 +1,6 @@
 # Security
 
-Anthill is experimental software. It runs code you point it at and listens on a network port, so please read
+Hairspring is experimental software. It runs code you point it at and listens on a network port, so please read
 this before deploying it.
 
 ## Reporting a vulnerability
@@ -14,7 +14,7 @@ response-time guarantees.
 
 The server may be reachable from a LAN or the internet behind bearer tokens. Callers hold one of three roles
 (`read` < `run` < `admin`). Workers authenticate with a `run` token. We assume the **operator** is trusted: they
-write `anthill.toml` (which defines the commands that process targets execute) and deploy the binaries.
+write `hairspring.toml` (which defines the commands that process targets execute) and deploy the binaries.
 
 We defend against: unauthenticated access, role escalation, command injection through the API, request
 floods, malformed input, hostile web pages driving a local server, and untrusted text reaching people or AI
@@ -26,7 +26,7 @@ agents.
 |---|---|
 | Authentication | Bearer tokens (16+ chars) stored only as SHA-256 digests; compared across all tokens in constant time |
 | Authorization | Role checked first in every handler; worker endpoints and replay (which executes target code) require `run`; worker ids hidden from `read` tokens |
-| No remote code execution | The API accepts **target names only**; commands come from the server-side `anthill.toml`. MCP `start_run` cannot supply a command |
+| No remote code execution | The API accepts **target names only**; commands come from the server-side `hairspring.toml`. MCP `start_run` cannot supply a command |
 | Network exposure | Refuses to bind a non-loopback address without tokens; default bind is `127.0.0.1` |
 | Open (no-token) mode | Rejects unknown `Host` headers (DNS rebinding) and cross-site `Origin`s (CSRF); `/mcp` requires `application/json` |
 | Abuse limits | Per-client rate limit (valid tokens and unauthenticated clients are bucketed separately, bounded table); 2 MiB body cap; cap on SSE streams, MCP batch size and waits; queue and worker admission caps; JSON recursion limits |
@@ -44,7 +44,7 @@ agents.
   `run` token can lease jobs and report arbitrary (but bounded) results. Give `run` tokens only to workers you trust.
 - **Hermit is third-party code** (a small, fast-moving fork). It is unaudited by us and executes the program
   under test with ptrace and namespaces. Use it on machines where that risk is acceptable.
-- **Process targets execute the commands in `anthill.toml` with the server's privileges.** Protect that file and
+- **Process targets execute the commands in `hairspring.toml` with the server's privileges.** Protect that file and
   run workers as an unprivileged user (the provided Docker image does).
 - **Dependency vetting.** We use mainstream crates and npm packages and run `cargo audit` and `npm audit` in CI.
   We did not use a commercial software-composition-analysis service. Review `Cargo.lock` for your own policy.
@@ -53,8 +53,8 @@ agents.
 
 ## Hardening checklist for a deployment
 
-1. Generate tokens with `anthill token` and pass them via `ANTHILL_TOKENS` or `--tokens-file` (mode 600), never on a command line.
+1. Generate tokens with `hairspring token` and pass them via `HAIRSPRING_TOKENS` or `--tokens-file` (mode 600), never on a command line.
 2. Terminate TLS in front of the server; keep PostgreSQL on a private network.
 3. Run the server and workers as unprivileged users; give workers only the filesystem access their targets need.
 4. Use `read` tokens for dashboards and agents that only analyse; `run` tokens only where needed.
-5. Keep `anthill.toml` under version control with review.
+5. Keep `hairspring.toml` under version control with review.

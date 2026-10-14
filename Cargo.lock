@@ -74,143 +74,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anthill-cli"
-version = "0.1.0"
-dependencies = [
- "anthill-core",
- "anthill-engine",
- "anthill-hermit",
- "anthill-mcp",
- "anthill-server",
- "anthill-service",
- "anthill-store",
- "anthill-wasm",
- "anthill-worker",
- "clap",
- "serde_json",
- "ureq",
-]
-
-[[package]]
-name = "anthill-core"
-version = "0.1.0"
-
-[[package]]
-name = "anthill-dapr"
-version = "0.1.0"
-dependencies = [
- "anthill-core",
- "serde",
- "serde_json",
- "toml",
-]
-
-[[package]]
-name = "anthill-engine"
-version = "0.1.0"
-dependencies = [
- "anthill-core",
- "anthill-pubsub",
- "serde",
- "serde_json",
- "toml",
-]
-
-[[package]]
-name = "anthill-experiments"
-version = "0.1.0"
-
-[[package]]
-name = "anthill-hermit"
-version = "0.1.0"
-dependencies = [
- "anthill-core",
- "anthill-engine",
-]
-
-[[package]]
-name = "anthill-mcp"
-version = "0.1.0"
-dependencies = [
- "anthill-core",
- "anthill-engine",
- "anthill-service",
- "anthill-store",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "anthill-pubsub"
-version = "0.1.0"
-dependencies = [
- "anthill-core",
-]
-
-[[package]]
-name = "anthill-server"
-version = "0.1.0"
-dependencies = [
- "anthill-core",
- "anthill-engine",
- "anthill-mcp",
- "anthill-service",
- "anthill-store",
- "anthill-worker",
- "axum",
- "futures-util",
- "rust-embed",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "tokio",
- "ureq",
-]
-
-[[package]]
-name = "anthill-service"
-version = "0.1.0"
-dependencies = [
- "anthill-core",
- "anthill-engine",
- "anthill-store",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "anthill-store"
-version = "0.1.0"
-dependencies = [
- "postgres",
- "r2d2",
- "r2d2_postgres",
- "rusqlite",
- "serde",
- "sha2 0.11.1",
-]
-
-[[package]]
-name = "anthill-wasm"
-version = "0.1.0"
-dependencies = [
- "anthill-core",
- "anthill-engine",
- "wasmtime",
-]
-
-[[package]]
-name = "anthill-worker"
-version = "0.1.0"
-dependencies = [
- "anthill-engine",
- "anthill-service",
- "serde",
- "serde_json",
- "ureq",
-]
-
-[[package]]
 name = "anyhow"
 version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -883,6 +746,143 @@ dependencies = [
  "hashbrown 0.16.1",
  "indexmap",
  "stable_deref_trait",
+]
+
+[[package]]
+name = "hairspring-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "hairspring-core",
+ "hairspring-engine",
+ "hairspring-hermit",
+ "hairspring-mcp",
+ "hairspring-server",
+ "hairspring-service",
+ "hairspring-store",
+ "hairspring-wasm",
+ "hairspring-worker",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
+name = "hairspring-core"
+version = "0.1.0"
+
+[[package]]
+name = "hairspring-dapr"
+version = "0.1.0"
+dependencies = [
+ "hairspring-core",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
+name = "hairspring-engine"
+version = "0.1.0"
+dependencies = [
+ "hairspring-core",
+ "hairspring-pubsub",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
+name = "hairspring-experiments"
+version = "0.1.0"
+
+[[package]]
+name = "hairspring-hermit"
+version = "0.1.0"
+dependencies = [
+ "hairspring-core",
+ "hairspring-engine",
+]
+
+[[package]]
+name = "hairspring-mcp"
+version = "0.1.0"
+dependencies = [
+ "hairspring-core",
+ "hairspring-engine",
+ "hairspring-service",
+ "hairspring-store",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "hairspring-pubsub"
+version = "0.1.0"
+dependencies = [
+ "hairspring-core",
+]
+
+[[package]]
+name = "hairspring-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "hairspring-core",
+ "hairspring-engine",
+ "hairspring-mcp",
+ "hairspring-service",
+ "hairspring-store",
+ "hairspring-worker",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tokio",
+ "ureq",
+]
+
+[[package]]
+name = "hairspring-service"
+version = "0.1.0"
+dependencies = [
+ "hairspring-core",
+ "hairspring-engine",
+ "hairspring-store",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "hairspring-store"
+version = "0.1.0"
+dependencies = [
+ "postgres",
+ "r2d2",
+ "r2d2_postgres",
+ "rusqlite",
+ "serde",
+ "sha2 0.11.1",
+]
+
+[[package]]
+name = "hairspring-wasm"
+version = "0.1.0"
+dependencies = [
+ "hairspring-core",
+ "hairspring-engine",
+ "wasmtime",
+]
+
+[[package]]
+name = "hairspring-worker"
+version = "0.1.0"
+dependencies = [
+ "hairspring-engine",
+ "hairspring-service",
+ "serde",
+ "serde_json",
+ "ureq",
 ]
 
 [[package]]

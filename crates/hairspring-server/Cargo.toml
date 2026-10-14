@@ -1,0 +1,25 @@
+[package]
+name = "hairspring-server"
+version = "0.1.0"
+edition = "2021"
+description = "Hairspring server: REST API, SSE, MCP endpoint, auth and embedded web UI"
+license = "Apache-2.0"
+
+[dependencies]
+hairspring-core = { path = "../hairspring-core" }
+hairspring-engine = { path = "../hairspring-engine" }
+hairspring-mcp = { path = "../hairspring-mcp" }
+hairspring-service = { path = "../hairspring-service" }
+hairspring-store = { path = "../hairspring-store" }
+axum = "0.8.9"
+futures-util = "0.3.34"
+rust-embed = "8.13.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "net", "time", "signal", "sync"] }
+
+[dev-dependencies]
+hairspring-worker = { path = "../hairspring-worker" }
+serde_json = "1.0.154"
+ureq = "3.4.2"

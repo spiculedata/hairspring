@@ -14,15 +14,15 @@ WORKDIR /src
 COPY . .
 # The UI is embedded into the server binary at compile time.
 COPY --from=web /web/dist ./web/dist
-RUN cargo build --release --locked -p anthill-cli -p anthill-dapr
+RUN cargo build --release --locked -p hairspring-cli -p hairspring-dapr
 
 # ---- runtime ----
 FROM debian:bookworm-slim
-RUN useradd --system --create-home --uid 10001 --shell /usr/sbin/nologin anthill
-COPY --from=build /src/target/release/anthill /usr/local/bin/anthill
-COPY --from=build /src/target/release/anthill-dapr-sim /usr/local/bin/anthill-dapr-sim
-USER anthill
-WORKDIR /home/anthill
+RUN useradd --system --create-home --uid 10001 --shell /usr/sbin/nologin hairspring
+COPY --from=build /src/target/release/hairspring /usr/local/bin/hairspring
+COPY --from=build /src/target/release/hairspring-dapr-sim /usr/local/bin/hairspring-dapr-sim
+USER hairspring
+WORKDIR /home/hairspring
 EXPOSE 7878
-ENTRYPOINT ["anthill"]
+ENTRYPOINT ["hairspring"]
 CMD ["serve", "--addr", "0.0.0.0:7878"]

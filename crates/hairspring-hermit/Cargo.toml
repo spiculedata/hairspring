@@ -1,0 +1,10 @@
+[package]
+name = "hairspring-hermit"
+version = "0.1.0"
+edition = "2021"
+description = "Hermit backend for Hairspring: explore real programs by scheduler seed (Linux x86-64, experimental)"
+license = "Apache-2.0"
+
+[dependencies]
+hairspring-core = { path = "../hairspring-core" }
+hairspring-engine = { path = "../hairspring-engine" }

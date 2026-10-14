@@ -1,7 +1,7 @@
 import { parseSse, type SseEvent } from './sse';
 import type { FailureDetail, ReplayResult, Run, RunDetail, Target, Worker, FailureSummary } from './types';
 
-const TOKEN_KEY = 'anthill.token';
+const TOKEN_KEY = 'hairspring.token';
 
 export class ApiError extends Error {
   constructor(

@@ -1,13 +1,13 @@
-name: "Anthill deterministic tests"
+name: "Hairspring deterministic tests"
 description: "Explore targets for property violations; upload SARIF annotations and replayable bundles."
-author: "Anthill contributors"
+author: "Hairspring contributors"
 branding:
   icon: "search"
   color: "orange"
 
 inputs:
   targets:
-    description: "Space-separated target names (default: all targets in anthill.toml)"
+    description: "Space-separated target names (default: all targets in hairspring.toml)"
     required: false
     default: ""
   seed:
@@ -15,13 +15,13 @@ inputs:
     required: false
     default: ""
   config:
-    description: "Path to anthill.toml"
+    description: "Path to hairspring.toml"
     required: false
-    default: "anthill.toml"
-  anthill-bin:
-    description: "Path to the anthill executable. Build or download it in an earlier step."
+    default: "hairspring.toml"
+  hairspring-bin:
+    description: "Path to the hairspring executable. Build or download it in an earlier step."
     required: false
-    default: "anthill"
+    default: "hairspring"
   upload-sarif:
     description: "Upload findings as code-scanning alerts (needs security-events: write)"
     required: false
@@ -35,14 +35,14 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - name: Run anthill
+    - name: Run hairspring
       id: run
       shell: bash
       env:
         INPUT_TARGETS: ${{ inputs.targets }}
         INPUT_SEED: ${{ inputs.seed }}
         INPUT_CONFIG: ${{ inputs.config }}
-        INPUT_BIN: ${{ inputs.anthill-bin }}
+        INPUT_BIN: ${{ inputs.hairspring-bin }}
       run: |
         # Inputs arrive through the environment, never interpolated into the script, so a hostile
         # target name or seed cannot inject shell commands.
@@ -51,10 +51,10 @@ runs:
         read -r -a targets <<< "$INPUT_TARGETS"
         [ ${#targets[@]} -gt 0 ] && args+=("${targets[@]}")
         [ -n "$INPUT_SEED" ] && args+=(--seed "$INPUT_SEED")
-        args+=(--config "$INPUT_CONFIG" --db .anthill/anthill.db --bundle-dir .anthill/bundles)
-        "$INPUT_BIN" "${args[@]}" --format sarif > anthill.sarif
+        args+=(--config "$INPUT_CONFIG" --db .hairspring/hairspring.db --bundle-dir .hairspring/bundles)
+        "$INPUT_BIN" "${args[@]}" --format sarif > hairspring.sarif
         code=$?
-        "$INPUT_BIN" "${args[@]}" --format junit > anthill-junit.xml 2>/dev/null || true
+        "$INPUT_BIN" "${args[@]}" --format junit > hairspring-junit.xml 2>/dev/null || true
         echo "exit-code=$code" >> "$GITHUB_OUTPUT"
         exit 0
 
@@ -62,18 +62,18 @@ runs:
       if: ${{ inputs.upload-sarif == 'true' && always() }}
       uses: github/codeql-action/upload-sarif@v3
       with:
-        sarif_file: anthill.sarif
-        category: anthill
+        sarif_file: hairspring.sarif
+        category: hairspring
 
     - name: Upload reproduction bundles and reports
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: anthill-results
+        name: hairspring-results
         path: |
-          .anthill/bundles/
-          anthill.sarif
-          anthill-junit.xml
+          .hairspring/bundles/
+          hairspring.sarif
+          hairspring-junit.xml
         if-no-files-found: ignore
 
     - name: Fail if a property was violated
@@ -82,6 +82,6 @@ runs:
         CODE: ${{ steps.run.outputs.exit-code }}
       run: |
         if [ "$CODE" != "0" ]; then
-          echo "anthill exited with $CODE (1 = property violated, 2 = error). Replay with: anthill replay <bundle>"
+          echo "hairspring exited with $CODE (1 = property violated, 2 = error). Replay with: hairspring replay <bundle>"
           exit 1
         fi

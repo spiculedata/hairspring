@@ -1,4 +1,4 @@
-# Anthill MVP Spec
+# Hairspring MVP Spec
 
 Open-source, self-hostable deterministic simulation testing: explore many futures of a system, travel back to any state, replay any failure exactly.
 
@@ -7,7 +7,7 @@ Status: draft, informed by experiments in `experiments/` (std-only Rust, run wit
 ## 1. Goals and non-goals
 
 **Goals (MVP)**
-- A developer runs `anthill test` on a laptop (macOS or Linux) and gets: bug found, minimal repro, one-file replay bundle.
+- A developer runs `hairspring test` on a laptop (macOS or Linux) and gets: bug found, minimal repro, one-file replay bundle.
 - Same engine runs on a self-hosted server with many workers and a shared store.
 - Time travel: pick any node in the exploration tree, inspect state, fork new futures from it.
 - Properties as `always` / `sometimes` / `reachable` assertions, plus property-test generators.
@@ -32,7 +32,7 @@ Status: draft, informed by experiments in `experiments/` (std-only Rust, run wit
 
 | Tier | What is deterministic | macOS | Linux |
 |---|---|---|---|
-| **1. Simulation runtime** (MVP) | Code written or linked against the Anthill runtime: virtual clock, seeded RNG, simulated network/disk, controlled scheduler | Full support | Full support |
+| **1. Simulation runtime** (MVP) | Code written or linked against the Hairspring runtime: virtual clock, seeded RNG, simulated network/disk, controlled scheduler | Full support | Full support |
 | **2. Linux system mode** (post-MVP, **determinism unproven**) | Unmodified services in microVMs: snapshot/fork and fault injection give branching, but stock microVMs are NOT deterministic (interrupt/TSC/entropy timing), so replay is statistical until proven otherwise | Not locally. Mac devs submit to a Linux server | Firecracker or Cloud Hypervisor, needs KVM |
 | **3. Record/replay of one process** (stretch) | Bit-exact replay of a failing process | No | rr or equivalent, needs PMU access |
 
@@ -42,7 +42,7 @@ Rule: **Tier 1 is the product.** Tiers 2 and 3 plug into the same store, explore
 - U1: a stock microVM restored from the same snapshot with the same recorded inputs reproduces the same trace. Measure the divergence rate over 100 runs.
 - U2: rr works on our target hardware (needs x86 and PMU access, absent on Apple Silicon and most cloud VMs).
 - U3: Hermit (or equivalent) still builds and runs a real service deterministically.
-- U4: a real Tier 1 target passes `anthill doctor` without runtime-hostile libraries leaking non-determinism.
+- U4: a real Tier 1 target passes `hairspring doctor` without runtime-hostile libraries leaking non-determinism.
 
 ## 3b. Determinism support research (2026-10-13)
 
@@ -113,14 +113,14 @@ Measured after the sections above; details in [docs/determinism.md](docs/determi
 - The Hermit "first run differs" effect was **host filesystem state**: Hermit virtualises timestamps, so Python's
   `.pyc` caches look stale after any native Python run and are recompiled and rewritten. Freezing them
   (`PYTHONDONTWRITEBYTECODE=1`, empty `PYTHONPYCACHEPREFIX`) gave 50/50 identical runs.
-- The Anthill Hermit backend, run on bare metal, found and reproduced 3/3 a real threading bug in C and a
+- The Hairspring Hermit backend, run on bare metal, found and reproduced 3/3 a real threading bug in C and a
   duplicate-delivery bug in an unmodified Python Dapr consumer; the fixed variants passed every seed.
 - WASM trace hashes are identical on macOS arm64 and Linux x86-64.
 
 ## 4. Architecture
 
 ```
- SDK (Rust first, then Go)            anthill CLI / server
+ SDK (Rust first, then Go)            hairspring CLI / server
  ┌──────────────────────┐            ┌───────────────────────────────┐
  │ assertions            │  events    │ explorer  (picks node, branches)│
  │ choice source         │──────────▶│ store     (node DAG + blobs)     │
@@ -158,28 +158,28 @@ Invariants
 
 1. No ambient time, randomness, thread spawn, network, filesystem or env reads in simulated code; all go through the runtime.
 2. Iteration order must be defined (no `HashMap` iteration without a fixed hasher).
-3. **`anthill doctor`** runs every target twice with the same seed and compares a rolling hash of the trace. It fails on first divergence and prints the step. This is exp 2 as a product feature, and it runs in CI.
+3. **`hairspring doctor`** runs every target twice with the same seed and compares a rolling hash of the trace. It fails on first divergence and prints the step. This is exp 2 as a product feature, and it runs in CI.
 4. Build hash is recorded; a bundle only replays on the same build hash (or warns).
 
 ## 7. Deployment
 
 | | Local | Self-hosted |
 |---|---|---|
-| Binary | `anthill` single binary | Same binary: `anthill server`, `anthill worker` |
+| Binary | `hairspring` single binary | Same binary: `hairspring server`, `hairspring worker` |
 | Metadata | SQLite | Postgres |
-| Blobs | `.anthill/` dir | S3-compatible (MinIO) |
+| Blobs | `.hairspring/` dir | S3-compatible (MinIO) |
 | Scheduling | In-process thread pool | Queue (Postgres `SKIP LOCKED` to start) |
 | Auth | None (localhost) | Token / OIDC later |
 | Platform | macOS, Linux | Linux workers (Tier 2 later) |
 
-Mac developers get full Tier 1 locally. Tier 2 jobs submit from the same CLI to a Linux server (`anthill test --remote`).
+Mac developers get full Tier 1 locally. Tier 2 jobs submit from the same CLI to a Linux server (`hairspring test --remote`).
 
 ## 8. Milestones
 
 | M | Deliverable | Exit criterion |
 |---|---|---|
 | M0 | `experiments/` (done) | Determinism, replay and branching demonstrated |
-| M1 | `anthill-core`: Sim trait, stable ActionIds, bundle format, shrinker, `doctor` | Exp 3 target re-implemented on the trait; shrinker returns a 1-minimal trace (no single step removable; not necessarily globally minimal, e.g. 8 vs 11 steps depending on the failure found); doctor catches an injected `HashMap` leak. **Done: 16 tests, `examples/lock_demo.rs`** |
+| M1 | `hairspring-core`: Sim trait, stable ActionIds, bundle format, shrinker, `doctor` | Exp 3 target re-implemented on the trait; shrinker returns a 1-minimal trace (no single step removable; not necessarily globally minimal, e.g. 8 vs 11 steps depending on the failure found); doctor catches an injected `HashMap` leak. **Done: 16 tests, `examples/lock_demo.rs`** |
 | M2 | Store plus explorer with SQLite and chunked snapshots | 10k-node run; memory flat; any node restorable |
 | M3 | Simulated network/disk/clock library and a real target (small Raft or Dapr-pubsub consumer) | Finds a planted bug in under 1 min on a laptop |
 | M4 | Server and worker mode, Postgres, MinIO, web timeline UI | Multi-worker run visible live; click-to-replay works |

@@ -58,7 +58,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/dapr/subscribe":
             return self.reply(200, [{"pubsubname": "pubsub", "topic": "orders", "route": "/orders"}])
-        if self.path == "/anthill/check":
+        if self.path == "/hairspring/check":
             for order_id in EXPECTED_IDS:
                 n = effect_count(order_id)
                 if n != 1:

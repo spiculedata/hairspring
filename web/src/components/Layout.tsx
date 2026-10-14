@@ -26,7 +26,7 @@ export function Layout({ path, children }: { path: string; children: ReactNode }
   return (
     <>
       <header className="topbar">
-        <span className="brand">Anthill</span>
+        <span className="brand">Hairspring</span>
         <nav aria-label="Main">
           {LINKS.map(([to, label]) => (
             <Link key={to} to={to}>

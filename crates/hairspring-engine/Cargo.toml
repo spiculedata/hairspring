@@ -1,0 +1,13 @@
+[package]
+name = "hairspring-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Hairspring engine: type-erased target registry, config, backends and reports"
+license = "Apache-2.0"
+
+[dependencies]
+hairspring-core = { path = "../hairspring-core" }
+hairspring-pubsub = { path = "../hairspring-pubsub" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+toml = "1.1.8"

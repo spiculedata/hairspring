@@ -1,9 +1,0 @@
-[package]
-name = "anthill-pubsub"
-version = "0.1.0"
-edition = "2021"
-description = "U4 target: at-least-once pub/sub consumer model for anthill-core"
-license = "Apache-2.0"
-
-[dependencies]
-anthill-core = { path = "../anthill-core" }

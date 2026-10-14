@@ -44,7 +44,7 @@ export function FailurePage({ id }: { id: string }) {
         >
           Replay
         </button>
-        <button onClick={() => download(`${record.target}-${record.bundle_hash.slice(0, 8)}.anthill`, bundle)}>Download bundle</button>
+        <button onClick={() => download(`${record.target}-${record.bundle_hash.slice(0, 8)}.hairspring`, bundle)}>Download bundle</button>
         <button onClick={() => void navigator.clipboard?.writeText(bundle)}>Copy bundle</button>
       </div>
       {replayError && <p className="error" role="alert">{replayError}</p>}

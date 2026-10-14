@@ -32,7 +32,7 @@ jobs:
       - name: Test
         run: cargo test --workspace --no-fail-fast
       # System-level (Hermit) tests need performance counters and are run separately on bare metal:
-      #   ANTHILL_HERMIT_REAL=1 cargo test -p anthill-hermit --test real_hermit
+      #   HAIRSPRING_HERMIT_REAL=1 cargo test -p hairspring-hermit --test real_hermit
 
   web:
     name: Web UI

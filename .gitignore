@@ -3,7 +3,7 @@
 node_modules
 web/dist/*
 !web/dist/.gitkeep
-.anthill/
+.hairspring/
 *.log
 .DS_Store
 .env

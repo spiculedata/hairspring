@@ -1,6 +1,6 @@
 //! Exp 3: "snapshot and branch from interesting states" vs restart-from-zero random.
 //! Metric: total simulation steps executed until the first violation.
-use anthill_experiments::*;
+use hairspring_experiments::*;
 use std::collections::HashMap;
 
 const TRIALS: u64 = 300;

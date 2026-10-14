@@ -1,6 +1,6 @@
 # Supply chain notes
 
-- `anthill-core` has **no dependencies** on purpose: it is the part you must be able to trust and read in an hour.
+- `hairspring-core` has **no dependencies** on purpose: it is the part you must be able to trust and read in an hour.
 - Rust dependencies are mainstream crates (`serde`, `toml`, `rusqlite` with bundled SQLite, `sha2`, `clap`, `axum`,
   `tokio`, `ureq`, `rust-embed`, `wasmtime`, optional `postgres`/`r2d2`). `Cargo.lock` is committed.
 - The web UI depends on React, Vite, TypeScript and Vitest only; `package-lock.json` is committed.

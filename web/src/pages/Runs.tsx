@@ -83,7 +83,7 @@ export function Runs() {
           {runs.data?.length === 0 && (
             <tr>
               <td colSpan={5} className="muted">
-                No runs yet. Start one above, or run <code>anthill test</code>.
+                No runs yet. Start one above, or run <code>hairspring test</code>.
               </td>
             </tr>
           )}
