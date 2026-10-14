@@ -28,7 +28,20 @@ fn workdir() -> PathBuf {
     d
 }
 
+/// Each program is built once per process. Tests run in parallel and share one work directory, so
+/// rebuilding a binary that another test is executing would fail with "text file busy".
 fn compile(name: &str, source: &str) -> PathBuf {
+    static BUILT: std::sync::Mutex<Vec<(String, PathBuf)>> = std::sync::Mutex::new(Vec::new());
+    let mut built = BUILT.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, bin)) = built.iter().find(|(n, _)| n == name) {
+        return bin.clone();
+    }
+    let bin = build(name, source);
+    built.push((name.to_string(), bin.clone()));
+    bin
+}
+
+fn build(name: &str, source: &str) -> PathBuf {
     let dir = workdir();
     let src = dir.join(format!("{name}.c"));
     let bin = dir.join(name);
