@@ -34,7 +34,7 @@ pub fn run(ctx: &Ctx, args: &ReplayArgs, out: &mut dyn Write) -> CmdResult<i32> 
         return Err(format!("bundle exceeds {MAX_BUNDLE_BYTES} bytes").into());
     }
     let bundle = Bundle::decode(&text).map_err(|e| format!("invalid bundle: {e}"))?;
-    let replay = ctx.engine.replay(&bundle)?;
+    let replay = anthill_service::sanitize::replay_steps(ctx.engine.replay(&bundle)?);
     writeln!(
         out,
         "replaying {} steps on target `{}` (backend {})",

@@ -75,13 +75,35 @@ fn drain(mut stream: impl Read + Send + 'static, cap: usize, tx: mpsc::Sender<St
     });
 }
 
+extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
+}
+
+const SIGKILL: i32 = 9;
+
+/// Kills every process in the guest's process group, so nothing it started outlives the trial.
 fn kill_group(pid: u32) {
-    // A negative pid addresses the whole process group, so grandchildren die with the guest.
-    // The `--` matters: without it Linux's kill parses `-<pid>` as an option and does nothing.
-    let _ = Command::new("kill")
-        .args(["-KILL", "--", &format!("-{pid}")])
-        .stderr(Stdio::null())
-        .status();
+    // A negative pid addresses the whole group. This calls libc directly (already linked by std) so it works
+    // without a `kill` executable on PATH and has no argument-parsing quirks between platforms.
+    // SAFETY: `kill` has no memory-safety preconditions; an invalid pid just returns an error.
+    unsafe {
+        kill(-(pid as i32), SIGKILL);
+    }
+}
+
+/// A bare program name is looked up on the *caller's* PATH. The guest gets a pinned PATH, and Rust would
+/// otherwise search that one, missing e.g. `~/.cargo/bin/hermit`.
+fn resolve_bin(bin: &std::path::Path) -> std::path::PathBuf {
+    if bin.components().count() != 1 {
+        return bin.to_path_buf();
+    }
+    std::env::var_os("PATH")
+        .and_then(|paths| {
+            std::env::split_paths(&paths)
+                .map(|dir| dir.join(bin))
+                .find(|candidate| candidate.is_file())
+        })
+        .unwrap_or_else(|| bin.to_path_buf())
 }
 
 /// `ETXTBSY` (os error 26): the executable was written moments ago and another thread's `fork` still holds
@@ -109,7 +131,7 @@ pub fn run_trial(
     seed: u64,
     timeout: Duration,
 ) -> Result<Trial, SpawnError> {
-    let mut cmd = Command::new(&settings.bin);
+    let mut cmd = Command::new(resolve_bin(&settings.bin));
     cmd.args(hermit_args(settings, spec, seed))
         .env_clear()
         .envs(guest_env(spec.command, spec.env))
@@ -138,14 +160,23 @@ pub fn run_trial(
     let deadline = Instant::now() + timeout;
     let (status, timed_out) = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break (Some(status), false),
+            Ok(Some(status)) => {
+                // The guest is gone, but anything it left running (daemons, background jobs) is still in its group.
+                kill_group(child.id());
+                break (Some(status), false);
+            }
             Ok(None) if Instant::now() >= deadline => {
                 kill_group(child.id());
                 let _ = child.kill();
                 break (child.wait().ok(), true);
             }
             Ok(None) => std::thread::sleep(POLL),
-            Err(e) => return Err(SpawnError::Other(e.to_string())),
+            Err(e) => {
+                kill_group(child.id());
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(SpawnError::Other(e.to_string()));
+            }
         }
     };
     // After a kill a surviving grandchild could hold the pipes open; do not wait for it forever.

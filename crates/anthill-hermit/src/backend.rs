@@ -13,6 +13,18 @@ use std::time::{Duration, Instant};
 const BUILD: &str = env!("CARGO_PKG_VERSION");
 const CANCELLED: &str = "cancelled";
 
+/// Everything needed to describe one confirmed violation.
+#[derive(Clone, Copy)]
+struct Found<'a> {
+    spec: &'a TargetSpec,
+    p: &'a ProcessSpec<'a>,
+    req: &'a RunRequest,
+    seed: u64,
+    trial: &'a Trial,
+    reason: &'a str,
+    confirmed: u32,
+}
+
 pub struct HermitBackend {
     settings: HermitSettings,
 }
@@ -69,16 +81,16 @@ impl HermitBackend {
             .count() as u32
     }
 
-    fn failure(
-        &self,
-        spec: &TargetSpec,
-        p: &ProcessSpec,
-        req: &RunRequest,
-        seed: u64,
-        t: &Trial,
-        reason: &str,
-        confirmed: u32,
-    ) -> FailureReport {
+    fn failure(&self, found: &Found) -> FailureReport {
+        let Found {
+            spec,
+            p,
+            req,
+            seed,
+            trial: t,
+            reason,
+            confirmed,
+        } = *found;
         let hash = behaviour_hash(t);
         let total = self.settings.repro_runs;
         let mut message = format!(
@@ -141,18 +153,35 @@ impl Backend for HermitBackend {
                     started.elapsed().as_millis() as u64,
                 ));
             }
-            let timeout = self
-                .trial_timeout(&p)
-                .min(remaining.max(Duration::from_secs(1)));
+            let allowed = remaining.max(Duration::from_secs(1));
+            // True when the wall budget, not the target's own limit, is what cut the trial short.
+            let clipped = allowed < self.trial_timeout(&p);
+            let timeout = self.trial_timeout(&p).min(allowed);
             let trial = match self.trial(&p, seed, timeout) {
                 Ok(t) => t,
                 Err(e) => return Ok(infra(e.to_string())),
             };
             match classify(&trial, timeout.as_secs()) {
                 Verdict::Infra(msg) => return Ok(infra(msg)),
+                Verdict::Violation(_) if trial.timed_out && clipped => {
+                    // Out of budget, not out of patience: inconclusive, never a finding.
+                    return Ok(RunOutcome::passed(
+                        i,
+                        i,
+                        started.elapsed().as_millis() as u64,
+                    ));
+                }
                 Verdict::Violation(reason) => {
                     let confirmed = self.confirm(&p, seed, &behaviour_hash(&trial), timeout);
-                    let failure = self.failure(spec, &p, req, seed, &trial, &reason, confirmed);
+                    let failure = self.failure(&Found {
+                        spec,
+                        p: &p,
+                        req,
+                        seed,
+                        trial: &trial,
+                        reason: &reason,
+                        confirmed,
+                    });
                     return Ok(RunOutcome::failed(
                         i + 1,
                         i + 1,
@@ -207,7 +236,7 @@ impl Backend for HermitBackend {
             None => None,
         };
         Ok(ReplayOutcome {
-            reproduced: matches!(verdict, Verdict::Violation(_)),
+            reproduced: matches!(verdict, Verdict::Violation(_)) && matches != Some(false),
             steps: steps(p.command, seed, &settings.epoch, &trial, note),
         })
     }

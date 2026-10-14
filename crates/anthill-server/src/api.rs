@@ -185,7 +185,7 @@ pub async fn replay(
     caller: Caller,
     ApiJson(body): ApiJson<ReplayBody>,
 ) -> Result<Json<Value>, ApiError> {
-    caller.need(Role::Read)?;
+    caller.need(Role::Run)?; // replay executes target code, so it needs more than read access
     let out = blocking(move || s.svc.replay_bundle(&s.engine, &body.bundle)).await?;
     Ok(Json(serde_json::to_value(out).unwrap_or_default()))
 }

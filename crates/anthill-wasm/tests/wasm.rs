@@ -152,7 +152,7 @@ fn golden_trace_hash_is_identical_on_every_platform() {
     let r = vm.run();
     assert_eq!(
         vm.trace_hash(),
-        "01919384cb47b910",
+        "27e9fbab3f294016",
         "result {r:?}, choices {:?}",
         vm.choices()
     );
@@ -396,4 +396,220 @@ fn the_vm_reports_run_results_directly() {
     let mut vm = WasmVm::new(LOST_UPDATE.as_bytes(), 1, vec![0, 1, 0, 1], cfg()).unwrap();
     // forced choices A,B,A,B = both read then both write: the classic lost update
     assert!(matches!(vm.run(), RunResult::Violation(m) if m.contains("lost update")));
+}
+
+// ---- review findings ----
+const RAND_BUG: &str = r#"
+(module
+  (import "anthill" "choose" (func $choose (param i32) (result i32)))
+  (import "anthill" "rand_u64" (func $rand (result i64)))
+  (import "anthill" "fail" (func $fail (param i32 i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 0) "rand bug")
+  (func (export "run") (result i32)
+    (drop (call $choose (i32.const 2)))
+    (if (i64.eqz (i64.rem_u (call $rand) (i64.const 3))) (then (call $fail (i32.const 0) (i32.const 8))))
+    (i32.const 0)))
+"#;
+
+#[test]
+fn failures_that_depend_on_seeded_randomness_shrink_and_replay() {
+    let (e, _p) = engine_for(RAND_BUG, "rand", budget(200));
+    let f = e
+        .run(&RunRequest::new("w", 1), &mut |_| true)
+        .unwrap()
+        .failure
+        .expect("a seed with rand % 3 == 0 exists");
+    assert!(
+        f.message.contains("rand bug"),
+        "the report names the real failure, not `exit code 0`: {}",
+        f.message
+    );
+    let b = Bundle::decode(&f.bundle).unwrap();
+    assert_eq!(
+        b.path.len(),
+        0,
+        "the irrelevant decision is shrunk away (the failure comes from the seed's random stream)"
+    );
+    let r = e.replay(&b).unwrap();
+    assert!(
+        r.reproduced,
+        "replay uses the recorded seed, so the random stream is identical: {:?}",
+        r.steps
+    );
+}
+
+#[test]
+fn replay_only_counts_the_same_failure_as_reproduced() {
+    let (e, _p) = engine_for(LOST_UPDATE, "key", budget(200));
+    let f = e
+        .run(&RunRequest::new("w", 1), &mut |_| true)
+        .unwrap()
+        .failure
+        .unwrap();
+    let b = Bundle::decode(&f.bundle).unwrap();
+    assert!(b.params.contains_key("failure_key"));
+    let other = b.clone().with_param("failure_key", "exit:9");
+    let r = e.replay(&other).unwrap();
+    assert!(
+        !r.reproduced,
+        "a different failure than the one recorded is not a reproduction"
+    );
+    assert!(
+        r.steps
+            .iter()
+            .any(|s| s.label.contains("different failure")),
+        "{:?}",
+        r.steps
+    );
+}
+
+#[test]
+fn forks_and_restores_are_faithful_including_forced_choices_and_fuel() {
+    let forced = VmConfig {
+        forced_only: true,
+        ..cfg()
+    };
+    let mut vm = WasmVm::new(LOST_UPDATE.as_bytes(), 0, vec![0, 1, 1], forced).unwrap();
+    let snap = vm.snapshot().unwrap();
+    let fuel_at_snapshot = vm.fuel_remaining();
+    let first = vm.run();
+    assert!(
+        vm.fuel_remaining() < fuel_at_snapshot,
+        "running consumed fuel"
+    );
+    let mut forked = vm.fork(&snap).unwrap();
+    assert_eq!(
+        forked.fuel_remaining(),
+        fuel_at_snapshot,
+        "a fork starts with the fuel it had at the snapshot"
+    );
+    assert_eq!(
+        forked.run(),
+        first,
+        "a fork keeps the forced decision list: the same future"
+    );
+    assert_eq!(
+        forked.choices(),
+        vec![0, 1, 1, 0, 0, 0]
+            .into_iter()
+            .take(forked.choices().len())
+            .collect::<Vec<u64>>()
+    );
+    vm.restore(&snap).unwrap();
+    assert_eq!(
+        vm.fuel_remaining(),
+        fuel_at_snapshot,
+        "restore resets fuel too"
+    );
+}
+
+#[test]
+fn runaway_decision_counts_are_bounded() {
+    let wat = r#"(module (import "anthill" "choose" (func $c (param i32) (result i32))) (memory (export "memory") 1)
+      (func (export "run") (result i32) (loop $l (drop (call $c (i32.const 2))) (br $l)) (i32.const 0)))"#;
+    let dir = scratch("choices");
+    let p = dir.join("m.wat");
+    std::fs::write(&p, wat).unwrap();
+    let e = engine_at(
+        &p,
+        Budget {
+            max_steps: 40_000_000,
+            max_trials: 1,
+            wall_secs: 60,
+        },
+    )
+    .unwrap();
+    let out = e.run(&RunRequest::new("w", 1), &mut |_| true).unwrap();
+    assert_eq!(out.status, RunStatus::Failed);
+    assert!(
+        out.failure.unwrap().message.contains("decisions"),
+        "memory for the decision log is bounded"
+    );
+}
+
+#[test]
+fn a_guest_cannot_exhaust_host_memory_by_growing_a_table() {
+    // One instruction used to allocate ~17 GB; tables are now capped and the grow simply fails.
+    let wat = r#"(module (memory (export "memory") 1) (table 1 funcref)
+      (func (export "run") (result i32)
+        (if (result i32) (i32.eq (table.grow (ref.null func) (i32.const 0x7fffffff)) (i32.const -1)) (then (i32.const 0)) (else (i32.const 1)))))"#;
+    let (e, _p) = engine_for(wat, "table", budget(1));
+    let started = std::time::Instant::now();
+    assert_eq!(
+        e.run(&RunRequest::new("w", 1), &mut |_| true)
+            .unwrap()
+            .status,
+        RunStatus::Passed,
+        "growth must be denied, not performed"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+#[test]
+fn the_wall_clock_watchdog_stops_a_guest_that_fuel_would_never_stop() {
+    // With effectively unlimited fuel only the real-time watchdog can end this loop.
+    let wat = r#"(module (memory (export "memory") 1) (func (export "run") (result i32) (loop $l (br $l)) (i32.const 0)))"#;
+    let mut vm = WasmVm::new(
+        wat.as_bytes(),
+        1,
+        vec![],
+        VmConfig {
+            fuel: 1 << 50,
+            ..VmConfig::default()
+        },
+    )
+    .unwrap();
+    let started = std::time::Instant::now();
+    let result = vm.run_with_wall(std::time::Duration::from_millis(300));
+    assert_eq!(result, RunResult::TimedOut);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
+    // and a guest that finishes in time is untouched by the watchdog
+    let mut ok = WasmVm::new(ATOMIC.as_bytes(), 3, vec![], cfg()).unwrap();
+    assert!(matches!(
+        ok.run_with_wall(std::time::Duration::from_secs(5)),
+        RunResult::Exit(0)
+    ));
+}
+
+#[test]
+fn replay_clamps_the_fuel_a_bundle_asks_for() {
+    let wat = r#"(module (memory (export "memory") 1) (func (export "run") (result i32) (loop $l (br $l)) (i32.const 0)))"#;
+    let (e, p) = engine_for(
+        wat,
+        "fuelclamp",
+        Budget {
+            max_steps: 100_000,
+            max_trials: 1,
+            wall_secs: 30,
+        },
+    );
+    let hash = {
+        let bytes = std::fs::read(&p).unwrap();
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in bytes {
+            h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        }
+        format!("{h:016x}")
+    };
+    let b = Bundle::new(1, "x", vec![])
+        .with_target("w")
+        .with_backend("wasm")
+        .with_param("module_hash", hash)
+        .with_param("fuel", u64::MAX.to_string());
+    let started = std::time::Instant::now();
+    let r = e.replay(&b).unwrap();
+    assert!(
+        r.reproduced,
+        "an endless loop still fails, just not forever"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(60),
+        "a hostile fuel value must not pin a CPU: {:?}",
+        started.elapsed()
+    );
 }

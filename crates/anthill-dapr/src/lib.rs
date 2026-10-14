@@ -21,5 +21,5 @@ pub mod sim;
 pub use faults::FaultPlan;
 pub use launcher::{AppLauncher, ProcessApp};
 pub use scenario::Scenario;
-pub use sidecar::{start_sidecar, SidecarHandle};
+pub use sidecar::{start_sidecar, start_sidecar_with, SidecarHandle, SidecarLimits};
 pub use sim::{run_simulation, Report, Verdict};

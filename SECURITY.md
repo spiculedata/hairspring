@@ -25,7 +25,7 @@ agents.
 | Area | Control |
 |---|---|
 | Authentication | Bearer tokens (16+ chars) stored only as SHA-256 digests; compared across all tokens in constant time |
-| Authorization | Role checked first in every handler; worker endpoints require `run`; worker ids hidden from `read` tokens |
+| Authorization | Role checked first in every handler; worker endpoints and replay (which executes target code) require `run`; worker ids hidden from `read` tokens |
 | No remote code execution | The API accepts **target names only**; commands come from the server-side `anthill.toml`. MCP `start_run` cannot supply a command |
 | Network exposure | Refuses to bind a non-loopback address without tokens; default bind is `127.0.0.1` |
 | Open (no-token) mode | Rejects unknown `Host` headers (DNS rebinding) and cross-site `Origin`s (CSRF); `/mcp` requires `application/json` |

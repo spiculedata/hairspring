@@ -1,6 +1,16 @@
 use crate::scenario::AppSection;
 use std::process::{Child, Command, Stdio};
 
+/// Host variables the app may see; everything else (tokens, cloud credentials) is withheld.
+const PASSED_ENV: [&str; 5] = ["PATH", "HOME", "LANG", "TZ", "TMPDIR"];
+
+#[cfg(unix)]
+extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
+}
+#[cfg(unix)]
+const SIGKILL: i32 = 9;
+
 /// Starts and stops the application under test.
 pub trait AppLauncher {
     /// Starts (or restarts) the app, telling it where the sidecar listens. Returns the app's HTTP port.
@@ -48,12 +58,22 @@ impl AppLauncher for ProcessApp {
             }
         };
         let mut cmd = Command::new(program);
-        cmd.args(args)
-            .env("DAPR_HTTP_PORT", sidecar_port.to_string())
+        cmd.args(args).env_clear();
+        for name in PASSED_ENV {
+            if let Ok(v) = std::env::var(name) {
+                cmd.env(name, v);
+            }
+        }
+        cmd.env("DAPR_HTTP_PORT", sidecar_port.to_string())
             .env("DAPR_APP_PORT", port.to_string())
             .env("APP_PORT", port.to_string())
             .stdin(Stdio::null());
         cmd.envs(&self.section.env);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0); // so stop() can kill the app's children too
+        }
         if let Some(dir) = &self.section.cwd {
             cmd.current_dir(dir);
         }
@@ -66,6 +86,11 @@ impl AppLauncher for ProcessApp {
 
     fn stop(&mut self) {
         if let Some(mut child) = self.child.take() {
+            #[cfg(unix)]
+            // SAFETY: plain syscall; the child leads its own group (process_group(0)), so -pid targets only that group.
+            unsafe {
+                kill(-(child.id() as i32), SIGKILL);
+            }
             let _ = child.kill();
             let _ = child.wait();
         }

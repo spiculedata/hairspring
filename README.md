@@ -139,7 +139,7 @@ cp .env.example .env              # set real secrets
 docker compose up --build -d      # PostgreSQL + server + 2 workers
 ```
 
-Roles: `read` (inspect, replay), `run` (start and cancel runs, act as a worker), `admin`. Tokens are
+Roles: `read` (inspect results), `run` (start and cancel runs, replay bundles, act as a worker), `admin`. Tokens are
 SHA-256 hashed in memory and compared in constant time; the server refuses to listen on a non-loopback
 address without tokens, rate-limits per client, caps request sizes, and defends loopback open-mode against
 DNS rebinding and cross-site requests. Details and limits in [SECURITY.md](SECURITY.md). Put TLS in front of it.

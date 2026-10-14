@@ -299,6 +299,6 @@ impl Service {
                 bundle.path.len()
             )));
         }
-        Ok(engine.replay(&bundle)?)
+        Ok(sanitize::replay_steps(engine.replay(&bundle)?))
     }
 }

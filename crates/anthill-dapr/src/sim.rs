@@ -21,6 +21,8 @@ pub struct Report {
     pub duplicates_injected: u64,
     pub crashes: u64,
     pub published_by_app: u64,
+    /// False when the app has no `/anthill/check` endpoint: only delivery was checked.
+    pub invariants_checked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +53,17 @@ fn app_addr(port: u16) -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], port))
 }
 
+fn parse_subscription(s: &Value) -> Result<Subscription, String> {
+    let text = |v: &Value| v.as_str().map(str::to_string);
+    let route = text(&s["route"])
+        .or_else(|| text(&s["routes"]["default"]))
+        .or_else(|| text(&s["routes"]["rules"][0]["path"]));
+    match (text(&s["pubsubname"]), text(&s["topic"]), route) {
+        (Some(pubsub), Some(topic), Some(route)) => Ok(Subscription { pubsub, topic, route }),
+        _ => Err(format!("could not understand a subscription from /dapr/subscribe (need pubsubname, topic and a route): {}", clip(&s.to_string()))),
+    }
+}
+
 fn wait_ready(port: u16, timeout: Duration) -> Result<Vec<Subscription>, String> {
     let deadline = Instant::now() + timeout;
     loop {
@@ -68,19 +81,7 @@ fn wait_ready(port: u16, timeout: Duration) -> Result<Vec<Subscription>, String>
                 let subs = v
                     .as_array()
                     .ok_or("/dapr/subscribe must return a JSON array")?;
-                return Ok(subs
-                    .iter()
-                    .filter_map(|s| {
-                        Some(Subscription {
-                            pubsub: s["pubsubname"].as_str()?.to_string(),
-                            topic: s["topic"].as_str()?.to_string(),
-                            route: s["route"]
-                                .as_str()
-                                .or_else(|| s["routes"]["default"].as_str())?
-                                .to_string(),
-                        })
-                    })
-                    .collect());
+                return subs.iter().map(parse_subscription).collect();
             }
         }
         if Instant::now() >= deadline {
@@ -210,10 +211,10 @@ fn drive(run: &Run, app: &mut dyn AppLauncher) -> Verdict {
                 msgs[index].topic, msgs[index].pubsub
             ));
         };
-        msgs[index].attempts += 1;
         if chance(&mut rng, faults.drop) {
-            continue; // lost in transit; it will be retried
+            continue; // lost in transit: the app never saw it, so it is not an attempt
         }
+        msgs[index].attempts += 1;
         match deliver(port, sub, index, &msgs[index], timeout) {
             Delivery::Success => {
                 msgs[index].successes += 1;
@@ -242,6 +243,12 @@ fn drive(run: &Run, app: &mut dyn AppLauncher) -> Verdict {
         }
     }
 
+    let out_of_budget = msgs
+        .iter()
+        .any(|m| m.successes == 0 && !m.dropped && m.attempts < limits.max_attempts);
+    if out_of_budget {
+        return Verdict::Error(format!("the simulation ran out of its round budget ({} rounds) before every message was delivered; raise [limits].max_rounds", limits.max_rounds));
+    }
     for (i, m) in msgs.iter().enumerate() {
         if m.successes == 0 {
             let why = if m.dropped {
@@ -256,7 +263,11 @@ fn drive(run: &Run, app: &mut dyn AppLauncher) -> Verdict {
         }
     }
     match request(app_addr(port), "GET", "/anthill/check", &[], b"", timeout) {
-        Ok(r) if r.status == 200 || r.status == 404 => Verdict::Ok(report),
+        Ok(r) if r.status == 200 => Verdict::Ok(Report {
+            invariants_checked: true,
+            ..report
+        }),
+        Ok(r) if r.status == 404 => Verdict::Ok(report),
         Ok(r) => Verdict::Violation(clip(&String::from_utf8_lossy(&r.body)).trim().to_string())
             .into_non_empty(r.status),
         Err(e) => Verdict::Error(format!("the app's /anthill/check endpoint failed: {e}")),

@@ -3,7 +3,7 @@
 //! to people and to AI agents, so every field is bounded and stripped of control characters.
 use crate::{ServiceError, MAX_BUNDLE_BYTES};
 use anthill_core::bundle::Bundle;
-use anthill_engine::report::{FailureReport, RunOutcome, Step};
+use anthill_engine::report::{FailureReport, ReplayOutcome, RunOutcome, Step};
 
 pub const MAX_STEPS: usize = 1000;
 pub const MAX_LABEL_CHARS: usize = 500;
@@ -40,6 +40,32 @@ fn multi_line(text: &str) -> String {
             }
         })
         .collect()
+}
+
+/// Replay output comes from running target code, so it is cut to size and stripped of control characters
+/// (rather than rejected) before anyone or any agent reads it.
+pub fn replay_steps(out: ReplayOutcome) -> ReplayOutcome {
+    let steps = out
+        .steps
+        .into_iter()
+        .take(MAX_STEPS)
+        .map(|s| Step {
+            index: s.index,
+            action_id: single_line(&s.action_id)
+                .chars()
+                .take(MAX_ACTION_ID_CHARS)
+                .collect(),
+            label: single_line(&s.label)
+                .chars()
+                .take(MAX_LABEL_CHARS)
+                .collect(),
+            state: multi_line(&s.state).chars().take(MAX_STATE_CHARS).collect(),
+        })
+        .collect();
+    ReplayOutcome {
+        reproduced: out.reproduced,
+        steps,
+    }
 }
 
 fn clean_step(step: &Step) -> Result<Step, ServiceError> {

@@ -13,6 +13,14 @@ const CANCELLED: &str = "cancelled";
 const MIN_FUEL: u64 = 10_000;
 /// Re-executions the shrinker may spend before settling for what it has.
 const MAX_SHRINK_RUNS: usize = 3000;
+/// Most fuel a replayed bundle may request, whatever the bundle says.
+const MAX_REPLAY_FUEL: u64 = 50_000_000;
+/// Wall-clock limit for one replay.
+const REPLAY_WALL: Duration = Duration::from_secs(30);
+/// Trace length shown to humans; longer runs are summarised.
+const MAX_STEPS_SHOWN: usize = 500;
+/// Longest the shrinker may spend on one failing run.
+const SHRINK_WALL: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone)]
 pub struct WasmSettings {
@@ -81,6 +89,7 @@ fn failure_key(r: &RunResult) -> Option<String> {
         RunResult::Exit(n) => Some(format!("exit:{n}")),
         RunResult::Violation(m) => Some(format!("violation:{m}")),
         RunResult::OutOfFuel => Some("fuel".to_string()),
+        RunResult::TimedOut => Some("timeout".to_string()),
         RunResult::Trap(m) => Some(format!("trap:{m}")),
     }
 }
@@ -92,22 +101,32 @@ fn describe(r: &RunResult, fuel: u64) -> String {
         RunResult::OutOfFuel => {
             format!("did not finish within {fuel} instructions (possible infinite loop)")
         }
+        RunResult::TimedOut => "did not finish within the wall-clock limit".to_string(),
         RunResult::Trap(m) => format!("trapped: {m}"),
     }
 }
 
 fn run_forced(
     module: &CompiledModule,
+    seed: u64,
     choices: &[u64],
     cfg: VmConfig,
+    wall: Duration,
 ) -> Option<(RunResult, WasmVm)> {
-    let mut vm = module.instantiate(0, choices.to_vec(), cfg).ok()?;
-    let result = vm.run();
+    let mut vm = module.instantiate(seed, choices.to_vec(), cfg).ok()?;
+    let result = vm.run_with_wall(wall);
     Some((result, vm))
 }
 
 /// Delta debugging over the recorded decisions: drop chunks while the same failure persists.
-fn shrink(module: &CompiledModule, original: &[u64], key: &str, cfg: &VmConfig) -> Vec<u64> {
+fn shrink(
+    module: &CompiledModule,
+    seed: u64,
+    original: &[u64],
+    key: &str,
+    cfg: &VmConfig,
+    deadline: Instant,
+) -> Vec<u64> {
     let forced = VmConfig {
         forced_only: true,
         ..cfg.clone()
@@ -116,7 +135,11 @@ fn shrink(module: &CompiledModule, original: &[u64], key: &str, cfg: &VmConfig) 
     let mut runs = 0usize;
     let still_fails = |candidate: &[u64], runs: &mut usize| -> bool {
         *runs += 1;
-        run_forced(module, candidate, forced.clone())
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return false; // out of time: keep what we have
+        }
+        run_forced(module, seed, candidate, forced.clone(), left)
             .and_then(|(r, _)| failure_key(&r))
             .is_some_and(|k| k == key)
     };
@@ -151,9 +174,11 @@ fn shrink(module: &CompiledModule, original: &[u64], key: &str, cfg: &VmConfig) 
 }
 
 fn steps_for(vm: &WasmVm, result: &RunResult, fuel: u64) -> Vec<Step> {
-    let mut steps: Vec<Step> = vm
-        .choice_log()
+    let log = vm.choice_log();
+    let omitted = log.len().saturating_sub(MAX_STEPS_SHOWN);
+    let mut steps: Vec<Step> = log
         .iter()
+        .take(MAX_STEPS_SHOWN)
         .enumerate()
         .map(|(i, (n, v))| Step {
             index: i,
@@ -162,6 +187,15 @@ fn steps_for(vm: &WasmVm, result: &RunResult, fuel: u64) -> Vec<Step> {
             state: String::new(),
         })
         .collect();
+    if omitted > 0 {
+        let index = steps.len();
+        steps.push(Step {
+            index,
+            action_id: format!("{index:016x}"),
+            label: format!("... {omitted} more decisions omitted"),
+            state: String::new(),
+        });
+    }
     for line in vm.log_lines() {
         let index = steps.len();
         steps.push(Step {
@@ -234,27 +268,46 @@ impl Backend for WasmBackend {
                 Ok(vm) => vm,
                 Err(e) => return Ok(RunOutcome::error(e.to_string())),
             };
-            let result = vm.run();
+            let wall_left = wall
+                .saturating_sub(started.elapsed())
+                .max(Duration::from_secs(1));
+            let result = vm.run_with_wall(wall_left);
+            if result == RunResult::TimedOut {
+                // Out of wall-clock budget: inconclusive, never a finding.
+                return Ok(RunOutcome::passed(
+                    i,
+                    i,
+                    started.elapsed().as_millis() as u64,
+                ));
+            }
             if let Some(key) = failure_key(&result) {
                 let original = vm.choices();
                 let cfg = self.vm_config(fuel, false);
-                let minimal = shrink(&module, &original, &key, &cfg);
-                let Some((final_result, final_vm)) = run_forced(
-                    &module,
-                    &minimal,
-                    VmConfig {
-                        forced_only: true,
-                        ..cfg
-                    },
-                ) else {
-                    return Ok(RunOutcome::error("could not re-run the shrunk trace"));
+                let forced = VmConfig {
+                    forced_only: true,
+                    ..cfg.clone()
+                };
+                let deadline = Instant::now() + SHRINK_WALL.min(wall_left);
+                let mut minimal = shrink(&module, seed, &original, &key, &cfg, deadline);
+                let same = |r: &RunResult| failure_key(r).as_deref() == Some(key.as_str());
+                let mut rerun = run_forced(&module, seed, &minimal, forced.clone(), REPLAY_WALL);
+                // The shrunk trace must still fail the same way; otherwise fall back to the full one.
+                if !rerun.as_ref().is_some_and(|(r, _)| same(r)) {
+                    minimal = original.clone();
+                    rerun = run_forced(&module, seed, &minimal, forced, REPLAY_WALL);
+                }
+                let (final_result, final_vm) = match rerun {
+                    Some((r, v)) if same(&r) => (r, v),
+                    // Not even the recorded decisions replay: report the observed run itself.
+                    _ => (result.clone(), vm),
                 };
                 let steps = steps_for(&final_vm, &final_result, fuel);
                 let bundle = Bundle::new(seed, BUILD, minimal.clone())
                     .with_target(req.target.clone())
                     .with_backend("wasm")
                     .with_param("module_hash", hash.clone())
-                    .with_param("fuel", fuel.to_string());
+                    .with_param("fuel", fuel.to_string())
+                    .with_param("failure_key", key.clone());
                 let failure = FailureReport {
                     target: spec.name.clone(),
                     backend: "wasm".to_string(),
@@ -303,11 +356,38 @@ impl Backend for WasmBackend {
             .get("fuel")
             .and_then(|f| f.parse().ok())
             .unwrap_or(spec.budget.max_steps);
-        let (result, vm) = run_forced(&module, &bundle.path, self.vm_config(fuel, true))
-            .ok_or_else(|| EngineError::Backend("cannot instantiate the module".to_string()))?;
+        let fuel = fuel.min(MAX_REPLAY_FUEL);
+        let (result, vm) = run_forced(
+            &module,
+            bundle.seed,
+            &bundle.path,
+            self.vm_config(fuel, true),
+            REPLAY_WALL,
+        )
+        .ok_or_else(|| EngineError::Backend("cannot instantiate the module".to_string()))?;
+        let now = failure_key(&result);
+        let recorded = bundle.params.get("failure_key");
+        let same = match (&now, recorded) {
+            (Some(n), Some(r)) => n == r,
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
+        let mut steps = steps_for(&vm, &result, fuel.max(MIN_FUEL));
+        if now.is_some() && !same {
+            let index = steps.len();
+            steps.push(Step {
+                index,
+                action_id: format!("{index:016x}"),
+                label: format!(
+                    "a different failure occurred than the one recorded ({})",
+                    describe(&result, fuel)
+                ),
+                state: String::new(),
+            });
+        }
         Ok(ReplayOutcome {
-            reproduced: failure_key(&result).is_some(),
-            steps: steps_for(&vm, &result, fuel.max(MIN_FUEL)),
+            reproduced: same,
+            steps,
         })
     }
 

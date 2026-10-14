@@ -140,33 +140,30 @@ impl PgStore {
 
     fn migrate(&self) -> Result<()> {
         let mut c = self.pool.get()?;
-        c.execute("SELECT pg_advisory_lock($1)", &[&MIGRATION_LOCK])?;
-        let result = (|| -> Result<()> {
-            c.batch_execute(
-                "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)",
-            )?;
-            let current: Option<i32> = c
-                .query_opt("SELECT version FROM schema_version LIMIT 1", &[])?
-                .map(|r| r.get(0));
-            match current {
-                None => {
-                    let mut tx = c.transaction()?;
-                    tx.batch_execute(SCHEMA)?;
-                    tx.execute(
-                        "INSERT INTO schema_version(version) VALUES ($1)",
-                        &[&SCHEMA_VERSION],
-                    )?;
-                    tx.commit()?;
-                    Ok(())
-                }
-                Some(v) if v == SCHEMA_VERSION => Ok(()),
-                Some(v) => Err(StoreError::Backend(format!(
-                    "database schema version {v} is not supported (expected {SCHEMA_VERSION})"
-                ))),
+        let mut tx = c.transaction()?;
+        // Transaction-scoped: released on commit or rollback, even if this connection dies mid-way.
+        tx.execute("SELECT pg_advisory_xact_lock($1)", &[&MIGRATION_LOCK])?;
+        tx.batch_execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")?;
+        let current: Option<i32> = tx
+            .query_opt("SELECT version FROM schema_version LIMIT 1", &[])?
+            .map(|r| r.get(0));
+        match current {
+            None => {
+                tx.batch_execute(SCHEMA)?;
+                tx.execute(
+                    "INSERT INTO schema_version(version) VALUES ($1)",
+                    &[&SCHEMA_VERSION],
+                )?;
             }
-        })();
-        c.execute("SELECT pg_advisory_unlock($1)", &[&MIGRATION_LOCK])?;
-        result
+            Some(v) if v == SCHEMA_VERSION => {}
+            Some(v) => {
+                return Err(StoreError::Backend(format!(
+                    "database schema version {v} is not supported (expected {SCHEMA_VERSION})"
+                )))
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     fn client(&self) -> Result<r2d2::PooledConnection<PostgresConnectionManager<NoTls>>> {
@@ -260,6 +257,8 @@ impl Store for PgStore {
     fn cancel_run(&self, id: &str, now: i64) -> Result<bool> {
         let mut c = self.client()?;
         let mut tx = c.transaction()?;
+        // Same order as finish_job (jobs, then runs), so the two can never deadlock.
+        tx.execute("SELECT id FROM jobs WHERE run_id=$1 FOR UPDATE", &[&id])?;
         let n = tx.execute("UPDATE runs SET state='cancelled', finished_at=$1 WHERE id=$2 AND state IN ('queued','running')", &[&now, &id])?;
         if n > 0 {
             tx.execute("UPDATE jobs SET status='failed', last_error='cancelled' WHERE run_id=$1 AND status='queued'", &[&id])?;

@@ -76,6 +76,9 @@ fn main() -> ExitCode {
                 "anthill-dapr-sim: ok (seed {seed}): {} delivered, {} redelivered, {} crashes",
                 r.delivered, r.redelivered, r.crashes
             );
+            if !r.invariants_checked {
+                println!("anthill-dapr-sim: warning: the app has no /anthill/check endpoint, so only delivery was checked, not your invariants");
+            }
             ExitCode::SUCCESS
         }
         Verdict::Violation(m) => {

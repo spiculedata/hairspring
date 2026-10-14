@@ -149,15 +149,10 @@ fn full_agent_loop_find_inspect_replay() {
     let bundle = f["bundle"].as_str().unwrap().to_string();
     assert!(bundle.starts_with("anthill-bundle v2"));
 
-    let by_text = tool(&s, Role::Read, "replay_bundle", json!({"bundle": bundle}));
+    let by_text = tool(&s, Role::Run, "replay_bundle", json!({"bundle": bundle}));
     assert_eq!(structured(&by_text)["reproduced"], json!(true));
     let hash = f["record"]["bundle_hash"].as_str().unwrap();
-    let by_hash = tool(
-        &s,
-        Role::Read,
-        "replay_bundle",
-        json!({"bundle_hash": hash}),
-    );
+    let by_hash = tool(&s, Role::Run, "replay_bundle", json!({"bundle_hash": hash}));
     assert_eq!(structured(&by_hash)["reproduced"], json!(true));
 
     let got = tool(
@@ -257,12 +252,7 @@ fn domain_errors_are_tool_errors_not_protocol_errors() {
         json!({"run_id": "run_0123456789abcdef"}),
     );
     assert_eq!(r["result"]["isError"], json!(true));
-    let r = tool(
-        &s,
-        Role::Read,
-        "replay_bundle",
-        json!({"bundle": "garbage"}),
-    );
+    let r = tool(&s, Role::Run, "replay_bundle", json!({"bundle": "garbage"}));
     assert_eq!(r["result"]["isError"], json!(true));
 }
 
@@ -517,3 +507,21 @@ fn stdio_survives_an_oversized_line_and_keeps_serving() {
 }
 
 const MAX: usize = anthill_mcp::MAX_MESSAGE_BYTES;
+
+#[test]
+fn replay_needs_the_run_role_because_it_executes_target_code() {
+    let s = server();
+    let r = tool(
+        &s,
+        Role::Read,
+        "replay_bundle",
+        json!({"bundle": "anything"}),
+    );
+    assert_eq!(r["result"]["isError"], json!(true));
+    assert!(
+        r.to_string().to_lowercase().contains("permission")
+            || r.to_string().to_lowercase().contains("role")
+            || r.to_string().to_lowercase().contains("not allowed"),
+        "{r}"
+    );
+}

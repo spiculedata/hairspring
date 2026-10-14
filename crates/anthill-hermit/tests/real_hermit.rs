@@ -43,7 +43,7 @@ fn compile(name: &str, source: &str) -> PathBuf {
     bin
 }
 
-fn engine(bin: &PathBuf, trials: u64) -> Engine {
+fn engine(bin: &std::path::Path, trials: u64) -> Engine {
     let spec = TargetSpec {
         name: "t".into(),
         description: String::new(),

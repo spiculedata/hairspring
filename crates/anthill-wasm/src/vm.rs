@@ -5,6 +5,15 @@ use wasmtime::{
     StoreLimits, StoreLimitsBuilder, Trap, Val,
 };
 
+/// Separates the stream that answers `choose` from the one behind `rand_u64`, so replaying with forced
+/// decisions leaves the guest's random numbers exactly as they were in the original run.
+const CHOICE_SALT: u64 = 0xC401_CE5A_17D3_E551;
+/// Most decisions a guest may make in one run; the log of them must stay bounded.
+const MAX_DECISIONS: usize = 100_000;
+const MAX_TABLE_ELEMENTS: usize = 10_000;
+/// Epoch deadline meaning "never": large, but far enough from `u64::MAX` not to overflow when added.
+const NO_DEADLINE: u64 = 1 << 62;
+const WATCHDOG_TICK: std::time::Duration = std::time::Duration::from_millis(5);
 const MAX_LOG_LINES: usize = 200;
 const MAX_MESSAGE_BYTES: usize = 200;
 const WASM_PAGE: usize = 65_536;
@@ -54,11 +63,14 @@ pub enum RunResult {
     Exit(i32),
     Violation(String),
     OutOfFuel,
+    /// The wall-clock watchdog fired (only with [`WasmVm::run_with_wall`]).
+    TimedOut,
     Trap(String),
 }
 
 struct HostState {
     rng: Rng,
+    choice_rng: Rng,
     forced: Vec<u64>,
     forced_only: bool,
     cursor: usize,
@@ -72,6 +84,10 @@ struct HostState {
 #[derive(Clone)]
 struct HostSnapshot {
     rng: Rng,
+    choice_rng: Rng,
+    forced: Vec<u64>,
+    forced_only: bool,
+    fuel: u64,
     cursor: usize,
     choices: Vec<(u32, u64)>,
     log: Vec<String>,
@@ -106,6 +122,9 @@ pub struct CompiledModule {
 fn engine() -> Result<Engine, WasmError> {
     let mut c = Config::new();
     c.consume_fuel(true);
+    // Fuel counts instructions, not the time spent inside host-side operations such as memory.fill;
+    // epoch interruption lets a watchdog bound real time too.
+    c.epoch_interruption(true);
     // The two documented sources of nondeterminism in core WebAssembly.
     c.cranelift_nan_canonicalization(true);
     c.relaxed_simd_deterministic(true);
@@ -132,6 +151,7 @@ impl CompiledModule {
     ) -> Result<WasmVm, WasmError> {
         let state = HostState {
             rng: Rng::new(seed),
+            choice_rng: Rng::new(seed ^ CHOICE_SALT),
             forced,
             forced_only: cfg.forced_only,
             cursor: 0,
@@ -141,6 +161,9 @@ impl CompiledModule {
             clock_ms: 0,
             limits: StoreLimitsBuilder::new()
                 .memory_size(cfg.max_memory_bytes)
+                .table_elements(MAX_TABLE_ELEMENTS)
+                .tables(1)
+                .memories(1)
                 .instances(1)
                 .build(),
         };
@@ -149,6 +172,7 @@ impl CompiledModule {
         store
             .set_fuel(cfg.fuel)
             .map_err(|e| WasmError::Runtime(e.to_string()))?;
+        store.set_epoch_deadline(NO_DEADLINE);
         let linker = host_linker(&self.engine)?;
         let instance = linker
             .instantiate(&mut store, &self.module)
@@ -180,19 +204,25 @@ fn host_linker(engine: &Engine) -> Result<Linker<HostState>, WasmError> {
     l.func_wrap(
         "anthill",
         "choose",
-        |mut c: Caller<'_, HostState>, n: i32| -> i32 {
+        |mut c: Caller<'_, HostState>, n: i32| -> wasmtime::Result<i32> {
             let n = n.max(1) as u32;
             let s = c.data_mut();
+            if s.choices.len() >= MAX_DECISIONS {
+                s.violation = Some(format!(
+                    "made more than {MAX_DECISIONS} decisions (possible infinite loop)"
+                ));
+                return Err(wasmtime::Error::msg("anthill: too many decisions"));
+            }
             let v = if s.cursor < s.forced.len() {
                 s.forced[s.cursor] % u64::from(n)
             } else if s.forced_only {
                 0
             } else {
-                s.rng.below(n as usize) as u64
+                s.choice_rng.below(n as usize) as u64
             };
             s.cursor += 1;
             s.choices.push((n, v));
-            v as i32
+            Ok(v as i32)
         },
     )
     .map_err(err)?;
@@ -285,8 +315,33 @@ impl WasmVm {
         match outcome {
             Ok(code) => RunResult::Exit(code),
             Err(e) if e.downcast_ref::<Trap>() == Some(&Trap::OutOfFuel) => RunResult::OutOfFuel,
+            Err(e) if e.downcast_ref::<Trap>() == Some(&Trap::Interrupt) => RunResult::TimedOut,
             Err(e) => RunResult::Trap(e.to_string().lines().next().unwrap_or("trap").to_string()),
         }
+    }
+
+    /// Like [`WasmVm::run`] but also stops the guest after `wall` of real time.
+    pub fn run_with_wall(&mut self, wall: std::time::Duration) -> RunResult {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        self.store.set_epoch_deadline(1);
+        let engine = self.compiled.engine.clone();
+        let done = std::sync::Arc::new(AtomicBool::new(false));
+        let watchdog_done = done.clone();
+        let watchdog = std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            while !watchdog_done.load(Ordering::SeqCst) {
+                if started.elapsed() >= wall {
+                    engine.increment_epoch();
+                    return;
+                }
+                std::thread::sleep(WATCHDOG_TICK);
+            }
+        });
+        let result = self.run();
+        done.store(true, Ordering::SeqCst);
+        let _ = watchdog.join();
+        self.store.set_epoch_deadline(NO_DEADLINE);
+        result
     }
 
     pub fn call_i32(&mut self, name: &str) -> Result<i32, WasmError> {
@@ -371,12 +426,20 @@ impl WasmVm {
             };
             globals.push((name, value));
         }
+        let fuel = self
+            .store
+            .get_fuel()
+            .map_err(|e| WasmError::Runtime(e.to_string()))?;
         let s = self.store.data();
         Ok(Snapshot {
             memory,
             globals,
             host: HostSnapshot {
                 rng: s.rng.clone(),
+                choice_rng: s.choice_rng.clone(),
+                forced: s.forced.clone(),
+                forced_only: s.forced_only,
+                fuel,
                 cursor: s.cursor,
                 choices: s.choices.clone(),
                 log: s.log.clone(),
@@ -402,14 +465,25 @@ impl WasmVm {
                 restore_global(&mut self.store, g, value)?;
             }
         }
+        self.store
+            .set_fuel(snap.host.fuel)
+            .map_err(|e| WasmError::Runtime(e.to_string()))?;
         let s = self.store.data_mut();
         s.rng = snap.host.rng.clone();
+        s.choice_rng = snap.host.choice_rng.clone();
+        s.forced = snap.host.forced.clone();
+        s.forced_only = snap.host.forced_only;
         s.cursor = snap.host.cursor;
         s.choices = snap.host.choices.clone();
         s.log = snap.host.log.clone();
         s.clock_ms = snap.host.clock_ms;
         s.violation = None;
         Ok(())
+    }
+
+    /// Instructions the guest may still execute.
+    pub fn fuel_remaining(&self) -> u64 {
+        self.store.get_fuel().unwrap_or(0)
     }
 
     /// A new, independent VM in the state captured by `snap`.

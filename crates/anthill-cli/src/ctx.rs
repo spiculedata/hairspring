@@ -43,6 +43,9 @@ impl Ctx {
                 .then(|| db_arg.to_string())
         });
         if let Some(url) = url {
+            if from_arg_with_password(&db_arg, &url) {
+                eprintln!("anthill: warning: the database password is visible in the process list; set {DATABASE_URL_ENV} instead of passing it with --db");
+            }
             let schema = std::env::var(DATABASE_SCHEMA_ENV)
                 .ok()
                 .filter(|s| !s.is_empty())
@@ -60,5 +63,37 @@ impl Ctx {
 
     pub fn service(&self) -> CmdResult<Service> {
         Ok(Service::new(self.store()?))
+    }
+}
+
+/// True when the URL came from the command line (visible in `ps`) and embeds a password.
+fn from_arg_with_password(db_arg: &str, url: &str) -> bool {
+    if db_arg != url {
+        return false;
+    }
+    let authority = url
+        .split_once("://")
+        .map_or("", |(_, rest)| rest.split(['/', '?']).next().unwrap_or(""));
+    authority
+        .rsplit_once('@')
+        .is_some_and(|(userinfo, _)| userinfo.contains(':'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::from_arg_with_password;
+
+    #[test]
+    fn warns_only_for_passwords_given_on_the_command_line() {
+        let url = "postgres://anthill:s3cret@db/anthill";
+        assert!(from_arg_with_password(url, url));
+        assert!(
+            !from_arg_with_password("results.db", url),
+            "the URL came from the environment"
+        );
+        let no_pw = "postgres://anthill@db/anthill";
+        assert!(!from_arg_with_password(no_pw, no_pw));
+        let at_in_path = "postgres://db/anthill?x=a@b:c";
+        assert!(!from_arg_with_password(at_in_path, at_in_path));
     }
 }

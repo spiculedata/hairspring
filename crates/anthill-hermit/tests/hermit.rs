@@ -494,3 +494,143 @@ fn a_target_can_set_its_own_trial_timeout() {
         started.elapsed()
     );
 }
+
+// ---- review findings ----
+#[test]
+fn a_trial_cut_off_by_the_wall_budget_is_inconclusive_not_a_hang() {
+    let d = scratch("wallclip");
+    let mut s = settings(fake(&d));
+    s.trial_timeout = Duration::from_secs(30); // the target's own limit is generous
+    let spec = TargetSpec {
+        name: "svc".into(),
+        description: String::new(),
+        kind: TargetKind::Process {
+            command: vec!["/bin/sh".into(), "-c".into(), "sleep 30".into()],
+            env: BTreeMap::new(),
+            cwd: None,
+            hermit_args: vec![],
+            trial_timeout_secs: None,
+        },
+        budget: Budget {
+            max_steps: 1,
+            max_trials: 5,
+            wall_secs: 1,
+        },
+    };
+    let e = Engine::new(
+        Arc::new(Registry::new()),
+        Config {
+            targets: BTreeMap::from([("svc".to_string(), spec)]),
+        },
+    )
+    .with_backend(Arc::new(HermitBackend::new(s)));
+    let started = std::time::Instant::now();
+    let out = e.run(&RunRequest::new("svc", 1), &mut |_| true).unwrap();
+    assert_eq!(
+        out.status,
+        RunStatus::Passed,
+        "being out of budget says nothing about the program: {out:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn replay_with_different_behaviour_is_not_a_reproduction() {
+    let d = scratch("diffout");
+    let e = engine_for(
+        fake(&d),
+        "svc",
+        &["/bin/sh", "-c", SEEDED_BUG],
+        &[],
+        budget(20),
+    );
+    let f = e
+        .run(&RunRequest::new("svc", 1), &mut |_| true)
+        .unwrap()
+        .failure
+        .unwrap();
+    let tampered = Bundle::decode(&f.bundle)
+        .unwrap()
+        .with_param("output_hash", "deadbeefdeadbeef");
+    let r = e.replay(&tampered).unwrap();
+    assert!(
+        !r.reproduced,
+        "it still fails, but not the way that was recorded"
+    );
+    assert!(r
+        .steps
+        .iter()
+        .any(|s| s.label.contains("output matches the recording: no")));
+}
+
+#[test]
+fn a_bare_hermit_name_is_found_on_the_callers_path_not_the_pinned_guest_path() {
+    let d = scratch("barepath");
+    let name = format!("anthill-fake-hermit-{}", std::process::id());
+    std::fs::copy(fake(&d), d.join(&name)).unwrap();
+    let old = std::env::var("PATH").unwrap_or_default();
+    std::env::set_var("PATH", format!("{}:{old}", d.display()));
+    let mut s = settings(PathBuf::from(&name));
+    s.trial_timeout = Duration::from_secs(10);
+    let e = Engine::new(
+        Arc::new(Registry::new()),
+        Config {
+            targets: BTreeMap::from([(
+                "svc".to_string(),
+                TargetSpec {
+                    name: "svc".into(),
+                    description: String::new(),
+                    kind: TargetKind::Process {
+                        command: vec!["/bin/sh".into(), "-c".into(), "true".into()],
+                        env: BTreeMap::new(),
+                        cwd: None,
+                        hermit_args: vec![],
+                        trial_timeout_secs: None,
+                    },
+                    budget: budget(1),
+                },
+            )]),
+        },
+    )
+    .with_backend(Arc::new(HermitBackend::new(s)));
+    let out = e.run(&RunRequest::new("svc", 1), &mut |_| true).unwrap();
+    std::env::set_var("PATH", old);
+    assert_eq!(out.status, RunStatus::Passed, "{out:?}");
+}
+
+#[test]
+fn processes_left_behind_after_a_normal_exit_are_cleaned_up() {
+    let d = scratch("straggler");
+    let pidfile = d.join("pid");
+    let script = format!("sleep 31 & echo $! > {}", pidfile.display());
+    let e = engine_for(fake(&d), "svc", &["/bin/sh", "-c", &script], &[], budget(1));
+    let out = e.run(&RunRequest::new("svc", 1), &mut |_| true).unwrap();
+    assert_eq!(out.status, RunStatus::Passed);
+    let pid: i32 = std::fs::read_to_string(&pidfile)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let alive = |pid: i32| {
+        Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while alive(pid) && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        !alive(pid),
+        "the leftover background process must not outlive the trial"
+    );
+}
+
+use std::process::Command;

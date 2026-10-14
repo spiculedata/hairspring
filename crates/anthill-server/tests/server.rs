@@ -158,6 +158,11 @@ fn authentication_and_roles_are_enforced() {
             .status,
         403
     );
+    assert_eq!(
+        read.post("/api/replay", &json!({"bundle": "x"})).status,
+        403,
+        "replay runs target code, so it needs the run role"
+    );
     let run = client(srv.addr(), Some(RUN));
     assert_eq!(
         run.post("/api/runs", &json!({"target": "lock-lease"}))

@@ -53,7 +53,7 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "replay_bundle",
-        role: Role::Read,
+        role: Role::Run,
         description: "Replay a reproduction bundle (pass `bundle` text or a stored `bundle_hash`). reproduced=true means the property is still violated; false means it no longer fails.",
         schema: || obj(json!({ "bundle": { "type": "string" }, "bundle_hash": { "type": "string" } }), &[]),
     },

@@ -51,8 +51,25 @@ fn default_worker_name() -> String {
     worker_name_for(&host_name(), std::process::id())
 }
 
+#[cfg(unix)]
+fn warn_if_readable_by_others(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = std::fs::metadata(path) {
+        if meta.permissions().mode() & 0o077 != 0 {
+            eprintln!(
+                "anthill: warning: {} is readable by other users; run `chmod 600` on it",
+                path.display()
+            );
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn warn_if_readable_by_others(_path: &std::path::Path) {}
+
 fn token_from(args: &WorkerArgs) -> CmdResult<Option<String>> {
     if let Some(path) = &args.token_file {
+        warn_if_readable_by_others(path);
         let text = std::fs::read_to_string(path)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let token = text.trim().to_string();

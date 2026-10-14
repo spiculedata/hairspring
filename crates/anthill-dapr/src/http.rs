@@ -1,17 +1,37 @@
 //! A deliberately tiny HTTP/1.1 server and client over `std::net`: one request per connection,
-//! bounded sizes, no dependencies. Simple enough to behave deterministically under Hermit.
+//! bounded sizes, deadlines and connection caps, no dependencies. Simple enough to behave
+//! deterministically under Hermit.
 use serde_json::Value;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const ACCEPT_POLL: Duration = Duration::from_millis(5);
-const SERVER_READ_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_REQUEST_DEADLINE: Duration = Duration::from_secs(10);
+const DEFAULT_MAX_CONNECTIONS: usize = 256;
+
+/// Limits that keep one slow or greedy client from starving the others.
+#[derive(Debug, Clone, Copy)]
+pub struct ServeLimits {
+    /// The whole request (headers and body) must arrive within this time, however slowly it trickles.
+    pub request_deadline: Duration,
+    /// Concurrent connections served; extra ones get `503`.
+    pub max_connections: usize,
+}
+
+impl Default for ServeLimits {
+    fn default() -> Self {
+        ServeLimits {
+            request_deadline: DEFAULT_REQUEST_DEADLINE,
+            max_connections: DEFAULT_MAX_CONNECTIONS,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Request {
@@ -20,6 +40,12 @@ pub struct Request {
     pub query: String,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+}
+
+impl Request {
+    pub fn header(&self, name: &str) -> Option<&str> {
+        header(&self.headers, name)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -62,9 +88,13 @@ fn reason(status: u16) -> &'static str {
         200 => "OK",
         204 => "No Content",
         400 => "Bad Request",
+        403 => "Forbidden",
         404 => "Not Found",
         409 => "Conflict",
         413 => "Payload Too Large",
+        415 => "Unsupported Media Type",
+        429 => "Too Many Requests",
+        503 => "Service Unavailable",
         _ => "Status",
     }
 }
@@ -106,9 +136,39 @@ fn write_response(stream: &mut TcpStream, r: &Response) {
 enum ReadError {
     Bad,
     TooLarge,
+    /// The client was too slow; the connection is dropped without a reply.
+    Slow,
 }
 
-fn read_request(stream: &mut TcpStream) -> Result<Request, ReadError> {
+/// One read bounded by what is left of the request deadline.
+fn read_within(
+    stream: &mut TcpStream,
+    buf: &mut [u8],
+    deadline: Instant,
+) -> Result<usize, ReadError> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        return Err(ReadError::Slow);
+    }
+    stream
+        .set_read_timeout(Some(left))
+        .map_err(|_| ReadError::Bad)?;
+    match stream.read(buf) {
+        Ok(0) => Err(ReadError::Bad),
+        Ok(n) => Ok(n),
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ) =>
+        {
+            Err(ReadError::Slow)
+        }
+        Err(_) => Err(ReadError::Bad),
+    }
+}
+
+fn read_request(stream: &mut TcpStream, deadline: Instant) -> Result<Request, ReadError> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     let header_end = loop {
@@ -118,10 +178,8 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, ReadError> {
         if buf.len() > MAX_HEADER_BYTES {
             return Err(ReadError::TooLarge);
         }
-        match stream.read(&mut chunk) {
-            Ok(0) | Err(_) => return Err(ReadError::Bad),
-            Ok(n) => buf.extend_from_slice(&chunk[..n]),
-        }
+        let n = read_within(stream, &mut chunk, deadline)?;
+        buf.extend_from_slice(&chunk[..n]);
     };
     let head = String::from_utf8_lossy(&buf[..header_end]).into_owned();
     let mut lines = head.splitn(2, "\r\n");
@@ -131,21 +189,32 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, ReadError> {
         return Err(ReadError::Bad);
     }
     let headers = parse_headers(lines.next().unwrap_or(""));
-    let length = match header(&headers, "content-length") {
-        None => 0,
-        Some(v) => v.parse::<usize>().map_err(|_| ReadError::Bad)?,
-    };
-    if length > MAX_BODY_BYTES {
-        return Err(ReadError::TooLarge);
-    }
     let mut body = buf[header_end + 4..].to_vec();
-    while body.len() < length {
-        match stream.read(&mut chunk) {
-            Ok(0) | Err(_) => return Err(ReadError::Bad),
-            Ok(n) => body.extend_from_slice(&chunk[..n]),
+    if header(&headers, "transfer-encoding")
+        .is_some_and(|v| v.to_ascii_lowercase().contains("chunked"))
+    {
+        while !body.ends_with(b"0\r\n\r\n") {
+            if body.len() > MAX_BODY_BYTES {
+                return Err(ReadError::TooLarge);
+            }
+            let n = read_within(stream, &mut chunk, deadline)?;
+            body.extend_from_slice(&chunk[..n]);
         }
+        body = decode_chunked(&body);
+    } else {
+        let length = match header(&headers, "content-length") {
+            None => 0,
+            Some(v) => v.parse::<usize>().map_err(|_| ReadError::Bad)?,
+        };
+        if length > MAX_BODY_BYTES {
+            return Err(ReadError::TooLarge);
+        }
+        while body.len() < length {
+            let n = read_within(stream, &mut chunk, deadline)?;
+            body.extend_from_slice(&chunk[..n]);
+        }
+        body.truncate(length);
     }
-    body.truncate(length);
     let (path, query) = parts[1]
         .split_once('?')
         .map(|(p, q)| (p.to_string(), q.to_string()))
@@ -159,22 +228,49 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, ReadError> {
     })
 }
 
-/// Serves `handler` on `listener` until `stop` is set. One thread per connection.
+/// Decrements the live-connection count when a connection ends, however it ends.
+struct ConnectionSlot(Arc<AtomicUsize>);
+
+impl Drop for ConnectionSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Serves `handler` on `listener` until `stop` is set, with default limits.
 pub fn serve(
     listener: TcpListener,
     handler: Arc<dyn Fn(Request) -> Response + Send + Sync>,
     stop: Arc<AtomicBool>,
 ) {
+    serve_with(listener, handler, stop, ServeLimits::default());
+}
+
+/// Serves `handler` with explicit limits. One thread per connection, at most `max_connections` at once.
+pub fn serve_with(
+    listener: TcpListener,
+    handler: Arc<dyn Fn(Request) -> Response + Send + Sync>,
+    stop: Arc<AtomicBool>,
+    limits: ServeLimits,
+) {
     let _ = listener.set_nonblocking(true);
+    let active = Arc::new(AtomicUsize::new(0));
     std::thread::spawn(move || {
         while !stop.load(Ordering::SeqCst) {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    if active.fetch_add(1, Ordering::SeqCst) >= limits.max_connections {
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        write_response(&mut stream, &Response::text(503, "too many connections"));
+                        continue;
+                    }
+                    let slot = ConnectionSlot(active.clone());
                     let handler = handler.clone();
                     std::thread::spawn(move || {
+                        let _slot = slot;
                         let _ = stream.set_nonblocking(false);
-                        let _ = stream.set_read_timeout(Some(SERVER_READ_TIMEOUT));
-                        match read_request(&mut stream) {
+                        let deadline = Instant::now() + limits.request_deadline;
+                        match read_request(&mut stream, deadline) {
                             Ok(req) => write_response(&mut stream, &handler(req)),
                             Err(ReadError::TooLarge) => write_response(
                                 &mut stream,
@@ -183,11 +279,9 @@ pub fn serve(
                             Err(ReadError::Bad) => {
                                 write_response(&mut stream, &Response::text(400, "bad request"))
                             }
+                            Err(ReadError::Slow) => {}
                         }
                     });
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(ACCEPT_POLL)
                 }
                 Err(_) => std::thread::sleep(ACCEPT_POLL),
             }
@@ -218,7 +312,7 @@ fn decode_chunked(body: &[u8]) -> Vec<u8> {
     out
 }
 
-/// A blocking request with a connect and read timeout.
+/// A blocking request. `timeout` bounds the whole exchange (connect, send and receive), not each read.
 pub fn request(
     addr: SocketAddr,
     method: &str,
@@ -227,11 +321,9 @@ pub fn request(
     body: &[u8],
     timeout: Duration,
 ) -> Result<Response, String> {
+    let deadline = Instant::now() + timeout;
     let mut stream = TcpStream::connect_timeout(&addr, timeout)
         .map_err(|e| format!("cannot connect to {addr}: {e}"))?;
-    stream
-        .set_read_timeout(Some(timeout))
-        .map_err(|e| e.to_string())?;
     stream
         .set_write_timeout(Some(timeout))
         .map_err(|e| e.to_string())?;
@@ -250,6 +342,25 @@ pub fn request(
     let mut raw = Vec::new();
     let mut chunk = [0u8; 8192];
     loop {
+        if let Some(end) = find_header_end(&raw) {
+            let parsed = parse_head(&raw[..end]);
+            if let Some(len) = parsed
+                .as_ref()
+                .and_then(|(_, h)| header(h, "content-length"))
+                .and_then(|v| v.parse::<usize>().ok())
+            {
+                if raw.len() >= end + 4 + len {
+                    break; // the whole body has arrived; no need to wait for the server to close
+                }
+            }
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(format!("timed out waiting for {addr}"));
+        }
+        stream
+            .set_read_timeout(Some(left))
+            .map_err(|e| e.to_string())?;
         match stream.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => {
@@ -259,8 +370,10 @@ pub fn request(
                 }
             }
             Err(e)
-                if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut =>
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
             {
                 return Err(format!("timed out waiting for {addr}"))
             }
@@ -268,14 +381,7 @@ pub fn request(
         }
     }
     let end = find_header_end(&raw).ok_or("malformed response")?;
-    let head = String::from_utf8_lossy(&raw[..end]).into_owned();
-    let mut lines = head.splitn(2, "\r\n");
-    let status = lines
-        .next()
-        .and_then(|l| l.split(' ').nth(1))
-        .and_then(|s| s.parse::<u16>().ok())
-        .ok_or("malformed status line")?;
-    let headers = parse_headers(lines.next().unwrap_or(""));
+    let (status, headers) = parse_head(&raw[..end]).ok_or("malformed status line")?;
     let body = &raw[end + 4..];
     let body = if header(&headers, "transfer-encoding")
         .is_some_and(|v| v.to_ascii_lowercase().contains("chunked"))
@@ -289,4 +395,11 @@ pub fn request(
         headers,
         body,
     })
+}
+
+fn parse_head(head: &[u8]) -> Option<(u16, Vec<(String, String)>)> {
+    let head = String::from_utf8_lossy(head).into_owned();
+    let mut lines = head.splitn(2, "\r\n");
+    let status = lines.next()?.split(' ').nth(1)?.parse::<u16>().ok()?;
+    Some((status, parse_headers(lines.next().unwrap_or(""))))
 }
