@@ -1,7 +1,11 @@
 # Showcase plan: reproduce the SQLite WAL-reset bug
 
-**Status: planned, not done.** This documents a feasibility assessment and a concrete plan. Nothing here has
-been run yet; the claims below are from SQLite's published documentation.
+**Status: spike in progress.** The workload is in [`experiments/sqlite-wal`](../experiments/sqlite-wal). It runs under
+Hermit on both SQLite 3.51.2 (affected) and 3.51.3 (fixed). No violation has been observed yet and results are not
+final; the bug claims below are from SQLite's published documentation.
+
+One lesson so far: an unbounded, spinning checkpointer thread livelocks under Hermit's deterministic scheduler
+(seeds hung until timeout). The workload now bounds and yields the checkpointer.
 
 ## The bug
 

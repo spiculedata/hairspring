@@ -9,3 +9,4 @@ web/dist/*
 .env
 .env.*
 .playwright-mcp/
+.claude/
