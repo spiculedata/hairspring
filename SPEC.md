@@ -107,6 +107,16 @@ Caveats (do not oversell)
 
 Revised decision: Tier 2 = Hermit-backed system mode on x86-64 Linux, labelled experimental; Tier 1 (+WASM) remains the cross-platform product.
 
+## 3e. Later results (summary)
+
+Measured after the sections above; details in [docs/determinism.md](docs/determinism.md).
+- The Hermit "first run differs" effect was **host filesystem state**: Hermit virtualises timestamps, so Python's
+  `.pyc` caches look stale after any native Python run and are recompiled and rewritten. Freezing them
+  (`PYTHONDONTWRITEBYTECODE=1`, empty `PYTHONPYCACHEPREFIX`) gave 50/50 identical runs.
+- The Anthill Hermit backend, run on bare metal, found and reproduced 3/3 a real threading bug in C and a
+  duplicate-delivery bug in an unmodified Python Dapr consumer; the fixed variants passed every seed.
+- WASM trace hashes are identical on macOS arm64 and Linux x86-64.
+
 ## 4. Architecture
 
 ```

@@ -116,20 +116,24 @@ Also ship a Claude Code skill/plugin (`/anthill`) that wraps CLI and MCP.
 - `cargo anthill` wrapper for Rust projects.
 - **Dapr simulation:** a simulated sidecar implementing pub/sub, state store, bindings, and secrets APIs with configurable faults (redelivery, timeout, partial failure). Apps under Hermit or WASM talk to the simulated sidecar on loopback. A natural first domain for Dapr-based microservices; do after the core path works.
 
-## 7. Phasing
+## 7. Phasing (status)
 
-| Phase | Deliver | Exit criterion |
+| Phase | Deliver | Status |
 |---|---|---|
-| M1 (done) | `anthill-core` | 21 tests green, doctor catches HashMap leak |
-| M2 | `anthill-store` + `anthill-cli` local mode, bundle export, SQLite | `anthill test` finds, shrinks, stores and replays the pub/sub bug from a fresh clone |
-| M3 | `anthill-server` + worker + **MCP** (read tools first) | Claude Code can list runs, fetch a failure and replay it via MCP |
-| M4 | Web UI: runs, failure view, replay player | A non-author can find and understand a failure from the UI alone |
-| M5 | `HermitBackend` (Linux, experimental) | 3 real programs, 100% repeatable by seed, honest overhead numbers; container profile documented |
-| M6 | WASM spike then backend | Same program replays identically on macOS and Linux; snapshot/fork works |
-| M7 | Dapr simulator; GitHub Action | A real Dapr service tested end to end in CI |
-| M8 | Postgres/S3 multi-worker, auth, packaging | `docker compose up` gives a working cluster |
+| M1 | `anthill-core` | Done |
+| M2 | Store, engine, service, CLI (local mode, bundles, SQLite) | Done |
+| M3 | Server, remote worker, MCP (stdio and HTTP) | Done; security and code reviewed, findings fixed |
+| M4 | Web UI (runs, live activity via SSE, failure timeline, replay) | Done (low fidelity by design); checked in a real browser |
+| M5 | Hermit backend | Done; validated on bare-metal Linux with real Hermit (found and reproduced a real threading bug) |
+| M6 | WASM backend with snapshot/fork | Done; golden trace hash identical on macOS arm64 and Linux x86-64 |
+| M7 | Dapr simulator, GitHub Action, Claude Code plugin | Done; Python Dapr consumer bug found under real Hermit; the Action and plugin are written and syntax-checked but **not exercised on GitHub/Claude Code** |
+| M8 | PostgreSQL, multi-worker, auth, packaging | Done; `docker compose up` verified (auth, worker execution, restart persistence, non-root); S3 blob storage **not** implemented (blobs are in the database) |
 
-Why MCP early (M3, not last): it is cheap once the server API exists, and it makes every later feature usable by an agent immediately.
+Decisions taken: Apache-2.0; MCP in M3; React UI; Rust-only SDK; Dapr simulator after the Hermit backend;
+open source from day one (the repository is prepared for publication; see README and SECURITY.md).
+
+Next (not started): the SQLite WAL-reset showcase (`docs/showcase-sqlite-wal-reset.md`), a Go SDK, S3 blobs,
+per-token quotas and audit logging, a higher-fidelity UI.
 
 ## 8. Risks and honest unknowns
 1. Hermit: small third-party fork, unaudited, x86-64 Linux only, large slowdown (rough estimate ~19x, to be re-measured), first-run determinism wrinkle under investigation. Mitigation: isolate behind the Backend trait; label experimental.
