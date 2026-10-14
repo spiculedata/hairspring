@@ -437,3 +437,76 @@ fn a_cli_worker_executes_runs_for_a_server_without_embedded_workers() {
         std::thread::sleep(Duration::from_millis(100));
     }
 }
+
+// ---- process targets via the Hermit backend (fake hermit) ----
+fn write_exe(path: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(path, body).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn process_project(name: &str) -> (PathBuf, String) {
+    let d = scratch(name);
+    let fake = d.join("fake-hermit");
+    write_exe(&fake, "#!/bin/sh\nshift\nseed=0\nwhile [ \"$1\" != \"--\" ]; do case \"$1\" in --sched-seed=*) seed=${1#--sched-seed=};; esac; shift; done\nshift\nFAKE_SCHED_SEED=$seed exec \"$@\"\n");
+    std::fs::write(
+        d.join("anthill.toml"),
+        "[target.svc]\nkind = \"process\"\ncommand = [\"/bin/sh\", \"-c\", \"[ $((FAKE_SCHED_SEED % 5)) -eq 3 ] && { echo 'ANTHILL_VIOLATION: lost update'; exit 1; }; echo ok\"]\n[target.svc.budget]\nmax_trials = 20\n",
+    )
+    .unwrap();
+    let path = fake.to_str().unwrap().to_string();
+    (d, path)
+}
+
+fn anthill_env(dir: &Path, args: &[&str], hermit: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_anthill"))
+        .args(args)
+        .current_dir(dir)
+        .env("ANTHILL_HERMIT", hermit)
+        .output()
+        .expect("binary runs")
+}
+
+#[test]
+fn process_targets_are_explored_replayed_and_checked_through_the_cli() {
+    let (d, hermit) = process_project("proc");
+    let o = anthill_env(&d, &["test", "svc", "--seed", "1"], &hermit);
+    assert_eq!(o.status.code(), Some(1), "{}{}", out(&o), err(&o));
+    let s = out(&o);
+    assert!(
+        s.contains("FAILED")
+            && s.contains("sched-seed 3")
+            && s.contains("lost update")
+            && s.contains("backend=hermit"),
+        "{s}"
+    );
+    let file = std::fs::read_dir(d.join(".anthill/bundles"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let r = anthill_env(&d, &["replay", file.to_str().unwrap()], &hermit);
+    assert_eq!(r.status.code(), Some(1), "{}{}", out(&r), err(&r));
+    assert!(
+        out(&r).contains("output matches the recording: yes"),
+        "{}",
+        out(&r)
+    );
+    let doc = anthill_env(&d, &["doctor", "svc", "--seeds", "3"], &hermit);
+    assert_eq!(doc.status.code(), Some(0), "{}{}", out(&doc), err(&doc));
+}
+
+#[test]
+fn process_targets_report_a_missing_hermit_clearly() {
+    let (d, _) = process_project("noherm");
+    let o = anthill_env(&d, &["test", "svc"], "/definitely/not/hermit");
+    assert_eq!(o.status.code(), Some(2), "{}{}", out(&o), err(&o));
+    assert!(
+        out(&o).contains("hermit executable not found")
+            || err(&o).contains("hermit executable not found"),
+        "{}{}",
+        out(&o),
+        err(&o)
+    );
+}

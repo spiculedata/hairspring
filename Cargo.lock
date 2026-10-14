@@ -64,6 +64,7 @@ version = "0.1.0"
 dependencies = [
  "anthill-core",
  "anthill-engine",
+ "anthill-hermit",
  "anthill-mcp",
  "anthill-server",
  "anthill-service",
@@ -92,6 +93,14 @@ dependencies = [
 [[package]]
 name = "anthill-experiments"
 version = "0.1.0"
+
+[[package]]
+name = "anthill-hermit"
+version = "0.1.0"
+dependencies = [
+ "anthill-core",
+ "anthill-engine",
+]
 
 [[package]]
 name = "anthill-mcp"

@@ -18,6 +18,7 @@ anthill-core = { path = "../anthill-core" }
 anthill-engine = { path = "../anthill-engine" }
 anthill-service = { path = "../anthill-service" }
 anthill-store = { path = "../anthill-store" }
+anthill-hermit = { path = "../anthill-hermit" }
 anthill-mcp = { path = "../anthill-mcp" }
 anthill-server = { path = "../anthill-server" }
 anthill-worker = { path = "../anthill-worker" }

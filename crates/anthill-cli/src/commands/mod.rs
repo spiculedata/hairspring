@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 /// Builds the engine with every backend compiled into this binary.
 pub fn build_engine(registry: Arc<Registry>, config: Config) -> Engine {
-    Engine::new(registry, config)
+    Engine::new(registry, config).with_backend(Arc::new(anthill_hermit::HermitBackend::from_env()))
 }
 
 pub fn dispatch(
