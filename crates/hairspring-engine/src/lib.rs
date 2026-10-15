@@ -8,6 +8,7 @@ pub mod engine;
 pub mod erased;
 pub mod format;
 pub mod report;
+pub mod scheduler;
 pub mod sim_backend;
 
 use std::fmt;

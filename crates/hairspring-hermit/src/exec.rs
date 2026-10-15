@@ -1,5 +1,6 @@
 //! Running one trial: spawn hermit, capture bounded output, enforce a timeout.
 use crate::{env::guest_env, HermitSettings};
+use hairspring_engine::scheduler::{Heuristic, SchedulerSpec};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
@@ -17,6 +18,7 @@ pub struct ProcessSpec<'a> {
     pub cwd: Option<&'a str>,
     pub hermit_args: &'a [String],
     pub trial_timeout_secs: Option<u64>,
+    pub scheduler: &'a SchedulerSpec,
 }
 
 #[derive(Debug, Clone)]
@@ -43,14 +45,36 @@ impl std::fmt::Display for SpawnError {
     }
 }
 
+/// Hermit flags that choose the scheduling strategy. Recorded in bundles, so replay can insist on the same strategy.
+pub fn scheduler_flags(s: &SchedulerSpec) -> Vec<String> {
+    let mut flags = Vec::new();
+    let heuristic = s.effective_heuristic();
+    if let Some(value) = heuristic.hermit_value() {
+        flags.push(format!("--sched-heuristic={value}"));
+    }
+    if let (Heuristic::StickyRandom, Some(permille)) = (heuristic, s.sticky_permille) {
+        flags.push(format!(
+            "--sched-sticky-random-param={:.3}",
+            f64::from(permille) / 1000.0
+        ));
+    }
+    if s.chaos {
+        flags.push("--chaos".to_string());
+    }
+    if let Some(ns) = s.max_timeslice_ns {
+        flags.push(format!("--max-timeslice={ns}"));
+    }
+    if let Some(margin) = s.skid_margin {
+        flags.push(format!("--skid-margin={margin}"));
+    }
+    flags
+}
+
 /// Arguments for `hermit`: `run <flags> -- <command...>`.
 pub fn hermit_args(settings: &HermitSettings, spec: &ProcessSpec, seed: u64) -> Vec<String> {
-    let mut args = vec![
-        "run".to_string(),
-        format!("--epoch={}", settings.epoch),
-        "--sched-heuristic=random".to_string(),
-        format!("--sched-seed={seed}"),
-    ];
+    let mut args = vec!["run".to_string(), format!("--epoch={}", settings.epoch)];
+    args.extend(scheduler_flags(spec.scheduler));
+    args.push(format!("--sched-seed={seed}"));
     args.extend(spec.hermit_args.iter().cloned());
     args.push("--".to_string());
     args.extend(spec.command.iter().cloned());

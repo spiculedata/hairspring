@@ -1,4 +1,4 @@
-use crate::exec::{run_trial, ProcessSpec, SpawnError, Trial};
+use crate::exec::{run_trial, scheduler_flags, ProcessSpec, SpawnError, Trial};
 use crate::trace::{behaviour_hash, classify, steps, Verdict};
 use crate::HermitSettings;
 use hairspring_core::bundle::Bundle;
@@ -47,12 +47,14 @@ impl HermitBackend {
                 cwd,
                 hermit_args,
                 trial_timeout_secs,
+                scheduler,
             } => Ok(ProcessSpec {
                 command,
                 env,
                 cwd: cwd.as_deref(),
                 hermit_args,
                 trial_timeout_secs: *trial_timeout_secs,
+                scheduler,
             }),
             other => Err(EngineError::BackendUnavailable(other.name().to_string())),
         }
@@ -104,9 +106,17 @@ impl HermitBackend {
             .with_backend("hermit")
             .with_param("sched_seed", seed.to_string())
             .with_param("epoch", self.settings.epoch.clone())
-            .with_param("heuristic", "random")
+            .with_param("heuristic", p.scheduler.effective_heuristic().name())
+            .with_param("scheduler", scheduler_flags(p.scheduler).join(" "))
             .with_param("output_hash", hash);
-        let steps = steps(p.command, seed, &self.settings.epoch, t, None);
+        let steps = steps(
+            p.command,
+            seed,
+            &self.settings.epoch,
+            p.scheduler.effective_heuristic().name(),
+            t,
+            None,
+        );
         FailureReport {
             target: spec.name.clone(),
             backend: "hermit".to_string(),
@@ -117,6 +127,23 @@ impl HermitBackend {
             bundle: bundle.encode(),
         }
     }
+}
+
+/// Replay is only meaningful under the scheduling strategy the bundle was recorded with. Bundles from before scheduler
+/// options existed recorded no flags and always used the default random strategy.
+fn check_same_scheduler(p: &ProcessSpec, bundle: &Bundle) -> Result<(), EngineError> {
+    let current = scheduler_flags(p.scheduler).join(" ");
+    let recorded = bundle
+        .params
+        .get("scheduler")
+        .cloned()
+        .unwrap_or_else(|| "--sched-heuristic=random".to_string());
+    if recorded == current {
+        return Ok(());
+    }
+    Err(EngineError::Backend(format!(
+        "bundle was recorded with scheduler flags `{recorded}` but target uses `{current}`; replay needs the same scheduler"
+    )))
 }
 
 fn infra(msg: impl Into<String>) -> RunOutcome {
@@ -208,6 +235,7 @@ impl Backend for HermitBackend {
 
     fn replay(&self, spec: &TargetSpec, bundle: &Bundle) -> Result<ReplayOutcome, EngineError> {
         let p = self.process(spec)?;
+        check_same_scheduler(&p, bundle)?;
         let seed = bundle
             .params
             .get("sched_seed")
@@ -237,7 +265,14 @@ impl Backend for HermitBackend {
         };
         Ok(ReplayOutcome {
             reproduced: matches!(verdict, Verdict::Violation(_)) && matches != Some(false),
-            steps: steps(p.command, seed, &settings.epoch, &trial, note),
+            steps: steps(
+                p.command,
+                seed,
+                &settings.epoch,
+                p.scheduler.effective_heuristic().name(),
+                &trial,
+                note,
+            ),
         })
     }
 

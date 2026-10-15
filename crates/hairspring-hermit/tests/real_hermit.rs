@@ -6,6 +6,7 @@ use hairspring_engine::config::{Budget, Config, TargetKind, TargetSpec};
 use hairspring_engine::engine::{Engine, RunRequest};
 use hairspring_engine::erased::Registry;
 use hairspring_engine::report::RunStatus;
+use hairspring_engine::scheduler::SchedulerSpec;
 use hairspring_hermit::{HermitBackend, HermitSettings};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -66,6 +67,7 @@ fn engine(bin: &std::path::Path, trials: u64) -> Engine {
             cwd: None,
             hermit_args: vec![],
             trial_timeout_secs: None,
+            scheduler: SchedulerSpec::default(),
         },
         budget: Budget {
             max_steps: 1,

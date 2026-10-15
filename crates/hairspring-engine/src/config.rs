@@ -1,5 +1,6 @@
 //! `hairspring.toml` parsing and validation.
 use crate::erased::Registry;
+use crate::scheduler::{Heuristic, SchedulerSpec};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -51,6 +52,8 @@ pub enum TargetKind {
         hermit_args: Vec<String>,
         /// Longest a single trial may run before it counts as a hang (default set by the backend).
         trial_timeout_secs: Option<u64>,
+        /// How threads are scheduled; part of the target so bundles replay under the same strategy.
+        scheduler: SchedulerSpec,
     },
     Wasm {
         module: String,
@@ -119,9 +122,27 @@ struct RawTarget {
     #[serde(default)]
     hermit_args: Vec<String>,
     trial_timeout_secs: Option<u64>,
+    heuristic: Option<Heuristic>,
+    sticky_permille: Option<u16>,
+    #[serde(default)]
+    chaos: bool,
+    max_timeslice_ns: Option<u64>,
+    skid_margin: Option<u32>,
     module: Option<String>,
     #[serde(default)]
     budget: Budget,
+}
+
+impl RawTarget {
+    fn scheduler(&self) -> SchedulerSpec {
+        SchedulerSpec {
+            heuristic: self.heuristic,
+            sticky_permille: self.sticky_permille,
+            chaos: self.chaos,
+            max_timeslice_ns: self.max_timeslice_ns,
+            skid_margin: self.skid_margin,
+        }
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -146,6 +167,12 @@ fn convert(name: String, raw: RawTarget) -> Result<TargetSpec, ConfigError> {
         )));
     }
     let missing = |what: &str| ConfigError::Invalid(format!("target `{name}` requires `{what}`"));
+    let scheduler = raw.scheduler();
+    if !matches!(raw.kind, RawKind::Process) && !scheduler.is_default() {
+        return Err(ConfigError::Invalid(format!(
+            "target `{name}`: scheduler options (heuristic, chaos, ...) are only valid for kind = \"process\""
+        )));
+    }
     let kind = match raw.kind {
         RawKind::Sim => TargetKind::Sim {
             sim: raw
@@ -158,12 +185,16 @@ fn convert(name: String, raw: RawTarget) -> Result<TargetSpec, ConfigError> {
                 .command
                 .filter(|c| !c.is_empty() && !c[0].is_empty())
                 .ok_or_else(|| missing("command"))?;
+            scheduler
+                .validate()
+                .map_err(|m| ConfigError::Invalid(format!("target `{name}`: {m}")))?;
             TargetKind::Process {
                 command,
                 env: raw.env,
                 cwd: raw.cwd,
                 hermit_args: raw.hermit_args,
                 trial_timeout_secs: raw.trial_timeout_secs,
+                scheduler,
             }
         }
         RawKind::Wasm => TargetKind::Wasm {

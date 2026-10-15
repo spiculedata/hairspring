@@ -88,6 +88,7 @@ pub fn steps(
     command: &[String],
     seed: u64,
     epoch: &str,
+    heuristic: &str,
     t: &Trial,
     verdict_note: Option<String>,
 ) -> Vec<Step> {
@@ -101,7 +102,7 @@ pub fn steps(
             ),
             MAX_LINE_CHARS,
         ),
-        state: format!("epoch={epoch} heuristic=random"),
+        state: format!("epoch={epoch} heuristic={heuristic}"),
     }];
     let ending = if t.timed_out {
         "timed out (killed)".to_string()

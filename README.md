@@ -108,6 +108,7 @@ Or test a real program without modelling it, in `hairspring.toml` (Linux):
 kind = "process"
 command = ["/opt/app/bin/checkout", "--self-test"]   # fails by exit code, or prints HAIRSPRING_VIOLATION: ...
 trial_timeout_secs = 120
+# Optional scheduling strategy; see `hairspring init` for the options (chaos, max_timeslice_ns, skid_margin, heuristic).
 [target.checkout.budget]
 max_trials = 100
 ```

@@ -5,6 +5,7 @@ use hairspring_engine::config::{Budget, Config, TargetKind, TargetSpec};
 use hairspring_engine::engine::{Engine, RunRequest};
 use hairspring_engine::erased::Registry;
 use hairspring_engine::report::RunStatus;
+use hairspring_engine::scheduler::SchedulerSpec;
 use hairspring_engine::EngineError;
 use hairspring_hermit::{guest_env, HermitBackend, HermitSettings};
 use std::collections::BTreeMap;
@@ -84,6 +85,7 @@ fn engine_for(
             cwd: None,
             hermit_args: vec![],
             trial_timeout_secs: None,
+            scheduler: SchedulerSpec::default(),
         },
         budget,
     };
@@ -290,6 +292,7 @@ fn a_hang_is_reported_as_a_violation() {
                 cwd: None,
                 hermit_args: vec![],
                 trial_timeout_secs: None,
+                scheduler: SchedulerSpec::default(),
             },
             budget: budget(2),
         };
@@ -377,8 +380,9 @@ fn hermit_is_invoked_with_a_pinned_epoch_random_scheduling_and_user_args() {
             command: vec!["/bin/true".into()],
             env: BTreeMap::new(),
             cwd: None,
-            hermit_args: vec!["--chaos".into()],
+            hermit_args: vec!["--tmp=/x".into()],
             trial_timeout_secs: None,
+            scheduler: SchedulerSpec::default(),
         },
         budget: budget(1),
     };
@@ -398,7 +402,7 @@ fn hermit_is_invoked_with_a_pinned_epoch_random_scheduling_and_user_args() {
         "--epoch=2026-01-01T00:00:00Z",
         "--sched-heuristic=random",
         "--sched-seed=42",
-        "--chaos",
+        "--tmp=/x",
         "-- /bin/true",
         "HAIRSPRING_SEED=42",
     ] {
@@ -473,6 +477,7 @@ fn a_target_can_set_its_own_trial_timeout() {
             cwd: None,
             hermit_args: vec![],
             trial_timeout_secs: Some(1),
+            scheduler: SchedulerSpec::default(),
         },
         budget: budget(1),
     };
@@ -510,6 +515,7 @@ fn a_trial_cut_off_by_the_wall_budget_is_inconclusive_not_a_hang() {
             cwd: None,
             hermit_args: vec![],
             trial_timeout_secs: None,
+            scheduler: SchedulerSpec::default(),
         },
         budget: Budget {
             max_steps: 1,
@@ -590,6 +596,7 @@ fn a_bare_hermit_name_is_found_on_the_callers_path_not_the_pinned_guest_path() {
                         cwd: None,
                         hermit_args: vec![],
                         trial_timeout_secs: None,
+                        scheduler: SchedulerSpec::default(),
                     },
                     budget: budget(1),
                 },

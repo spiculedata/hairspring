@@ -24,6 +24,13 @@ wall_secs = 60
 # env = { MODE = "test" }
 # trial_timeout_secs = 120   # Hermit is slow; raise this for heavy programs
 #
+# How threads are scheduled (all optional; the default is seeded random scheduling).
+# Races inside a few instructions need a short timeslice with chaos mode, not the random heuristic.
+# chaos = true                    # randomise thread priorities each timeslice; cannot be combined with heuristic = "random"
+# max_timeslice_ns = 1000000      # preempt after this much virtual time (smaller finds finer races, costs more)
+# skid_margin = 25                # PMU skid margin; smaller is faster, Hermit panics on overshoot if you pass --panic-on-rbc-overshoot
+# heuristic = "sticky-random"     # or "random" (default) or "none"; sticky-random also takes sticky_permille = 900
+#
 # [target.my-service.budget]
 # max_trials = 100
 "#;
