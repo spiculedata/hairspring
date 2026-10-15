@@ -240,6 +240,8 @@ impl Service {
             trials: run.trials,
             // Not persisted yet: stored runs report 0 (see the follow-up issue on the run store).
             inconclusive: 0,
+            distinct_schedules: 0,
+            work: 0,
             elapsed_ms,
             failure,
             error,

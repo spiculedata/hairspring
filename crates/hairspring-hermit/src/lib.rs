@@ -11,6 +11,7 @@
 mod backend;
 mod env;
 mod exec;
+mod summary;
 mod trace;
 
 pub use backend::HermitBackend;
@@ -36,7 +37,13 @@ pub struct HermitSettings {
     pub repro_runs: u32,
     /// Output kept per stream; the rest is drained and discarded.
     pub max_capture_bytes: usize,
+    /// Where Hermit writes each trial's `--summary-json`. It must be outside `/tmp` (Hermit gives the guest its own).
+    /// `None` turns schedule fingerprints off; defaults to `/dev/shm` when that exists.
+    pub summary_dir: Option<PathBuf>,
 }
+
+/// Memory-backed and not `/tmp`, so Hermit accepts it and the files cost nothing.
+const DEFAULT_SUMMARY_DIR: &str = "/dev/shm";
 
 impl Default for HermitSettings {
     fn default() -> Self {
@@ -49,6 +56,9 @@ impl Default for HermitSettings {
             extra_env: Vec::new(),
             repro_runs: 3,
             max_capture_bytes: 1024 * 1024,
+            summary_dir: std::path::Path::new(DEFAULT_SUMMARY_DIR)
+                .is_dir()
+                .then(|| PathBuf::from(DEFAULT_SUMMARY_DIR)),
         }
     }
 }

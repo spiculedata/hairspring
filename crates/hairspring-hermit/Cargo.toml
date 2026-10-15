@@ -8,3 +8,4 @@ license = "Apache-2.0"
 [dependencies]
 hairspring-core = { path = "../hairspring-core" }
 hairspring-engine = { path = "../hairspring-engine" }
+serde_json = "1.0.154"

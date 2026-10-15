@@ -136,6 +136,7 @@ impl HermitBackend {
 
     /// Decides what one finished trial means. Returns the run's outcome when the run should end here.
     fn judge(&self, j: &Judged, tally: &mut Tally) -> Option<RunOutcome> {
+        tally.record_schedule(j.trial);
         match self.verdict(j.p, j.trial, j.timeout) {
             Verdict::Infra(msg) => Some(infra(msg)),
             Verdict::Hang(_) | Verdict::Violation(_) if j.trial.timed_out && j.clipped => {
@@ -159,9 +160,11 @@ impl HermitBackend {
                     confirmed,
                 });
                 let ms = j.started.elapsed().as_millis() as u64;
+                let (distinct, work) = tally.schedule_stats();
                 Some(
                     RunOutcome::failed(j.index + 1, j.index + 1, ms, failure)
-                        .with_inconclusive(tally.inconclusive),
+                        .with_inconclusive(tally.inconclusive)
+                        .with_schedule_stats(distinct, work),
                 )
             }
             Verdict::Pass => {
@@ -189,7 +192,7 @@ impl HermitBackend {
         if confirmed < total {
             message.push_str(" - not reproducible: the program or its environment is non-deterministic under hermit");
         }
-        let bundle = Bundle::new(seed, BUILD, vec![])
+        let mut bundle = Bundle::new(seed, BUILD, vec![])
             .with_target(req.target.clone())
             .with_backend("hermit")
             .with_param("sched_seed", seed.to_string())
@@ -197,6 +200,9 @@ impl HermitBackend {
             .with_param("heuristic", p.scheduler.effective_heuristic().name())
             .with_param("scheduler", scheduler_flags(p.scheduler).join(" "))
             .with_param("output_hash", hash);
+        if let Some(schedule) = &t.schedule {
+            bundle = bundle.with_param("schedule_fingerprint", schedule.fingerprint.clone());
+        }
         let steps = steps(
             p.command,
             seed,
@@ -217,11 +223,37 @@ impl HermitBackend {
     }
 }
 
+/// What replay says about how closely the rerun matched the recording: the output, and the schedule when both are known.
+fn replay_notes(bundle: &Bundle, trial: &Trial) -> Option<String> {
+    let yes_no = |same: bool| if same { "yes" } else { "no" };
+    let mut notes = Vec::new();
+    if let Some(recorded) = bundle.params.get("output_hash") {
+        let same = *recorded == behaviour_hash(trial);
+        notes.push(if same {
+            "output matches the recording: yes".to_string()
+        } else {
+            "output matches the recording: no (the program or environment changed)".to_string()
+        });
+    }
+    if let (Some(recorded), Some(now)) =
+        (bundle.params.get("schedule_fingerprint"), &trial.schedule)
+    {
+        notes.push(format!(
+            "schedule matches the recording: {}",
+            yes_no(*recorded == now.fingerprint)
+        ));
+    }
+    (!notes.is_empty()).then(|| notes.join("; "))
+}
+
 /// Running totals for one run. Timeouts are counted apart from passes so a run that tested nothing is never a pass.
 #[derive(Default)]
 struct Tally {
     trials: u64,
     inconclusive: u64,
+    /// Fingerprints of the schedules the trials ran, and the total work they did.
+    schedules: std::collections::HashSet<String>,
+    work: u64,
     /// The wall-clock budget, not the target's own limit, cut the last trial short.
     budget_cut: bool,
 }
@@ -229,6 +261,17 @@ struct Tally {
 impl Tally {
     fn pass(&mut self) {
         self.trials += 1;
+    }
+
+    fn record_schedule(&mut self, t: &Trial) {
+        if let Some(schedule) = &t.schedule {
+            self.schedules.insert(schedule.fingerprint.clone());
+            self.work = self.work.saturating_add(schedule.syscalls);
+        }
+    }
+
+    fn schedule_stats(&self) -> (u64, u64) {
+        (self.schedules.len() as u64, self.work)
     }
 
     fn hang(&mut self) {
@@ -263,7 +306,10 @@ impl Tally {
             return RunOutcome::error(self.nothing_tested()).with_inconclusive(self.inconclusive);
         }
         let ms = started.elapsed().as_millis() as u64;
-        RunOutcome::passed(self.trials, self.trials, ms).with_inconclusive(self.inconclusive)
+        let (distinct, work) = self.schedule_stats();
+        RunOutcome::passed(self.trials, self.trials, ms)
+            .with_inconclusive(self.inconclusive)
+            .with_schedule_stats(distinct, work)
     }
 }
 
@@ -375,17 +421,11 @@ impl Backend for HermitBackend {
         if let Verdict::Infra(m) = &verdict {
             return Err(EngineError::Backend(m.clone()));
         }
+        let notes = replay_notes(bundle, &trial);
         let matches = bundle
             .params
             .get("output_hash")
             .map(|h| *h == behaviour_hash(&trial));
-        let note = match matches {
-            Some(true) => Some("output matches the recording: yes".to_string()),
-            Some(false) => Some(
-                "output matches the recording: no (the program or environment changed)".to_string(),
-            ),
-            None => None,
-        };
         Ok(ReplayOutcome {
             reproduced: matches!(verdict, Verdict::Violation(_)) && matches != Some(false),
             steps: steps(
@@ -394,7 +434,7 @@ impl Backend for HermitBackend {
                 &settings.epoch,
                 p.scheduler.effective_heuristic().name(),
                 &trial,
-                note,
+                notes,
             ),
         })
     }

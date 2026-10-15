@@ -26,8 +26,14 @@ enum Abort {
     Cancelled,
 }
 
-fn finished_payload(state: RunState, inconclusive: u64) -> String {
-    serde_json::json!({ "state": state.as_str(), "inconclusive": inconclusive }).to_string()
+fn finished_payload(state: RunState, outcome: Option<&RunOutcome>) -> String {
+    serde_json::json!({
+        "state": state.as_str(),
+        "inconclusive": outcome.map_or(0, |o| o.inconclusive),
+        "distinct_schedules": outcome.map_or(0, |o| o.distinct_schedules),
+        "work": outcome.map_or(0, |o| o.work),
+    })
+    .to_string()
 }
 
 impl Service {
@@ -172,13 +178,14 @@ impl Service {
             }
             None => None,
         };
+        let event_payload_json = finished_payload(state, Some(&clean));
         let result = JobResult {
             state,
             steps: clean.steps_executed,
             trials: clean.trials,
             error: clean.error,
             failure,
-            event_payload_json: finished_payload(state, clean.inconclusive),
+            event_payload_json,
         };
         match self
             .store
@@ -210,7 +217,7 @@ impl Service {
             self.store.add_event(
                 run_id,
                 "finished",
-                &finished_payload(RunState::Error, 0),
+                &finished_payload(RunState::Error, None),
                 now,
             )?;
         }

@@ -1,4 +1,5 @@
 //! Running one trial: spawn hermit, capture bounded output, enforce a timeout.
+use crate::summary::{self, Summary};
 use crate::{env::guest_env, HermitSettings};
 use hairspring_engine::scheduler::{Heuristic, SchedulerSpec};
 use std::collections::BTreeMap;
@@ -30,6 +31,8 @@ pub struct Trial {
     pub stdout: String,
     pub stderr: String,
     pub timed_out: bool,
+    /// The schedule the trial ran, when Hermit's summary could be read.
+    pub schedule: Option<Summary>,
 }
 
 #[derive(Debug)]
@@ -73,10 +76,18 @@ pub fn scheduler_flags(s: &SchedulerSpec) -> Vec<String> {
 }
 
 /// Arguments for `hermit`: `run <flags> -- <command...>`.
-pub fn hermit_args(settings: &HermitSettings, spec: &ProcessSpec, seed: u64) -> Vec<String> {
+pub fn hermit_args(
+    settings: &HermitSettings,
+    spec: &ProcessSpec,
+    seed: u64,
+    summary: Option<&std::path::Path>,
+) -> Vec<String> {
     let mut args = vec!["run".to_string(), format!("--epoch={}", settings.epoch)];
     args.extend(scheduler_flags(spec.scheduler));
     args.push(format!("--sched-seed={seed}"));
+    if let Some(path) = summary {
+        args.push(format!("--summary-json={}", path.display()));
+    }
     args.extend(spec.hermit_args.iter().cloned());
     args.push("--".to_string());
     args.extend(spec.command.iter().cloned());
@@ -157,8 +168,36 @@ pub fn run_trial(
     seed: u64,
     timeout: Duration,
 ) -> Result<Trial, SpawnError> {
+    let summary_path = settings
+        .summary_dir
+        .as_ref()
+        .map(|dir| summary_file(dir, seed));
+    let trial = run_trial_with_summary(settings, spec, seed, timeout, summary_path.as_deref());
+    // Always remove the file, including when the trial failed to start or timed out.
+    let schedule = summary_path.as_deref().and_then(|p| {
+        let read = summary::read(p);
+        let _ = std::fs::remove_file(p);
+        read
+    });
+    trial.map(|t| Trial { schedule, ..t })
+}
+
+/// A path no other trial in this process (or another process) is using.
+fn summary_file(dir: &std::path::Path, seed: u64) -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    dir.join(format!("hairspring-{}-{seed}-{n}.json", std::process::id()))
+}
+
+fn run_trial_with_summary(
+    settings: &HermitSettings,
+    spec: &ProcessSpec,
+    seed: u64,
+    timeout: Duration,
+    summary: Option<&std::path::Path>,
+) -> Result<Trial, SpawnError> {
     let mut cmd = Command::new(resolve_bin(&settings.bin));
-    cmd.args(hermit_args(settings, spec, seed))
+    cmd.args(hermit_args(settings, spec, seed, summary))
         .env_clear()
         .envs(guest_env(spec.command, spec.env))
         // The trial seed is an input like any other; tools such as hairspring-dapr-sim derive their faults from it.
@@ -214,5 +253,6 @@ pub fn run_trial(
         stdout,
         stderr,
         timed_out,
+        schedule: None,
     })
 }

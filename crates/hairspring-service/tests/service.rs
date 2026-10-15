@@ -856,3 +856,36 @@ fn a_worker_cannot_claim_more_inconclusive_trials_than_trials() {
         Err(ServiceError::InvalidRequest(_))
     ));
 }
+
+#[test]
+fn the_finished_event_reports_schedule_diversity_and_work() {
+    let (svc, _, engine) = service();
+    let job = leased(&svc, &engine, "pubsub-atomic", "w1");
+    svc.complete(
+        &job.job_id,
+        "w1",
+        &RunOutcome::passed(10, 6, 5).with_schedule_stats(3, 606),
+    )
+    .unwrap();
+    let events = svc.events(&job.run_id, 0, 100).unwrap();
+    let payload = &events
+        .iter()
+        .find(|e| e.kind == "finished")
+        .unwrap()
+        .payload_json;
+    assert!(
+        payload.contains("\"distinct_schedules\":3") && payload.contains("\"work\":606"),
+        "{payload}"
+    );
+}
+
+#[test]
+fn a_worker_cannot_claim_more_distinct_schedules_than_trials() {
+    let (svc, _, engine) = service();
+    let job = leased(&svc, &engine, "pubsub-atomic", "w1");
+    let lying = RunOutcome::passed(10, 2, 5).with_schedule_stats(3, 1);
+    assert!(matches!(
+        svc.complete(&job.job_id, "w1", &lying),
+        Err(ServiceError::InvalidRequest(_))
+    ));
+}

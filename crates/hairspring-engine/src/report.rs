@@ -46,6 +46,12 @@ pub struct RunOutcome {
     /// Trials that ended in a timeout and were neither a pass nor a finding. Absent in older stored runs.
     #[serde(default)]
     pub inconclusive: u64,
+    /// Distinct schedules the trials ran, when the backend can tell; 0 means unknown. Absent in older stored runs.
+    #[serde(default)]
+    pub distinct_schedules: u64,
+    /// Work done across all trials (for Hermit: guest syscalls); 0 means unknown. Absent in older stored runs.
+    #[serde(default)]
+    pub work: u64,
     pub elapsed_ms: u64,
     pub failure: Option<FailureReport>,
     pub error: Option<String>,
@@ -59,12 +65,22 @@ impl RunOutcome {
         }
     }
 
+    pub fn with_schedule_stats(self, distinct_schedules: u64, work: u64) -> Self {
+        RunOutcome {
+            distinct_schedules,
+            work,
+            ..self
+        }
+    }
+
     pub fn passed(steps_executed: u64, trials: u64, elapsed_ms: u64) -> Self {
         RunOutcome {
             status: RunStatus::Passed,
             steps_executed,
             trials,
             inconclusive: 0,
+            distinct_schedules: 0,
+            work: 0,
             elapsed_ms,
             failure: None,
             error: None,
@@ -81,6 +97,8 @@ impl RunOutcome {
             steps_executed,
             trials,
             inconclusive: 0,
+            distinct_schedules: 0,
+            work: 0,
             elapsed_ms,
             failure: Some(failure),
             error: None,
@@ -92,6 +110,8 @@ impl RunOutcome {
             steps_executed: 0,
             trials: 0,
             inconclusive: 0,
+            distinct_schedules: 0,
+            work: 0,
             elapsed_ms: 0,
             failure: None,
             error: Some(message.into()),

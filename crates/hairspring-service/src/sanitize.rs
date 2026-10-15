@@ -113,9 +113,10 @@ fn clean_failure(f: &FailureReport, run_target: &str) -> Result<FailureReport, S
 
 /// Returns a bounded, sanitised copy of `outcome`, or an error if it breaks the limits.
 pub fn outcome(outcome: &RunOutcome, run_target: &str) -> Result<RunOutcome, ServiceError> {
-    if outcome.inconclusive > outcome.trials {
+    if outcome.inconclusive > outcome.trials || outcome.distinct_schedules > outcome.trials {
         return Err(ServiceError::InvalidRequest(
-            "inconclusive trials cannot exceed the number of trials".to_string(),
+            "inconclusive trials and distinct schedules cannot exceed the number of trials"
+                .to_string(),
         ));
     }
     if let Some(e) = &outcome.error {
