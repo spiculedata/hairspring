@@ -1,6 +1,6 @@
 //! `hairspring.toml` parsing and validation.
 use crate::erased::Registry;
-use crate::scheduler::{Heuristic, SchedulerSpec};
+use crate::scheduler::{check_hermit_args, Heuristic, SchedulerSpec};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -197,6 +197,7 @@ fn convert(name: String, raw: RawTarget) -> Result<TargetSpec, ConfigError> {
                 .ok_or_else(|| missing("command"))?;
             scheduler
                 .validate()
+                .and_then(|()| check_hermit_args(&raw.hermit_args))
                 .map_err(|m| ConfigError::Invalid(format!("target `{name}`: {m}")))?;
             let parallelism = raw.parallelism.unwrap_or(1);
             if !(1..=MAX_PARALLELISM).contains(&parallelism) {

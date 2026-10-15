@@ -7,11 +7,13 @@
 //!
 //! Verdicts: the guest violates a property if it exits non-zero or prints a line starting with
 //! `HAIRSPRING_VIOLATION:`. A trial that hits its time limit is inconclusive (counted separately, never a pass) unless the
-//! target sets `hang_is_violation`; a run where every trial timed out is an error. Linux x86-64 only; experimental.
+//! target sets `hang_is_violation`; a run where every trial timed out is an error. Trials run in batches of `parallelism`
+//! seeds, so a cancel takes effect at the next batch boundary. Linux x86-64 only; experimental.
 mod backend;
 mod env;
 mod exec;
 mod summary;
+mod summary_dir;
 mod trace;
 
 pub use backend::HermitBackend;

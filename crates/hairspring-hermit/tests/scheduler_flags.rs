@@ -185,7 +185,7 @@ fn bundles_record_the_scheduler_flags_that_were_used() {
     let (_, b) = failing(&d, chaos_spec());
     assert_eq!(
         b.params.get("scheduler").map(String::as_str),
-        Some("--chaos --max-timeslice=1000000 --skid-margin=25")
+        Some("--chaos --max-timeslice=1000000 --skid-margin=25 --panic-on-rbc-overshoot")
     );
     assert_eq!(b.params.get("heuristic").map(String::as_str), Some("none"));
 }

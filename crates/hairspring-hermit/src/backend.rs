@@ -1,4 +1,5 @@
 use crate::exec::{run_trial, scheduler_flags, ProcessSpec, SpawnError, Trial};
+use crate::summary_dir::PrivateDir;
 use crate::trace::{behaviour_hash, classify, steps, Verdict};
 use crate::HermitSettings;
 use hairspring_core::bundle::Bundle;
@@ -40,11 +41,21 @@ struct Judged<'a> {
 
 pub struct HermitBackend {
     settings: HermitSettings,
+    /// Where Hermit writes each trial's summary; `None` turns schedule fingerprints off (no directory configured, or
+    /// one that could not be made private).
+    summaries: Option<PrivateDir>,
 }
 
 impl HermitBackend {
     pub fn new(settings: HermitSettings) -> HermitBackend {
-        HermitBackend { settings }
+        let summaries = settings
+            .summary_dir
+            .as_deref()
+            .and_then(|base| PrivateDir::create(base).ok());
+        HermitBackend {
+            settings,
+            summaries,
+        }
     }
 
     /// Uses `HAIRSPRING_HERMIT` or `hermit` from the PATH.
@@ -93,7 +104,7 @@ impl HermitBackend {
     }
 
     fn trial(&self, p: &ProcessSpec, seed: u64, timeout: Duration) -> Result<Trial, SpawnError> {
-        run_trial(&self.settings, p, seed, timeout)
+        run_trial(&self.settings, p, seed, timeout, self.summaries.as_ref())
     }
 
     /// Re-runs a violating seed and counts how many runs show the same behaviour.
@@ -140,9 +151,10 @@ impl HermitBackend {
         match self.verdict(j.p, j.trial, j.timeout) {
             Verdict::Infra(msg) => Some(infra(msg)),
             Verdict::Hang(_) | Verdict::Violation(_) if j.trial.timed_out && j.clipped => {
-                // Out of budget, not out of patience: inconclusive, never a finding.
+                // Out of budget, not out of patience: inconclusive, never a finding. The rest of the batch is still
+                // judged first, because a violation among trials that already ran must not be thrown away.
                 tally.cut_by_budget();
-                Some(tally.finish(j.started))
+                None
             }
             Verdict::Hang(_) => {
                 tally.hang();
@@ -199,6 +211,8 @@ impl HermitBackend {
             .with_param("epoch", self.settings.epoch.clone())
             .with_param("heuristic", p.scheduler.effective_heuristic().name())
             .with_param("scheduler", scheduler_flags(p.scheduler).join(" "))
+            .with_param("hermit_args", p.hermit_args.join(" "))
+            .with_param("hang_is_violation", p.hang_is_violation.to_string())
             .with_param("output_hash", hash);
         if let Some(schedule) = &t.schedule {
             bundle = bundle.with_param("schedule_fingerprint", schedule.fingerprint.clone());
@@ -224,9 +238,14 @@ impl HermitBackend {
 }
 
 /// What replay says about how closely the rerun matched the recording: the output, and the schedule when both are known.
-fn replay_notes(bundle: &Bundle, trial: &Trial) -> Option<String> {
+fn replay_notes(bundle: &Bundle, trial: &Trial, hang_relaxed: bool) -> Option<String> {
     let yes_no = |same: bool| if same { "yes" } else { "no" };
     let mut notes = Vec::new();
+    if hang_relaxed {
+        notes.push(
+            "timed out again; this target no longer treats a hang as a violation".to_string(),
+        );
+    }
     if let Some(recorded) = bundle.params.get("output_hash") {
         let same = *recorded == behaviour_hash(trial);
         notes.push(if same {
@@ -322,12 +341,24 @@ fn check_same_scheduler(p: &ProcessSpec, bundle: &Bundle) -> Result<(), EngineEr
         .get("scheduler")
         .cloned()
         .unwrap_or_else(|| "--sched-heuristic=random".to_string());
-    if recorded == current {
-        return Ok(());
+    if recorded != current {
+        return Err(EngineError::Backend(format!(
+            "bundle was recorded with scheduler flags `{recorded}` but target uses `{current}`; replay needs the same scheduler"
+        )));
     }
-    Err(EngineError::Backend(format!(
-        "bundle was recorded with scheduler flags `{recorded}` but target uses `{current}`; replay needs the same scheduler"
-    )))
+    // Extra Hermit arguments can change the schedule too (for example `--chaos-target-races`).
+    let current_args = p.hermit_args.join(" ");
+    let recorded_args = bundle
+        .params
+        .get("hermit_args")
+        .cloned()
+        .unwrap_or_default();
+    if recorded_args != current_args {
+        return Err(EngineError::Backend(format!(
+            "bundle was recorded with hermit_args `{recorded_args}` but target uses `{current_args}`; replay needs the same hermit_args"
+        )));
+    }
+    Ok(())
 }
 
 fn infra(msg: impl Into<String>) -> RunOutcome {
@@ -390,6 +421,9 @@ impl Backend for HermitBackend {
                     return Ok(outcome);
                 }
             }
+            if tally.budget_cut {
+                return Ok(tally.finish(started));
+            }
             next = batch.end;
             if !progress(Progress {
                 steps: next,
@@ -415,13 +449,15 @@ impl Backend for HermitBackend {
             settings.epoch = epoch.clone();
         }
         let timeout = self.trial_timeout(&p);
-        let trial = run_trial(&settings, &p, seed, timeout)
+        let trial = run_trial(&settings, &p, seed, timeout, self.summaries.as_ref())
             .map_err(|e| EngineError::Backend(e.to_string()))?;
         let verdict = self.verdict(&p, &trial, timeout);
         if let Verdict::Infra(m) = &verdict {
             return Err(EngineError::Backend(m.clone()));
         }
-        let notes = replay_notes(bundle, &trial);
+        let hang_relaxed = matches!(verdict, Verdict::Hang(_))
+            && bundle.params.get("hang_is_violation").map(String::as_str) == Some("true");
+        let notes = replay_notes(bundle, &trial, hang_relaxed);
         let matches = bundle
             .params
             .get("output_hash")
@@ -455,8 +491,15 @@ impl Backend for HermitBackend {
                 self.trial(&p, seed, timeout).map_err(backend_err)?,
             );
             for t in [&a, &b] {
-                if let Verdict::Infra(m) = classify(t, timeout.as_secs()) {
+                if let Verdict::Infra(m) = self.verdict(&p, t, timeout) {
                     return Err(EngineError::Backend(m));
+                }
+                if t.timed_out {
+                    // Two kills at wall-clock deadlines capture different output; that is not nondeterminism.
+                    return Err(EngineError::Backend(format!(
+                        "a doctor trial timed out after {}s; raise trial_timeout_secs so both runs can finish",
+                        timeout.as_secs()
+                    )));
                 }
             }
             if behaviour_hash(&a) != behaviour_hash(&b) {

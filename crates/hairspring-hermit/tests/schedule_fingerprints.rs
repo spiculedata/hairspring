@@ -110,8 +110,19 @@ fn rig(
     Rig { engine, summaries }
 }
 
+/// Files left anywhere under `dir` (the backend keeps its own private subdirectory there while it lives).
 fn leftovers(dir: &Path) -> usize {
-    std::fs::read_dir(dir).unwrap().count()
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                leftovers(&p)
+            } else {
+                1
+            }
+        })
+        .sum()
 }
 
 #[test]
@@ -208,4 +219,66 @@ fn bundles_record_the_schedule_fingerprint_and_replay_checks_it() {
         "{:?}",
         diff.steps
     );
+}
+
+#[test]
+fn a_symlink_planted_where_the_private_directory_goes_is_not_followed() {
+    use std::os::unix::fs::{symlink, MetadataExt};
+    let r = rig("plant", "echo fine", 2, 1, true, "good");
+    // `rig` already built the backend; build a second rig whose summary base holds a planted link at the exact path.
+    let dir = scratch("plant2");
+    let base = dir.join("summaries");
+    std::fs::create_dir_all(&base).unwrap();
+    let uid = std::fs::metadata(&base).unwrap().uid();
+    let elsewhere = scratch("plant-target");
+    symlink(
+        &elsewhere,
+        base.join(format!("hairspring-{uid}-{}", std::process::id())),
+    )
+    .unwrap();
+    let spec = TargetSpec {
+        name: "svc".into(),
+        description: String::new(),
+        kind: TargetKind::Process {
+            command: vec!["/bin/sh".into(), "-c".into(), "echo fine".into()],
+            env: BTreeMap::new(),
+            cwd: None,
+            hermit_args: vec![],
+            trial_timeout_secs: None,
+            scheduler: SchedulerSpec::default(),
+            hang_is_violation: false,
+            parallelism: 1,
+        },
+        budget: Budget {
+            max_steps: 1,
+            max_trials: 2,
+            wall_secs: 60,
+        },
+    };
+    let settings = HermitSettings {
+        bin: fake(&dir),
+        trial_timeout: Duration::from_secs(10),
+        summary_dir: Some(base),
+        ..HermitSettings::default()
+    };
+    let e = Engine::new(
+        Arc::new(Registry::new()),
+        Config {
+            targets: BTreeMap::from([("svc".to_string(), spec)]),
+        },
+    )
+    .with_backend(Arc::new(HermitBackend::new(settings)));
+    let out = e.run(&RunRequest::new("svc", 1), &mut |_| true).unwrap();
+    assert_eq!(out.status, RunStatus::Passed, "{out:?}");
+    assert_eq!(
+        (out.distinct_schedules, out.work),
+        (0, 0),
+        "fingerprints off, not redirected"
+    );
+    assert_eq!(
+        leftovers(&elsewhere),
+        0,
+        "nothing was written through the link"
+    );
+    drop(r);
 }

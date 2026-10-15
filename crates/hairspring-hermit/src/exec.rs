@@ -1,5 +1,6 @@
 //! Running one trial: spawn hermit, capture bounded output, enforce a timeout.
 use crate::summary::{self, Summary};
+use crate::summary_dir::PrivateDir;
 use crate::{env::guest_env, HermitSettings};
 use hairspring_engine::scheduler::{Heuristic, SchedulerSpec};
 use std::collections::BTreeMap;
@@ -71,6 +72,8 @@ pub fn scheduler_flags(s: &SchedulerSpec) -> Vec<String> {
     }
     if let Some(margin) = s.skid_margin {
         flags.push(format!("--skid-margin={margin}"));
+        // An overshoot lands the preemption late and the schedule silently stops reproducing; make it loud.
+        flags.push("--panic-on-rbc-overshoot".to_string());
     }
     flags
 }
@@ -167,11 +170,9 @@ pub fn run_trial(
     spec: &ProcessSpec,
     seed: u64,
     timeout: Duration,
+    summaries: Option<&PrivateDir>,
 ) -> Result<Trial, SpawnError> {
-    let summary_path = settings
-        .summary_dir
-        .as_ref()
-        .map(|dir| summary_file(dir, seed));
+    let summary_path = summaries.map(|dir| dir.file_for(seed));
     let trial = run_trial_with_summary(settings, spec, seed, timeout, summary_path.as_deref());
     // Always remove the file, including when the trial failed to start or timed out.
     let schedule = summary_path.as_deref().and_then(|p| {
@@ -180,13 +181,6 @@ pub fn run_trial(
         read
     });
     trial.map(|t| Trial { schedule, ..t })
-}
-
-/// A path no other trial in this process (or another process) is using.
-fn summary_file(dir: &std::path::Path, seed: u64) -> std::path::PathBuf {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    dir.join(format!("hairspring-{}-{seed}-{n}.json", std::process::id()))
 }
 
 fn run_trial_with_summary(

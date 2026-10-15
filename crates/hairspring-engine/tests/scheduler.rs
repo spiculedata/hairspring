@@ -96,3 +96,44 @@ fn scheduler_options_on_other_target_kinds_are_rejected() {
         .unwrap_err();
     assert!(matches!(&err, ConfigError::Invalid(m) if m.contains("process")));
 }
+
+#[test]
+fn flags_the_backend_owns_are_rejected_in_hermit_args() {
+    // Passing them again would either be a usage error in Hermit or silently change the schedule while
+    // replay still believed it was running the recorded strategy.
+    for flag in [
+        "--chaos",
+        "--sched-heuristic=random",
+        "--sched-seed=7",
+        "--sched-sticky-random-param=0.5",
+        "--max-timeslice=1000",
+        "--skid-margin=10",
+        "--epoch=2020-01-01T00:00:00Z",
+        "--summary-json=/dev/shm/x.json",
+        "--seed=1",
+        "--tmp=/x",
+        "--verify",
+        "--panic-on-rbc-overshoot",
+    ] {
+        let err = parse(&format!("hermit_args = [\"{flag}\"]")).unwrap_err();
+        assert!(
+            matches!(&err, ConfigError::Invalid(m) if m.contains("hermit_args") && m.contains(flag.split('=').next().unwrap())),
+            "{flag}: {err}"
+        );
+    }
+}
+
+#[test]
+fn other_hermit_args_are_still_allowed() {
+    assert!(parse("hermit_args = [\"--no-virtualize-cpuid\", \"--chaos-target-races\"]").is_ok());
+}
+
+#[test]
+fn the_none_heuristic_needs_chaos_because_seeds_would_change_nothing() {
+    let err = parse("heuristic = \"none\"").unwrap_err();
+    assert!(
+        matches!(&err, ConfigError::Invalid(m) if m.contains("seed")),
+        "{err}"
+    );
+    assert!(parse("heuristic = \"none\"\nchaos = true").is_ok());
+}

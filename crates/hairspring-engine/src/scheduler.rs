@@ -4,6 +4,26 @@
 //! recorded in every bundle. Defaults reproduce the original behaviour: uniform random scheduling driven by the seed.
 use serde::{Deserialize, Serialize};
 
+/// Hermit flags the backend sets itself. Passing them again in `hermit_args` is either a usage error in Hermit or a
+/// silent change to the schedule that replay's check would not see.
+const OWNED_HERMIT_FLAGS: [&str; 15] = [
+    "--chaos",
+    "--sched-heuristic",
+    "--sched-seed",
+    "--sched-sticky-random-param",
+    "--max-timeslice",
+    "--preemption-timeout",
+    "--skid-margin",
+    "--epoch",
+    "--summary-json",
+    "--summary",
+    "--seed",
+    "--tmp",
+    "--verify",
+    "--panic-on-rbc-overshoot",
+    "--panic-on-rcb-overshoot",
+];
+
 /// Smallest timeslice Hermit accepts: one retired conditional branch (10 virtual nanoseconds).
 const MIN_TIMESLICE_NS: u64 = 10;
 /// Hermit caps the PMU skid margin at this many retired conditional branches.
@@ -71,6 +91,12 @@ impl SchedulerSpec {
                     .to_string(),
             );
         }
+        if self.heuristic == Some(Heuristic::None) && !self.chaos {
+            return Err(
+                "`heuristic = \"none\"` needs `chaos = true`; otherwise the seed has no effect on scheduling"
+                    .to_string(),
+            );
+        }
         match (self.sticky_permille, heuristic) {
             (Some(_), h) if h != Heuristic::StickyRandom => {
                 return Err("`sticky_permille` needs `heuristic = \"sticky-random\"`".to_string())
@@ -99,4 +125,17 @@ impl SchedulerSpec {
     pub fn is_default(&self) -> bool {
         *self == SchedulerSpec::default()
     }
+}
+
+/// Rejects `hermit_args` entries that name a flag the backend owns.
+pub fn check_hermit_args(args: &[String]) -> Result<(), String> {
+    for arg in args {
+        let name = arg.split('=').next().unwrap_or(arg);
+        if OWNED_HERMIT_FLAGS.contains(&name) {
+            return Err(format!(
+                "`hermit_args` must not contain `{name}`: Hairspring sets it from the scheduler options and the run's seed"
+            ));
+        }
+    }
+    Ok(())
 }

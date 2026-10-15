@@ -44,11 +44,34 @@ fn first_line(text: &str, containing: &str) -> Option<String> {
         .map(|l| l.trim().to_string())
 }
 
+/// Failures of Hermit itself that are not about the guest: a command-line usage error, or the PMU skid overshoot
+/// panic. Either would otherwise look like the guest exiting non-zero and be reported as a finding.
+fn hermit_own_failure(stderr: &str) -> Option<String> {
+    if stderr.contains("Usage: hermit") {
+        let detail = first_line(stderr, "error:").unwrap_or_else(|| "bad command line".to_string());
+        return Some(format!(
+            "hermit rejected its command line (usage error): {detail}"
+        ));
+    }
+    if stderr.contains("SKID_OVERSHOOT")
+        || (stderr.contains("panicked") && stderr.contains("overshoot"))
+    {
+        return Some(
+            "hermit panicked on a PMU skid overshoot: the preemption landed late, so this schedule is not reproducible; raise `skid_margin`"
+                .to_string(),
+        );
+    }
+    None
+}
+
 pub fn classify(t: &Trial, timeout_secs: u64) -> Verdict {
     if t.stderr.contains(INTERNAL_FAILURE) {
         let detail = first_line(&t.stderr, "Error:")
             .unwrap_or_else(|| "hermit reported an internal failure".to_string());
         return Verdict::Infra(format!("hermit failed to run the program: {detail}"));
+    }
+    if let Some(reason) = hermit_own_failure(&t.stderr) {
+        return Verdict::Infra(reason);
     }
     if t.timed_out {
         return Verdict::Hang(format!(

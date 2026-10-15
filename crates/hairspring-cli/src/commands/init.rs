@@ -30,7 +30,7 @@ wall_secs = 60
 # Races inside a few instructions need a short timeslice with chaos mode, not the random heuristic.
 # chaos = true                    # randomise thread priorities each timeslice; cannot be combined with heuristic = "random"
 # max_timeslice_ns = 1000000      # preempt after this much virtual time (smaller finds finer races, costs more)
-# skid_margin = 25                # PMU skid margin; smaller is faster, Hermit panics on overshoot if you pass --panic-on-rbc-overshoot
+# skid_margin = 25                # PMU skid margin; smaller is faster. An overshoot aborts the run as an infrastructure error
 # heuristic = "sticky-random"     # or "random" (default) or "none"; sticky-random also takes sticky_permille = 900
 #
 # [target.my-service.budget]

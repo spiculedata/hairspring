@@ -49,7 +49,8 @@ pub struct RunOutcome {
     /// Distinct schedules the trials ran, when the backend can tell; 0 means unknown. Absent in older stored runs.
     #[serde(default)]
     pub distinct_schedules: u64,
-    /// Work done across all trials (for Hermit: guest syscalls); 0 means unknown. Absent in older stored runs.
+    /// Work done across all trials (for Hermit: guest syscalls, including scheduler spins such as `sched_yield`); 0 means
+    /// unknown. Absent in older stored runs.
     #[serde(default)]
     pub work: u64,
     pub elapsed_ms: u64,
