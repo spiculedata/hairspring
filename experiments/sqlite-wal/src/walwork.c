@@ -12,7 +12,7 @@
 #define MAX_TXNS 4096
 #define MAX_CKPTS 400
 static const char *db_path;
-static int n_writers = 3, n_txns = 100, n_ckpt = 1;
+static int n_writers = 3, n_txns = 100, n_ckpt = 1, autockpt = 8;
 static int writers_done = 0;
 static pthread_mutex_t done_mu = PTHREAD_MUTEX_INITIALIZER;
 static unsigned char committed[MAX_WRITERS][MAX_TXNS];
@@ -21,6 +21,7 @@ static sqlite3 *open_db(void) {
   sqlite3 *db;
   if (sqlite3_open(db_path, &db) != SQLITE_OK) { fprintf(stderr, "open: %s\n", sqlite3_errmsg(db)); exit(3); }
   sqlite3_busy_timeout(db, 5000);
+  { char p[64]; snprintf(p, sizeof p, "PRAGMA wal_autocheckpoint=%d", autockpt); sqlite3_exec(db, p, 0, 0, 0); }
   return db;
 }
 
@@ -67,13 +68,15 @@ int main(int argc, char **argv) {
   if (argc > 2) n_writers = atoi(argv[2]);
   if (argc > 3) n_txns = atoi(argv[3]);
   if (argc > 4) n_ckpt = atoi(argv[4]);
+  if (argc > 5) autockpt = atoi(argv[5]);
   if (n_writers < 1 || n_writers > MAX_WRITERS || n_txns < 1 || n_txns > MAX_TXNS) return 2;
   char tmp[512];
   unlink(db_path);
   snprintf(tmp, sizeof tmp, "%s-wal", db_path); unlink(tmp);
   snprintf(tmp, sizeof tmp, "%s-shm", db_path); unlink(tmp);
   sqlite3 *db = open_db();
-  sqlite3_exec(db, "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=8; CREATE TABLE t(w INT, i INT, pad BLOB);", 0, 0, 0);
+  snprintf(tmp, sizeof tmp, "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=%d; CREATE TABLE t(w INT, i INT, pad BLOB);", autockpt);
+  sqlite3_exec(db, tmp, 0, 0, 0);
   sqlite3_close(db);
   pthread_t th[MAX_WRITERS + 8];
   int nt = 0;

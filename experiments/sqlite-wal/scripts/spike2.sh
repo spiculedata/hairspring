@@ -1,6 +1,7 @@
 set -u
-H=${HERMIT:-/opt/hermit-fork/target/release/hermit}
-D=${D:-$PWD}; cd "$D"
+echo 1 > /proc/sys/kernel/perf_event_paranoid
+H=/opt/hermit-fork/target/release/hermit
+D=/opt/anthill-wal; cd $D
 SEEDS=${SEEDS:-20}; TMO=${TMO:-120}
 for v in 3510200 3510300; do
   echo "== hermit $v, $SEEDS seeds (3 writers x 60 txns, 1 checkpointer, timeout ${TMO}s)"

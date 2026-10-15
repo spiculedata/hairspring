@@ -1,0 +1,21 @@
+PILOT2 row=slow seed=4 rc=0 secs=53 flags=[--chaos --max-timeslice=1000000 --chaos-per-thread-slowdown  ] ok sqlite 3.51.2 committed=600 cycles=199 
+PILOT2 row=slow seed=1 rc=0 secs=97 flags=[--chaos --max-timeslice=1000000 --chaos-per-thread-slowdown  ] ok sqlite 3.51.2 committed=600 cycles=199 
+PILOT2 row=slow seed=6 rc=0 secs=121 flags=[--chaos --max-timeslice=1000000 --chaos-per-thread-slowdown  ] ok sqlite 3.51.2 committed=600 cycles=199 
+PILOT2 row=slow seed=5 rc=0 secs=203 flags=[--chaos --max-timeslice=1000000 --chaos-per-thread-slowdown  ] ok sqlite 3.51.2 committed=600 cycles=199 
+PILOT2 row=slow seed=3 rc=0 secs=205 flags=[--chaos --max-timeslice=1000000 --chaos-per-thread-slowdown  ] ok sqlite 3.51.2 committed=600 cycles=199 
+PILOT2 row=slow seed=2 rc=0 secs=282 flags=[--chaos --max-timeslice=1000000 --chaos-per-thread-slowdown  ] ok sqlite 3.51.2 committed=600 cycles=199 
+PILOT2 row=slow seed=7 rc=0 secs=331 flags=[--chaos --max-timeslice=1000000 --chaos-per-thread-slowdown  ] ok sqlite 3.51.2 committed=600 cycles=199 
+PILOT2 row=t250 seed=1 rc=0 secs=422 flags=[--chaos --max-timeslice=250000  ] ok sqlite 3.51.2 committed=600 cycles=199 
+PILOT2 row=t250 seed=3 rc=0 secs=464 flags=[--chaos --max-timeslice=250000  ] ok sqlite 3.51.2 committed=600 cycles=199 
+PILOT2 row=t250 seed=4 rc=0 secs=392 flags=[--chaos --max-timeslice=250000  ] ok sqlite 3.51.2 committed=600 cycles=199 
+PILOT2 row=t250 seed=5 rc=0 secs=456 flags=[--chaos --max-timeslice=250000  ] ok sqlite 3.51.2 committed=600 cycles=199 
+PILOT2 row=t250 seed=6 rc=0 secs=429 flags=[--chaos --max-timeslice=250000  ] ok sqlite 3.51.2 committed=600 cycles=199 
+PILOT2 row=t250 seed=2 rc=0 secs=615 flags=[--chaos --max-timeslice=250000  ] ok sqlite 3.51.2 committed=600 cycles=199 
+PILOT2 row=t250 seed=7 rc=0 secs=484 flags=[--chaos --max-timeslice=250000  ] ok sqlite 3.51.2 committed=600 cycles=199 
+PILOT2 row=skid5000 seed=1 rc=124 secs=900 flags=[--chaos --max-timeslice=1000000 --skid-margin=5000 --panic-on-rbc-overshoot --verify ]  hermit: virtual-time epoch=2026-01-01T00:00:00+00:00 source=explicit; reproduce with --epoch=2026-01-01T00:00:00+00:00 :: Run1... 
+PILOT2 row=skid5000 seed=2 rc=124 secs=900 flags=[--chaos --max-timeslice=1000000 --skid-margin=5000 --panic-on-rbc-overshoot --verify ]  hermit: virtual-time epoch=2026-01-01T00:00:00+00:00 source=explicit; reproduce with --epoch=2026-01-01T00:00:00+00:00 :: Run1... 
+PILOT2 row=skid5000 seed=3 rc=124 secs=900 flags=[--chaos --max-timeslice=1000000 --skid-margin=5000 --panic-on-rbc-overshoot  ]  hermit: virtual-time epoch=2026-01-01T00:00:00+00:00 source=explicit; reproduce with --epoch=2026-01-01T00:00:00+00:00 
+PILOT2 row=skid5000 seed=4 rc=124 secs=900 flags=[--chaos --max-timeslice=1000000 --skid-margin=5000 --panic-on-rbc-overshoot  ]  hermit: virtual-time epoch=2026-01-01T00:00:00+00:00 source=explicit; reproduce with --epoch=2026-01-01T00:00:00+00:00 
+PILOT2 row=skid5000 seed=5 rc=124 secs=900 flags=[--chaos --max-timeslice=1000000 --skid-margin=5000 --panic-on-rbc-overshoot  ]  hermit: virtual-time epoch=2026-01-01T00:00:00+00:00 source=explicit; reproduce with --epoch=2026-01-01T00:00:00+00:00 
+PILOT2 row=skid5000 seed=6 rc=124 secs=900 flags=[--chaos --max-timeslice=1000000 --skid-margin=5000 --panic-on-rbc-overshoot  ]  hermit: virtual-time epoch=2026-01-01T00:00:00+00:00 source=explicit; reproduce with --epoch=2026-01-01T00:00:00+00:00 
+PILOT2 row=skid5000 seed=7 rc=124 secs=900 flags=[--chaos --max-timeslice=1000000 --skid-margin=5000 --panic-on-rbc-overshoot  ]  hermit: virtual-time epoch=2026-01-01T00:00:00+00:00 source=explicit; reproduce with --epoch=2026-01-01T00:00:00+00:00 

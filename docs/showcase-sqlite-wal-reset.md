@@ -1,11 +1,15 @@
 # Showcase plan: reproduce the SQLite WAL-reset bug
 
-**Status: spike in progress.** The workload is in [`experiments/sqlite-wal`](../experiments/sqlite-wal). It runs under
-Hermit on both SQLite 3.51.2 (affected) and 3.51.3 (fixed). No violation has been observed yet and results are not
-final; the bug claims below are from SQLite's published documentation.
-
-One lesson so far: an unbounded, spinning checkpointer thread livelocks under Hermit's deterministic scheduler
-(seeds hung until timeout). The workload now bounds and yields the checkpointer.
+**Status: assisted reproduction achieved; unassisted finding not achieved.** Under Hermit (`--chaos --max-timeslice=1000000`,
+seed 3) a targeted, single-process workload on SQLite 3.51.2 built with a `nanosleep` inserted at the WAL checkpoint's header
+check loses exactly one committed transaction (`committed=300 counter=299 rows=299`) in 6 of 6 runs (4 at the default skid
+margin, 2 at skid margin 25) and shows 0 violations in 29 runs on 3.51.3 under the same flags (including seed 3 twice);
+1 of 28 seeds hits. The sleep's length did not matter in the range that hit; its effect is inferred to be turning the check
+into a scheduling point. Natively the same jittered patch hits 186 of 1641 runs on 3.51.2 and 0 of 2363 on 3.51.3. On the
+unmodified 3.51.2 build there were 0 violations in 11,611 dangerous-window executions across 56 distinct schedules (95% upper
+bound 3/N, which is uninformative). `--verify` passes at skid margins 100, 50 and 25. Not claimed: finding the bug without the
+patch, any rate comparison with other tools, a generic workload, or cross-process behaviour. Details, logs and method notes:
+[experiments/sqlite-wal](../experiments/sqlite-wal).
 
 ## The bug
 

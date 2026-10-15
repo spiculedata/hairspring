@@ -1,0 +1,135 @@
+RESULT ver=3510200 cfg=ctrl seed=6 rc=1 secs=141 HAIRSPRING_VIOLATION: committed=800 counter=800 rows=-1 cycles=13
+RESULT ver=3510200 cfg=ctrl seed=2 rc=1 secs=142 HAIRSPRING_VIOLATION: committed=800 counter=800 rows=301 cycles=10
+RESULT ver=3510200 cfg=ctrl seed=5 rc=1 secs=144 HAIRSPRING_VIOLATION: committed=800 counter=800 rows=-1 cycles=13
+RESULT ver=3510200 cfg=ctrl seed=4 rc=0 secs=151 ok sqlite 3.51.2 committed=800 cycles=16
+RESULT ver=3510200 cfg=ctrl seed=3 rc=0 secs=159 ok sqlite 3.51.2 committed=800 cycles=9
+RESULT ver=3510200 cfg=ctrl seed=7 rc=0 secs=167 ok sqlite 3.51.2 committed=800 cycles=6
+RESULT ver=3510200 cfg=ctrl seed=1 rc=1 secs=170 HAIRSPRING_VIOLATION: committed=800 counter=800 rows=-1 cycles=11
+RESULT ver=3510200 cfg=ctrl seed=12 rc=0 secs=130 ok sqlite 3.51.2 committed=800 cycles=1
+RESULT ver=3510200 cfg=ctrl seed=10 rc=1 secs=145 HAIRSPRING_VIOLATION: committed=800 counter=795 rows=-1 cycles=14
+RESULT ver=3510200 cfg=ctrl seed=11 rc=1 secs=139 HAIRSPRING_VIOLATION: committed=800 counter=793 rows=-1 cycles=6
+RESULT ver=3510200 cfg=ctrl seed=8 rc=0 secs=151 ok sqlite 3.51.2 committed=800 cycles=15
+RESULT ver=3510200 cfg=ctrl seed=9 rc=1 secs=152 HAIRSPRING_VIOLATION: committed=800 counter=800 rows=-1 cycles=16
+RESULT ver=3510200 cfg=ctrl seed=14 rc=1 secs=141 HAIRSPRING_VIOLATION: committed=800 counter=800 rows=-1 cycles=10
+RESULT ver=3510200 cfg=ctrl seed=13 rc=1 secs=162 HAIRSPRING_VIOLATION: committed=800 counter=799 rows=-1 cycles=13
+RESULT ver=3510200 cfg=ctrl seed=16 rc=0 secs=102 ok sqlite 3.51.2 committed=800 cycles=5
+RESULT ver=3510200 cfg=ctrl seed=19 rc=1 secs=113 HAIRSPRING_VIOLATION: committed=800 counter=799 rows=799 cycles=11
+RESULT ver=3510200 cfg=ctrl seed=20 rc=1 secs=98 HAIRSPRING_VIOLATION: committed=800 counter=800 rows=-1 cycles=13
+RESULT ver=3510200 cfg=ctrl seed=15 rc=1 secs=122 HAIRSPRING_VIOLATION: committed=800 counter=800 rows=-1 cycles=12
+RESULT ver=3510200 cfg=ctrl seed=17 rc=1 secs=135 HAIRSPRING_VIOLATION: committed=800 counter=800 rows=-1 cycles=11
+RESULT ver=3510200 cfg=ctrl seed=18 rc=1 secs=171 HAIRSPRING_VIOLATION: committed=800 counter=800 rows=-1 cycles=14
+SWEEPDONE ver=3510200 cfgs=ctrl seeds=1-20
+RESULT ver=3510300 cfg=ctrl seed=2 rc=0 secs=99 ok sqlite 3.51.3 committed=800 cycles=10
+RESULT ver=3510300 cfg=ctrl seed=1 rc=0 secs=108 ok sqlite 3.51.3 committed=800 cycles=11
+RESULT ver=3510300 cfg=ctrl seed=5 rc=0 secs=123 ok sqlite 3.51.3 committed=800 cycles=14
+RESULT ver=3510300 cfg=ctrl seed=4 rc=0 secs=131 ok sqlite 3.51.3 committed=800 cycles=16
+RESULT ver=3510300 cfg=ctrl seed=3 rc=0 secs=135 ok sqlite 3.51.3 committed=800 cycles=10
+RESULT ver=3510300 cfg=ctrl seed=7 rc=0 secs=144 ok sqlite 3.51.3 committed=800 cycles=7
+RESULT ver=3510300 cfg=ctrl seed=6 rc=0 secs=178 ok sqlite 3.51.3 committed=800 cycles=18
+RESULT ver=3510300 cfg=ctrl seed=8 rc=0 secs=127 ok sqlite 3.51.3 committed=800 cycles=9
+RESULT ver=3510300 cfg=ctrl seed=11 rc=0 secs=101 ok sqlite 3.51.3 committed=800 cycles=7
+RESULT ver=3510300 cfg=ctrl seed=12 rc=0 secs=112 ok sqlite 3.51.3 committed=800 cycles=1
+RESULT ver=3510300 cfg=ctrl seed=9 rc=0 secs=163 ok sqlite 3.51.3 committed=800 cycles=17
+RESULT ver=3510300 cfg=ctrl seed=13 rc=0 secs=141 ok sqlite 3.51.3 committed=800 cycles=12
+RESULT ver=3510300 cfg=ctrl seed=10 rc=0 secs=174 ok sqlite 3.51.3 committed=800 cycles=14
+RESULT ver=3510300 cfg=ctrl seed=14 rc=0 secs=122 ok sqlite 3.51.3 committed=800 cycles=10
+RESULT ver=3510300 cfg=ctrl seed=16 rc=0 secs=159 ok sqlite 3.51.3 committed=800 cycles=6
+RESULT ver=3510300 cfg=ctrl seed=15 rc=0 secs=166 ok sqlite 3.51.3 committed=800 cycles=12
+RESULT ver=3510300 cfg=ctrl seed=17 rc=0 secs=198 ok sqlite 3.51.3 committed=800 cycles=12
+RESULT ver=3510300 cfg=ctrl seed=18 rc=0 secs=180 ok sqlite 3.51.3 committed=800 cycles=15
+RESULT ver=3510300 cfg=ctrl seed=19 rc=0 secs=174 ok sqlite 3.51.3 committed=800 cycles=11
+RESULT ver=3510300 cfg=ctrl seed=20 rc=0 secs=170 ok sqlite 3.51.3 committed=800 cycles=15
+SWEEPDONE ver=3510300 cfgs=ctrl seeds=1-20
+RESULT ver=3510200 cfg=g1m seed=6 rc=0 secs=136 ok sqlite 3.51.2 committed=800 cycles=57
+RESULT ver=3510200 cfg=g1m seed=4 rc=0 secs=141 ok sqlite 3.51.2 committed=800 cycles=47
+RESULT ver=3510200 cfg=g1m seed=3 rc=0 secs=160 ok sqlite 3.51.2 committed=800 cycles=43
+RESULT ver=3510200 cfg=g1m seed=7 rc=0 secs=168 ok sqlite 3.51.2 committed=800 cycles=27
+RESULT ver=3510200 cfg=g1m seed=1 rc=0 secs=171 ok sqlite 3.51.2 committed=800 cycles=47
+RESULT ver=3510200 cfg=g1m seed=2 rc=0 secs=179 ok sqlite 3.51.2 committed=800 cycles=32
+RESULT ver=3510200 cfg=g1m seed=5 rc=0 secs=188 ok sqlite 3.51.2 committed=800 cycles=59
+RESULT ver=3510200 cfg=g1m seed=8 rc=0 secs=150 ok sqlite 3.51.2 committed=800 cycles=27
+RESULT ver=3510200 cfg=g1m seed=12 rc=0 secs=122 ok sqlite 3.51.2 committed=800 cycles=1
+RESULT ver=3510200 cfg=g1m seed=11 rc=0 secs=129 ok sqlite 3.51.2 committed=800 cycles=12
+RESULT ver=3510200 cfg=g1m seed=9 rc=0 secs=175 ok sqlite 3.51.2 committed=800 cycles=35
+RESULT ver=3510200 cfg=g1m seed=14 rc=0 secs=133 ok sqlite 3.51.2 committed=800 cycles=28
+RESULT ver=3510200 cfg=g1m seed=10 rc=0 secs=161 ok sqlite 3.51.2 committed=800 cycles=69
+RESULT ver=3510200 cfg=g1m seed=13 rc=0 secs=159 ok sqlite 3.51.2 committed=800 cycles=54
+RESULT ver=3510200 cfg=g1m seed=15 rc=0 secs=124 ok sqlite 3.51.2 committed=800 cycles=19
+RESULT ver=3510200 cfg=g1m seed=16 rc=0 secs=147 ok sqlite 3.51.2 committed=800 cycles=7
+RESULT ver=3510200 cfg=g1m seed=18 rc=0 secs=145 ok sqlite 3.51.2 committed=800 cycles=62
+RESULT ver=3510200 cfg=g1m seed=19 rc=0 secs=144 ok sqlite 3.51.2 committed=800 cycles=40
+RESULT ver=3510200 cfg=g1m seed=17 rc=0 secs=170 ok sqlite 3.51.2 committed=800 cycles=45
+RESULT ver=3510200 cfg=g1m seed=20 rc=0 secs=164 ok sqlite 3.51.2 committed=800 cycles=54
+RESULT ver=3510200 cfg=g1m seed=21 rc=0 secs=170 ok sqlite 3.51.2 committed=800 cycles=19
+RESULT ver=3510200 cfg=g1m seed=22 rc=0 secs=175 ok sqlite 3.51.2 committed=800 cycles=30
+RESULT ver=3510200 cfg=g1m seed=25 rc=0 secs=127 ok sqlite 3.51.2 committed=800 cycles=44
+RESULT ver=3510200 cfg=g1m seed=23 rc=0 secs=167 ok sqlite 3.51.2 committed=800 cycles=58
+RESULT ver=3510200 cfg=g1m seed=26 rc=0 secs=141 ok sqlite 3.51.2 committed=800 cycles=51
+RESULT ver=3510200 cfg=g1m seed=27 rc=0 secs=126 ok sqlite 3.51.2 committed=800 cycles=13
+RESULT ver=3510200 cfg=g1m seed=28 rc=0 secs=130 ok sqlite 3.51.2 committed=800 cycles=60
+RESULT ver=3510200 cfg=g1m seed=24 rc=0 secs=229 ok sqlite 3.51.2 committed=800 cycles=66
+RESULT ver=3510200 cfg=g1m seed=33 rc=0 secs=124 ok sqlite 3.51.2 committed=800 cycles=37
+RESULT ver=3510200 cfg=g1m seed=29 rc=0 secs=156 ok sqlite 3.51.2 committed=800 cycles=10
+RESULT ver=3510200 cfg=g1m seed=30 rc=0 secs=177 ok sqlite 3.51.2 committed=800 cycles=8
+RESULT ver=3510200 cfg=g1m seed=32 rc=0 secs=163 ok sqlite 3.51.2 committed=800 cycles=34
+RESULT ver=3510200 cfg=g1m seed=31 rc=0 secs=173 ok sqlite 3.51.2 committed=800 cycles=28
+RESULT ver=3510200 cfg=g1m seed=35 rc=0 secs=140 ok sqlite 3.51.2 committed=800 cycles=34
+RESULT ver=3510200 cfg=g1m seed=37 rc=0 secs=123 ok sqlite 3.51.2 committed=800 cycles=29
+RESULT ver=3510200 cfg=g1m seed=34 rc=0 secs=251 ok sqlite 3.51.2 committed=800 cycles=38
+RESULT ver=3510200 cfg=g1m seed=38 rc=0 secs=136 ok sqlite 3.51.2 committed=800 cycles=12
+RESULT ver=3510200 cfg=g1m seed=36 rc=0 secs=170 ok sqlite 3.51.2 committed=800 cycles=41
+RESULT ver=3510200 cfg=g1m seed=39 rc=0 secs=137 ok sqlite 3.51.2 committed=800 cycles=14
+RESULT ver=3510200 cfg=g1m seed=40 rc=0 secs=158 ok sqlite 3.51.2 committed=800 cycles=45
+RESULT ver=3510200 cfg=g500k seed=1 rc=0 secs=197 ok sqlite 3.51.2 committed=800 cycles=31
+RESULT ver=3510200 cfg=g500k seed=6 rc=0 secs=170 ok sqlite 3.51.2 committed=800 cycles=28
+RESULT ver=3510200 cfg=g500k seed=2 rc=0 secs=215 ok sqlite 3.51.2 committed=800 cycles=41
+RESULT ver=3510200 cfg=g500k seed=5 rc=0 secs=180 ok sqlite 3.51.2 committed=800 cycles=36
+RESULT ver=3510200 cfg=g500k seed=7 rc=0 secs=199 ok sqlite 3.51.2 committed=800 cycles=61
+RESULT ver=3510200 cfg=g500k seed=3 rc=0 secs=259 ok sqlite 3.51.2 committed=800 cycles=43
+RESULT ver=3510200 cfg=g500k seed=4 rc=0 secs=250 ok sqlite 3.51.2 committed=800 cycles=18
+RESULT ver=3510200 cfg=g500k seed=8 rc=0 secs=232 ok sqlite 3.51.2 committed=800 cycles=67
+RESULT ver=3510200 cfg=g500k seed=9 rc=0 secs=230 ok sqlite 3.51.2 committed=800 cycles=24
+RESULT ver=3510200 cfg=g500k seed=11 rc=0 secs=231 ok sqlite 3.51.2 committed=800 cycles=8
+RESULT ver=3510200 cfg=g500k seed=10 rc=0 secs=247 ok sqlite 3.51.2 committed=800 cycles=31
+RESULT ver=3510200 cfg=g500k seed=13 rc=0 secs=208 ok sqlite 3.51.2 committed=800 cycles=61
+RESULT ver=3510200 cfg=g500k seed=12 rc=0 secs=227 ok sqlite 3.51.2 committed=800 cycles=25
+RESULT ver=3510200 cfg=g500k seed=14 rc=0 secs=237 ok sqlite 3.51.2 committed=800 cycles=22
+RESULT ver=3510200 cfg=g500k seed=15 rc=0 secs=248 ok sqlite 3.51.2 committed=800 cycles=61
+RESULT ver=3510200 cfg=g500k seed=17 rc=0 secs=197 ok sqlite 3.51.2 committed=800 cycles=35
+RESULT ver=3510200 cfg=g500k seed=16 rc=0 secs=223 ok sqlite 3.51.2 committed=800 cycles=21
+RESULT ver=3510200 cfg=g500k seed=20 rc=0 secs=218 ok sqlite 3.51.2 committed=800 cycles=28
+RESULT ver=3510200 cfg=g500k seed=18 rc=0 secs=278 ok sqlite 3.51.2 committed=800 cycles=17
+RESULT ver=3510200 cfg=g500k seed=21 rc=0 secs=234 ok sqlite 3.51.2 committed=800 cycles=22
+RESULT ver=3510200 cfg=g500k seed=19 rc=0 secs=311 ok sqlite 3.51.2 committed=800 cycles=52
+RESULT ver=3510200 cfg=g500k seed=22 rc=0 secs=244 ok sqlite 3.51.2 committed=800 cycles=29
+RESULT ver=3510200 cfg=g500k seed=23 rc=0 secs=259 ok sqlite 3.51.2 committed=800 cycles=43
+RESULT ver=3510200 cfg=g500k seed=24 rc=0 secs=276 ok sqlite 3.51.2 committed=800 cycles=49
+RESULT ver=3510200 cfg=g500k seed=25 rc=0 secs=250 ok sqlite 3.51.2 committed=800 cycles=16
+RESULT ver=3510200 cfg=g500k seed=26 rc=0 secs=237 ok sqlite 3.51.2 committed=800 cycles=47
+RESULT ver=3510200 cfg=g500k seed=27 rc=0 secs=217 ok sqlite 3.51.2 committed=800 cycles=51
+RESULT ver=3510200 cfg=g500k seed=28 rc=0 secs=278 ok sqlite 3.51.2 committed=800 cycles=67
+RESULT ver=3510200 cfg=g500k seed=29 rc=0 secs=221 ok sqlite 3.51.2 committed=800 cycles=37
+RESULT ver=3510200 cfg=g500k seed=31 rc=0 secs=225 ok sqlite 3.51.2 committed=800 cycles=58
+RESULT ver=3510200 cfg=g500k seed=30 rc=0 secs=261 ok sqlite 3.51.2 committed=800 cycles=52
+RESULT ver=3510200 cfg=g500k seed=33 rc=0 secs=214 ok sqlite 3.51.2 committed=800 cycles=38
+RESULT ver=3510200 cfg=g500k seed=32 rc=0 secs=233 ok sqlite 3.51.2 committed=800 cycles=39
+RESULT ver=3510200 cfg=g500k seed=34 rc=0 secs=301 ok sqlite 3.51.2 committed=800 cycles=60
+RESULT ver=3510200 cfg=g500k seed=35 rc=0 secs=207 ok sqlite 3.51.2 committed=800 cycles=18
+RESULT ver=3510200 cfg=g500k seed=36 rc=0 secs=261 ok sqlite 3.51.2 committed=800 cycles=34
+RESULT ver=3510200 cfg=g500k seed=38 rc=0 secs=240 ok sqlite 3.51.2 committed=800 cycles=13
+RESULT ver=3510200 cfg=g500k seed=37 rc=0 secs=246 ok sqlite 3.51.2 committed=800 cycles=12
+RESULT ver=3510200 cfg=g500k seed=39 rc=0 secs=228 ok sqlite 3.51.2 committed=800 cycles=58
+RESULT ver=3510200 cfg=g500k seed=40 rc=0 secs=343 ok sqlite 3.51.2 committed=800 cycles=56
+RESULT ver=3510200 cfg=g250k seed=1 rc=124 secs=400 
+RESULT ver=3510200 cfg=g250k seed=2 rc=124 secs=400 
+RESULT ver=3510200 cfg=g250k seed=3 rc=124 secs=400 
+RESULT ver=3510200 cfg=g250k seed=4 rc=0 secs=379 ok sqlite 3.51.2 committed=800 cycles=67
+RESULT ver=3510200 cfg=g250k seed=5 rc=124 secs=400 
+RESULT ver=3510200 cfg=g250k seed=6 rc=124 secs=400 
+RESULT ver=3510200 cfg=g250k seed=7 rc=124 secs=400 
+RESULT ver=3510200 cfg=g250k seed=8 rc=124 secs=400 
+RESULT ver=3510200 cfg=g250k seed=9 rc=124 secs=400 
+RESULT ver=3510200 cfg=g250k seed=10 rc=124 secs=400 
+RESULT ver=3510200 cfg=g250k seed=11 rc=124 secs=400 
+RESULT ver=3510200 cfg=g250k seed=12 rc=124 secs=400 
+RESULT ver=3510200 cfg=g250k seed=13 rc=124 secs=401 
