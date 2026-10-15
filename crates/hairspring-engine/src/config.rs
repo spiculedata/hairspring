@@ -9,6 +9,7 @@ const MAX_STEPS_CAP: u64 = 50_000_000;
 const MAX_TRIALS_CAP: u64 = 10_000;
 const MAX_WALL_SECS_CAP: u64 = 600;
 const MAX_NAME_LEN: usize = 64;
+const MAX_PARALLELISM: u32 = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -57,6 +58,8 @@ pub enum TargetKind {
         /// Treat a trial that times out as a violation (for programs where a hang is the bug). Off by default:
         /// a timeout is then inconclusive, which is never reported as a pass.
         hang_is_violation: bool,
+        /// Trials run at the same time (consecutive seeds in a batch); 1 runs them one by one.
+        parallelism: u32,
     },
     Wasm {
         module: String,
@@ -132,6 +135,7 @@ struct RawTarget {
     max_timeslice_ns: Option<u64>,
     skid_margin: Option<u32>,
     hang_is_violation: Option<bool>,
+    parallelism: Option<u32>,
     module: Option<String>,
     #[serde(default)]
     budget: Budget,
@@ -173,10 +177,10 @@ fn convert(name: String, raw: RawTarget) -> Result<TargetSpec, ConfigError> {
     let missing = |what: &str| ConfigError::Invalid(format!("target `{name}` requires `{what}`"));
     let scheduler = raw.scheduler();
     if !matches!(raw.kind, RawKind::Process)
-        && (!scheduler.is_default() || raw.hang_is_violation.is_some())
+        && (!scheduler.is_default() || raw.hang_is_violation.is_some() || raw.parallelism.is_some())
     {
         return Err(ConfigError::Invalid(format!(
-            "target `{name}`: scheduler options (heuristic, chaos, ...) and hang_is_violation are only valid for kind = \"process\""
+            "target `{name}`: scheduler options (heuristic, chaos, ...), hang_is_violation and parallelism are only valid for kind = \"process\""
         )));
     }
     let kind = match raw.kind {
@@ -194,6 +198,12 @@ fn convert(name: String, raw: RawTarget) -> Result<TargetSpec, ConfigError> {
             scheduler
                 .validate()
                 .map_err(|m| ConfigError::Invalid(format!("target `{name}`: {m}")))?;
+            let parallelism = raw.parallelism.unwrap_or(1);
+            if !(1..=MAX_PARALLELISM).contains(&parallelism) {
+                return Err(ConfigError::Invalid(format!(
+                    "target `{name}`: `parallelism` must be 1-{MAX_PARALLELISM}"
+                )));
+            }
             TargetKind::Process {
                 command,
                 env: raw.env,
@@ -202,6 +212,7 @@ fn convert(name: String, raw: RawTarget) -> Result<TargetSpec, ConfigError> {
                 trial_timeout_secs: raw.trial_timeout_secs,
                 scheduler,
                 hang_is_violation: raw.hang_is_violation.unwrap_or(false),
+                parallelism,
             }
         }
         RawKind::Wasm => TargetKind::Wasm {

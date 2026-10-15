@@ -20,6 +20,7 @@ pub struct ProcessSpec<'a> {
     pub trial_timeout_secs: Option<u64>,
     pub scheduler: &'a SchedulerSpec,
     pub hang_is_violation: bool,
+    pub parallelism: u32,
 }
 
 #[derive(Debug, Clone)]

@@ -58,6 +58,7 @@ fn engine(
             trial_timeout_secs: None,
             scheduler,
             hang_is_violation: false,
+            parallelism: 1,
         },
         budget: Budget {
             max_steps: 1,

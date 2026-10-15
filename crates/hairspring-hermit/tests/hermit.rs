@@ -87,6 +87,7 @@ fn engine_for(
             trial_timeout_secs: None,
             scheduler: SchedulerSpec::default(),
             hang_is_violation: false,
+            parallelism: 1,
         },
         budget,
     };
@@ -295,6 +296,7 @@ fn a_hang_is_a_violation_when_the_target_opts_in() {
                 trial_timeout_secs: None,
                 scheduler: SchedulerSpec::default(),
                 hang_is_violation: true,
+                parallelism: 1,
             },
             budget: budget(2),
         };
@@ -386,6 +388,7 @@ fn hermit_is_invoked_with_a_pinned_epoch_random_scheduling_and_user_args() {
             trial_timeout_secs: None,
             scheduler: SchedulerSpec::default(),
             hang_is_violation: false,
+            parallelism: 1,
         },
         budget: budget(1),
     };
@@ -482,6 +485,7 @@ fn a_target_can_set_its_own_trial_timeout() {
             trial_timeout_secs: Some(1),
             scheduler: SchedulerSpec::default(),
             hang_is_violation: true,
+            parallelism: 1,
         },
         budget: budget(1),
     };
@@ -521,6 +525,7 @@ fn a_trial_cut_off_by_the_wall_budget_is_inconclusive_not_a_hang() {
             trial_timeout_secs: None,
             scheduler: SchedulerSpec::default(),
             hang_is_violation: false,
+            parallelism: 1,
         },
         budget: Budget {
             max_steps: 1,
@@ -609,6 +614,7 @@ fn a_bare_hermit_name_is_found_on_the_callers_path_not_the_pinned_guest_path() {
                         trial_timeout_secs: None,
                         scheduler: SchedulerSpec::default(),
                         hang_is_violation: false,
+                        parallelism: 1,
                     },
                     budget: budget(1),
                 },

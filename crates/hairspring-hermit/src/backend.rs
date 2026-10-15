@@ -25,6 +25,19 @@ struct Found<'a> {
     confirmed: u32,
 }
 
+/// One finished trial and everything needed to judge it.
+struct Judged<'a> {
+    spec: &'a TargetSpec,
+    p: &'a ProcessSpec<'a>,
+    req: &'a RunRequest,
+    index: u64,
+    seed: u64,
+    trial: &'a Trial,
+    timeout: Duration,
+    clipped: bool,
+    started: Instant,
+}
+
 pub struct HermitBackend {
     settings: HermitSettings,
 }
@@ -49,6 +62,7 @@ impl HermitBackend {
                 trial_timeout_secs,
                 scheduler,
                 hang_is_violation,
+                parallelism,
             } => Ok(ProcessSpec {
                 command,
                 env,
@@ -57,6 +71,7 @@ impl HermitBackend {
                 trial_timeout_secs: *trial_timeout_secs,
                 scheduler,
                 hang_is_violation: *hang_is_violation,
+                parallelism: *parallelism,
             }),
             other => Err(EngineError::BackendUnavailable(other.name().to_string())),
         }
@@ -91,6 +106,69 @@ impl HermitBackend {
                 })
             })
             .count() as u32
+    }
+
+    /// Runs the trials for the seeds `base + range` at the same time, returning results in range order.
+    fn run_batch(
+        &self,
+        p: &ProcessSpec,
+        base: u64,
+        range: std::ops::Range<u64>,
+        timeout: Duration,
+    ) -> Vec<Result<Trial, SpawnError>> {
+        if range.end - range.start == 1 {
+            return vec![self.trial(p, base.wrapping_add(range.start), timeout)];
+        }
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = range
+                .map(|i| scope.spawn(move || self.trial(p, base.wrapping_add(i), timeout)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| {
+                    h.join().unwrap_or_else(|_| {
+                        Err(SpawnError::Other("a trial thread panicked".to_string()))
+                    })
+                })
+                .collect()
+        })
+    }
+
+    /// Decides what one finished trial means. Returns the run's outcome when the run should end here.
+    fn judge(&self, j: &Judged, tally: &mut Tally) -> Option<RunOutcome> {
+        match self.verdict(j.p, j.trial, j.timeout) {
+            Verdict::Infra(msg) => Some(infra(msg)),
+            Verdict::Hang(_) | Verdict::Violation(_) if j.trial.timed_out && j.clipped => {
+                // Out of budget, not out of patience: inconclusive, never a finding.
+                tally.cut_by_budget();
+                Some(tally.finish(j.started))
+            }
+            Verdict::Hang(_) => {
+                tally.hang();
+                None
+            }
+            Verdict::Violation(reason) => {
+                let confirmed = self.confirm(j.p, j.seed, &behaviour_hash(j.trial), j.timeout);
+                let failure = self.failure(&Found {
+                    spec: j.spec,
+                    p: j.p,
+                    req: j.req,
+                    seed: j.seed,
+                    trial: j.trial,
+                    reason: &reason,
+                    confirmed,
+                });
+                let ms = j.started.elapsed().as_millis() as u64;
+                Some(
+                    RunOutcome::failed(j.index + 1, j.index + 1, ms, failure)
+                        .with_inconclusive(tally.inconclusive),
+                )
+            }
+            Verdict::Pass => {
+                tally.pass();
+                None
+            }
+        }
     }
 
     fn failure(&self, found: &Found) -> FailureReport {
@@ -230,49 +308,46 @@ impl Backend for HermitBackend {
         let started = Instant::now();
         let wall = Duration::from_secs(budget.wall_secs);
         let trials = budget.max_trials.max(1);
+        let width = u64::from(p.parallelism.max(1));
         let mut tally = Tally::default();
-        for i in 0..trials {
-            let seed = req.seed.wrapping_add(i);
+        let mut next = 0u64;
+        while next < trials {
             let remaining = wall.saturating_sub(started.elapsed());
-            if i > 0 && remaining.is_zero() {
+            if next > 0 && remaining.is_zero() {
                 return Ok(tally.finish(started));
             }
             let allowed = remaining.max(Duration::from_secs(1));
-            // True when the wall budget, not the target's own limit, is what cut the trial short.
+            // True when the wall budget, not the target's own limit, is what cut the trials short.
             let clipped = allowed < self.trial_timeout(&p);
             let timeout = self.trial_timeout(&p).min(allowed);
-            let trial = match self.trial(&p, seed, timeout) {
-                Ok(t) => t,
-                Err(e) => return Ok(infra(e.to_string())),
-            };
-            match self.verdict(&p, &trial, timeout) {
-                Verdict::Infra(msg) => return Ok(infra(msg)),
-                Verdict::Hang(_) | Verdict::Violation(_) if trial.timed_out && clipped => {
-                    // Out of budget, not out of patience: inconclusive, never a finding.
-                    tally.cut_by_budget();
-                    return Ok(tally.finish(started));
+            let batch = next..trials.min(next + width);
+            let results = self.run_batch(&p, req.seed, batch.clone(), timeout);
+            // Judge in seed order so the reported failure is the lowest failing seed, as in a sequential run.
+            for (i, result) in batch.clone().zip(results) {
+                let seed = req.seed.wrapping_add(i);
+                let trial = match result {
+                    Ok(t) => t,
+                    Err(e) => return Ok(infra(e.to_string())),
+                };
+                let judged = Judged {
+                    spec,
+                    p: &p,
+                    req,
+                    index: i,
+                    seed,
+                    trial: &trial,
+                    timeout,
+                    clipped,
+                    started,
+                };
+                if let Some(outcome) = self.judge(&judged, &mut tally) {
+                    return Ok(outcome);
                 }
-                Verdict::Hang(_) => tally.hang(),
-                Verdict::Violation(reason) => {
-                    let confirmed = self.confirm(&p, seed, &behaviour_hash(&trial), timeout);
-                    let failure = self.failure(&Found {
-                        spec,
-                        p: &p,
-                        req,
-                        seed,
-                        trial: &trial,
-                        reason: &reason,
-                        confirmed,
-                    });
-                    let ms = started.elapsed().as_millis() as u64;
-                    return Ok(RunOutcome::failed(i + 1, i + 1, ms, failure)
-                        .with_inconclusive(tally.inconclusive));
-                }
-                Verdict::Pass => tally.pass(),
             }
+            next = batch.end;
             if !progress(Progress {
-                steps: i + 1,
-                trials: i + 1,
+                steps: next,
+                trials: next,
                 message: tally.progress_message(trials),
             }) {
                 return Ok(RunOutcome::error(CANCELLED));

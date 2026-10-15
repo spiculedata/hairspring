@@ -55,6 +55,7 @@ fn engine(dir: &Path, script: &str, trials: u64, hang_is_violation: bool) -> Eng
             trial_timeout_secs: Some(1),
             scheduler: SchedulerSpec::default(),
             hang_is_violation,
+            parallelism: 1,
         },
         budget: Budget {
             max_steps: 1,

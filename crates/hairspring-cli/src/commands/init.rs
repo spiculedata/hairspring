@@ -24,6 +24,7 @@ wall_secs = 60
 # env = { MODE = "test" }
 # trial_timeout_secs = 120   # Hermit is slow; raise this for heavy programs
 # hang_is_violation = true   # a trial that times out is a failure (default: inconclusive, never a pass)
+# parallelism = 4            # trials run at once (1-64); keep at or below your core count
 #
 # How threads are scheduled (all optional; the default is seeded random scheduling).
 # Races inside a few instructions need a short timeslice with chaos mode, not the random heuristic.
