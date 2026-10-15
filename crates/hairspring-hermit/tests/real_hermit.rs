@@ -68,6 +68,7 @@ fn engine(bin: &std::path::Path, trials: u64) -> Engine {
             hermit_args: vec![],
             trial_timeout_secs: None,
             scheduler: SchedulerSpec::default(),
+            hang_is_violation: false,
         },
         budget: Budget {
             max_steps: 1,

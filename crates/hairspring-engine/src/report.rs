@@ -43,17 +43,28 @@ pub struct RunOutcome {
     pub status: RunStatus,
     pub steps_executed: u64,
     pub trials: u64,
+    /// Trials that ended in a timeout and were neither a pass nor a finding. Absent in older stored runs.
+    #[serde(default)]
+    pub inconclusive: u64,
     pub elapsed_ms: u64,
     pub failure: Option<FailureReport>,
     pub error: Option<String>,
 }
 
 impl RunOutcome {
+    pub fn with_inconclusive(self, inconclusive: u64) -> Self {
+        RunOutcome {
+            inconclusive,
+            ..self
+        }
+    }
+
     pub fn passed(steps_executed: u64, trials: u64, elapsed_ms: u64) -> Self {
         RunOutcome {
             status: RunStatus::Passed,
             steps_executed,
             trials,
+            inconclusive: 0,
             elapsed_ms,
             failure: None,
             error: None,
@@ -69,6 +80,7 @@ impl RunOutcome {
             status: RunStatus::Failed,
             steps_executed,
             trials,
+            inconclusive: 0,
             elapsed_ms,
             failure: Some(failure),
             error: None,
@@ -79,6 +91,7 @@ impl RunOutcome {
             status: RunStatus::Error,
             steps_executed: 0,
             trials: 0,
+            inconclusive: 0,
             elapsed_ms: 0,
             failure: None,
             error: Some(message.into()),

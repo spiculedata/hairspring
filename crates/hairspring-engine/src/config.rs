@@ -54,6 +54,9 @@ pub enum TargetKind {
         trial_timeout_secs: Option<u64>,
         /// How threads are scheduled; part of the target so bundles replay under the same strategy.
         scheduler: SchedulerSpec,
+        /// Treat a trial that times out as a violation (for programs where a hang is the bug). Off by default:
+        /// a timeout is then inconclusive, which is never reported as a pass.
+        hang_is_violation: bool,
     },
     Wasm {
         module: String,
@@ -128,6 +131,7 @@ struct RawTarget {
     chaos: bool,
     max_timeslice_ns: Option<u64>,
     skid_margin: Option<u32>,
+    hang_is_violation: Option<bool>,
     module: Option<String>,
     #[serde(default)]
     budget: Budget,
@@ -168,9 +172,11 @@ fn convert(name: String, raw: RawTarget) -> Result<TargetSpec, ConfigError> {
     }
     let missing = |what: &str| ConfigError::Invalid(format!("target `{name}` requires `{what}`"));
     let scheduler = raw.scheduler();
-    if !matches!(raw.kind, RawKind::Process) && !scheduler.is_default() {
+    if !matches!(raw.kind, RawKind::Process)
+        && (!scheduler.is_default() || raw.hang_is_violation.is_some())
+    {
         return Err(ConfigError::Invalid(format!(
-            "target `{name}`: scheduler options (heuristic, chaos, ...) are only valid for kind = \"process\""
+            "target `{name}`: scheduler options (heuristic, chaos, ...) and hang_is_violation are only valid for kind = \"process\""
         )));
     }
     let kind = match raw.kind {
@@ -195,6 +201,7 @@ fn convert(name: String, raw: RawTarget) -> Result<TargetSpec, ConfigError> {
                 hermit_args: raw.hermit_args,
                 trial_timeout_secs: raw.trial_timeout_secs,
                 scheduler,
+                hang_is_violation: raw.hang_is_violation.unwrap_or(false),
             }
         }
         RawKind::Wasm => TargetKind::Wasm {

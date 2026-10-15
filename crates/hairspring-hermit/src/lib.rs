@@ -5,8 +5,9 @@
 //! seed reproduces the failure exactly. The result is a seed to replay rather than a state tree:
 //! there are no snapshots, so "time travel" means re-running the same seed.
 //!
-//! Verdicts: the guest violates a property if it exits non-zero, prints a line starting with
-//! `HAIRSPRING_VIOLATION:`, or hangs past the trial timeout. Linux x86-64 only; experimental.
+//! Verdicts: the guest violates a property if it exits non-zero or prints a line starting with
+//! `HAIRSPRING_VIOLATION:`. A trial that hits its time limit is inconclusive (counted separately, never a pass) unless the
+//! target sets `hang_is_violation`; a run where every trial timed out is an error. Linux x86-64 only; experimental.
 mod backend;
 mod env;
 mod exec;
@@ -27,7 +28,7 @@ pub struct HermitSettings {
     pub bin: PathBuf,
     /// Virtual clock epoch passed to every run; fixed so time is not an input.
     pub epoch: String,
-    /// Longest a single trial may run before it is killed and reported as a hang.
+    /// Longest a single trial may run before it is killed and counted as timed out.
     pub trial_timeout: Duration,
     /// Extra environment for the hermit process itself (not the guest's configured env).
     pub extra_env: Vec<(String, String)>,

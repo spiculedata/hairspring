@@ -86,6 +86,7 @@ fn engine_for(
             hermit_args: vec![],
             trial_timeout_secs: None,
             scheduler: SchedulerSpec::default(),
+            hang_is_violation: false,
         },
         budget,
     };
@@ -278,7 +279,7 @@ fn a_missing_hermit_binary_is_a_clear_error() {
 }
 
 #[test]
-fn a_hang_is_reported_as_a_violation() {
+fn a_hang_is_a_violation_when_the_target_opts_in() {
     let d = scratch("hang");
     let mut s = settings(fake(&d));
     s.trial_timeout = Duration::from_millis(600);
@@ -293,6 +294,7 @@ fn a_hang_is_reported_as_a_violation() {
                 hermit_args: vec![],
                 trial_timeout_secs: None,
                 scheduler: SchedulerSpec::default(),
+                hang_is_violation: true,
             },
             budget: budget(2),
         };
@@ -383,6 +385,7 @@ fn hermit_is_invoked_with_a_pinned_epoch_random_scheduling_and_user_args() {
             hermit_args: vec!["--tmp=/x".into()],
             trial_timeout_secs: None,
             scheduler: SchedulerSpec::default(),
+            hang_is_violation: false,
         },
         budget: budget(1),
     };
@@ -478,6 +481,7 @@ fn a_target_can_set_its_own_trial_timeout() {
             hermit_args: vec![],
             trial_timeout_secs: Some(1),
             scheduler: SchedulerSpec::default(),
+            hang_is_violation: true,
         },
         budget: budget(1),
     };
@@ -516,6 +520,7 @@ fn a_trial_cut_off_by_the_wall_budget_is_inconclusive_not_a_hang() {
             hermit_args: vec![],
             trial_timeout_secs: None,
             scheduler: SchedulerSpec::default(),
+            hang_is_violation: false,
         },
         budget: Budget {
             max_steps: 1,
@@ -534,8 +539,14 @@ fn a_trial_cut_off_by_the_wall_budget_is_inconclusive_not_a_hang() {
     let out = e.run(&RunRequest::new("svc", 1), &mut |_| true).unwrap();
     assert_eq!(
         out.status,
-        RunStatus::Passed,
-        "being out of budget says nothing about the program: {out:?}"
+        RunStatus::Error,
+        "being out of budget is not a finding, and a run that tested nothing is not a pass: {out:?}"
+    );
+    assert!(out.failure.is_none());
+    let msg = out.error.clone().unwrap();
+    assert!(
+        msg.contains("wall-clock budget") && msg.contains("nothing was tested"),
+        "{msg}"
     );
     assert!(
         started.elapsed() < Duration::from_secs(10),
@@ -597,6 +608,7 @@ fn a_bare_hermit_name_is_found_on_the_callers_path_not_the_pinned_guest_path() {
                         hermit_args: vec![],
                         trial_timeout_secs: None,
                         scheduler: SchedulerSpec::default(),
+                        hang_is_violation: false,
                     },
                     budget: budget(1),
                 },

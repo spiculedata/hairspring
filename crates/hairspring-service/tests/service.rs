@@ -826,3 +826,33 @@ fn status_of_outcomes_is_preserved_for_passed_and_error() {
         Some("kaput")
     );
 }
+
+#[test]
+fn the_finished_event_reports_how_many_trials_were_inconclusive() {
+    let (svc, _, engine) = service();
+    let job = leased(&svc, &engine, "pubsub-atomic", "w1");
+    svc.complete(
+        &job.job_id,
+        "w1",
+        &RunOutcome::passed(10, 4, 5).with_inconclusive(3),
+    )
+    .unwrap();
+    let events = svc.events(&job.run_id, 0, 100).unwrap();
+    let finished = events.iter().find(|e| e.kind == "finished").unwrap();
+    assert!(
+        finished.payload_json.contains("\"inconclusive\":3"),
+        "{}",
+        finished.payload_json
+    );
+}
+
+#[test]
+fn a_worker_cannot_claim_more_inconclusive_trials_than_trials() {
+    let (svc, _, engine) = service();
+    let job = leased(&svc, &engine, "pubsub-atomic", "w1");
+    let lying = RunOutcome::passed(10, 2, 5).with_inconclusive(3);
+    assert!(matches!(
+        svc.complete(&job.job_id, "w1", &lying),
+        Err(ServiceError::InvalidRequest(_))
+    ));
+}

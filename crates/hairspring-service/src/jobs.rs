@@ -26,8 +26,8 @@ enum Abort {
     Cancelled,
 }
 
-fn finished_payload(state: RunState) -> String {
-    serde_json::json!({ "state": state.as_str() }).to_string()
+fn finished_payload(state: RunState, inconclusive: u64) -> String {
+    serde_json::json!({ "state": state.as_str(), "inconclusive": inconclusive }).to_string()
 }
 
 impl Service {
@@ -178,7 +178,7 @@ impl Service {
             trials: clean.trials,
             error: clean.error,
             failure,
-            event_payload_json: finished_payload(state),
+            event_payload_json: finished_payload(state, clean.inconclusive),
         };
         match self
             .store
@@ -207,8 +207,12 @@ impl Service {
             .store
             .finish_run(run_id, RunState::Error, 0, 0, Some(reason), now)?
         {
-            self.store
-                .add_event(run_id, "finished", &finished_payload(RunState::Error), now)?;
+            self.store.add_event(
+                run_id,
+                "finished",
+                &finished_payload(RunState::Error, 0),
+                now,
+            )?;
         }
         Ok(())
     }

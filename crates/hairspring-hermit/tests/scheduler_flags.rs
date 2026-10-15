@@ -57,6 +57,7 @@ fn engine(
             hermit_args: user_args.iter().map(|s| s.to_string()).collect(),
             trial_timeout_secs: None,
             scheduler,
+            hang_is_violation: false,
         },
         budget: Budget {
             max_steps: 1,

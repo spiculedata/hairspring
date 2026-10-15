@@ -48,6 +48,7 @@ impl HermitBackend {
                 hermit_args,
                 trial_timeout_secs,
                 scheduler,
+                hang_is_violation,
             } => Ok(ProcessSpec {
                 command,
                 env,
@@ -55,6 +56,7 @@ impl HermitBackend {
                 hermit_args,
                 trial_timeout_secs: *trial_timeout_secs,
                 scheduler,
+                hang_is_violation: *hang_is_violation,
             }),
             other => Err(EngineError::BackendUnavailable(other.name().to_string())),
         }
@@ -67,6 +69,14 @@ impl HermitBackend {
             .unwrap_or(self.settings.trial_timeout)
     }
 
+    /// Classifies a trial. A timeout is only a violation when the target says a hang is the bug.
+    fn verdict(&self, p: &ProcessSpec, t: &Trial, timeout: Duration) -> Verdict {
+        match classify(t, timeout.as_secs()) {
+            Verdict::Hang(reason) if p.hang_is_violation => Verdict::Violation(reason),
+            other => other,
+        }
+    }
+
     fn trial(&self, p: &ProcessSpec, seed: u64, timeout: Duration) -> Result<Trial, SpawnError> {
         run_trial(&self.settings, p, seed, timeout)
     }
@@ -76,7 +86,7 @@ impl HermitBackend {
         (0..self.settings.repro_runs)
             .filter(|_| {
                 self.trial(p, seed, timeout).is_ok_and(|t| {
-                    matches!(classify(&t, timeout.as_secs()), Verdict::Violation(_))
+                    matches!(self.verdict(p, &t, timeout), Verdict::Violation(_))
                         && behaviour_hash(&t) == reference
                 })
             })
@@ -129,6 +139,56 @@ impl HermitBackend {
     }
 }
 
+/// Running totals for one run. Timeouts are counted apart from passes so a run that tested nothing is never a pass.
+#[derive(Default)]
+struct Tally {
+    trials: u64,
+    inconclusive: u64,
+    /// The wall-clock budget, not the target's own limit, cut the last trial short.
+    budget_cut: bool,
+}
+
+impl Tally {
+    fn pass(&mut self) {
+        self.trials += 1;
+    }
+
+    fn hang(&mut self) {
+        self.trials += 1;
+        self.inconclusive += 1;
+    }
+
+    fn cut_by_budget(&mut self) {
+        self.hang();
+        self.budget_cut = true;
+    }
+
+    fn progress_message(&self, of: u64) -> String {
+        match self.inconclusive {
+            0 => format!("{} of {of} seeds explored", self.trials),
+            n => format!("{} of {of} seeds explored ({n} timed out)", self.trials),
+        }
+    }
+
+    fn nothing_tested(&self) -> String {
+        if self.budget_cut {
+            return "the wall-clock budget ran out before any trial finished; nothing was tested (raise wall_secs or lower trial_timeout_secs)".to_string();
+        }
+        format!(
+            "all {} trials timed out; nothing was tested (raise trial_timeout_secs, or set hang_is_violation = true if a hang is the bug)",
+            self.trials
+        )
+    }
+
+    fn finish(&self, started: Instant) -> RunOutcome {
+        if self.inconclusive > 0 && self.inconclusive == self.trials {
+            return RunOutcome::error(self.nothing_tested()).with_inconclusive(self.inconclusive);
+        }
+        let ms = started.elapsed().as_millis() as u64;
+        RunOutcome::passed(self.trials, self.trials, ms).with_inconclusive(self.inconclusive)
+    }
+}
+
 /// Replay is only meaningful under the scheduling strategy the bundle was recorded with. Bundles from before scheduler
 /// options existed recorded no flags and always used the default random strategy.
 fn check_same_scheduler(p: &ProcessSpec, bundle: &Bundle) -> Result<(), EngineError> {
@@ -170,15 +230,12 @@ impl Backend for HermitBackend {
         let started = Instant::now();
         let wall = Duration::from_secs(budget.wall_secs);
         let trials = budget.max_trials.max(1);
+        let mut tally = Tally::default();
         for i in 0..trials {
             let seed = req.seed.wrapping_add(i);
             let remaining = wall.saturating_sub(started.elapsed());
             if i > 0 && remaining.is_zero() {
-                return Ok(RunOutcome::passed(
-                    i,
-                    i,
-                    started.elapsed().as_millis() as u64,
-                ));
+                return Ok(tally.finish(started));
             }
             let allowed = remaining.max(Duration::from_secs(1));
             // True when the wall budget, not the target's own limit, is what cut the trial short.
@@ -188,16 +245,14 @@ impl Backend for HermitBackend {
                 Ok(t) => t,
                 Err(e) => return Ok(infra(e.to_string())),
             };
-            match classify(&trial, timeout.as_secs()) {
+            match self.verdict(&p, &trial, timeout) {
                 Verdict::Infra(msg) => return Ok(infra(msg)),
-                Verdict::Violation(_) if trial.timed_out && clipped => {
+                Verdict::Hang(_) | Verdict::Violation(_) if trial.timed_out && clipped => {
                     // Out of budget, not out of patience: inconclusive, never a finding.
-                    return Ok(RunOutcome::passed(
-                        i,
-                        i,
-                        started.elapsed().as_millis() as u64,
-                    ));
+                    tally.cut_by_budget();
+                    return Ok(tally.finish(started));
                 }
+                Verdict::Hang(_) => tally.hang(),
                 Verdict::Violation(reason) => {
                     let confirmed = self.confirm(&p, seed, &behaviour_hash(&trial), timeout);
                     let failure = self.failure(&Found {
@@ -209,28 +264,21 @@ impl Backend for HermitBackend {
                         reason: &reason,
                         confirmed,
                     });
-                    return Ok(RunOutcome::failed(
-                        i + 1,
-                        i + 1,
-                        started.elapsed().as_millis() as u64,
-                        failure,
-                    ));
+                    let ms = started.elapsed().as_millis() as u64;
+                    return Ok(RunOutcome::failed(i + 1, i + 1, ms, failure)
+                        .with_inconclusive(tally.inconclusive));
                 }
-                Verdict::Pass => {}
+                Verdict::Pass => tally.pass(),
             }
             if !progress(Progress {
                 steps: i + 1,
                 trials: i + 1,
-                message: format!("{} of {trials} seeds explored", i + 1),
+                message: tally.progress_message(trials),
             }) {
                 return Ok(RunOutcome::error(CANCELLED));
             }
         }
-        Ok(RunOutcome::passed(
-            trials,
-            trials,
-            started.elapsed().as_millis() as u64,
-        ))
+        Ok(tally.finish(started))
     }
 
     fn replay(&self, spec: &TargetSpec, bundle: &Bundle) -> Result<ReplayOutcome, EngineError> {
@@ -248,7 +296,7 @@ impl Backend for HermitBackend {
         let timeout = self.trial_timeout(&p);
         let trial = run_trial(&settings, &p, seed, timeout)
             .map_err(|e| EngineError::Backend(e.to_string()))?;
-        let verdict = classify(&trial, timeout.as_secs());
+        let verdict = self.verdict(&p, &trial, timeout);
         if let Verdict::Infra(m) = &verdict {
             return Err(EngineError::Backend(m.clone()));
         }

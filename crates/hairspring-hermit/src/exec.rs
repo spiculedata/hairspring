@@ -19,6 +19,7 @@ pub struct ProcessSpec<'a> {
     pub hermit_args: &'a [String],
     pub trial_timeout_secs: Option<u64>,
     pub scheduler: &'a SchedulerSpec,
+    pub hang_is_violation: bool,
 }
 
 #[derive(Debug, Clone)]

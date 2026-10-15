@@ -238,6 +238,8 @@ impl Service {
             status,
             steps_executed: run.steps,
             trials: run.trials,
+            // Not persisted yet: stored runs report 0 (see the follow-up issue on the run store).
+            inconclusive: 0,
             elapsed_ms,
             failure,
             error,

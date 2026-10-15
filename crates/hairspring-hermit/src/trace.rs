@@ -18,6 +18,8 @@ fn is_marker_line(line: &str) -> bool {
 pub enum Verdict {
     Pass,
     Violation(String),
+    /// The trial hit its time limit: possibly a hang or deadlock, possibly just slow. Not a finding by itself.
+    Hang(String),
     /// Hermit itself failed: not a finding about the target.
     Infra(String),
 }
@@ -49,7 +51,7 @@ pub fn classify(t: &Trial, timeout_secs: u64) -> Verdict {
         return Verdict::Infra(format!("hermit failed to run the program: {detail}"));
     }
     if t.timed_out {
-        return Verdict::Violation(format!(
+        return Verdict::Hang(format!(
             "timed out after {timeout_secs}s (possible hang or deadlock)"
         ));
     }
