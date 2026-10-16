@@ -56,12 +56,13 @@ impl ScheduleSet {
         self.unremembered
     }
 
-    /// `"12 distinct schedules"`, or `"at least 4096 distinct schedules"` once the cap has cut the count short.
+    /// `"12 distinct schedules"`, or `"more than 4096 distinct schedules"` once the cap has cut the count short: the
+    /// full set holds `n`, and a schedule it does not hold was seen, so there are at least `n + 1`.
     pub fn describe(&self) -> String {
         let n = self.distinct();
         let unit = if n == 1 { "schedule" } else { "schedules" };
         match self.is_capped() {
-            true => format!("at least {n} distinct {unit}"),
+            true => format!("more than {n} distinct {unit}"),
             false => format!("{n} distinct {unit}"),
         }
     }
@@ -102,7 +103,7 @@ mod tests {
         assert_eq!(set.distinct(), 3, "only the cap's worth is remembered");
         assert!(set.is_capped());
         assert_eq!(set.unremembered(), 3);
-        assert_eq!(set.describe(), "at least 3 distinct schedules");
+        assert_eq!(set.describe(), "more than 3 distinct schedules");
     }
 
     #[test]

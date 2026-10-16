@@ -97,7 +97,7 @@ impl Tally {
     }
 
     /// The distinct schedules seen and the work done. Once the run has seen more schedules than it remembers, the
-    /// first figure is a lower bound ("at least"): [`Tally::progress_message`] says so.
+    /// first figure is a lower bound ("more than" it): [`Tally::progress_message`] says so.
     pub fn schedule_stats(&self) -> (u64, u64) {
         (self.schedules.distinct(), self.work)
     }
@@ -282,12 +282,12 @@ mod tests {
         assert_eq!(distinct, 3, "no more than the cap is remembered");
         assert_eq!(work, 60, "work keeps adding up past the cap");
         let message = tally.progress_message(10);
-        assert!(message.starts_with("6 of 10 seeds explored; at least 3 distinct schedules"));
+        assert!(message.starts_with("6 of 10 seeds explored; more than 3 distinct schedules"));
         assert!(
             message.contains("remembers at most 3, and 3 trials ran others"),
             "{message}"
         );
-        assert!(message.contains("true number is higher"), "{message}");
+        assert!(!message.contains("at least"), "{message}");
     }
 
     #[test]
@@ -295,7 +295,7 @@ mod tests {
         let mut tally = Tally::new(None).with_schedule_cap(2);
         run_of(&mut tally, &["a", "b", "a", "b", "b"]);
         assert_eq!(tally.schedule_stats().0, 2);
-        assert!(!tally.progress_message(5).contains("at least"));
+        assert!(!tally.progress_message(5).contains("more than"));
     }
 
     #[test]

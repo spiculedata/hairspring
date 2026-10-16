@@ -32,13 +32,14 @@ impl Omitted {
         self.bytes > 0
     }
 
-    fn with(self, dropped: &[u8]) -> Omitted {
-        Omitted {
-            bytes: self.bytes + dropped.len() as u64,
-            hash: dropped.iter().fold(self.hash, |h, b| {
-                (h ^ u64::from(*b)).wrapping_mul(FNV_PRIME)
-            }),
-        }
+    /// Adds `dropped` bytes, in stream order, to the account.
+    fn with(self, dropped: impl IntoIterator<Item = u8>) -> Omitted {
+        let (bytes, hash) = dropped
+            .into_iter()
+            .fold((self.bytes, self.hash), |(n, h), b| {
+                (n + 1, (h ^ u64::from(b)).wrapping_mul(FNV_PRIME))
+            });
+        Omitted { bytes, hash }
     }
 }
 
@@ -72,10 +73,9 @@ impl HeadTail {
         // `rest` that no longer fit are the omitted middle, in stream order.
         let overflow = (self.tail.len() + rest.len()).saturating_sub(self.tail_cap);
         let from_window = overflow.min(self.tail.len());
-        let dropped: Vec<u8> = self.tail.drain(..from_window).collect();
-        self.omitted = self.omitted.with(&dropped);
+        self.omitted = self.omitted.with(self.tail.drain(..from_window));
         let from_rest = overflow - from_window;
-        self.omitted = self.omitted.with(&rest[..from_rest]);
+        self.omitted = self.omitted.with(rest[..from_rest].iter().copied());
         self.tail.extend(&rest[from_rest..]);
     }
 
