@@ -177,15 +177,27 @@ impl Tally {
 
     /// The outcome of a run that ended without a finding.
     pub fn finish(&self, started: Instant) -> RunOutcome {
-        if self.inconclusive > 0 && self.inconclusive == self.trials {
+        let ms = started.elapsed().as_millis() as u64;
+        let (distinct, work) = self.schedule_stats();
+        if self.trials == 0 {
+            // The backend always starts a first trial, so this is a guard: a run that judged nothing is never a pass.
+            return self.with_partial_properties(
+                RunOutcome::error(
+                    "the budget ran out before any trial started; nothing was tested",
+                )
+                .with_elapsed_ms(ms),
+            );
+        }
+        if self.inconclusive == self.trials {
+            // Every trial that ran was judged once, so the distinct schedules cannot exceed the trials.
             return self.with_partial_properties(
                 RunOutcome::error(self.nothing_tested())
                     .with_trials_attempted(self.trials)
-                    .with_inconclusive(self.inconclusive),
+                    .with_inconclusive(self.inconclusive)
+                    .with_schedule_stats(distinct, work)
+                    .with_elapsed_ms(ms),
             );
         }
-        let ms = started.elapsed().as_millis() as u64;
-        let (distinct, work) = self.schedule_stats();
         self.with_properties(
             RunOutcome::passed(self.trials, self.trials, ms)
                 .with_inconclusive(self.inconclusive)
@@ -230,6 +242,7 @@ mod tests {
     use crate::events::EventsFault;
     use hairspring_engine::report::RunStatus;
     use hairspring_props::TrialEvents;
+    use std::time::Duration;
 
     fn report(id: &str, kind: &str, trues: u64, falses: u64) -> TrialProps {
         let ev = |j: String| format!("HAIRSPRING_EVENT {j}\n");
@@ -344,6 +357,45 @@ mod tests {
         );
         let msg = out.error.unwrap();
         assert!(msg.starts_with("all 3 trials were inconclusive"), "{msg}");
+    }
+
+    #[test]
+    fn an_all_inconclusive_error_keeps_the_schedule_stats_of_the_trials_it_ran() {
+        let mut tally = Tally::new(None);
+        for (i, (fp, work)) in [("a", 10), ("b", 5), ("a", 7)].into_iter().enumerate() {
+            tally.on_trial(
+                i as u64,
+                i as u64,
+                &scheduled(fp, work),
+                &Verdict::Inconclusive("x".into()),
+            );
+            tally.unusable();
+        }
+        let out = tally.finish(Instant::now());
+        assert_eq!(out.status, RunStatus::Error);
+        assert_eq!((out.distinct_schedules, out.work), (2, 22));
+        assert!(out.distinct_schedules <= out.trials, "{out:?}");
+    }
+
+    #[test]
+    fn an_all_inconclusive_error_records_how_long_the_run_took() {
+        let mut tally = Tally::new(None);
+        tally.unusable();
+        let started = Instant::now() - Duration::from_millis(250);
+        let out = tally.finish(started);
+        assert_eq!(out.status, RunStatus::Error);
+        assert!(out.elapsed_ms >= 250, "{}", out.elapsed_ms);
+    }
+
+    #[test]
+    fn a_run_in_which_no_trial_started_is_an_error_not_a_pass() {
+        let out = Tally::new(None).finish(Instant::now());
+        assert_eq!(out.status, RunStatus::Error, "{out:?}");
+        let msg = out.error.unwrap();
+        assert!(
+            msg.contains("budget ran out before any trial started"),
+            "{msg}"
+        );
     }
 
     #[test]

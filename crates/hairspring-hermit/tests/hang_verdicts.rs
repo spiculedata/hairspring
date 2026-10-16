@@ -44,6 +44,16 @@ fn fake(dir: &Path) -> PathBuf {
 }
 
 fn engine(dir: &Path, script: &str, trials: u64, hang_is_violation: bool) -> Engine {
+    engine_with_wall(dir, script, trials, hang_is_violation, 60)
+}
+
+fn engine_with_wall(
+    dir: &Path,
+    script: &str,
+    trials: u64,
+    hang_is_violation: bool,
+    wall_secs: u64,
+) -> Engine {
     let spec = TargetSpec {
         name: "svc".into(),
         description: String::new(),
@@ -60,7 +70,7 @@ fn engine(dir: &Path, script: &str, trials: u64, hang_is_violation: bool) -> Eng
         budget: Budget {
             max_steps: 1,
             max_trials: trials,
-            wall_secs: 60,
+            wall_secs,
         },
     };
     let settings = HermitSettings {
@@ -105,6 +115,16 @@ fn a_run_where_every_trial_timed_out_is_an_error_not_a_pass() {
         msg.contains("timed out") && msg.contains("nothing was tested"),
         "{msg}"
     );
+}
+
+#[test]
+fn a_spent_wall_clock_budget_still_runs_the_first_trial() {
+    let d = scratch("zero-wall");
+    let out = engine_with_wall(&d, "echo fine", 5, false, 0)
+        .run(&RunRequest::new("svc", 1), &mut |_| true)
+        .unwrap();
+    assert!(out.trials >= 1, "never a pass over zero trials: {out:?}");
+    assert_eq!(out.status, RunStatus::Passed, "{out:?}");
 }
 
 #[test]
