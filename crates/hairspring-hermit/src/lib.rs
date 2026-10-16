@@ -15,13 +15,14 @@ mod capture;
 mod env;
 mod events;
 mod exec;
+mod safe_open;
 mod summary;
 mod summary_dir;
 mod trace;
 
 pub use backend::HermitBackend;
 pub use env::guest_env;
-pub use events::{EVENTS_FILE_ENV, GUEST_EVENTS_FILE};
+pub use events::{EventsFault, GUEST_EVENTS_FILE};
 pub use exec::Trial;
 
 use std::path::PathBuf;
@@ -50,6 +51,9 @@ pub struct HermitSettings {
     /// Offer the guest an events file (`HAIRSPRING_EVENTS_FILE`) in addition to stdout and stderr. Needs `summary_dir`,
     /// and uses Hermit's `--tmp` for the guest's `/tmp`. Off by default: it changes what the guest's `/tmp` is.
     pub events_file: bool,
+    /// Where the events file's per-trial directories go. `None` uses `summary_dir`; set this to a disk-backed
+    /// directory when guests may write more than `/dev/shm` can hold.
+    pub events_dir: Option<PathBuf>,
 }
 
 /// Memory-backed and not `/tmp`, so Hermit accepts it and the files cost nothing.
@@ -70,6 +74,7 @@ impl Default for HermitSettings {
                 .is_dir()
                 .then(|| PathBuf::from(DEFAULT_SUMMARY_DIR)),
             events_file: false,
+            events_dir: None,
         }
     }
 }

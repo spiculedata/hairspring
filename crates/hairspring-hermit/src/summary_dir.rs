@@ -41,9 +41,10 @@ impl PrivateDir {
         self.path.join(format!("{seed}-{:016x}.json", random_u64()))
     }
 
-    /// A fresh private directory (mode 0700, unpredictable name) for one trial's scratch files, removed on drop.
-    pub fn scratch_for(&self, seed: u64) -> io::Result<ScratchDir> {
-        let path = self.path.join(format!("{seed}-{:016x}.d", random_u64()));
+    /// A fresh private directory (mode 0700) for one trial's scratch files, removed on drop. The name is a fixed-width
+    /// random number and nothing else, so the path's length never depends on the seed.
+    pub fn scratch_for(&self) -> io::Result<ScratchDir> {
+        let path = self.path.join(format!("{:016x}.d", random_u64()));
         DirBuilder::new().mode(0o700).create(&path)?;
         Ok(ScratchDir { path })
     }
@@ -56,7 +57,33 @@ impl PrivateDir {
 
 impl Drop for PrivateDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
+        // Drop cannot report; the per-trial directories inside are removed (and failures reported) by their owners.
+        let _ = remove_tree(&self.path);
+    }
+}
+
+/// Makes `dir` and everything below it owner-accessible, so a directory the guest left at mode 000 cannot stop the
+/// removal. Symlinks are not followed.
+fn make_accessible(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let is_dir = std::fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_dir());
+    if !is_dir {
+        return;
+    }
+    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            make_accessible(&entry.path());
+        }
+    }
+}
+
+/// Removes a directory tree, whatever modes the guest gave its contents. A tree already gone is fine.
+fn remove_tree(path: &Path) -> io::Result<()> {
+    make_accessible(path);
+    match std::fs::remove_dir_all(path) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        other => other,
     }
 }
 
@@ -70,11 +97,16 @@ impl ScratchDir {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Removes the directory and says why if it could not be removed. Dropping does the same but cannot report.
+    pub fn remove(self) -> io::Result<()> {
+        remove_tree(&self.path)
+    }
 }
 
 impl Drop for ScratchDir {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
+        let _ = remove_tree(&self.path);
     }
 }
 
@@ -187,12 +219,69 @@ mod tests {
     fn scratch_directories_are_private_distinct_and_removed_on_drop() {
         let b = base("scratch");
         let d = PrivateDir::create(&b).unwrap();
-        let (a, c) = (d.scratch_for(7).unwrap(), d.scratch_for(7).unwrap());
+        let (a, c) = (d.scratch_for().unwrap(), d.scratch_for().unwrap());
         assert_ne!(a.path(), c.path());
         assert_eq!(std::fs::metadata(a.path()).unwrap().mode() & 0o777, 0o700);
         let gone = a.path().to_path_buf();
         drop(a);
         assert!(!gone.exists());
+    }
+
+    #[test]
+    fn scratch_names_have_a_fixed_width() {
+        let b = base("width");
+        let d = PrivateDir::create(&b).unwrap();
+        let names: Vec<_> = (0..20)
+            .map(|_| d.scratch_for().unwrap().path().file_name().unwrap().len())
+            .collect();
+        assert!(names.iter().all(|n| *n == names[0]), "{names:?}");
+    }
+
+    fn not_root() -> bool {
+        // SAFETY: see `PrivateDir::create`.
+        unsafe { geteuid() != 0 }
+    }
+
+    #[test]
+    fn a_subdirectory_the_guest_made_unreadable_is_removed_anyway() {
+        if !not_root() {
+            return;
+        }
+        let b = base("chmod000");
+        let d = PrivateDir::create(&b).unwrap();
+        let s = d.scratch_for().unwrap();
+        let sub = s.path().join("a/b");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("f"), "x").unwrap();
+        std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o000)).unwrap();
+        std::fs::set_permissions(s.path().join("a"), std::fs::Permissions::from_mode(0o000))
+            .unwrap();
+        let path = s.path().to_path_buf();
+        s.remove().unwrap();
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_removal_that_fails_is_reported() {
+        if !not_root() {
+            return;
+        }
+        let b = base("failremove");
+        let d = PrivateDir::create(&b).unwrap();
+        let s = d.scratch_for().unwrap();
+        let parent = s.path().parent().unwrap().to_path_buf();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let err = s.remove().unwrap_err();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+    }
+
+    #[test]
+    fn a_scratch_directory_cannot_be_made_once_the_private_one_is_gone() {
+        let b = base("gone");
+        let d = PrivateDir::create(&b).unwrap();
+        std::fs::remove_dir_all(d.path()).unwrap();
+        assert!(d.scratch_for().is_err());
     }
 
     #[test]

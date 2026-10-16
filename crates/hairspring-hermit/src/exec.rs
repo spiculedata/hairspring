@@ -1,6 +1,6 @@
 //! Running one trial: spawn hermit, capture bounded output, enforce a timeout.
 use crate::capture::{drain, Captured};
-use crate::events;
+use crate::events::{self, EventsFault};
 use crate::summary::{self, Summary};
 use crate::summary_dir::{PrivateDir, ScratchDir};
 use crate::{env::guest_env, HermitSettings};
@@ -42,7 +42,16 @@ pub struct Trial {
     /// A digest of the raw event lines, so that `behaviour_hash` sees property outcomes. `None` without events.
     pub events_digest: Option<u64>,
     /// Why the events file could not be used, when it was asked for and something went wrong.
-    pub events_error: Option<String>,
+    pub events_error: Option<EventsFault>,
+}
+
+/// The private directories a backend gives its trials.
+#[derive(Clone, Copy, Default)]
+pub struct Dirs<'a> {
+    /// Hermit's `--summary-json` files.
+    pub summaries: Option<&'a PrivateDir>,
+    /// The per-trial directories mounted as the guest's `/tmp` for the events file.
+    pub events: Option<&'a PrivateDir>,
 }
 
 #[derive(Debug)]
@@ -164,26 +173,23 @@ fn spawn_with_retry(cmd: &mut Command) -> std::io::Result<std::process::Child> {
 fn events_scratch(
     settings: &HermitSettings,
     spec: &ProcessSpec,
-    seed: u64,
-    scratch: Option<&PrivateDir>,
-) -> (Option<ScratchDir>, Option<String>) {
-    if !settings.events_file {
+    base: Option<&PrivateDir>,
+) -> (Option<ScratchDir>, Option<EventsFault>) {
+    if let Some(problem) =
+        events::config_problem(settings.events_file, spec.hermit_args, base.is_some())
+    {
+        return (None, Some(EventsFault::Config(problem)));
+    }
+    let Some(base) = base.filter(|_| settings.events_file) else {
         return (None, None);
-    }
-    if events::claims_tmp(spec.hermit_args) {
-        let why =
-            "the events file needs hermit's `--tmp`, which this target's hermit_args already sets";
-        return (None, Some(why.to_string()));
-    }
-    let Some(base) = scratch else {
-        let why = "the events file needs a private scratch directory (`summary_dir`), and none is available";
-        return (None, Some(why.to_string()));
     };
-    match base.scratch_for(seed) {
+    match base.scratch_for() {
         Ok(dir) => (Some(dir), None),
         Err(e) => (
             None,
-            Some(format!("cannot create the events directory: {e}")),
+            Some(EventsFault::Infra(format!(
+                "cannot create the events directory: {e}"
+            ))),
         ),
     }
 }
@@ -193,10 +199,10 @@ pub fn run_trial(
     spec: &ProcessSpec,
     seed: u64,
     timeout: Duration,
-    summaries: Option<&PrivateDir>,
+    dirs: Dirs,
 ) -> Result<Trial, SpawnError> {
-    let summary_path = summaries.map(|dir| dir.file_for(seed));
-    let (events_dir, events_error) = events_scratch(settings, spec, seed, summaries);
+    let summary_path = dirs.summaries.map(|dir| dir.file_for(seed));
+    let (events_dir, scratch_fault) = events_scratch(settings, spec, dirs.events);
     let trial = run_trial_with_summary(
         settings,
         spec,
@@ -211,9 +217,13 @@ pub fn run_trial(
         let _ = std::fs::remove_file(p);
         read
     });
+    // The events were read inside the trial; only now can the directory go, and a failure to remove it is reported.
+    let cleanup_fault = events_dir
+        .and_then(|dir| dir.remove().err())
+        .map(|e| EventsFault::Infra(format!("cannot remove the events directory: {e}")));
     trial.map(|t| Trial {
         schedule,
-        events_error: t.events_error.or(events_error),
+        events_error: scratch_fault.or(cleanup_fault).or(t.events_error),
         ..t
     })
 }
@@ -223,8 +233,15 @@ fn collect_events(
     dir: Option<&ScratchDir>,
     out: &Captured,
     err: &Captured,
-) -> (Option<TrialProps>, Option<u64>, Option<String>) {
+) -> (Option<TrialProps>, Option<u64>, Option<EventsFault>) {
     let (file, error) = match dir.map(|d| events::read_events_file(d.path())) {
+        Some(Ok(Some(file))) if file.truncated => {
+            let fault = EventsFault::Guest(
+                "the events file is larger than the per-trial budget; the rest was not read"
+                    .to_string(),
+            );
+            (Some(file), Some(fault))
+        }
         Some(Ok(file)) => (file, None),
         Some(Err(e)) => (None, Some(e)),
         None => (None, None),
@@ -292,9 +309,17 @@ fn run_trial_with_summary(
         }
     };
     // After a kill a surviving grandchild could hold the pipes open; do not wait for it forever.
-    let out = out_rx.recv_timeout(READER_GRACE).unwrap_or_default();
-    let err = err_rx.recv_timeout(READER_GRACE).unwrap_or_default();
-    let (events, events_digest, events_error) = collect_events(events_dir, &out, &err);
+    let out = out_rx.recv_timeout(READER_GRACE).ok();
+    let err = err_rx.recv_timeout(READER_GRACE).ok();
+    let incomplete = (out.is_none() || err.is_none()).then(|| {
+        EventsFault::Guest(format!(
+            "incomplete capture: an output stream was still open {}s after the guest ended (something it started kept it), so output and events may be missing",
+            READER_GRACE.as_secs()
+        ))
+    });
+    let (out, err) = (out.unwrap_or_default(), err.unwrap_or_default());
+    let (events, events_digest, file_fault) = collect_events(events_dir, &out, &err);
+    let events_error = file_fault.or(incomplete);
     Ok(Trial {
         exit_code: status.and_then(|s| s.code()),
         signal: status.and_then(|s| s.signal()),
