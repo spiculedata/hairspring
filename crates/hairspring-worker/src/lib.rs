@@ -10,13 +10,13 @@ use hairspring_engine::backend::Progress;
 use hairspring_engine::engine::{Engine, RunRequest};
 use hairspring_engine::report::RunOutcome;
 use hairspring_service::LeasedJob;
+use reregister::ReregisterBackoff;
 use serde_json::{json, Value};
 use std::cell::Cell;
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use reregister::ReregisterBackoff;
 use trials::request_batches;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
