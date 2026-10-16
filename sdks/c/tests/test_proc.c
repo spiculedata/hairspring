@@ -27,7 +27,7 @@
 #endif
 #endif
 
-/* TSan installs its own SEGV handling; the SDK keeps a handler it did not install (has_default_action in hs_report.c). */
+/* Under TSan these tests do not get a plain SIGSEGV death; the cause is not established (see PR #30). */
 #if defined(__SANITIZE_THREAD__)
 #define HS_T_TSAN 1
 #elif defined(__has_feature)
