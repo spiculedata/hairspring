@@ -1,6 +1,7 @@
 pub mod doctor;
 pub mod init;
 pub mod inspect;
+pub mod json_out;
 pub mod replay;
 pub mod serve;
 pub mod test;

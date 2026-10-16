@@ -1,3 +1,4 @@
+use super::json_out;
 use crate::cli::{BundleCommand, ResultsArgs, ShowArgs};
 use crate::ctx::{CmdResult, Ctx};
 use crate::timefmt::format_utc;
@@ -14,6 +15,10 @@ pub fn targets(ctx: &Ctx, out: &mut dyn Write) -> CmdResult<i32> {
 
 pub fn results(ctx: &Ctx, args: &ResultsArgs, out: &mut dyn Write) -> CmdResult<i32> {
     let svc = ctx.service()?;
+    if args.json {
+        json_out::results(&svc, args.limit, out)?;
+        return Ok(crate::EXIT_OK);
+    }
     for r in svc.list_runs(args.limit)? {
         writeln!(
             out,
@@ -33,6 +38,10 @@ pub fn show(ctx: &Ctx, args: &ShowArgs, out: &mut dyn Write) -> CmdResult<i32> {
     let detail = svc
         .get_run(&args.id)?
         .ok_or_else(|| format!("no stored run `{}`", args.id))?;
+    if args.json {
+        json_out::show(&svc, &detail, out)?;
+        return Ok(crate::EXIT_OK);
+    }
     let outcome = svc
         .outcome(&args.id)?
         .ok_or_else(|| format!("no stored run `{}`", args.id))?;

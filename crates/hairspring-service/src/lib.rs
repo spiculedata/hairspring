@@ -7,6 +7,7 @@ mod completion;
 mod error;
 mod ingest;
 mod jobs;
+pub mod ndjson;
 mod output_view;
 mod properties;
 mod property_query;

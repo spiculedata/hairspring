@@ -2,6 +2,7 @@
 mod api;
 mod auth;
 mod error;
+mod ndjson;
 mod ratelimit;
 mod read_api;
 mod sse;
