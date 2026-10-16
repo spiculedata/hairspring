@@ -5,6 +5,11 @@ use std::fmt;
 pub enum StoreError {
     NotFound(String),
     Backend(String),
+    /// The answer would be larger than the store is willing to compute; the caller should ask for less.
+    LimitExceeded {
+        what: &'static str,
+        limit: u64,
+    },
 }
 
 impl fmt::Display for StoreError {
@@ -12,6 +17,9 @@ impl fmt::Display for StoreError {
         match self {
             StoreError::NotFound(w) => write!(f, "not found: {w}"),
             StoreError::Backend(m) => write!(f, "storage error: {m}"),
+            StoreError::LimitExceeded { what, limit } => {
+                write!(f, "limit exceeded: {what} (more than {limit})")
+            }
         }
     }
 }

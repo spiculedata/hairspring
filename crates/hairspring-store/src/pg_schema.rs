@@ -4,7 +4,17 @@
 use crate::types::{Result, StoreError};
 use postgres::Transaction;
 
-pub(crate) const SCHEMA_VERSION: i32 = 2;
+pub(crate) const SCHEMA_VERSION: i32 = 3;
+
+/// The tables a version 3 schema must have.
+const V3_TABLES: [&str; 4] = ["run_identity", "trees", "trial_lineage", "tree_branches"];
+/// The indexes of `trial_lineage`.
+const V3_INDEXES: [&str; 4] = [
+    "lineage_children",
+    "lineage_path",
+    "lineage_verdict",
+    "lineage_edge",
+];
 
 const SCHEMA_V1: &str = "
 CREATE TABLE runs (
@@ -71,9 +81,52 @@ CREATE INDEX IF NOT EXISTS trials_verdict ON trials(run_id, verdict);
 CREATE INDEX IF NOT EXISTS trials_schedule ON trials(run_id, schedule_fp);
 ";
 
+/// Version 3: see the SQLite migration of the same name; the two stores keep the same columns. `path` is BYTEA, which
+/// compares bytewise, so no collation applies to it.
+const MIGRATE_V2_TO_V3: &str = "
+CREATE TABLE IF NOT EXISTS run_identity (
+  run_id TEXT PRIMARY KEY REFERENCES runs(id), scheme TEXT NOT NULL, identity_text TEXT NOT NULL,
+  identity_hash TEXT NOT NULL, complete BOOLEAN NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted BOOLEAN NOT NULL);
+CREATE TABLE IF NOT EXISTS trees (
+  id TEXT PRIMARY KEY REFERENCES runs(id), backend TEXT NOT NULL, target TEXT NOT NULL, identity_hash TEXT,
+  node_count BIGINT NOT NULL DEFAULT 0, run_count BIGINT NOT NULL DEFAULT 1, created_at BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS trial_lineage (
+  tree_id TEXT NOT NULL REFERENCES trees(id), node BIGINT NOT NULL, run_id TEXT NOT NULL, seq BIGINT NOT NULL,
+  parent_node BIGINT, depth INTEGER NOT NULL, path BYTEA NOT NULL, verdict TEXT NOT NULL, operator TEXT NOT NULL,
+  cut_kind TEXT NOT NULL, cut_at BIGINT NOT NULL, suffix_seed BIGINT, edge_ref TEXT, origin TEXT NOT NULL,
+  reporter_id TEXT NOT NULL, reporter_trusted BOOLEAN NOT NULL, verified TEXT NOT NULL DEFAULT 'no',
+  created_at BIGINT NOT NULL,
+  PRIMARY KEY (tree_id, node), UNIQUE (run_id, seq),
+  CHECK (parent_node IS NULL OR parent_node < node),
+  FOREIGN KEY (run_id, seq) REFERENCES trials(run_id, seq),
+  FOREIGN KEY (tree_id, parent_node) REFERENCES trial_lineage(tree_id, node));
+CREATE INDEX IF NOT EXISTS lineage_children ON trial_lineage(tree_id, parent_node, node);
+CREATE INDEX IF NOT EXISTS lineage_path ON trial_lineage(tree_id, path);
+CREATE INDEX IF NOT EXISTS lineage_verdict ON trial_lineage(tree_id, verdict, depth, node);
+CREATE INDEX IF NOT EXISTS lineage_edge ON trial_lineage(edge_ref) WHERE edge_ref IS NOT NULL;
+CREATE TABLE IF NOT EXISTS tree_branches (
+  run_id TEXT PRIMARY KEY REFERENCES runs(id), tree_id TEXT NOT NULL REFERENCES trees(id),
+  source_node BIGINT NOT NULL, cut_kind TEXT NOT NULL, cut_at BIGINT NOT NULL, point_hash TEXT NOT NULL,
+  command_json TEXT NOT NULL, command_hash TEXT NOT NULL, seed_source TEXT NOT NULL,
+  verify_runs BIGINT NOT NULL DEFAULT 0, verify_matches BIGINT NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE (tree_id, command_hash));
+";
+
 /// Brings the schema to [`SCHEMA_VERSION`] inside the caller's transaction. A schema from a newer release is refused.
+/// A current schema is only looked at: no DDL is issued, so opening it needs no rights beyond reading and writing rows.
 pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
-    tx.batch_execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")?;
+    // The version table is created only when it is missing: creating a table that exists is still DDL, and a role that
+    // only uses a current schema may not do it.
+    let has_version_table = tx
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables \
+             WHERE table_schema = current_schema() AND table_name = 'schema_version')",
+            &[],
+        )?
+        .get::<_, bool>(0);
+    if !has_version_table {
+        tx.batch_execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")?;
+    }
     let current: Option<i32> = tx
         .query_opt("SELECT version FROM schema_version LIMIT 1", &[])?
         .map(|r| r.get(0));
@@ -81,6 +134,7 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
         None => {
             tx.batch_execute(SCHEMA_V1)?;
             tx.batch_execute(MIGRATE_V1_TO_V2)?;
+            tx.batch_execute(MIGRATE_V2_TO_V3)?;
             tx.execute(
                 "INSERT INTO schema_version(version) VALUES ($1)",
                 &[&SCHEMA_VERSION],
@@ -88,20 +142,51 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
         }
         Some(1) => {
             tx.batch_execute(MIGRATE_V1_TO_V2)?;
+            tx.batch_execute(MIGRATE_V2_TO_V3)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
-        Some(v) if v == SCHEMA_VERSION => {
-            // Schemas created by an earlier build of version 2 have no `workers.secret_hash`. Look first, as the
-            // SQLite store does, so a current schema is opened without DDL rights or an exclusive lock on `workers`.
-            // The caller's advisory lock serialises this check with the `ALTER`, which stays idempotent.
+        Some(2) => {
+            // Schemas created by an earlier build of version 2 have no `workers.secret_hash`. The caller's advisory
+            // lock serialises this check with the `ALTER`, which stays idempotent.
             if !has_worker_secret_column(tx)? {
                 tx.batch_execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS secret_hash TEXT")?;
             }
+            tx.batch_execute(MIGRATE_V2_TO_V3)?;
+            tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
+        Some(v) if v == SCHEMA_VERSION => verify_current(tx)?,
         Some(v) => {
             return Err(StoreError::Backend(format!(
                 "database schema version {v} is not supported (expected {SCHEMA_VERSION})"
             )))
+        }
+    }
+    Ok(())
+}
+
+/// Reports a current schema that lost one of the version 3 tables or indexes instead of repairing it.
+fn verify_current(tx: &mut Transaction<'_>) -> Result<()> {
+    for table in V3_TABLES {
+        let row = tx.query_one(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables \
+             WHERE table_schema = current_schema() AND table_name = $1)",
+            &[&table],
+        )?;
+        if !row.get::<_, bool>(0) {
+            return Err(StoreError::Backend(format!(
+                "database schema version {SCHEMA_VERSION} is incomplete: table {table} is missing"
+            )));
+        }
+    }
+    for index in V3_INDEXES {
+        let row = tx.query_one(
+            "SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = $1)",
+            &[&index],
+        )?;
+        if !row.get::<_, bool>(0) {
+            return Err(StoreError::Backend(format!(
+                "database schema version {SCHEMA_VERSION} is incomplete: index {index} is missing"
+            )));
         }
     }
     Ok(())

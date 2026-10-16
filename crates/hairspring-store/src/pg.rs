@@ -2,7 +2,10 @@
 //!
 //! Connections are plain TCP (`NoTls`): run Postgres on a private network or behind a TLS proxy.
 //! Leasing uses `FOR UPDATE SKIP LOCKED`, so any number of workers can pull jobs concurrently.
+use crate::lineage::*;
+use crate::pg_lineage as lineage;
 use crate::pg_schema;
+use crate::pg_tree_query as query;
 use crate::pg_trials as trials;
 use crate::trials::*;
 use crate::types::*;
@@ -13,7 +16,7 @@ use r2d2_postgres::{r2d2, PostgresConnectionManager};
 type Pool = r2d2::Pool<PostgresConnectionManager<NoTls>>;
 
 /// Serialises migrations across processes starting at the same time.
-const MIGRATION_LOCK: i64 = 727_274;
+pub(crate) const MIGRATION_LOCK: i64 = 727_274;
 const MAX_SCHEMA_NAME: usize = 63;
 
 impl From<postgres::Error> for StoreError {
@@ -30,9 +33,25 @@ impl From<r2d2::Error> for StoreError {
 
 pub struct PgStore {
     pool: Pool,
+    /// How subtree queries are answered; the store's own rule unless a caller changes it.
+    query_rule: std::sync::Mutex<TreeQueryRule>,
 }
 
-fn valid_schema(name: &str) -> bool {
+/// Creates the schema when it does not exist. The caller holds the migration lock and has validated the name.
+fn ensure_schema(admin: &mut postgres::Client, schema: &str) -> Result<()> {
+    let exists: bool = admin
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)",
+            &[&schema],
+        )?
+        .get(0);
+    if !exists {
+        admin.batch_execute(&format!("CREATE SCHEMA \"{schema}\""))?;
+    }
+    Ok(())
+}
+
+pub(crate) fn valid_schema(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= MAX_SCHEMA_NAME
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -113,9 +132,11 @@ impl PgStore {
             .map_err(|_| StoreError::Backend("invalid database URL".to_string()))?;
         {
             let mut admin = cfg.connect(NoTls)?;
-            // `CREATE SCHEMA IF NOT EXISTS` itself races when several processes start together.
+            // `CREATE SCHEMA IF NOT EXISTS` itself races when several processes start together. It is also DDL,
+            // which needs a right a role that only uses an existing schema does not have, so it runs only when the
+            // schema is missing.
             admin.execute("SELECT pg_advisory_lock($1)", &[&MIGRATION_LOCK])?;
-            let created = admin.batch_execute(&format!("CREATE SCHEMA IF NOT EXISTS \"{schema}\""));
+            let created = ensure_schema(&mut admin, schema);
             admin.execute("SELECT pg_advisory_unlock($1)", &[&MIGRATION_LOCK])?;
             created?;
         }
@@ -123,7 +144,10 @@ impl PgStore {
         let pool = r2d2::Pool::builder()
             .max_size(pool_size.max(1))
             .build(PostgresConnectionManager::new(cfg, NoTls))?;
-        let store = PgStore { pool };
+        let store = PgStore {
+            pool,
+            query_rule: std::sync::Mutex::new(TreeQueryRule::StoreDefault),
+        };
         store.migrate()?;
         Ok(store)
     }
@@ -140,6 +164,31 @@ impl PgStore {
 
     fn client(&self) -> Result<r2d2::PooledConnection<PostgresConnectionManager<NoTls>>> {
         Ok(self.pool.get()?)
+    }
+
+    fn rule(&self) -> TreeQueryRule {
+        *self.query_rule.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The plan PostgreSQL chooses for a tree query in one form, one line per step, planned with real bound values
+    /// for the given node. For tests that assert the plan; not part of the supported interface.
+    #[doc(hidden)]
+    pub fn explain_tree_query(
+        &self,
+        query: TreeQuery,
+        form: TreeQueryForm,
+        tree_id: &str,
+        node: u64,
+    ) -> Result<Vec<String>> {
+        query::explain(&mut *self.client()?, query, form, tree_id, node)
+    }
+
+    /// The form the current rule gives subtree queries on this tree. For tests; not a supported interface.
+    #[doc(hidden)]
+    pub fn tree_query_form(&self, tree_id: &str) -> Result<TreeQueryForm> {
+        let tree = lineage::get_tree(&mut *self.client()?, tree_id)?
+            .ok_or_else(|| StoreError::NotFound(format!("tree {tree_id}")))?;
+        Ok(query::form_for(self.rule(), tree.node_count))
     }
 }
 
@@ -535,6 +584,105 @@ impl Store for PgStore {
             last_seen: now,
             trusted: false,
         })
+    }
+
+    fn put_run_identity(&self, identity: &RunIdentity) -> Result<IdentityOutcome> {
+        lineage::put_identity(&mut *self.client()?, identity)
+    }
+
+    fn get_run_identity(&self, run_id: &str) -> Result<Option<RunIdentity>> {
+        lineage::get_identity(&mut *self.client()?, run_id)
+    }
+
+    fn create_tree(&self, new: &NewTree, now: i64) -> Result<TreeOutcome> {
+        lineage::create_tree(&mut *self.client()?, new, now)
+    }
+
+    fn get_tree(&self, id: &str) -> Result<Option<TreeRecord>> {
+        lineage::get_tree(&mut *self.client()?, id)
+    }
+
+    fn tree_of_run(&self, run_id: &str) -> Result<Option<String>> {
+        lineage::tree_of_run(&mut *self.client()?, run_id)
+    }
+
+    fn add_tree_node(&self, tree_id: &str, new: &NewNode, now: i64) -> Result<NodeOutcome> {
+        lineage::add_node(&mut *self.client()?, tree_id, new, now)
+    }
+
+    fn get_tree_node(&self, tree_id: &str, node: u64) -> Result<Option<NodeRecord>> {
+        lineage::get_node(&mut *self.client()?, tree_id, node)
+    }
+
+    fn tree_node_of_trial(&self, run_id: &str, seq: u64) -> Result<Option<NodeRecord>> {
+        lineage::node_of_trial(&mut *self.client()?, run_id, seq)
+    }
+
+    fn set_node_verified(&self, tree_id: &str, node: u64, verified: Verified) -> Result<()> {
+        lineage::set_verified(&mut *self.client()?, tree_id, node, verified)
+    }
+
+    fn set_tree_query_rule(&self, rule: TreeQueryRule) {
+        *self.query_rule.lock().unwrap_or_else(|e| e.into_inner()) = rule;
+    }
+
+    fn tree_query_rule(&self) -> TreeQueryRule {
+        self.rule()
+    }
+
+    fn subtree_descendants(
+        &self,
+        tree_id: &str,
+        node: u64,
+        after: Option<u64>,
+        limit: u32,
+    ) -> Result<NodePage> {
+        query::descendants(
+            &mut *self.client()?,
+            self.rule(),
+            tree_id,
+            node,
+            after,
+            limit,
+        )
+    }
+
+    fn subtree_tally(&self, tree_id: &str, node: u64) -> Result<Vec<VerdictCount>> {
+        query::tally(&mut *self.client()?, self.rule(), tree_id, node)
+    }
+
+    fn subtree_first_failing(&self, tree_id: &str, node: u64) -> Result<Option<u64>> {
+        query::first_failing(&mut *self.client()?, self.rule(), tree_id, node)
+    }
+
+    fn tree_children(
+        &self,
+        tree_id: &str,
+        node: u64,
+        after: Option<u64>,
+        limit: u32,
+    ) -> Result<NodePage> {
+        query::children(&mut *self.client()?, tree_id, node, after, limit)
+    }
+
+    fn tree_ancestors(&self, tree_id: &str, node: u64) -> Result<Vec<NodeRecord>> {
+        query::ancestors(&mut *self.client()?, tree_id, node)
+    }
+
+    fn add_tree_branch(&self, new: &NewBranch, now: i64) -> Result<BranchOutcome> {
+        lineage::add_branch(&mut *self.client()?, new, now)
+    }
+
+    fn get_tree_branch(&self, run_id: &str) -> Result<Option<BranchRecord>> {
+        lineage::get_branch(&mut *self.client()?, run_id)
+    }
+
+    fn find_tree_branch(&self, tree_id: &str, command_hash: &str) -> Result<Option<BranchRecord>> {
+        lineage::find_branch(&mut *self.client()?, tree_id, command_hash)
+    }
+
+    fn record_branch_verify(&self, run_id: &str, matched: bool) -> Result<()> {
+        lineage::record_verify(&mut *self.client()?, run_id, matched)
     }
 
     fn set_worker_secret_hash(&self, id: &str, hash: &str) -> Result<()> {

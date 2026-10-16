@@ -139,8 +139,10 @@ fn concurrent_startup_on_a_schema_missing_the_worker_secret_column_succeeds() {
     let schema = new_id("c").replace('-', "_");
     drop(PgStore::connect_in_schema(&url, &schema, 1).unwrap());
     let mut c = postgres::Client::connect(&url, postgres::NoTls).unwrap();
+    // Version 3 adds nothing to `workers`; the schema is made to look like the earlier build of version 2.
     c.batch_execute(&format!(
-        "ALTER TABLE \"{schema}\".workers DROP COLUMN secret_hash"
+        "ALTER TABLE \"{schema}\".workers DROP COLUMN secret_hash;
+         UPDATE \"{schema}\".schema_version SET version = 2"
     ))
     .unwrap();
     let barrier = Arc::new(std::sync::Barrier::new(6));
@@ -193,7 +195,8 @@ fn a_version_two_schema_from_before_worker_secrets_gains_the_column_when_connect
     let mut c = postgres::Client::connect(&url, postgres::NoTls).unwrap();
     // The earlier version 2 had no secret column.
     c.batch_execute(&format!(
-        "ALTER TABLE \"{schema}\".workers DROP COLUMN secret_hash"
+        "ALTER TABLE \"{schema}\".workers DROP COLUMN secret_hash;
+         UPDATE \"{schema}\".schema_version SET version = 2"
     ))
     .unwrap();
     let s = PgStore::connect_in_schema(&url, &schema, 2).unwrap();

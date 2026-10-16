@@ -1,6 +1,7 @@
 //! SQLite side of per-trial storage (schema version 2). Every statement binds its inputs as parameters; nothing
 //! guest-influenced is ever spliced into SQL text.
 use crate::sha256_hex;
+use crate::sqlite_lineage as lineage;
 use crate::trials::{to_db, *};
 use crate::types::{Result, RunState, StoreError};
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction, TransactionBehavior};
@@ -127,9 +128,19 @@ fn run_state(tx: &Transaction, run_id: &str) -> Result<Option<IngestRun>> {
     ))
 }
 
-/// A new attempt of the job starts the run's trials over; the earlier attempt's rows are removed.
-fn start_attempt(tx: &Transaction, run_id: &str, attempt: i64) -> Result<()> {
-    let blobs = kept_blobs(tx, run_id)?;
+/// A new attempt of the job starts the run's trials over; the earlier attempt's rows are removed. The run's tree nodes
+/// refer to its trial rows, so they go first. Returns the reason, with nothing changed, when other rows depend on this
+/// run's nodes (branch runs of the tree it roots, nodes built on its nodes).
+fn start_attempt(
+    tx: &Transaction,
+    run_id: &str,
+    attempt: i64,
+) -> Result<std::result::Result<(), String>> {
+    if let Some(why) = lineage::attempt_blocked(tx, run_id)? {
+        return Ok(Err(why));
+    }
+    let mut blobs = kept_blobs(tx, run_id)?;
+    blobs.extend(lineage::drop_run_lineage(tx, run_id)?);
     for table in ["trials", "run_catalog", "run_properties"] {
         tx.execute(&format!("DELETE FROM {table} WHERE run_id=?"), [run_id])?;
     }
@@ -137,7 +148,8 @@ fn start_attempt(tx: &Transaction, run_id: &str, attempt: i64) -> Result<()> {
         "UPDATE runs SET ingest_attempt=?, catalog_size=0, kept_bytes=0 WHERE id=?",
         params![attempt, run_id],
     )?;
-    collect_orphans(tx, &blobs)
+    collect_orphans(tx, &blobs)?;
+    Ok(Ok(()))
 }
 
 /// The blobs the run's trial rows point at.
@@ -155,7 +167,7 @@ fn kept_blobs(tx: &Transaction, run_id: &str) -> Result<Vec<String>> {
 fn collect_orphans(tx: &Transaction, hashes: &[String]) -> Result<()> {
     for h in hashes {
         tx.execute(
-            "DELETE FROM blobs WHERE hash=?1 AND NOT EXISTS (SELECT 1 FROM trials WHERE detail_ref=?1 OR output_ref=?1) AND NOT EXISTS (SELECT 1 FROM failures WHERE bundle_hash=?1)",
+            "DELETE FROM blobs WHERE hash=?1 AND NOT EXISTS (SELECT 1 FROM trials WHERE detail_ref=?1 OR output_ref=?1) AND NOT EXISTS (SELECT 1 FROM failures WHERE bundle_hash=?1) AND NOT EXISTS (SELECT 1 FROM trial_lineage WHERE edge_ref=?1)",
             [h],
         )?;
     }
@@ -335,7 +347,9 @@ pub(crate) fn ingest(
         ));
     }
     if target.attempt > run.ingest_attempt {
-        start_attempt(&tx, &target.run_id, target.attempt)?;
+        if let Err(why) = start_attempt(&tx, &target.run_id, target.attempt)? {
+            return Ok(IngestOutcome::Rejected(why));
+        }
         run.catalog_size = 0;
         run.kept_bytes = 0;
     }
@@ -554,7 +568,8 @@ pub(crate) fn discard_earlier_attempts(tx: &Transaction, run_id: &str, attempt: 
         |r| r.get(0),
     )?;
     if held != 0 && held < attempt {
-        start_attempt(tx, run_id, attempt)?;
+        // Finishing cannot be refused halfway, so the caller's transaction ends in an error and nothing is applied.
+        start_attempt(tx, run_id, attempt)?.map_err(StoreError::Backend)?;
     }
     Ok(())
 }
