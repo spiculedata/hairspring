@@ -7,6 +7,7 @@ pub mod demos;
 pub mod engine;
 pub mod erased;
 pub mod format;
+mod format_props;
 pub mod report;
 pub mod scheduler;
 pub mod sim_backend;

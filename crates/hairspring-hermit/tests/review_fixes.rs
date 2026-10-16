@@ -127,3 +127,22 @@ fn replaying_a_promoted_hang_where_hangs_are_no_longer_violations_says_so() {
         r.steps
     );
 }
+
+#[test]
+fn a_rerun_that_cannot_start_is_reported_with_the_spawn_error() {
+    // Seed 1 violates, then the fake removes its own execute bit, so every confirmation rerun fails to spawn.
+    let fake = "#!/bin/sh\nchmod -x \"$0\"\nshift\nwhile [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n";
+    let out = run_once(&engine(
+        &scratch("rerun-spawn"),
+        fake,
+        "echo 'HAIRSPRING_VIOLATION: real bug'; exit 1",
+        Opts::default(),
+        &[],
+    ));
+    let f = out.failure.as_ref().unwrap_or_else(|| panic!("{out:?}"));
+    assert!(
+        f.message.contains("inconclusive") && f.message.to_lowercase().contains("denied"),
+        "the spawn error must reach the failure message: {}",
+        f.message
+    );
+}

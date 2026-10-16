@@ -1,6 +1,8 @@
 //! Shared helpers for tests that drive the Hermit backend through a fake `hermit` script.
 #![allow(dead_code)]
 pub mod events;
+pub mod multi;
+pub mod props;
 use hairspring_engine::config::{Budget, Config, TargetKind, TargetSpec};
 use hairspring_engine::engine::Engine;
 use hairspring_engine::erased::Registry;

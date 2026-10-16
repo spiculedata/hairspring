@@ -47,17 +47,36 @@ impl<'a> TrialEvents<'a> {
         }
     }
 
-    /// Fold every line; never panics, never fails. Anything dropped is counted in `health`.
+    /// Fold every line with the default event budget; never panics, never fails. Anything dropped is counted in
+    /// `health`.
     pub fn fold(&self) -> TrialProps {
+        self.fold_with_budget(DEFAULT_MAX_EVENT_BYTES_PER_TRIAL)
+    }
+
+    /// Like [`TrialEvents::fold`] with `budget` bytes of event lines accepted from the whole trial.
+    pub fn fold_with_budget(&self, budget: usize) -> TrialProps {
         match &self.source {
-            Source::Output(out) => Self::fold_stream(out.split(|b| *b == b'\n')),
-            Source::Lines(lines) => Self::fold_stream(lines.iter().copied()),
+            Source::Output(out) => {
+                Self::fold_stream_with_budget(out.split(|b| *b == b'\n'), budget)
+            }
+            Source::Lines(lines) => Self::fold_stream_with_budget(lines.iter().copied(), budget),
         }
     }
 
-    /// Fold lines as they are produced, without collecting them first.
+    /// Fold lines as they are produced, without collecting them first, with the default event budget.
     pub fn fold_stream<'l, I: IntoIterator<Item = &'l [u8]>>(lines: I) -> TrialProps {
-        let mut acc = Accumulator::default();
+        Self::fold_stream_with_budget(lines, DEFAULT_MAX_EVENT_BYTES_PER_TRIAL)
+    }
+
+    /// Like [`TrialEvents::fold_stream`] with `budget` bytes of event lines accepted from the whole trial.
+    pub fn fold_stream_with_budget<'l, I: IntoIterator<Item = &'l [u8]>>(
+        lines: I,
+        budget: usize,
+    ) -> TrialProps {
+        let mut acc = Accumulator {
+            budget,
+            ..Accumulator::default()
+        };
         for line in lines {
             acc.feed(line);
         }
@@ -69,6 +88,8 @@ type ProcId = (String, String);
 
 #[derive(Default)]
 struct Accumulator {
+    /// Most event-line bytes accepted from the trial.
+    budget: usize,
     procs: Vec<ProcReport>,
     props: BTreeMap<String, TrialProperty>,
     declared: HashSet<ProcId>,
@@ -169,7 +190,7 @@ impl Accumulator {
             return;
         }
         let cost = (line.len().min(MAX_LINE_BYTES) + 1) as u64;
-        if self.health.event_bytes.saturating_add(cost) > MAX_EVENT_BYTES_PER_TRIAL as u64 {
+        if self.health.event_bytes.saturating_add(cost) > self.budget as u64 {
             self.health.over_limit += 1;
             return;
         }

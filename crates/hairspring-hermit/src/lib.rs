@@ -15,16 +15,22 @@ mod capture;
 mod env;
 mod events;
 mod exec;
+mod property_verdict;
 mod safe_open;
 mod summary;
 mod summary_dir;
+mod tally;
 mod trace;
+#[cfg(test)]
+mod verdict_tests;
 
 pub use backend::HermitBackend;
 pub use env::guest_env;
 pub use events::{EventsFault, GUEST_EVENTS_FILE};
 pub use exec::Trial;
+pub use tally::TrialObserver;
 
+use hairspring_props::limits::DEFAULT_MAX_EVENT_BYTES_PER_TRIAL;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -54,6 +60,10 @@ pub struct HermitSettings {
     /// Where the events file's per-trial directories go. `None` uses `summary_dir`; set this to a disk-backed
     /// directory when guests may write more than `/dev/shm` can hold.
     pub events_dir: Option<PathBuf>,
+    /// Most event-line bytes accepted from one trial, shared by stdout, stderr and the events file. Defaults to
+    /// 4 MiB (about 4,900 ids at roughly 850 bytes each). The buffer grows as events arrive, so only trials that emit
+    /// events spend memory.
+    pub max_event_bytes: usize,
 }
 
 /// Memory-backed and not `/tmp`, so Hermit accepts it and the files cost nothing.
@@ -75,6 +85,7 @@ impl Default for HermitSettings {
                 .then(|| PathBuf::from(DEFAULT_SUMMARY_DIR)),
             events_file: false,
             events_dir: None,
+            max_event_bytes: DEFAULT_MAX_EVENT_BYTES_PER_TRIAL,
         }
     }
 }

@@ -1,0 +1,6 @@
+HAIRSPRING_EVENT {"v":1,"kind":"hello","sdk":"c","sdk_version":"0.1.0","proc":"p1.s4242","catalog_hash":"9f2c","signal_handlers":false,"tag_stable":false}
+HAIRSPRING_EVENT {"v":1,"kind":"catalog","proc":"p1.s4242","id":"spawn.reached","type":"reachable","must_hit":true}
+HAIRSPRING_EVENT {"v":1,"kind":"assert","proc":"p1.s4242","id":"spawn.reached","hits":                   1,"trues":                   1,"falses":                   0,"first_true":{"thread":"t#1","ord":                   1,"vals":[0,0,0,0]}}
+HAIRSPRING_EVENT {"v":1,"kind":"work","proc":"p1.s4242","ops":                   0}
+HAIRSPRING_EVENT {"v":1,"kind":"thread","proc":"p1.s4242","thread":"t#1","evals":                   1,"tape_consumed":                   0,"key_stable":false}
+HAIRSPRING_EVENT {"v":1,"kind":"end","proc":"p1.s4242","reason":"exit","status":0,"sites":1,"evals":                   1,"dropped":0,"threads":1}
