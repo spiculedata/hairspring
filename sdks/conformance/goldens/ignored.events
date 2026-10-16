@@ -1,0 +1,2 @@
+HAIRSPRING_EVENT {"v":1,"kind":"telemetry","proc":"p1"}
+HAIRSPRING_EVENT {"v":2,"kind":"work","proc":"p1","ops":"not a number in v2"}

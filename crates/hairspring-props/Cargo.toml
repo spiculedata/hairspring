@@ -1,0 +1,10 @@
+[package]
+name = "hairspring-props"
+version = "0.1.0"
+edition = "2021"
+description = "Hairspring property layer: guest event protocol v1 parser, per-trial and per-run verdicts, Wilson intervals (pure, no I/O)"
+license = "Apache-2.0"
+
+[dependencies]
+serde = "1.0.229"
+serde_json = "1.0.154"

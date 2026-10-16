@@ -1,0 +1,26 @@
+HAIRSPRING_EVENT
+HAIRSPRING_EVENT{"v":1,"kind":"work","proc":"p1","ops":1}
+HAIRSPRING_EVENT {"v":1,"kind":"work","proc":"p1","ops":1
+HAIRSPRING_EVENT {"v":1,"kind":"work","proc":"p1","ops":1} trailing
+HAIRSPRING_EVENT [1,2,3]
+HAIRSPRING_EVENT {"v":1,"kind":"work","proc":"p1","ops":1,"ops":2}
+HAIRSPRING_EVENT {"v":0,"kind":"work","proc":"p1","ops":1}
+HAIRSPRING_EVENT {"kind":"work","proc":"p1","ops":1}
+HAIRSPRING_EVENT {"v":1,"kind":"work","proc":"p1","ops":-1}
+HAIRSPRING_EVENT {"v":1,"kind":"work","proc":"p1","ops":1.5}
+HAIRSPRING_EVENT {"v":1,"kind":"work","proc":"bad proc","ops":1}
+HAIRSPRING_EVENT {"v":1,"kind":"catalog","proc":"p1","id":"x","type":"nope","must_hit":true}
+HAIRSPRING_EVENT {"v":1,"kind":"catalog","proc":"p1","id":"x","type":"unreachable","must_hit":true}
+HAIRSPRING_EVENT {"v":1,"kind":"catalog","proc":"p1","id":"has space","type":"always","must_hit":true}
+HAIRSPRING_EVENT {"v":1,"kind":"catalog","proc":"p1","id":"x","type":"always","must_hit":true,"msg":"line\nbreak"}
+HAIRSPRING_EVENT {"v":1,"kind":"assert","proc":"p1","id":"a","hits":3,"trues":1,"falses":1}
+HAIRSPRING_EVENT {"v":1,"kind":"assert","proc":"p1","id":"a","hits":1,"trues":0,"falses":1,"first_false":{"thread":"t","ord":1,"vals":[1,2,3]}}
+HAIRSPRING_EVENT {"v":1,"kind":"assert","proc":"p1","id":"a","hits":1,"trues":1,"falses":0,"first_false":{"thread":"t","ord":1,"vals":[1,2,3,4]}}
+HAIRSPRING_EVENT {"v":1,"kind":"end","proc":"p1","reason":"boom","status":0,"sites":0,"evals":0,"dropped":0,"threads":[]}
+HAIRSPRING_EVENT {"v":1,"kind":"end","proc":"p1","reason":"exit","status":0,"sites":0,"evals":0,"dropped":0,"threads":[]}
+HAIRSPRING_EVENT {"v":1,"kind":"end","proc":"p1","reason":"exit","status":0,"sites":0,"evals":0,"dropped":0,"threads":257}
+HAIRSPRING_EVENT {"v":1,"kind":"thread","proc":"p1","thread":"t","evals":1}
+HAIRSPRING_EVENT {"v":1,"kind":"hello","sdk":"c","sdk_version":"1","proc":"_eval","catalog_hash":"h","signal_handlers":false}
+HAIRSPRING_EVENT {"v":1,"kind":"assert","proc":"p1","id":"a","hits":1,"trues":0,"falses":1,"first_false":{"thread":"t","ord":0,"vals":[1,2,3,4]}}
+HAIRSPRING_EVENT {"v":1,"kind":"catalog","proc":"p1","id":"x","type":"always","must_hit":true,"msg":"zero\u200bwidth"}
+HAIRSPRING_EVENT {"v":1,"kind":"work","proc":"p1","ops":1,"deep":[[[[1]]]]}

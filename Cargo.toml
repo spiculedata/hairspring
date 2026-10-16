@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["experiments", "crates/hairspring-core", "crates/hairspring-pubsub", "crates/hairspring-engine", "crates/hairspring-store", "crates/hairspring-service", "crates/hairspring-mcp", "crates/hairspring-hermit", "crates/hairspring-wasm", "crates/hairspring-dapr", "crates/hairspring-worker", "crates/hairspring-server", "crates/hairspring-cli"]
+members = ["experiments", "crates/hairspring-core", "crates/hairspring-pubsub", "crates/hairspring-engine", "crates/hairspring-store", "crates/hairspring-service", "crates/hairspring-mcp", "crates/hairspring-hermit", "crates/hairspring-props", "crates/hairspring-wasm", "crates/hairspring-dapr", "crates/hairspring-worker", "crates/hairspring-server", "crates/hairspring-cli"]
 
 [profile.release]
 opt-level = 3

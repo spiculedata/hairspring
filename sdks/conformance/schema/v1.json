@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hairspring.dev/schema/guest-protocol/v1.json",
+  "title": "Hairspring guest event protocol v1",
+  "description": "The JSON object that follows the `HAIRSPRING_EVENT ` prefix (one space) on one output line. Additive within a major version: unknown fields are ignored and counted, unknown kinds are ignored and counted, and any `v` greater than 1 is ignored and counted. Numbers may be padded with insignificant whitespace (the SDKs right-align counters in 20 characters so report length does not depend on values). Beyond what JSON Schema can state: duplicate object keys, nesting deeper than x-hairspring-limits.max_json_depth and control characters in strings are rejected; the whole line, prefix included, must be at most x-hairspring-limits.max_line_bytes bytes of valid UTF-8; `hits` must equal `trues` + `falses`; `first_false` requires `falses` > 0 and `first_true` requires `trues` > 0; `must_hit` must match the kind (true for always, sometimes, reachable); `thread` keys must be unique per process; `proc` \"_eval\" is reserved for `eval` lines. String limits other than ids, proc and thread (which are ASCII) are in BYTES, stated by x-max-bytes; maxLength (code points) is only a necessary condition. Strings may not contain control characters or format/separator characters (Unicode Cf, Zl, Zp such as U+200B, U+202E, U+2028).",
+  "type": "object",
+  "required": ["v", "kind"],
+  "properties": {
+    "v": { "const": 1 },
+    "kind": { "type": "string" }
+  },
+  "allOf": [
+    { "if": { "properties": { "kind": { "const": "hello" } } }, "then": { "$ref": "#/$defs/hello" } },
+    { "if": { "properties": { "kind": { "const": "catalog" } } }, "then": { "$ref": "#/$defs/catalog" } },
+    { "if": { "properties": { "kind": { "const": "assert" } } }, "then": { "$ref": "#/$defs/assert" } },
+    { "if": { "properties": { "kind": { "const": "work" } } }, "then": { "$ref": "#/$defs/work" } },
+    { "if": { "properties": { "kind": { "const": "thread" } } }, "then": { "$ref": "#/$defs/thread_line" } },
+    { "if": { "properties": { "kind": { "const": "end" } } }, "then": { "$ref": "#/$defs/end" } },
+    { "if": { "properties": { "kind": { "const": "eval" } } }, "then": { "$ref": "#/$defs/eval" } }
+  ],
+  "x-hairspring-limits": {
+    "event_prefix": "HAIRSPRING_EVENT ",
+    "max_line_bytes": 4096,
+    "max_id_bytes": 128,
+    "max_thread_key_bytes": 64,
+    "max_proc_bytes": 64,
+    "max_msg_bytes": 512,
+    "vals_len": 4,
+    "max_ids_per_proc": 4096,
+    "max_threads_per_proc": 256,
+    "max_procs_per_trial": 64,
+    "max_event_bytes_per_trial": 1048576,
+    "max_json_depth": 4
+  },
+  "$defs": {
+    "u64": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
+    "i64": { "type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807 },
+    "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9._:/-]+$" },
+    "proc": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9._:/-]+$" },
+    "thread": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9._:/#-]+$" },
+    "assert_kind": { "enum": ["always", "always_or_unreachable", "sometimes", "reachable", "unreachable"] },
+    "vals": { "type": "array", "items": { "$ref": "#/$defs/i64" }, "minItems": 4, "maxItems": 4 },
+    "witness": {
+      "type": "object",
+      "required": ["thread", "ord", "vals"],
+      "properties": {
+        "thread": { "$ref": "#/$defs/thread" },
+        "ord": { "$ref": "#/$defs/u64", "minimum": 1 },
+        "vals": { "$ref": "#/$defs/vals" }
+      }
+    },
+    "loc": {
+      "type": "object",
+      "required": ["file", "line"],
+      "properties": {
+        "file": { "type": "string", "maxLength": 256, "x-max-bytes": 256 },
+        "line": { "$ref": "#/$defs/u64" },
+        "func": { "type": "string", "maxLength": 128, "x-max-bytes": 128 }
+      }
+    },
+    "hello": {
+      "required": ["proc", "sdk", "sdk_version", "catalog_hash", "signal_handlers"],
+      "properties": {
+        "proc": { "$ref": "#/$defs/proc" },
+        "sdk": { "type": "string", "maxLength": 64, "x-max-bytes": 64 },
+        "sdk_version": { "type": "string", "maxLength": 64, "x-max-bytes": 64 },
+        "catalog_hash": { "type": "string", "maxLength": 128, "x-max-bytes": 128 },
+        "signal_handlers": { "type": "boolean" }
+      }
+    },
+    "catalog": {
+      "required": ["proc", "id", "type", "must_hit"],
+      "properties": {
+        "proc": { "$ref": "#/$defs/proc" },
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "$ref": "#/$defs/assert_kind" },
+        "must_hit": { "type": "boolean" },
+        "msg": { "type": "string", "maxLength": 512, "x-max-bytes": 512 },
+        "loc": { "$ref": "#/$defs/loc" }
+      }
+    },
+    "assert": {
+      "required": ["proc", "id", "hits", "trues", "falses"],
+      "properties": {
+        "proc": { "$ref": "#/$defs/proc" },
+        "id": { "$ref": "#/$defs/id" },
+        "hits": { "$ref": "#/$defs/u64" },
+        "trues": { "$ref": "#/$defs/u64" },
+        "falses": { "$ref": "#/$defs/u64" },
+        "first_false": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/witness" }] },
+        "first_true": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/witness" }] }
+      }
+    },
+    "work": {
+      "required": ["proc", "ops"],
+      "properties": {
+        "proc": { "$ref": "#/$defs/proc" },
+        "ops": { "$ref": "#/$defs/u64" }
+      }
+    },
+    "end": {
+      "required": ["proc", "reason", "status", "sites", "evals", "dropped", "threads"],
+      "properties": {
+        "proc": { "$ref": "#/$defs/proc" },
+        "reason": { "enum": ["exit", "signal", "explicit"] },
+        "status": { "$ref": "#/$defs/i64" },
+        "sites": { "$ref": "#/$defs/u64" },
+        "evals": { "$ref": "#/$defs/u64" },
+        "dropped": { "$ref": "#/$defs/u64" },
+        "threads": {
+          "description": "How many `thread` lines this process sends. The engine marks the trial degraded if the lines disagree.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 256
+        }
+      }
+    },
+    "thread_line": {
+      "description": "One line per thread so that an `end` line never outgrows the 4 KiB line limit. SDKs right-align the counters in 20-character fields.",
+      "required": ["proc", "thread", "evals", "tape_consumed"],
+      "properties": {
+        "proc": { "$ref": "#/$defs/proc" },
+        "thread": { "$ref": "#/$defs/thread" },
+        "evals": { "$ref": "#/$defs/u64" },
+        "tape_consumed": { "$ref": "#/$defs/u64", "description": "Bytes read from this thread's tape stream, counting reads past the end of the tape." },
+        "key_stable": { "type": "boolean", "default": true }
+      }
+    },
+    "eval": {
+      "description": "Per-evaluation form for scripts and languages without an SDK. Each line is a write syscall during the run, so any trial containing one is marked perturbing. `proc`, if present, must be the reserved tag \"_eval\" (the default), which no real process may use, so an `eval` line can never merge into an SDK process. `ok` is ignored for `reachable` and `unreachable`.",
+      "required": ["id", "type", "ok"],
+      "properties": {
+        "proc": { "const": "_eval" },
+        "id": { "$ref": "#/$defs/id" },
+        "type": { "$ref": "#/$defs/assert_kind" },
+        "ok": { "type": "boolean" }
+      }
+    }
+  }
+}
