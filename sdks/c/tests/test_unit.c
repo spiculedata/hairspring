@@ -1,5 +1,6 @@
 /* test_unit.c -- in-process unit tests: formatting, counters, witnesses, merging, thread keys, slots, lines. */
 #include <pthread.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -251,6 +252,11 @@ static void test_more_threads_than_slots_share_the_overflow_slot(void) {
 
 static int g_go;
 
+/* Start gate. Waiters yield so that they cannot keep the thread that is still creating threads off the CPU. */
+static void wait_for_go(void) {
+  while (!__atomic_load_n(&g_go, __ATOMIC_ACQUIRE)) sched_yield();
+}
+
 static void stress_hit(int ok) {
   struct hs_slot *sl = hs__slot();
   HS_SOMETIMES(ok, "unit.stress", "stress", (int64_t)sl->index, (int64_t)sl->evals + 1);
@@ -258,8 +264,7 @@ static void stress_hit(int ok) {
 
 static void *stress_main(void *arg) {
   (void)arg;
-  while (!__atomic_load_n(&g_go, __ATOMIC_ACQUIRE)) {
-  }
+  wait_for_go();
   for (int i = 0; i < STRESS_ROUNDS; i++) stress_hit(i & 1);
   return NULL;
 }
@@ -285,8 +290,7 @@ static uint64_t g_claimed[CLAIMERS];
 
 static void *claim_main(void *arg) {
   uint64_t i = (uint64_t)(uintptr_t)arg;
-  while (!__atomic_load_n(&g_go, __ATOMIC_ACQUIRE)) {
-  }
+  wait_for_go();
   g_claimed[i] = hs__slot()->index;
   return NULL;
 }
