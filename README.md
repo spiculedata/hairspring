@@ -8,8 +8,8 @@
 
 Hairspring explores many executions of a system, finds the rare interleaving or fault sequence that breaks a
 property, **shrinks it to a minimal trace, and hands you a bundle that replays it exactly**. It is inspired by
-the deterministic-simulation testing used by FoundationDB, TigerBeetle and Antithesis, built to be open,
-self-hostable, and usable without a cloud service.
+the deterministic-simulation testing used by FoundationDB and TigerBeetle. It is open source and runs on your
+laptop or your own servers.
 
 <p align="center"><img src="docs/images/failure-view.png" alt="A minimal 8-step reproduction of a duplicate-delivery bug, with Replay and state inspection" width="760"></p>
 
@@ -58,13 +58,13 @@ Hermit backend found a real check-then-act threading bug in a C program, reprodu
 found a duplicate-delivery bug in an unmodified Python Dapr consumer through a simulated sidecar.
 
 What we do **not** claim: bit-exact replay of arbitrary programs on macOS (there is no supported way to do
-this), a general-purpose deterministic hypervisor like Antithesis's, or that Hermit (a young open-source
+this), a general-purpose deterministic hypervisor, or that Hermit (a young open-source
 project) is production-hardened. See [Limitations](#limitations).
 
 ## Quick start
 
 ```bash
-git clone <this repo> && cd hairspring
+git clone https://github.com/spiculedata/hairspring && cd hairspring
 make ui                       # build the web UI (embedded into the server binary)
 cargo build --release -p hairspring-cli
 export PATH="$PWD/target/release:$PATH"
@@ -113,6 +113,10 @@ trial_timeout_secs = 120
 max_trials = 100
 ```
 
+A trial that times out is reported as inconclusive, not as a pass or a failure, unless you set
+`hang_is_violation = true`. Programs can also report assertions through the guest event protocol; see
+[docs/guest-protocol.md](docs/guest-protocol.md) and the C SDK in [`sdks/c`](sdks/c) ([docs/c-sdk.md](docs/c-sdk.md)).
+
 ## For AI agents (MCP)
 
 `hairspring mcp` (stdio) or `POST /mcp` (HTTP) expose the loop an agent needs: `list_targets`, `start_run`,
@@ -136,7 +140,8 @@ workflows or gRPC.
 ## Run it for a team
 
 ```bash
-cp .env.example .env              # set real secrets
+# Put these in a .env file next to docker-compose.yml (tokens must be at least 16 characters):
+#   HAIRSPRING_DB_PASSWORD, HAIRSPRING_ADMIN_TOKEN, HAIRSPRING_WORKER_TOKEN
 docker compose up --build -d      # PostgreSQL + server + 2 workers
 ```
 
