@@ -1,19 +1,71 @@
 //! A run's trials: the list with its filters, one trial's detail and output, and the coverage series.
 use crate::output_view::{OutputMeta, STREAMS};
 use crate::query::*;
-use crate::scan::{presence, Flow};
+use crate::scan::{failing_indexes, presence, Flow};
+use crate::trial_class::TrialClass;
 use crate::view::*;
 use crate::{Result, Service, ServiceError};
 use hairspring_props::record::TrialRecord as KeptRecord;
 use hairspring_props::TrialDigest;
 use hairspring_store::{KeptState, TrialRecord};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-fn trial_row(t: &TrialRecord) -> TrialRow {
+/// The properties that failed in one trial, named for a row.
+#[derive(Default)]
+struct Failing {
+    count: u32,
+    idx: Vec<u32>,
+    ids: Vec<String>,
+}
+
+/// The run's catalog ids by index, read from the store the first time a row needs one.
+struct CatalogNames<'a> {
+    svc: &'a Service,
+    run_id: &'a str,
+    names: Option<BTreeMap<u32, String>>,
+}
+
+impl<'a> CatalogNames<'a> {
+    fn new(svc: &'a Service, run_id: &'a str) -> CatalogNames<'a> {
+        CatalogNames {
+            svc,
+            run_id,
+            names: None,
+        }
+    }
+
+    /// What `digest` says failed. The catalog is read only when something did.
+    fn failing(&mut self, digest: &TrialDigest) -> Result<Failing> {
+        let all = failing_indexes(digest);
+        if all.is_empty() {
+            return Ok(Failing::default());
+        }
+        if self.names.is_none() {
+            let catalog = self.svc.store.get_catalog(self.run_id)?;
+            self.names = Some(catalog.into_iter().map(|c| (c.idx, c.prop_id)).collect());
+        }
+        let names = self.names.as_ref();
+        let idx: Vec<u32> = all.iter().copied().take(MAX_FAILING_SHOWN).collect();
+        let ids = idx
+            .iter()
+            .filter_map(|i| names.and_then(|n| n.get(i)).cloned())
+            .collect();
+        Ok(Failing {
+            count: all.len() as u32,
+            idx,
+            ids,
+        })
+    }
+}
+
+fn trial_row(t: &TrialRecord, failing: Failing) -> TrialRow {
     TrialRow {
         seq: t.seq,
         seed: t.seed.to_string(),
         verdict: t.verdict.as_str(),
+        class: TrialClass::of(t).as_str(),
+        failing_count: failing.count,
+        failing_idx: failing.idx,
         timed_out: t.timed_out,
         degraded: t.degraded,
         perturbing: t.perturbing,
@@ -34,6 +86,7 @@ fn trial_row(t: &TrialRecord) -> TrialRow {
         has_output: t.output_ref.is_some(),
         guest: GuestReason {
             reason: t.reason.clone(),
+            failing_ids: failing.ids,
         },
     }
 }
@@ -123,17 +176,20 @@ impl Service {
         }
         let mut rows: Vec<TrialRow> = Vec::new();
         let mut more = false;
+        let mut names = CatalogNames::new(self, run_id);
         let end = self.scan_trials(run_id, after, |t| {
-            if !filter.matches_row(t)
-                || (filter.needs_digest() && !filter.matches_digest(&decode(t)?))
-            {
+            if !filter.matches_row(t) {
+                return Ok(Flow::Continue);
+            }
+            let digest = decode(t)?;
+            if filter.needs_digest() && !filter.matches_digest(&digest) {
                 return Ok(Flow::Continue);
             }
             if rows.len() == limit {
                 more = true;
                 return Ok(Flow::Stop);
             }
-            rows.push(trial_row(t));
+            rows.push(trial_row(t, names.failing(&digest)?));
             Ok(Flow::Continue)
         })?;
         let next_cursor = if more {
@@ -167,9 +223,14 @@ impl Service {
         let meta = blob_text(self, t.output_ref.as_deref())?
             .map(|bytes| OutputMeta::read(&bytes))
             .unwrap_or_default();
+        // A digest that cannot be read leaves the failing list empty; the detail page does not depend on it.
+        let failing = decode(&t)
+            .ok()
+            .and_then(|d| CatalogNames::new(self, run_id).failing(&d).ok())
+            .unwrap_or_default();
         Ok(Some(TrialDetail {
             run_id: run_id.to_owned(),
-            trial: trial_row(&t),
+            trial: trial_row(&t, failing),
             guest: GuestDetail {
                 detail,
                 schedule: meta.schedule,

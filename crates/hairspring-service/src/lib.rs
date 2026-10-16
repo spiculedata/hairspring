@@ -13,6 +13,8 @@ mod property_query;
 mod query;
 pub mod sanitize;
 mod scan;
+mod strip_query;
+mod trial_class;
 mod trial_query;
 mod types;
 pub mod view;
@@ -21,7 +23,8 @@ pub use claim_view::ClaimView;
 pub use completion::{completion_of, RunCompletion};
 pub use error::ServiceError;
 pub use query::{
-    PropertyQuery, SeedQuery, TrialQuery, DEFAULT_PAGE, MAX_PAGE, MAX_PREFIX_BYTES, MAX_SEED_PAGE,
+    PropertyQuery, SeedQuery, StripQuery, TrialQuery, DEFAULT_PAGE, MAX_PAGE, MAX_PREFIX_BYTES,
+    MAX_SEED_PAGE, MAX_STRIP_PAGE,
 };
 pub use types::*;
 pub use view::{

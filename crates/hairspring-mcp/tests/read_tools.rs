@@ -304,6 +304,77 @@ fn trials_are_listed_and_filtered() {
 }
 
 #[test]
+fn list_trials_finds_one_trial_by_its_exact_seed_given_as_a_string() {
+    let (server, svc, engine) = server();
+    let run = stored_run(&svc, &engine, 2);
+    let (_, v) = structured(&server, "list_trials", json!({"run_id": run, "seed": "20"}));
+    assert_eq!(v["trials"].as_array().unwrap().len(), 1);
+    assert_eq!(v["trials"][0]["seed"], "20");
+    // A seed above 2^53 cannot be a JSON number, so only a string is accepted, and anything else is refused.
+    let (_, v) = structured(
+        &server,
+        "list_trials",
+        json!({"run_id": run, "seed": "18446744073709551615"}),
+    );
+    assert!(v["trials"].as_array().unwrap().is_empty());
+    for bad in [
+        json!("x<script>"),
+        json!("-1"),
+        json!("18446744073709551616"),
+        json!(20),
+    ] {
+        let (text, v) = call(
+            &server,
+            "list_trials",
+            json!({"run_id": run, "seed": bad}),
+            Role::Read,
+        );
+        assert!(
+            v.get("error").is_some() || v["result"]["isError"] == true,
+            "{bad}: {text}"
+        );
+        assert!(!text.contains("script"), "{text}");
+    }
+}
+
+#[test]
+fn list_trials_rows_carry_their_class_and_failing_ids_under_the_guest_fence() {
+    let (server, svc, engine) = server();
+    let run = stored_run(&svc, &engine, 2);
+    let (_, v) = structured(&server, "list_trials", json!({"run_id": run, "fails": 0}));
+    let row = &v["trials"][0];
+    assert_eq!(row["class"], "violation");
+    // The stored run has two properties, and both failed in this trial.
+    assert_eq!(row["failing_count"], 2);
+    assert_eq!(row["guest"]["failing_ids"].as_array().unwrap().len(), 2);
+    assert_eq!(row["failing_idx"].as_array().unwrap().len(), 2);
+    assert!(row.get("failing_ids").is_none());
+}
+
+#[test]
+fn get_property_can_return_the_property_alone() {
+    let (server, svc, engine) = server();
+    let run = stored_run(&svc, &engine, 2);
+    let (_, v) = structured(
+        &server,
+        "get_property",
+        json!({"run_id": run, "idx": 0, "seeds": "none"}),
+    );
+    assert_eq!(v["seeds_kind"], "none");
+    assert!(v["seeds"].as_array().unwrap().is_empty());
+    let tools = server
+        .handle_message(
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).to_string(),
+            Role::Read,
+        )
+        .unwrap();
+    assert!(
+        tools.contains("\"none\""),
+        "the schema lists the new seeds value"
+    );
+}
+
+#[test]
 fn a_trial_is_returned_with_its_reason_and_detail_under_the_guest_fence() {
     let (server, svc, engine) = server();
     let run = stored_run(&svc, &engine, 2);

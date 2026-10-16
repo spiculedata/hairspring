@@ -119,10 +119,13 @@ pub struct PropertyDetail {
     pub guest_note: &'static str,
 }
 
-/// A trial's reason is the engine's wording of how it was judged and can quote the program, so it is guest text.
+/// A trial's reason is the engine's wording of how it was judged and can quote the program, so it is guest text; so
+/// are the ids of the properties that failed in it.
 #[derive(Debug, Clone, Serialize)]
 pub struct GuestReason {
     pub reason: String,
+    /// Ids of the properties that failed in this trial, at most [`MAX_FAILING_SHOWN`] of the `failing_count`.
+    pub failing_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -130,6 +133,12 @@ pub struct TrialRow {
     pub seq: u64,
     pub seed: String,
     pub verdict: &'static str,
+    /// How the trial is shown: `pass` only for a rated, clean pass; a degraded or unreported pass is `excluded`.
+    pub class: &'static str,
+    /// How many properties failed in this trial (zero when its data could not be used).
+    pub failing_count: u32,
+    /// Catalog indexes of the first failing properties, at most [`MAX_FAILING_SHOWN`].
+    pub failing_idx: Vec<u32>,
     pub timed_out: bool,
     pub degraded: bool,
     pub perturbing: bool,
@@ -150,6 +159,30 @@ pub struct TrialRow {
     pub has_detail: bool,
     pub has_output: bool,
     pub guest: GuestReason,
+}
+
+/// Most failing properties named on one trial row; `failing_count` says how many there were.
+pub const MAX_FAILING_SHOWN: usize = 8;
+
+/// What one strip code means.
+#[derive(Debug, Clone, Serialize)]
+pub struct LegendEntry {
+    pub code: char,
+    pub name: &'static str,
+}
+
+/// One page of the seed strip: a character per trial, in judging order, starting at `first_seq`.
+///
+/// A page covers consecutive sequence numbers and ends where the stored rows have a gap, so a reader that sees the next
+/// page start later than it expected knows those trials have no stored row.
+#[derive(Debug, Clone, Serialize)]
+pub struct StripPage {
+    pub run_id: String,
+    pub first_seq: u64,
+    pub codes: String,
+    pub legend: Vec<LegendEntry>,
+    pub next_cursor: Option<String>,
+    pub scanned_trials: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]

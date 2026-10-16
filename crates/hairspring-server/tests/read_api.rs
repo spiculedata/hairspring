@@ -179,6 +179,7 @@ fn every_read_endpoint_needs_a_token_and_the_read_role_is_enough() {
         format!("/api/runs/{run}/trials/1"),
         format!("/api/runs/{run}/trials/1/output/stdout"),
         format!("/api/runs/{run}/coverage"),
+        format!("/api/runs/{run}/strip"),
     ] {
         assert_eq!(get(addr, None, &path).status, 401, "{path}");
         assert_eq!(
@@ -201,7 +202,7 @@ fn ids_are_validated_before_anything_is_looked_up() {
         "..%2f..",
         "run_0123456789abcdef0",
     ] {
-        for tail in ["properties", "trials", "coverage"] {
+        for tail in ["properties", "trials", "coverage", "strip"] {
             let r = get(addr, Some(READ), &format!("/api/runs/{bad}/{tail}"));
             assert_eq!(r.status, 404, "{bad}/{tail}");
         }
@@ -383,6 +384,106 @@ fn a_trial_is_found_by_its_exact_seed_and_a_bad_seed_is_a_400() {
         );
         assert_eq!(r.status, 400, "{bad}");
     }
+}
+
+#[test]
+fn the_strip_is_a_code_per_trial_and_pages_with_a_cursor() {
+    let (server, run) = boot();
+    let v = get(server.addr(), Some(READ), &format!("/api/runs/{run}/strip")).json();
+    assert_eq!(v["codes"], "pvp");
+    assert_eq!(v["first_seq"], 0);
+    assert_eq!(v["next_cursor"], Value::Null);
+    assert!(v["legend"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|l| l["code"] == "v" && l["name"] == "violation"));
+    let page = get(
+        server.addr(),
+        Some(READ),
+        &format!("/api/runs/{run}/strip?limit=2"),
+    )
+    .json();
+    assert_eq!(page["codes"], "pv");
+    assert_eq!(page["next_cursor"], "1");
+    let rest = get(
+        server.addr(),
+        Some(READ),
+        &format!("/api/runs/{run}/strip?limit=2&cursor=1"),
+    )
+    .json();
+    assert_eq!(
+        (rest["first_seq"].as_u64(), rest["codes"].as_str()),
+        (Some(2), Some("p"))
+    );
+}
+
+#[test]
+fn bad_strip_and_filter_parameters_are_a_400_that_does_not_echo_them() {
+    let (server, run) = boot();
+    for q in ["cursor=abc", "limit=abc", "limit=-1", "cursor=%3Cscript%3E"] {
+        let r = get(
+            server.addr(),
+            Some(READ),
+            &format!("/api/runs/{run}/strip?{q}"),
+        );
+        assert_eq!(r.status, 400, "{q}");
+        assert!(
+            !r.body.contains("script") && !r.body.contains("abc"),
+            "{}",
+            r.body
+        );
+    }
+    // A fingerprint is 16 to 64 hex digits; the filter refuses anything else without repeating it.
+    for fp in [
+        "4c16",
+        "zzzzzzzzzzzzzzzz",
+        "..%2f..%2fetc%2fpasswd",
+        "%3Cscript%3E%3Cscript%3E",
+    ] {
+        let r = get(
+            server.addr(),
+            Some(READ),
+            &format!("/api/runs/{run}/trials?fp={fp}"),
+        );
+        assert_eq!(r.status, 400, "{fp}");
+        assert!(
+            !r.body.contains("passwd") && !r.body.contains("script") && !r.body.contains("zzzz")
+        );
+    }
+    let ok = get(
+        server.addr(),
+        Some(READ),
+        &format!("/api/runs/{run}/trials?fp=0000000000000000"),
+    );
+    assert_eq!(ok.status, 200);
+    assert_eq!(ok.json()["trials"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn a_trial_row_carries_its_class_and_failing_ids_and_a_property_can_be_read_without_seeds() {
+    let (server, run) = boot();
+    let v = get(
+        server.addr(),
+        Some(READ),
+        &format!("/api/runs/{run}/trials?verdict=violation"),
+    )
+    .json();
+    let row = &v["trials"][0];
+    assert_eq!(row["class"], "violation");
+    assert_eq!(row["failing_count"], 1);
+    assert_eq!(row["failing_idx"][0], 0);
+    assert_eq!(row["guest"]["failing_ids"][0], "b.broken");
+    let p = get(
+        server.addr(),
+        Some(READ),
+        &format!("/api/runs/{run}/properties/0?seeds=none"),
+    );
+    assert_eq!(p.status, 200);
+    let p = p.json();
+    assert_eq!(p["seeds_kind"], "none");
+    assert_eq!(p["seeds"].as_array().unwrap().len(), 0);
+    assert_eq!(p["scanned_trials"], 0);
 }
 
 #[test]

@@ -14,8 +14,11 @@ pub const MAX_PAGE: u32 = 500;
 pub const MAX_SEED_PAGE: u32 = 1000;
 /// Longest prefix filter, in bytes (the longest property id).
 pub const MAX_PREFIX_BYTES: usize = 128;
-/// Longest schedule fingerprint filter, in characters.
+/// Shortest and longest schedule fingerprint filter, in characters (a Hermit fingerprint is 16 hex digits).
+const MIN_FP_CHARS: usize = 16;
 const MAX_FP_CHARS: usize = 64;
+/// Most codes in one page of the seed strip. It equals [`SCAN_CAP`]: one request reads at most that many trials.
+pub const MAX_STRIP_PAGE: u32 = 20_000;
 /// Most trials one request reads before it hands back a cursor, so a filter that matches nothing cannot hold a
 /// connection for the length of a very large run.
 pub const SCAN_CAP: usize = 20_000;
@@ -97,15 +100,16 @@ pub(crate) fn parse_seed(s: Option<&str>) -> Result<Option<u64>> {
     .transpose()
 }
 
+/// A schedule fingerprint: hex digits, at least [`MIN_FP_CHARS`] and at most [`MAX_FP_CHARS`] of them. Stored
+/// fingerprints are lower case, so the filter is too.
 pub(crate) fn parse_fingerprint(s: Option<&str>) -> Result<Option<String>> {
     match s {
         None => Ok(None),
         Some(f)
-            if !f.is_empty()
-                && f.len() <= MAX_FP_CHARS
-                && f.bytes().all(|b| b.is_ascii_alphanumeric()) =>
+            if (MIN_FP_CHARS..=MAX_FP_CHARS).contains(&f.len())
+                && f.bytes().all(|b| b.is_ascii_hexdigit()) =>
         {
-            Ok(Some(f.to_owned()))
+            Ok(Some(f.to_ascii_lowercase()))
         }
         Some(_) => Err(invalid("fp")),
     }
@@ -150,6 +154,13 @@ pub struct PropertyQuery {
 pub struct SeedQuery {
     /// `failing` (default), `hit` or `never`.
     pub seeds: Option<String>,
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+}
+
+/// Where to start, and how many codes, for a page of the seed strip.
+#[derive(Debug, Clone, Default)]
+pub struct StripQuery {
     pub cursor: Option<String>,
     pub limit: Option<u32>,
 }
@@ -206,8 +217,24 @@ mod tests {
 
     #[test]
     fn a_fingerprint_is_letters_and_digits_only() {
-        assert!(parse_fingerprint(Some("4c16a90b")).unwrap().is_some());
-        for bad in ["", "a b", "a'b", "a%20b", "../x", &"a".repeat(65)] {
+        assert!(parse_fingerprint(Some("4c16a90b4c16a90b"))
+            .unwrap()
+            .is_some());
+        assert_eq!(
+            parse_fingerprint(Some("4C16A90B4C16A90B"))
+                .unwrap()
+                .as_deref(),
+            Some("4c16a90b4c16a90b")
+        );
+        for bad in [
+            "",
+            "a b",
+            "a'b",
+            "a%20b",
+            "../x",
+            "4c16a90b",
+            &"a".repeat(65),
+        ] {
             assert!(parse_fingerprint(Some(bad)).is_err(), "{bad:?}");
         }
     }

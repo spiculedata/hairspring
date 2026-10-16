@@ -32,10 +32,19 @@ pub(crate) struct Presence {
     pub failed: bool,
 }
 
+/// Whether the trial's data says anything about properties: it was not left out of the statistics and did not time out.
+fn usable(digest: &TrialDigest) -> bool {
+    !digest.flags.excluded && !digest.flags.inconclusive
+}
+
+fn entry_failed(e: &hairspring_props::DigestEntry) -> bool {
+    e.conflicted || (e.catalogued && failure_basis(e.kind, e.hits, e.falses).is_some())
+}
+
 /// The digest's account of property `idx`, or `None` when the trial's data cannot be used: it was left out of the
 /// statistics, or it timed out and its report decides nothing.
 pub(crate) fn presence(digest: &TrialDigest, idx: u32) -> Option<Presence> {
-    if digest.flags.excluded || digest.flags.inconclusive {
+    if !usable(digest) {
         return None;
     }
     let entry = digest.entries.iter().find(|e| e.idx == idx);
@@ -46,10 +55,23 @@ pub(crate) fn presence(digest: &TrialDigest, idx: u32) -> Option<Presence> {
         },
         Some(e) => Presence {
             hit: e.catalogued && e.hits > 0,
-            failed: e.conflicted
-                || (e.catalogued && failure_basis(e.kind, e.hits, e.falses).is_some()),
+            failed: entry_failed(e),
         },
     })
+}
+
+/// The catalog indexes of the properties that failed in this trial, by the same rule as [`presence`]; none when the
+/// trial's data cannot be used.
+pub(crate) fn failing_indexes(digest: &TrialDigest) -> Vec<u32> {
+    if !usable(digest) {
+        return Vec::new();
+    }
+    digest
+        .entries
+        .iter()
+        .filter(|e| entry_failed(e))
+        .map(|e| e.idx)
+        .collect()
 }
 
 impl Service {
