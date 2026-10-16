@@ -14,7 +14,20 @@ describe('trial routes', () => {
   });
 
   it('is not found for a number that is not plain digits, or one that is too long to be a seed', () => {
-    for (const p of ['/runs/r/trials/x', '/runs/r/trials/-1', '/runs/r/seeds/1e3', '/runs/r/seeds/', '/runs/r/trials/16/extra', `/runs/r/seeds/${'9'.repeat(21)}`]) {
+    for (const p of ['/runs/r/trials/x', '/runs/r/trials/-1', '/runs/r/seeds/1e3', '/runs/r/trials/16/extra', `/runs/r/seeds/${'9'.repeat(21)}`]) {
+      expect(matchRoute(p).name, p).toBe('notfound');
+    }
+  });
+});
+
+describe('the seed explorer route', () => {
+  it('is a run id followed by seeds, with nothing after it', () => {
+    expect(matchRoute('/runs/run_0123/seeds')).toEqual({ name: 'seeds', id: 'run_0123' });
+    expect(matchRoute('/runs/run_0123/seeds/')).toEqual({ name: 'seeds', id: 'run_0123' });
+  });
+
+  it('checks the run id like the other run routes', () => {
+    for (const p of ['/runs/a%20b/seeds', '/runs/a.b/seeds', `/runs/${'a'.repeat(65)}/seeds`, '/runs/run_0123/seed']) {
       expect(matchRoute(p).name, p).toBe('notfound');
     }
   });

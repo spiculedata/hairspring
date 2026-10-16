@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { ErrorBoundary } from '../components/ErrorBoundary';
-import { GuestText } from '../components/GuestText';
+import { ErrorLine } from '../components/ErrorLine';
 import { Link } from '../components/Layout';
 import { runPath } from '../router';
 import { usePolling } from '../usePolling';
@@ -10,17 +10,7 @@ import { downloadOutput, useOutputTails, useRunContext, useTrialDetail } from '.
 import type { StreamName } from './types';
 
 const NOT_FOUND_TEXT = 'This trial does not exist in this run (the run may have been removed, or its trial rows expired).';
-const ERROR_CHARS = 300;
 const LOOKUP_RETRY_MS = 30_000;
-
-/** An error message as escaped text: it is only ever words from the server or the network, and is treated as untrusted anyway. */
-function ErrorLine({ message }: { message: string }) {
-  return (
-    <p className="error" role="alert">
-      <GuestText text={message} max={ERROR_CHARS} expandable={false} />
-    </p>
-  );
-}
 
 function Loaded({ runId, seq }: { runId: string; seq: number }) {
   const detail = useTrialDetail(runId, seq);

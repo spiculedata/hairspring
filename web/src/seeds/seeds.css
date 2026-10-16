@@ -1,0 +1,41 @@
+/* Results explorer: seed explorer. Meaning is always in the text; colour, height and marks only add emphasis. */
+.strip { position: relative; border: 1px solid var(--line); border-radius: 6px; background: var(--card); overflow: hidden; cursor: crosshair; }
+.strip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.strip canvas { display: block; }
+.strip-status { min-height: 1.5em; margin: .35rem 0; }
+.strip-keys { font-size: .8rem; margin: .25rem 0 .75rem; }
+table.strip-counts { width: auto; margin-top: .5rem; }
+table.strip-counts caption { text-align: left; color: var(--muted); font-size: .8rem; padding: .25rem 0; }
+table.strip-counts th, table.strip-counts td { padding: .2rem .75rem .2rem 0; }
+.class-v, .class-violation { color: var(--bad); }
+.class-x, .class-infra, .class-i, .class-inconclusive { color: var(--busy); }
+.class-u, .class-unusable, .class-e, .class-excluded { color: var(--muted); }
+.class-p, .class-pass { color: var(--good); }
+
+/* Row height is 40px = 8px + 23px clipped block + 8px + 1px border (ROW_HEIGHT and CLIP_HEIGHT in rowMetrics.ts). */
+table.seeds { margin-top: 0; table-layout: fixed; width: 100%; }
+table.seeds caption { text-align: left; padding: .4rem .5rem; color: var(--muted); font-size: .8rem; }
+table.seeds thead th { position: sticky; top: 0; background: var(--card); z-index: 1; }
+table.seeds tbody td, table.seeds tbody th { padding: 8px .5rem; border-bottom: 1px solid var(--line); overflow: hidden; vertical-align: top; font-weight: 400; line-height: 1.25; }
+table.seeds tbody th.verdict { font-weight: 600; white-space: nowrap; }
+table.seeds tr.start-row td, table.seeds tr.start-row th { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: .85rem; }
+table.seeds button.linklike { color: var(--accent); text-decoration: underline; padding: 0; font: inherit; }
+table.seeds button.fp-filter { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: .85rem; }
+
+.seed-filters .row { align-items: end; }
+.prop-chip { display: inline-flex; gap: .35rem; align-items: baseline; }
+.prop-matches { list-style: none; padding: 0; margin: 0; width: 100%; }
+.prop-matches li { padding: .1rem 0; }
+.prop-matches button.linklike { color: var(--accent); text-decoration: underline; }
+
+/* Phones: keep the trial, seed, verdict and failing columns; the rest return at the wider width. */
+@media (max-width: 40rem) {
+  table.seeds { min-width: 0 !important; width: 31rem; }
+  table.seeds col:nth-child(1) { width: 3.5rem !important; }
+  table.seeds col:nth-child(2) { width: 9.5rem !important; }
+  table.seeds col:nth-child(3) { width: 9rem !important; }
+  table.seeds col:nth-child(4) { width: 9rem !important; }
+  table.seeds col:nth-child(n+5),
+  table.seeds th:nth-child(n+5), table.seeds td:nth-child(n+5) { display: none; }
+}

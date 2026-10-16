@@ -17,7 +17,7 @@ function hostileDetail(h: string) {
   });
   const props = property({ id: h, msg: h, loc: { file: h, line: 1, func: h }, first_false: w });
   return detail({
-    trial: trialRow({ guest: { reason: h } }),
+    trial: trialRow({ guest: { reason: h, failing_ids: [h] } }),
     guest: {
       detail: record({ procs: [p], properties: [props], conflicts: [{ id: h, proc: h, kept: h, rejected: h }] }),
       schedule: schedule({ virttime_elapsed: h, timeslice_stats: h, per_thread_timeslice: h }),

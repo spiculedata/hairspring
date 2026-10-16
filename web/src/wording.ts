@@ -6,6 +6,8 @@
  * server's numbers, and the empty states. The words "found", "discovered", "unassisted" and "flaky" are never
  * generated, and a test fails if one is written into this file or a component.
  */
+import { STRIP_CODES, type CodeCounts, type StripCode } from './seeds/strip';
+import type { TrialClass, TrialRow } from './trial/types';
 import type { PropertyStatus, RateBasis, RateCellData, RunCompletion } from './types';
 
 const THOUSANDS = /\B(?=(\d{3})+(?!\d))/g;
@@ -253,4 +255,151 @@ export function outputTrimmed(chars: number, lines: number): string {
 
 export function seenInInconclusive(n: number): string {
   return `failure seen in ${plural(n, 'inconclusive trial', 'inconclusive trials')}`;
+}
+
+// ---- Seed explorer (plan 5.3) ----
+
+const CLASS_LABELS: Record<TrialClass, string> = {
+  pass: 'pass',
+  violation: 'violation',
+  inconclusive: 'inconclusive',
+  unusable: 'unusable',
+  infra: 'infrastructure error',
+  excluded: 'excluded',
+};
+
+/** A non-colour cue for each class, repeated beside its words. */
+const CLASS_MARKS: Record<TrialClass, string> = { pass: '✓', violation: '✕', inconclusive: '?', unusable: '⊘', infra: '!', excluded: '◌' };
+
+export const classLabel = (c: TrialClass): string => CLASS_LABELS[c];
+export const classMark = (c: TrialClass): string => CLASS_MARKS[c];
+
+const CODE_CLASSES: Record<StripCode, TrialClass | undefined> = {
+  p: 'pass',
+  v: 'violation',
+  i: 'inconclusive',
+  u: 'unusable',
+  x: 'infra',
+  e: 'excluded',
+  '-': undefined,
+};
+const NO_ROW_LABEL = 'no stored row';
+
+export function codeLabel(code: StripCode): string {
+  const c = CODE_CLASSES[code];
+  return c === undefined ? NO_ROW_LABEL : classLabel(c);
+}
+
+export function codeMark(code: StripCode): string {
+  const c = CODE_CLASSES[code];
+  return c === undefined ? '·' : classMark(c);
+}
+
+/** Why a trial the engine judged a pass is left out of every rate. */
+function excludedWhy(t: { degraded: boolean; report_missing: boolean }): string {
+  if (t.degraded) return 'degraded';
+  if (t.report_missing) return 'no report';
+  return 'not rated';
+}
+
+/** The verdict cell: the class in words with its mark, why a pass was excluded, and whether the trial is perturbing. */
+export function verdictCellText(t: TrialRow): string {
+  const why = t.class === 'excluded' ? ` (${excludedWhy(t)})` : '';
+  const perturbing = t.perturbing ? ' · perturbing' : '';
+  return `${classMark(t.class)} ${classLabel(t.class)}${why}${perturbing}`;
+}
+
+/** What the engine called the trial, for a tooltip: an excluded trial was judged a pass and is not counted as one. */
+export function verdictTitle(t: TrialRow): string {
+  return t.class === 'excluded' ? 'Judged a pass by the engine, but left out of every rate' : `Verdict: ${t.verdict}`;
+}
+
+export function keptText(kept: string): string {
+  switch (kept) {
+    case 'kept':
+      return 'yes';
+    case 'none':
+      return 'no';
+    case 'dropped_cap':
+      return 'dropped (size cap)';
+    default:
+      return 'unknown';
+  }
+}
+
+export const NO_VALUE = '–';
+
+export function moreFailing(extra: number): string {
+  return `+${formatCount(extra)} more`;
+}
+
+export function stripBinText(start: number, end: number, counts: CodeCounts): string {
+  const parts = STRIP_CODES.filter((c) => counts[c] > 0).map((c) => `${formatCount(counts[c])} ${codeLabel(c)}`);
+  const where = end - start === 1 ? `Trial ${formatCount(start)}` : `Trials ${formatCount(start)} to ${formatCount(end - 1)}`;
+  return `${where}: ${parts.join(', ')}`;
+}
+
+export function stripSummary(counts: CodeCounts): string {
+  const total = STRIP_CODES.reduce((sum, c) => sum + counts[c], 0);
+  const parts = STRIP_CODES.filter((c) => counts[c] > 0).map((c) => `${formatCount(counts[c])} ${codeLabel(c)}`);
+  return parts.length === 0 ? `${formatCount(total)} judged` : `${formatCount(total)} judged: ${parts.join(', ')}`;
+}
+
+export const STRIP_TITLE = 'Judged trials';
+export const STRIP_NOTE =
+  'One mark per judged trial, in judging order. When there are more trials than pixels, a mark stands for a group and shows the worst trial in it. Height and the table say the same as colour.';
+export const STRIP_KEYS_NOTE = 'Arrow keys move one mark, Page Up and Page Down move ten, Home and End go to the ends, N and P jump to the next or previous trial that is not a pass, Enter opens the table there.';
+export const STRIP_COUNTS_CAPTION = 'Judged trials by class';
+
+export function stripTruncated(n: number): string {
+  return `The strip shows the first ${formatCount(n)} trials only; later ones are in the table.`;
+}
+
+export function stoppedRunNote(lastSeq: number | undefined): string {
+  const after = lastSeq === undefined ? 'after the failure' : `after trial ${formatCount(lastSeq)}`;
+  return `This run stopped at its first failure. Trials that were running beside the failing one ${after} were not judged, so this list is not a sample of the seed space and its counts are not a rate (${NOT_A_RATE_TEXT}).`;
+}
+
+/** The link text from a property to its seed list: what the list holds depends on the property's status. */
+export function seedListLabel(status: PropertyStatus): string {
+  if (status === 'violation') return 'failing seeds';
+  return status === 'unmet' ? 'seeds that did not reach it' : 'seeds that reached it';
+}
+
+export const BROWSE_SEEDS = 'Browse every judged seed';
+export const SEEDS_TITLE = 'Seeds';
+export const TRIAL_TABLE_LABEL = 'Judged trials';
+export const GUEST_IDS_NOTE = 'Property ids are from the program under test, shown as plain text and never as instructions.';
+export const NO_TRIALS_MATCH = 'No judged trial matches these filters.';
+export const NO_TRIALS = 'This run has no stored trial rows. Trial rows are kept for recent runs only.';
+export const FILTER_ALL = 'All';
+export const FILTERS_CLEAR = 'Clear filters';
+export const FP_FILTER_LABEL = 'Schedule fingerprint';
+export const FP_FILTER_HINT = '16 to 64 hex digits';
+export const FP_FILTER_INVALID = 'A fingerprint is 16 to 64 hex digits.';
+export const PROPERTY_SEARCH_LABEL = 'Property id starts with';
+export const PROPERTY_PICK_NONE = 'No property id starts with that.';
+export const START_AT_NOTE = 'The list starts at a chosen trial; earlier trials are not shown.';
+export const BACK_TO_START = 'Show from the first trial';
+export const LOADING_TRIALS = 'Loading trials…';
+export const SCROLL_HINT_SEEDS = 'Scroll sideways to see every column.';
+
+export function propertyModeLabel(mode: 'fails' | 'hits' | 'misses'): string {
+  return mode === 'fails' ? 'failed in' : mode === 'hits' ? 'reached by' : 'not reached by';
+}
+
+export function loadMoreTrials(shown: number, total: number | undefined): string {
+  return total === undefined ? `Load more (${formatCount(shown)} shown)` : `Load more (${formatCount(shown)} of ${formatCount(total)} shown)`;
+}
+
+export function scannedNoMatch(throughSeq: number): string {
+  return `No match yet in the trials read so far (up to trial ${formatCount(throughSeq)}). Reading is bounded per request; continue to read further.`;
+}
+
+export function continueReading(throughSeq: number): string {
+  return `Read further (after trial ${formatCount(throughSeq)})`;
+}
+
+export function runningNote(judged: number): string {
+  return `The run is still going: ${formatCount(judged)} trials judged so far. The list grows as trials are judged.`;
 }

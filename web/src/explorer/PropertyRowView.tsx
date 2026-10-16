@@ -3,8 +3,9 @@ import { GuestText } from '../components/GuestText';
 import { Link } from '../components/Layout';
 import { RateCell } from '../components/RateCell';
 import { seedPath } from '../router';
+import { seedsPath, type SeedFilters } from '../seeds/filters';
 import type { PropertyRow } from '../types';
-import { formatCount, seenInInconclusive, statusLabel, statusMark } from '../wording';
+import { formatCount, seedListLabel, seenInInconclusive, statusLabel, statusMark } from '../wording';
 
 /** Height of every row, which is what makes windowing a sum. */
 export const ROW_HEIGHT = 88;
@@ -51,6 +52,26 @@ function FirstFailingSeed({ runId, seed }: { runId: string | undefined; seed: st
   return to === undefined ? <>{`seed ${seed}`}</> : <Link to={to}>{`seed ${seed}`}</Link>;
 }
 
+/**
+ * A link from a property to the seed explorer filtered by it: the seeds that failed a failing property, the seeds that
+ * never reached an UNMET one, and otherwise the seeds that reached it. The property is named by its catalog index.
+ */
+function SeedList({ runId, row }: { runId: string | undefined; row: PropertyRow }) {
+  if (runId === undefined) return null;
+  const to = seedsPath(runId, listFilter(row));
+  if (to === undefined) return null;
+  return (
+    <span className="clip-line">
+      <Link to={to}>{seedListLabel(row.status)}</Link>
+    </span>
+  );
+}
+
+function listFilter(row: PropertyRow): SeedFilters {
+  if (row.status === 'violation') return { fails: row.idx };
+  return row.status === 'unmet' ? { misses: row.idx } : { hits: row.idx };
+}
+
 /** One property as a table row. Guest strings (id, message, location) go through `GuestText` and nowhere else. */
 export function PropertyRowView({ row, rowIndex, runId }: { row: PropertyRow; rowIndex: number; runId?: string }) {
   return (
@@ -89,7 +110,10 @@ export function PropertyRowView({ row, rowIndex, runId }: { row: PropertyRow; ro
       </td>
       <td>
         <Clip>
-          <FirstFailingSeed runId={runId} seed={row.first_failing_seed} />
+          <span className="clip-line">
+            <FirstFailingSeed runId={runId} seed={row.first_failing_seed} />
+          </span>
+          <SeedList runId={runId} row={row} />
         </Clip>
       </td>
       <td className="num">

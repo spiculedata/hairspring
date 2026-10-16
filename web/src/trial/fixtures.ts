@@ -83,6 +83,9 @@ export function trialRow(over: Partial<TrialRow> = {}): TrialRow {
     seq: 16,
     seed: '1016',
     verdict: 'violation',
+    class: 'violation',
+    failing_count: 1,
+    failing_idx: [0],
     timed_out: false,
     degraded: false,
     perturbing: false,
@@ -101,7 +104,7 @@ export function trialRow(over: Partial<TrialRow> = {}): TrialRow {
     kept: 'kept',
     has_detail: true,
     has_output: true,
-    guest: { reason: 'always wal.no-lost-commit was false 1 time(s)' },
+    guest: { reason: 'always wal.no-lost-commit was false 1 time(s)', failing_ids: ['wal.no-lost-commit'] },
     ...over,
   };
 }

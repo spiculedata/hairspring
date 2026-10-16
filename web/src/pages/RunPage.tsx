@@ -7,7 +7,8 @@ import { FirstFailingSeed } from '../explorer/FirstFailingSeed';
 import { PropertyOverviewPanel } from '../explorer/PropertyOverviewPanel';
 import { usePropertyOverview } from '../explorer/usePropertyOverview';
 import { formatDuration, relativeTime } from '../format';
-import { noFailuresText } from '../wording';
+import { seedsPath } from '../seeds/filters';
+import { BROWSE_SEEDS, noFailuresText } from '../wording';
 import type { SseEvent } from '../sse';
 import { usePolling } from '../usePolling';
 
@@ -85,6 +86,9 @@ export function RunPage({ id }: { id: string }) {
       <ErrorBoundary label="Property table">
         <PropertyOverviewPanel model={properties} />
       </ErrorBoundary>
+      <p>
+        <Link to={seedsPath(run.id, {}) ?? '/'}>{BROWSE_SEEDS}</Link>
+      </p>
       <h2>Failures</h2>
       {detail.data?.failures.length === 0 && <p className="muted">{noFailuresText({ live, headline: properties.page?.headline })}</p>}
       <FirstFailingSeed runId={run.id} seed={detail.data?.properties?.first_failing_seed} />
