@@ -65,9 +65,9 @@ the thread-local slot pointer is declared `initial-exec` on Linux (one load from
 
 | Variable | Effect |
 |---|---|
-| `HAIRSPRING_EVENTS_FILE=path` | write events to this file (`O_APPEND | O_NOFOLLOW`, so a symlink is refused) instead of stderr; if it cannot be opened, events go to stderr and `end.dropped` counts it |
+| `HAIRSPRING_EVENTS_FILE=path` | (ignored in a set-uid or set-gid process: `secure_getenv` on glibc, `issetugid` on macOS and the BSDs) write events to this file (`O_APPEND | O_NOFOLLOW`, so a symlink is refused) instead of stderr; if it cannot be opened, events go to stderr and `end.dropped` counts it |
 | `HAIRSPRING_EVENTS=off` | record as usual but write nothing |
-| `HAIRSPRING_SIGNAL_REPORT=1` | install SIGSEGV, SIGBUS, SIGABRT, SIGFPE, SIGILL and SIGTERM handlers that write the report (reason `signal`, status = the signal number) and re-raise; `hello.signal_handlers` is then true only if every handler was installed. Default off: handlers add syscalls at startup and change how a crash looks under Hermit |
+| `HAIRSPRING_SIGNAL_REPORT=1` | install SIGSEGV, SIGBUS, SIGABRT, SIGFPE, SIGILL and SIGTERM handlers that write the report (reason `signal`, status = the signal number) and re-raise; `hello.signal_handlers` is then true only if every handler was installed. A signal that already has a non-default action is left alone and counts as not installed: an inherited `SIG_IGN` (`trap '' TERM`, `nohup`) stays ignored, and a handler a sanitizer or another runtime put there stays in place (under AddressSanitizer, SIGSEGV and SIGBUS are such signals) Default off: handlers add syscalls at startup and change how a crash looks under Hermit |
 | `HAIRSPRING_PROC=tag` | the root process tag: 1 to 64 bytes of `[A-Za-z0-9._:/-]`, not `_eval`; default `p1`. An invalid tag is refused (the default is used and `end.dropped` is incremented), never shortened |
 | `HAIRSPRING_PROC_PID` | set by the SDK (see below); do not set it |
 
@@ -176,6 +176,34 @@ Where the parser can notice a loss without that, the SDK makes it:
   the parser accepted. In practice the per-trial event budget trips first (see above).
 * Beyond 16384 distinct ids the extra records are not catalogued at all; only `end.dropped` shows it.
 * An id outside the alphabet is sent with `_` in place of each bad byte; two such ids can merge.
+
+### Limits and caveats
+
+Known limits of the SDK as built. None is hidden from the parser except where noted.
+
+* **The alternate signal stack belongs to one thread.** With `HAIRSPRING_SIGNAL_REPORT=1` the constructor calls
+  `sigaltstack` on the thread that runs it (normally the main thread). A stack overflow in any other thread has no
+  alternate stack to run the handler on, so the process dies without a report (the run shows `report_missing`).
+  Other faults in worker threads are reported (see the `threadsegv` test).
+* **Thread keys can be read torn.** `hs_thread` rewrites a slot's key while the slot may already be live (it has a
+  default `t#N` key from its first call). A report on another thread at that moment can print a mixed key. The
+  window is one `memcpy` of at most 64 bytes; call `hs_thread` before the thread does anything else.
+* **A witness can be read torn.** The first true and first false witness are written with plain stores by the thread
+  that owns them, a moment after the counter moves. A report written concurrently (an `exit` on another thread, a
+  signal) can print a witness whose fields come from two moments. Counters are exact; only a witness read during its
+  own first hit is affected.
+* **The offline catalog text is not escaped.** The strings in the `hs_catstr` section are the id and message as the
+  preprocessor sees them, so they can hold quotes, backslashes or bytes outside the alphabet that the live line
+  escapes or replaces. C2 has to escape and sanitise them (see "Requirement for C2" above). A reader of that section
+  must also skip runs of NUL bytes: padding between strings is zero (under AddressSanitizer it is a redzone, which an
+  unsanitised reader such as the extractor sees as zeros; the unit test walks it with `no_sanitize("address")`).
+* **`end.threads` and `end.sites` are not padded.** Every other counter is a fixed-width field, but these two are
+  written as plain decimals, so the `end` line is one to a few bytes longer or shorter depending on their values.
+  The line is far under 4096 bytes whatever they are.
+* **A non-blocking stderr can lose lines.** If the descriptor is `O_NONBLOCK` and the reader is slow, a write that
+  returns `EAGAIN` is retried with `sched_yield` up to 1000 times, then the line is dropped and counted in
+  `end.dropped`. A report can therefore be partial: some lines out, later ones missing (a missing `end` line shows
+  as `report_missing`).
 
 ### Write path
 
@@ -515,8 +543,11 @@ On aarch64 Linux, gcc 13.3 and clang 18 produce the same structure with `bl __aa
   child counters, 100 and 300 threads, crash with and without `HAIRSPRING_SIGNAL_REPORT` (also a null dereference,
   `abort()` and a fault in a worker thread), `hs_exit` and plain-return status, the events file (and a symlink, and an
   unwritable path), `HAIRSPRING_EVENTS=off`, `eval` lines, stderr closed with and without descriptor reuse, a timer
-  signal during the report, fork while another thread is inside `hs_thread`, a dup2 onto the events descriptor, a descriptor limit too low for a private copy, an empty catalog, constant thread-line length, and **two processes writing to one pipe**
+  signal during the report, fork while another thread is inside `hs_thread`, a dup2 onto the events descriptor (also before an `eval` line, and in the low-limit fallback), an inherited ignored SIGTERM with handlers requested, a descriptor limit too low for a private copy, an empty catalog, constant thread-line length, and **two processes writing to one pipe**
   (Linux) or one events file (macOS), 20 rounds, every line checked to be one whole object.
+* AddressSanitizer and UBSan: `make -C sdks/c test BUILD=build/asan EXTRA="-fsanitize=address,undefined"` is clean on
+  macOS. Two tests skip with a message under ASan, because ASan owns SIGSEGV and the SDK leaves it alone: the
+  SIGSEGV crash tests, with and without `HAIRSPRING_SIGNAL_REPORT` (the SIGABRT test still runs).
 * `make nosyscall` and `make nosyscall-pic` (T1, Linux): the seccomp test, built normally and with `-fPIC`.
 * `make staticfail`: an id of 129 bytes, a message of 513 bytes and five values are rejected at compile time.
 * `make cxx`: the macros compile and report from C++ (skipped when the matching C++ compiler is absent).
