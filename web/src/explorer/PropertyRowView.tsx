@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import { GuestText } from '../components/GuestText';
+import { Link } from '../components/Layout';
 import { RateCell } from '../components/RateCell';
+import { seedPath } from '../router';
 import type { PropertyRow } from '../types';
 import { formatCount, seenInInconclusive, statusLabel, statusMark } from '../wording';
 
@@ -42,8 +44,15 @@ function Location({ row }: { row: PropertyRow }) {
   );
 }
 
+/** The seed is a server-built decimal string, linked to its failure page only if it is plain digits. */
+function FirstFailingSeed({ runId, seed }: { runId: string | undefined; seed: string | null }) {
+  if (seed === null) return <>–</>;
+  const to = runId === undefined ? undefined : seedPath(runId, seed);
+  return to === undefined ? <>{`seed ${seed}`}</> : <Link to={to}>{`seed ${seed}`}</Link>;
+}
+
 /** One property as a table row. Guest strings (id, message, location) go through `GuestText` and nowhere else. */
-export function PropertyRowView({ row, rowIndex }: { row: PropertyRow; rowIndex: number }) {
+export function PropertyRowView({ row, rowIndex, runId }: { row: PropertyRow; rowIndex: number; runId?: string }) {
   return (
     <tr aria-rowindex={rowIndex} style={{ height: ROW_HEIGHT }}>
       <td className={`status status-${row.status}`}>
@@ -79,7 +88,9 @@ export function PropertyRowView({ row, rowIndex }: { row: PropertyRow; rowIndex:
         </Clip>
       </td>
       <td>
-        <Clip>{row.first_failing_seed === null ? '–' : `seed ${row.first_failing_seed}`}</Clip>
+        <Clip>
+          <FirstFailingSeed runId={runId} seed={row.first_failing_seed} />
+        </Clip>
       </td>
       <td className="num">
         <Clip>{formatCount(row.evals)}</Clip>

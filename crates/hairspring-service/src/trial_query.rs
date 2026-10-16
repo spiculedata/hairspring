@@ -1,4 +1,5 @@
 //! A run's trials: the list with its filters, one trial's detail and output, and the coverage series.
+use crate::output_view::{OutputMeta, STREAMS};
 use crate::query::*;
 use crate::scan::{presence, Flow};
 use crate::view::*;
@@ -7,9 +8,6 @@ use hairspring_props::record::TrialRecord as KeptRecord;
 use hairspring_props::TrialDigest;
 use hairspring_store::{KeptState, TrialRecord};
 use std::collections::BTreeSet;
-
-/// The streams a trial's kept output can hold.
-const STREAMS: [&str; 2] = ["stdout", "stderr"];
 
 fn trial_row(t: &TrialRecord) -> TrialRow {
     TrialRow {
@@ -54,6 +52,7 @@ struct TrialFilter {
     degraded: Option<bool>,
     perturbing: Option<bool>,
     fp: Option<String>,
+    seed: Option<u64>,
 }
 
 impl TrialFilter {
@@ -66,6 +65,7 @@ impl TrialFilter {
             degraded: parse_bool(q.degraded.as_deref(), "degraded")?,
             perturbing: parse_bool(q.perturbing.as_deref(), "perturbing")?,
             fp: parse_fingerprint(q.fp.as_deref())?,
+            seed: parse_seed(q.seed.as_deref())?,
         })
     }
 
@@ -74,7 +74,8 @@ impl TrialFilter {
     }
 
     fn matches_row(&self, t: &TrialRecord) -> bool {
-        self.verdict.is_none_or(|v| t.verdict == v)
+        self.seed.is_none_or(|s| t.seed == s)
+            && self.verdict.is_none_or(|v| t.verdict == v)
             && self.degraded.is_none_or(|d| t.degraded == d)
             && self.perturbing.is_none_or(|p| t.perturbing == p)
             && self
@@ -163,21 +164,18 @@ impl Service {
                 .and_then(|r| serde_json::to_value(r).ok()),
             None => None,
         };
-        let output_streams = match blob_text(self, t.output_ref.as_deref())? {
-            Some(bytes) => {
-                let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
-                STREAMS
-                    .into_iter()
-                    .filter(|s| v.get(*s).and_then(|x| x.as_str()).is_some())
-                    .collect()
-            }
-            None => Vec::new(),
-        };
+        let meta = blob_text(self, t.output_ref.as_deref())?
+            .map(|bytes| OutputMeta::read(&bytes))
+            .unwrap_or_default();
         Ok(Some(TrialDetail {
             run_id: run_id.to_owned(),
             trial: trial_row(&t),
-            guest: GuestDetail { detail },
-            output_streams,
+            guest: GuestDetail {
+                detail,
+                schedule: meta.schedule,
+            },
+            output_streams: meta.streams,
+            output_omitted_bytes: meta.omitted,
             guest_note: GUEST_NOTE,
         }))
     }

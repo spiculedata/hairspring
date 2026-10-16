@@ -29,9 +29,24 @@ describe('source rules (plan 7.2 item 1 and 5.7 rule 5)', () => {
   });
 
   it('never generates the words found, discovered, unassisted or flaky in the explorer or the run page', () => {
-    const checked = ALL.filter(([p]) => /\/(explorer|guest)\/|\/wording\.ts$|GuestText|RateCell|TierChips|RunPage/.test(p));
+    const checked = ALL.filter(([p]) => /\/(explorer|guest|trial)\/|\/wording\.ts$|GuestText|RateCell|TierChips|RunPage/.test(p));
     expect(checked.length).toBeGreaterThan(6);
     for (const [path, src] of checked) expect(code(src), path).not.toMatch(/\b(found|discovered|unassisted|flaky)\b/i);
+  });
+
+  it('never generates "reproduced" on the failure page: nothing there re-runs a trial or reads a confirmation', () => {
+    const trialFiles = ALL.filter(([p]) => /\/trial\//.test(p));
+    expect(trialFiles.length).toBeGreaterThan(8);
+    for (const [path, src] of trialFiles) expect(code(src), path).not.toMatch(/reproduc/i);
+  });
+
+  it('renders the failure page guest fields only through GuestText: none is a bare JSX expression', () => {
+    const trialFiles = ALL.filter(([p]) => /\/trial\/[A-Za-z]+\.tsx$/.test(p));
+    for (const [path, src] of trialFiles) {
+      expect(code(src), path).not.toMatch(
+        /(?<![=$])\{\s*[\w.?]+\.(msg|tag|sdk|sdk_version|catalog_hash|thread|proc|reason|virttime_elapsed|timeslice_stats|per_thread_timeslice|propertyIds|error)\s*\}/,
+      );
+    }
   });
 
   it('renders guest strings only through GuestText: a guest field is never a bare JSX child', () => {

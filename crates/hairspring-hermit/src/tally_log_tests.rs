@@ -32,6 +32,7 @@ fn trial(props: TrialProps) -> Trial {
         schedule: Some(Summary {
             fingerprint: "00ff".to_string(),
             syscalls: 99,
+            ..Summary::default()
         }),
         ..Trial::default()
     }

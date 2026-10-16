@@ -140,6 +140,33 @@ fn a_run_counts_distinct_schedules_and_total_work() {
 }
 
 #[test]
+fn a_kept_trial_records_the_deterministic_summary_fields_and_not_the_wall_clock_one() {
+    let r = rig("kept-fields", "echo fine", 2, 1, true, "good");
+    let out = r
+        .engine
+        .run(&RunRequest::new("svc", 1), &mut |_| true)
+        .unwrap();
+    let kept: serde_json::Value =
+        serde_json::from_str(out.trial_log[0].output.as_deref().expect("kept output")).unwrap();
+    let schedule = &kept["schedule"];
+    // Seed 1: `seed % 3 + 10` turns and `100 + seed % 3` syscalls, as the fake writes them.
+    assert_eq!(
+        (&schedule["sched_turns"], &schedule["syscalls"]),
+        (&11.into(), &101.into())
+    );
+    assert_eq!(schedule["virttime_elapsed"], "5");
+    assert_eq!(schedule["per_thread_timeslice"], "[]");
+    assert!(schedule["timeslice_stats"]
+        .as_str()
+        .unwrap()
+        .contains("sum_ns"));
+    assert!(
+        schedule.get("realtime_elapsed").is_none(),
+        "wall clock stays out"
+    );
+}
+
+#[test]
 fn parallel_trials_write_separate_summaries_and_count_the_same() {
     let r = rig("parallel", "echo fine", 6, 3, true, "good");
     let out = r

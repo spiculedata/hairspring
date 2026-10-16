@@ -166,6 +166,11 @@ fn bad_parameters_are_refused_and_an_unknown_run_is_none() {
 
 /// A one-trial run whose trial kept a detail record and its output.
 fn kept_run(output: &str) -> (hairspring_service::Service, String) {
+    kept_run_json(serde_json::json!({ "stdout": output, "stderr": "oops" }))
+}
+
+/// The same run with a chosen kept-output record, as a worker could send it.
+fn kept_run_json(output: serde_json::Value) -> (hairspring_service::Service, String) {
     let (svc, _store, engine) = setup();
     let job = lease_with_budget(&svc, &engine, &local(), 1);
     let p = props_multi(&[("b.broken", AssertKind::Always, HOSTILE, 0, 2)]);
@@ -177,7 +182,7 @@ fn kept_run(output: &str) -> (hairspring_service::Service, String) {
     );
     report.reason = format!("{HOSTILE} failed");
     report.detail = Some(String::from_utf8(KeptRecord::encode(&p).unwrap()).unwrap());
-    report.output = Some(serde_json::json!({ "stdout": output, "stderr": "oops" }).to_string());
+    report.output = Some(output.to_string());
     svc.ingest_trials(&job.job_id, &local(), &[report]).unwrap();
     finish(&svc, &job, &local(), passed(1, Some(1)));
     (svc, job.run_id)
@@ -261,4 +266,94 @@ fn coverage_is_a_series_that_never_goes_down_and_ends_at_the_last_trial() {
     let last = c.points.last().unwrap();
     assert_eq!((last.ids_hit, last.ids_true, last.schedules), (4, 3, 3));
     assert!(f.svc.coverage("run_0000000000000000").unwrap().is_none());
+}
+
+#[test]
+fn a_seed_filter_finds_one_trial_by_its_exact_seed_and_refuses_anything_else() {
+    let f = finished(&local());
+    let by = |s: &str| {
+        seeds(
+            &f,
+            &TrialQuery {
+                seed: Some(s.into()),
+                ..q()
+            },
+        )
+    };
+    assert_eq!(by("3"), ["3"]);
+    assert!(by("999").is_empty());
+    for bad in ["", "-1", "3 ", "x", "18446744073709551616", "0x3"] {
+        let r = f.svc.trial_page(
+            &f.run_id,
+            &TrialQuery {
+                seed: Some(bad.into()),
+                ..q()
+            },
+        );
+        assert!(matches!(r, Err(ServiceError::InvalidRequest(_))), "{bad:?}");
+    }
+}
+
+fn schedule_output(schedule: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "stdout": "out", "stderr": "err",
+        "stdout_omitted_bytes": 1234, "schedule": schedule,
+    })
+}
+
+#[test]
+fn a_kept_trial_reports_its_schedule_fields_and_how_much_output_was_cut() {
+    let (svc, run) = kept_run_json(schedule_output(serde_json::json!({
+        "sched_turns": 22979, "syscalls": 21739, "virttime_elapsed": "{\"secs\":1}",
+        "timeslice_stats": "{\"n\":3}", "per_thread_timeslice": "{\"1\":[2]}",
+    })));
+    let d = svc.trial_detail(&run, 0).unwrap().unwrap();
+    let s = d
+        .guest
+        .schedule
+        .clone()
+        .expect("schedule fields are served");
+    assert_eq!((s.sched_turns, s.syscalls), (22979, 21739));
+    assert_eq!(s.per_thread_timeslice.as_deref(), Some("{\"1\":[2]}"));
+    assert_eq!(
+        (d.output_omitted_bytes.stdout, d.output_omitted_bytes.stderr),
+        (1234, 0)
+    );
+    let json = serde_json::to_value(&d).unwrap();
+    assert!(json["guest"]["schedule"]["sched_turns"].is_u64());
+}
+
+#[test]
+fn schedule_fields_from_a_worker_are_checked_before_they_are_served() {
+    let big = "x".repeat(70_000);
+    let cases = [
+        serde_json::json!({ "sched_turns": "many", "syscalls": 1 }),
+        serde_json::json!({ "sched_turns": -1, "syscalls": 1 }),
+        serde_json::json!({ "syscalls": 1 }),
+    ];
+    for bad in cases {
+        let (svc, run) = kept_run_json(schedule_output(bad.clone()));
+        let d = svc.trial_detail(&run, 0).unwrap().unwrap();
+        assert!(d.guest.schedule.is_none(), "{bad}");
+    }
+    let (svc, run) = kept_run_json(schedule_output(serde_json::json!({
+        "sched_turns": 1, "syscalls": 2, "timeslice_stats": big, "virttime_elapsed": 5,
+        "per_thread_timeslice": "a\u{202e}b\u{0}",
+    })));
+    let s = svc
+        .trial_detail(&run, 0)
+        .unwrap()
+        .unwrap()
+        .guest
+        .schedule
+        .unwrap();
+    assert!(
+        s.timeslice_stats.is_none(),
+        "an oversized field is dropped, not cut"
+    );
+    assert!(
+        s.virttime_elapsed.is_none(),
+        "a non-string field is dropped"
+    );
+    assert_eq!(s.per_thread_timeslice.as_deref(), Some("a\u{202e}b\u{0}"));
 }

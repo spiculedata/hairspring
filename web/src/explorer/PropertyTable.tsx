@@ -28,7 +28,7 @@ function Spacer({ height }: { height: number }) {
  * Column widths come from columns.ts and fit the page at desktop width; below that the table scrolls sideways and a
  * hint says so.
  */
-export function PropertyTable({ properties, total }: { properties: readonly PropertyRow[]; total?: number }) {
+export function PropertyTable({ properties, total, runId }: { properties: readonly PropertyRow[]; total?: number; runId?: string }) {
   const [scrollTop, setScrollTop] = useState(0);
   if (properties.length === 0) return <p className="muted">{NO_PROPERTIES}</p>;
   const win = computeWindow({
@@ -71,7 +71,7 @@ export function PropertyTable({ properties, total }: { properties: readonly Prop
           <tbody>
             <Spacer height={win.padTop} />
             {properties.slice(win.start, win.end).map((row, i) => (
-              <PropertyRowView key={row.idx} row={row} rowIndex={win.start + i + HEADER_ROWS + 1} />
+              <PropertyRowView key={row.idx} row={row} rowIndex={win.start + i + HEADER_ROWS + 1} runId={runId} />
             ))}
             <Spacer height={win.padBottom} />
           </tbody>

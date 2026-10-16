@@ -85,6 +85,18 @@ pub(crate) fn parse_idx(s: Option<&str>, what: &str) -> Result<Option<u32>> {
     .transpose()
 }
 
+/// A seed: plain decimal digits that fit in 64 bits.
+pub(crate) fn parse_seed(s: Option<&str>) -> Result<Option<u64>> {
+    s.map(|s| {
+        if !s.is_empty() && s.len() <= 20 && s.bytes().all(|b| b.is_ascii_digit()) {
+            s.parse().map_err(|_| invalid("seed"))
+        } else {
+            Err(invalid("seed"))
+        }
+    })
+    .transpose()
+}
+
 pub(crate) fn parse_fingerprint(s: Option<&str>) -> Result<Option<String>> {
     match s {
         None => Ok(None),
@@ -156,6 +168,8 @@ pub struct TrialQuery {
     pub perturbing: Option<String>,
     /// Schedule fingerprint.
     pub fp: Option<String>,
+    /// An exact seed, as a decimal string.
+    pub seed: Option<String>,
     pub cursor: Option<String>,
     pub limit: Option<u32>,
 }
