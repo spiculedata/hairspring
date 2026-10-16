@@ -196,6 +196,7 @@ fn trials(server: &McpServer, args: &Value) -> Result<Value, Failed> {
             degraded: degraded.clone(),
             perturbing: perturbing.clone(),
             fp: fp.clone(),
+            seed: None,
             cursor: cursor.clone(),
             limit: Some(l),
         };

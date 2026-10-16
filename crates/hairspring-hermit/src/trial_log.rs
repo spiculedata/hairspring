@@ -76,12 +76,22 @@ fn tail(text: &str, max: usize) -> String {
     guest[start..].to_string()
 }
 
-/// The record for one trial: both tails, plus `<stream>_omitted_bytes` for a stream the capture had to cut.
+/// The record for one trial: both tails, `<stream>_omitted_bytes` for a stream the capture had to cut, and the
+/// scheduler summary's deterministic fields when Hermit wrote one.
 fn output_record(trial: &Trial, limit: usize) -> serde_json::Value {
     let mut record = serde_json::json!({
         "stdout": tail(&trial.stdout, limit),
         "stderr": tail(&trial.stderr, limit),
     });
+    if let Some(s) = &trial.schedule {
+        record["schedule"] = serde_json::json!({
+            "sched_turns": s.sched_turns,
+            "syscalls": s.syscalls,
+            "virttime_elapsed": s.virttime_elapsed,
+            "timeslice_stats": s.timeslice_stats,
+            "per_thread_timeslice": s.per_thread_timeslice,
+        });
+    }
     for (stream, omitted) in [
         ("stdout_omitted_bytes", trial.stdout_omitted),
         ("stderr_omitted_bytes", trial.stderr_omitted),

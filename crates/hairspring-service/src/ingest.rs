@@ -61,7 +61,8 @@ fn hash_field(value: &Option<String>, what: &str) -> Result<()> {
 }
 
 /// The kept output must be `{"stdout": text, "stderr": text}`, plus, for a stream the worker had to cut, the number of
-/// bytes it left out (`stdout_omitted_bytes`, `stderr_omitted_bytes`: non-negative integers). Nothing else.
+/// bytes it left out (`stdout_omitted_bytes`, `stderr_omitted_bytes`: non-negative integers), and an optional
+/// `schedule` object. Nothing else.
 fn check_output(text: &str) -> Result<()> {
     if text.len() > MAX_KEPT_OUTPUT_BYTES {
         return Err(invalid("kept output is too large"));
@@ -74,6 +75,9 @@ fn check_output(text: &str) -> Result<()> {
     let shaped = object.iter().all(|(k, v)| match k.as_str() {
         "stdout" | "stderr" => v.is_string(),
         "stdout_omitted_bytes" | "stderr_omitted_bytes" => v.is_u64(),
+        // The scheduler summary. Its fields are checked when it is served, so a bad one costs the summary and not
+        // the trial.
+        "schedule" => v.is_object(),
         _ => false,
     });
     if shaped {

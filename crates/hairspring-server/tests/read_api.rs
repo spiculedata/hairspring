@@ -365,6 +365,27 @@ fn trials_are_listed_and_filtered() {
 }
 
 #[test]
+fn a_trial_is_found_by_its_exact_seed_and_a_bad_seed_is_a_400() {
+    let (server, run) = boot();
+    let v = get(
+        server.addr(),
+        Some(READ),
+        &format!("/api/runs/{run}/trials?seed=11&limit=1"),
+    )
+    .json();
+    assert_eq!(v["trials"].as_array().unwrap().len(), 1);
+    assert_eq!(v["trials"][0]["verdict"], "violation");
+    for bad in ["x", "-1", "11%20", "99999999999999999999999"] {
+        let r = get(
+            server.addr(),
+            Some(READ),
+            &format!("/api/runs/{run}/trials?seed={bad}"),
+        );
+        assert_eq!(r.status, 400, "{bad}");
+    }
+}
+
+#[test]
 fn output_is_a_plain_text_attachment_with_a_server_built_file_name() {
     let (server, run) = boot();
     let r = get(

@@ -254,6 +254,7 @@ mod tests {
             schedule: Some(crate::summary::Summary {
                 fingerprint: fingerprint.to_string(),
                 syscalls,
+                ..crate::summary::Summary::default()
             }),
             ..Trial::default()
         }

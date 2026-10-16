@@ -10,12 +10,26 @@ use std::path::Path;
 /// The summary is a small JSON object; anything larger is not one and is not read.
 const MAX_SUMMARY_BYTES: u64 = 1024 * 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Longest compact-JSON text kept for one of the structured fields.
+const MAX_FIELD_TEXT_BYTES: usize = 8 * 1024;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Summary {
     /// FNV-1a over the deterministic fields, as 16 hex digits.
     pub fingerprint: String,
     /// Syscalls the guest completed: a measure of the work the trial did.
     pub syscalls: u64,
+    /// Scheduler turns taken.
+    pub sched_turns: u64,
+    /// The other deterministic fields as compact JSON text, kept for display. `None` when absent or too long.
+    pub virttime_elapsed: Option<String>,
+    pub timeslice_stats: Option<String>,
+    pub per_thread_timeslice: Option<String>,
+}
+
+fn field_text(v: &Value, key: &str) -> Option<String> {
+    let text = v.get(key)?.to_string();
+    (text.len() <= MAX_FIELD_TEXT_BYTES).then_some(text)
 }
 
 /// Reads a summary file. Missing, oversized or malformed files give `None`; the trial itself is unaffected.
@@ -35,7 +49,7 @@ pub fn read(path: &Path) -> Option<Summary> {
 pub fn parse(text: &str) -> Option<Summary> {
     let v: Value = serde_json::from_str(text).ok()?;
     let syscalls = v.get("syscalls")?.as_u64()?;
-    v.get("sched_turns")?.as_u64()?;
+    let sched_turns = v.get("sched_turns")?.as_u64()?;
     let canonical = [
         "sched_turns",
         "syscalls",
@@ -50,6 +64,10 @@ pub fn parse(text: &str) -> Option<Summary> {
     Some(Summary {
         fingerprint: fnv1a_hex(canonical.as_bytes()),
         syscalls,
+        sched_turns,
+        virttime_elapsed: field_text(&v, "virttime_elapsed"),
+        timeslice_stats: field_text(&v, "timeslice_stats"),
+        per_thread_timeslice: field_text(&v, "per_thread_timeslice"),
     })
 }
 

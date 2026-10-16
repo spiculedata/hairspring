@@ -7,6 +7,7 @@ mod completion;
 mod error;
 mod ingest;
 mod jobs;
+mod output_view;
 mod properties;
 mod property_query;
 mod query;

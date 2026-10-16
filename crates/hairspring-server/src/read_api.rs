@@ -109,6 +109,7 @@ pub async fn trials(
         degraded: param(&p, "degraded"),
         perturbing: param(&p, "perturbing"),
         fp: param(&p, "fp"),
+        seed: param(&p, "seed"),
         cursor: param(&p, "cursor"),
         limit: limit(&p)?,
     };

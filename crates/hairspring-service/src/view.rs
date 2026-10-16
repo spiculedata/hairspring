@@ -161,10 +161,30 @@ pub struct TrialPage {
     pub guest_note: &'static str,
 }
 
+/// The deterministic fields of the scheduler summary a trial ran under. They describe how the program behaved, so they
+/// are served under `guest`; the three text fields are compact JSON as the scheduler wrote it, never parsed here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ScheduleView {
+    pub sched_turns: u64,
+    pub syscalls: u64,
+    pub virttime_elapsed: Option<String>,
+    pub timeslice_stats: Option<String>,
+    pub per_thread_timeslice: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct GuestDetail {
     /// The kept trial record: processes, threads, per-id counts and witnesses. Null when the trial kept none.
     pub detail: Option<Value>,
+    /// The scheduler summary, when the worker kept one and it passed the checks.
+    pub schedule: Option<ScheduleView>,
+}
+
+/// Bytes the capture had to cut from the front of each kept output stream (zero when nothing was cut).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct OmittedBytes {
+    pub stdout: u64,
+    pub stderr: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -173,6 +193,7 @@ pub struct TrialDetail {
     pub trial: TrialRow,
     pub guest: GuestDetail,
     pub output_streams: Vec<&'static str>,
+    pub output_omitted_bytes: OmittedBytes,
     pub guest_note: &'static str,
 }
 
