@@ -91,6 +91,14 @@ struct IngestRun {
 
 /// A new attempt of the job starts the run's trials over; the earlier attempt's rows are removed.
 fn start_attempt(tx: &mut Transaction, run_id: &str, attempt: i64) -> Result<()> {
+    let blobs: Vec<String> = tx
+        .query(
+            "SELECT detail_ref FROM trials WHERE run_id=$1 AND detail_ref IS NOT NULL UNION SELECT output_ref FROM trials WHERE run_id=$1 AND output_ref IS NOT NULL",
+            &[&run_id],
+        )?
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
     for table in ["trials", "run_catalog", "run_properties"] {
         tx.execute(&format!("DELETE FROM {table} WHERE run_id=$1"), &[&run_id])?;
     }
@@ -98,6 +106,13 @@ fn start_attempt(tx: &mut Transaction, run_id: &str, attempt: i64) -> Result<()>
         "UPDATE runs SET ingest_attempt=$1, catalog_size=0, kept_bytes=0 WHERE id=$2",
         &[&attempt, &run_id],
     )?;
+    // Delete the blobs no remaining trial row or failure refers to.
+    for h in &blobs {
+        tx.execute(
+            "DELETE FROM blobs WHERE hash=$1 AND NOT EXISTS (SELECT 1 FROM trials WHERE detail_ref=$1 OR output_ref=$1) AND NOT EXISTS (SELECT 1 FROM failures WHERE bundle_hash=$1)",
+            &[h],
+        )?;
+    }
     Ok(())
 }
 
@@ -489,6 +504,24 @@ pub(crate) fn run_contributors(c: &mut Client, run_id: &str) -> Result<Vec<Contr
             trials: r.get::<_, i64>(2) as u64,
         })
         .collect())
+}
+
+pub(crate) fn set_worker_secret_hash(c: &mut Client, id: &str, hash: &str) -> Result<()> {
+    let n = c.execute(
+        "UPDATE workers SET secret_hash=$1 WHERE id=$2",
+        &[&hash, &id],
+    )?;
+    if n == 0 {
+        return Err(StoreError::NotFound(format!("worker {id}")));
+    }
+    Ok(())
+}
+
+pub(crate) fn worker_secret_hash(c: &mut Client, id: &str) -> Result<Option<String>> {
+    Ok(
+        c.query_opt("SELECT secret_hash FROM workers WHERE id=$1", &[&id])?
+            .and_then(|r| r.get::<_, Option<String>>(0)),
+    )
 }
 
 pub(crate) fn set_worker_trusted(c: &mut Client, id: &str, trusted: bool) -> Result<()> {

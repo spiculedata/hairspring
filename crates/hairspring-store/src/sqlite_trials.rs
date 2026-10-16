@@ -129,6 +129,7 @@ fn run_state(tx: &Transaction, run_id: &str) -> Result<Option<IngestRun>> {
 
 /// A new attempt of the job starts the run's trials over; the earlier attempt's rows are removed.
 fn start_attempt(tx: &Transaction, run_id: &str, attempt: i64) -> Result<()> {
+    let blobs = kept_blobs(tx, run_id)?;
     for table in ["trials", "run_catalog", "run_properties"] {
         tx.execute(&format!("DELETE FROM {table} WHERE run_id=?"), [run_id])?;
     }
@@ -136,6 +137,28 @@ fn start_attempt(tx: &Transaction, run_id: &str, attempt: i64) -> Result<()> {
         "UPDATE runs SET ingest_attempt=?, catalog_size=0, kept_bytes=0 WHERE id=?",
         params![attempt, run_id],
     )?;
+    collect_orphans(tx, &blobs)
+}
+
+/// The blobs the run's trial rows point at.
+fn kept_blobs(tx: &Transaction, run_id: &str) -> Result<Vec<String>> {
+    let mut stmt = tx.prepare(
+        "SELECT detail_ref FROM trials WHERE run_id=?1 AND detail_ref IS NOT NULL UNION SELECT output_ref FROM trials WHERE run_id=?1 AND output_ref IS NOT NULL",
+    )?;
+    let hashes = stmt
+        .query_map([run_id], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<String>>>()?;
+    Ok(hashes)
+}
+
+/// Deletes the blobs no remaining trial row or failure refers to.
+fn collect_orphans(tx: &Transaction, hashes: &[String]) -> Result<()> {
+    for h in hashes {
+        tx.execute(
+            "DELETE FROM blobs WHERE hash=?1 AND NOT EXISTS (SELECT 1 FROM trials WHERE detail_ref=?1 OR output_ref=?1) AND NOT EXISTS (SELECT 1 FROM failures WHERE bundle_hash=?1)",
+            [h],
+        )?;
+    }
     Ok(())
 }
 
@@ -484,6 +507,26 @@ pub(crate) fn run_contributors(conn: &Connection, run_id: &str) -> Result<Vec<Co
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+pub(crate) fn set_worker_secret_hash(conn: &Connection, id: &str, hash: &str) -> Result<()> {
+    let n = conn.execute(
+        "UPDATE workers SET secret_hash=? WHERE id=?",
+        params![hash, id],
+    )?;
+    if n == 0 {
+        return Err(StoreError::NotFound(format!("worker {id}")));
+    }
+    Ok(())
+}
+
+pub(crate) fn worker_secret_hash(conn: &Connection, id: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row("SELECT secret_hash FROM workers WHERE id=?", [id], |r| {
+            r.get(0)
+        })
+        .optional()?
+        .flatten())
 }
 
 pub(crate) fn set_worker_trusted(conn: &Connection, id: &str, trusted: bool) -> Result<()> {

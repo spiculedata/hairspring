@@ -87,10 +87,11 @@ fn stored_run(db: &Path, remote: bool, trials: &[(u64, TrialProps)]) -> String {
     let engine = Engine::new(registry.clone(), Config::from_registry(&registry));
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open(db).unwrap());
     let svc = Service::new(store);
-    let worker = if remote {
-        svc.register_worker("remote", "{}").unwrap().id
+    let (worker, secret) = if remote {
+        let (w, secret) = svc.register_remote_worker("remote", "{}").unwrap();
+        (w.id, Some(secret))
     } else {
-        Service::local_worker_id()
+        (Service::local_worker_id(), None)
     };
     let run = svc
         .start_run(
@@ -103,7 +104,7 @@ fn stored_run(db: &Path, remote: bool, trials: &[(u64, TrialProps)]) -> String {
         )
         .unwrap();
     let job = svc.lease(&worker).unwrap().unwrap();
-    svc.ingest_trials(&job.job_id, &worker, &reports(trials))
+    svc.ingest_trials_with_secret(&job.job_id, &worker, secret.as_deref(), &reports(trials))
         .unwrap();
     let n = trials.len() as u64;
     let outcome = RunOutcome {

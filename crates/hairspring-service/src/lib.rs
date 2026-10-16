@@ -69,6 +69,16 @@ pub struct Service {
     progress_seen: Arc<Mutex<HashMap<String, Instant>>>,
 }
 
+/// 256 random bits from the operating system, as hex.
+fn new_secret() -> Result<String> {
+    use std::io::Read;
+    let mut bytes = [0u8; 32];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut bytes))
+        .map_err(|e| ServiceError::Internal(format!("cannot read random bytes: {e}")))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
 fn backend_name(kind: &TargetKind) -> &'static str {
     match kind {
         TargetKind::Sim { .. } => "sim",
@@ -298,6 +308,21 @@ impl Service {
             }
         }
         Ok(self.store.register_worker(name, caps_json, now)?)
+    }
+
+    /// Registers a remote worker and issues it a secret. The secret is returned once and only its hash is stored;
+    /// the worker must present it to send trial records, so that trust attaches to the worker and not to a worker id
+    /// that other callers can read.
+    pub fn register_remote_worker(
+        &self,
+        name: &str,
+        caps_json: &str,
+    ) -> Result<(WorkerRecord, String)> {
+        let secret = new_secret()?;
+        let worker = self.register_worker(name, caps_json)?;
+        self.store
+            .set_worker_secret_hash(&worker.id, &hairspring_store::sha256_hex(secret.as_bytes()))?;
+        Ok((worker, secret))
     }
 
     /// Registers one of this process's own workers, which is trusted from the start. A remote worker never is: its

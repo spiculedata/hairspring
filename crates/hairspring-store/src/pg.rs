@@ -515,6 +515,14 @@ impl Store for PgStore {
         trials::set_worker_trusted(&mut *self.client()?, id, trusted)
     }
 
+    fn set_worker_secret_hash(&self, id: &str, hash: &str) -> Result<()> {
+        trials::set_worker_secret_hash(&mut *self.client()?, id, hash)
+    }
+
+    fn worker_secret_hash(&self, id: &str) -> Result<Option<String>> {
+        trials::worker_secret_hash(&mut *self.client()?, id)
+    }
+
     fn worker_trusted(&self, id: &str) -> Result<Option<bool>> {
         trials::worker_trusted(&mut *self.client()?, id)
     }

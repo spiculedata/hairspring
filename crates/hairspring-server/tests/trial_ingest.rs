@@ -139,6 +139,18 @@ struct Leased {
     run_id: String,
     job_id: String,
     worker: String,
+    secret: String,
+}
+
+/// Registers a worker over HTTP and returns its id and secret.
+fn register(c: &Client, name: &str) -> (String, String) {
+    let r = c
+        .post("/api/worker/register", &json!({"name": name}))
+        .json();
+    (
+        r["worker_id"].as_str().unwrap().to_string(),
+        r["worker_secret"].as_str().expect("a secret").to_string(),
+    )
 }
 
 fn lease_as_remote(srv: &RunningServer) -> Leased {
@@ -149,12 +161,7 @@ fn lease_as_remote(srv: &RunningServer) -> Leased {
         .as_str()
         .unwrap()
         .to_string();
-    let worker = c
-        .post("/api/worker/register", &json!({"name": "remote"}))
-        .json()["worker_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let (worker, secret) = register(&c, "remote");
     let job_id = c
         .post("/api/worker/lease", &json!({"worker_id": worker}))
         .json()["job_id"]
@@ -165,14 +172,179 @@ fn lease_as_remote(srv: &RunningServer) -> Leased {
         run_id,
         job_id,
         worker,
+        secret,
     }
 }
 
 fn post_trials(c: &Client, l: &Leased, trials: &[TrialReport]) -> Resp {
     c.post(
         &format!("/api/worker/jobs/{}/trials", l.job_id),
-        &json!({"worker_id": l.worker, "trials": trials}),
+        &json!({"worker_id": l.worker, "worker_secret": l.secret, "trials": trials}),
     )
+}
+
+#[test]
+fn a_second_run_token_naming_a_trusted_workers_id_cannot_send_trials_or_clear_the_unverified_marker(
+) {
+    let (srv, store) = boot(0);
+    let owner_client = client(srv.addr(), RUN);
+    let l = lease_as_remote(&srv);
+    assert_eq!(
+        client(srv.addr(), ADMIN)
+            .post(
+                &format!("/api/workers/{}/trust", l.worker),
+                &json!({"trusted": true})
+            )
+            .status,
+        200
+    );
+    // A different caller with its own run-role token sees the id in the worker list and tries to use it.
+    let other = client(srv.addr(), RUN);
+    let path = format!("/api/worker/jobs/{}/trials", l.job_id);
+    let seen = other.get("/api/workers").body;
+    assert!(
+        seen.contains(&l.worker),
+        "run-role callers can read worker ids"
+    );
+    for body in [
+        json!({"worker_id": l.worker, "trials": reports(1)}),
+        json!({"worker_id": l.worker, "worker_secret": "guess", "trials": reports(1)}),
+        json!({"worker_id": l.worker, "worker_secret": "", "trials": reports(1)}),
+    ] {
+        let r = other.post(&path, &body);
+        assert_eq!(r.status, 400, "{}", r.body);
+        assert!(!r.body.contains(&l.secret));
+    }
+    // Replaying the owner's secret under another registered worker's id fails too.
+    let (attacker, _) = register(&other, "attacker");
+    let replay = other.post(
+        &path,
+        &json!({"worker_id": attacker, "worker_secret": l.secret, "trials": reports(1)}),
+    );
+    assert_eq!(replay.status, 400, "{}", replay.body);
+    assert_eq!(
+        store.count_trials(&l.run_id).unwrap(),
+        0,
+        "nothing was stored"
+    );
+    // The owner, with its secret, is trusted and its run is no longer marked unverified.
+    assert_eq!(post_trials(&owner_client, &l, &reports(2)).status, 200);
+    let done = owner_client.post(
+        &format!("/api/worker/jobs/{}/complete", l.job_id),
+        &json!({"worker_id": l.worker, "outcome": {"status": "passed", "steps_executed": 2, "trials": 2, "elapsed_ms": 1, "failure": null, "error": null, "trials_reported": 2}}),
+    );
+    assert_eq!(done.status, 200, "{}", done.body);
+    let run = other.get(&format!("/api/runs/{}", l.run_id)).json();
+    assert_eq!(run["properties"]["unverified_worker_data"], false, "{run}");
+}
+
+#[test]
+fn text_from_the_program_never_appears_outside_the_guest_object_on_any_surface() {
+    use hairspring_props::AssertKind;
+    let (srv, _) = boot(0);
+    let c = client(srv.addr(), RUN);
+    let l = lease_as_remote(&srv);
+    // Two trials that disagree about an id's kind; the second carries marker text in its message and location.
+    let mut catalog = RunCatalog::new();
+    let first = props_for("guest.idmark", 3, 0);
+    let mut second = props_for("guest.idmark", 3, 0);
+    second.properties[0].kind = AssertKind::Sometimes;
+    second.properties[0].msg = "GUESTMSGMARK".to_string();
+    second.properties[0].loc = Some(hairspring_props::Loc {
+        file: "GUESTFILEMARK.c".to_string(),
+        line: 1,
+        func: Some("GUESTFUNCMARK".to_string()),
+    });
+    let trials: Vec<TrialReport> = [first, second]
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let rec = std::mem::take(&mut catalog).record(p, false, 16384);
+            catalog = rec.catalog;
+            TrialReport {
+                seq: i as u64,
+                seed: i as u64 + 1,
+                verdict: ReportedVerdict::Pass,
+                reason: String::new(),
+                exit_code: Some(0),
+                signal: None,
+                behaviour_hash: None,
+                schedule_fp: None,
+                syscalls: 1,
+                work_ops: 1,
+                elapsed_ms: 1,
+                catalog: rec.updates,
+                digest: rec.digest.encode(),
+                detail: None,
+                output: None,
+            }
+        })
+        .collect();
+    assert_eq!(post_trials(&c, &l, &trials).status, 200);
+    let done = c.post(
+        &format!("/api/worker/jobs/{}/complete", l.job_id),
+        &json!({"worker_id": l.worker, "outcome": {"status": "passed", "steps_executed": 2, "trials": 2, "elapsed_ms": 1, "failure": null, "error": null, "trials_reported": 2}}),
+    );
+    assert_eq!(done.status, 200, "{}", done.body);
+
+    let mut run = c.get(&format!("/api/runs/{}", l.run_id)).json();
+    assert!(run["properties"]["guest"].is_object(), "{run}");
+    run["properties"]["guest"] = Value::Null;
+    let surfaces = [
+        ("GET /api/runs/{id} outside guest", run.to_string()),
+        ("GET /api/runs", c.get("/api/runs").body),
+        (
+            "SSE events",
+            c.get(&format!("/api/runs/{}/events", l.run_id)).body,
+        ),
+        (
+            "MCP get_run",
+            c.post(
+                "/mcp",
+                &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "get_run", "arguments": {"run_id": l.run_id}}}),
+            )
+            .body,
+        ),
+        (
+            "MCP run resource",
+            c.post(
+                "/mcp",
+                &json!({"jsonrpc": "2.0", "id": 2, "method": "resources/read", "params": {"uri": format!("hairspring://runs/{}", l.run_id)}}),
+            )
+            .body,
+        ),
+    ];
+    for (name, body) in surfaces {
+        assert!(!body.is_empty(), "{name}");
+        for marker in [
+            "GUESTMSGMARK",
+            "GUESTFILEMARK",
+            "GUESTFUNCMARK",
+            "kind_mismatch",
+        ] {
+            assert!(!body.contains(marker), "{name} leaks {marker}: {body}");
+        }
+    }
+}
+
+#[test]
+fn worker_secrets_are_shown_once_and_never_listed() {
+    let (srv, _) = boot(1);
+    let run = client(srv.addr(), RUN);
+    let (id, secret) = register(&run, "remote");
+    assert!(secret.len() >= 32);
+    for token in [READ, RUN, ADMIN] {
+        let listed = client(srv.addr(), token).get("/api/workers").body;
+        assert!(!listed.contains(&secret), "{listed}");
+        assert!(!listed.to_lowercase().contains("secret"), "{listed}");
+        assert!(
+            !listed.contains(&hairspring_store::sha256_hex(secret.as_bytes())),
+            "{listed}"
+        );
+    }
+    let (_, second) = register(&run, "another");
+    assert_ne!(secret, second, "every worker gets its own");
+    assert!(run.get("/api/workers").body.contains(&id));
 }
 
 #[test]
@@ -237,7 +409,16 @@ fn the_ingest_endpoint_checks_who_is_calling_and_what_they_send() {
         400
     );
     assert_eq!(run.post_raw(&path, "not json").status, 400);
-    assert!(run.post_raw(&path, &"x".repeat(3 * 1024 * 1024)).status == 413);
+    // The server may answer 413 or drop the connection while the oversized body is still being sent.
+    let big = run
+        .agent
+        .post(format!("{}{}", run.base, path))
+        .header("Content-Type", "application/json")
+        .header("Authorization", format!("Bearer {RUN}"))
+        .send("x".repeat(3 * 1024 * 1024));
+    if let Ok(resp) = big {
+        assert_eq!(resp.status().as_u16(), 413);
+    }
     let mut forged = reports(1);
     forged[0].digest = vec![9, 9];
     assert_eq!(post_trials(&run, &l, &forged).status, 400);

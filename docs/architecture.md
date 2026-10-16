@@ -85,8 +85,16 @@ trusted worker (`hairspring_service::claims`). Everything else is shown, labelle
 whose stored rows do not match the count the worker reports is marked `ingest_incomplete`, and a run that was
 incomplete or stopped at its first failure makes no must-hit (UNMET) claim.
 
+A worker id is not a credential: any caller with a `run` token can read ids from the worker list. Registration
+therefore issues each remote worker a random secret, shown once in the register reply; only its hash is stored, and
+it never appears in the worker list. A request that carries trial records must present it, and a request that
+names a worker without its secret is refused, so the trust flag cannot be borrowed by naming a trusted worker's id.
+(The other worker endpoints still identify a worker by id and lease alone, as before.) The program's own text from
+a kind-mismatch is not kept in the stored run summary, and ids appear in API replies only under `guest`.
+
 Opening a version 1 database migrates it in place under one transaction (SQLite) or an advisory lock (PostgreSQL);
-old runs read back with zero counts.
+old runs read back with zero counts. **Back up the database before upgrading: there is no downgrade from version 2
+to version 1**, and an older release refuses a version 2 database.
 
 ## Bundles
 

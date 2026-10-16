@@ -96,6 +96,8 @@ pub fn run_all_trials(make: &dyn Fn() -> std::sync::Arc<dyn Store>) {
     hostile_text_in_trials_and_catalog_is_stored_verbatim(&*make());
     runs_do_not_see_each_others_rows(&*make());
     finishing_a_later_attempt_removes_the_earlier_attempts_rows(&*make());
+    worker_secret_hashes_are_stored_apart_from_the_worker_record(&*make());
+    a_new_attempt_collects_the_blobs_only_its_discarded_rows_used(&*make());
 }
 
 fn new_runs_have_zero_statistics_and_the_search_mode(s: &dyn Store) {
@@ -670,4 +672,74 @@ fn finishing_a_later_attempt_removes_the_earlier_attempts_rows(s: &dyn Store) {
     assert_eq!(s.count_trials(&r.id).unwrap(), 0);
     assert!(s.get_catalog(&r.id).unwrap().is_empty());
     assert_eq!(s.get_run(&r.id).unwrap().unwrap().catalog_size, 0);
+}
+
+fn worker_secret_hashes_are_stored_apart_from_the_worker_record(s: &dyn Store) {
+    let w = s.register_worker("remote", "{}", 1).unwrap();
+    assert_eq!(s.worker_secret_hash(&w.id).unwrap(), None);
+    s.set_worker_secret_hash(&w.id, "abc123").unwrap();
+    assert_eq!(
+        s.worker_secret_hash(&w.id).unwrap().as_deref(),
+        Some("abc123")
+    );
+    assert_eq!(s.worker_secret_hash("wrk_unknown").unwrap(), None);
+    assert!(s.set_worker_secret_hash("wrk_unknown", "x").is_err());
+    let listed = format!("{:?}", s.list_workers().unwrap());
+    assert!(
+        !listed.contains("abc123"),
+        "the hash is not part of the worker record"
+    );
+}
+
+fn a_new_attempt_collects_the_blobs_only_its_discarded_rows_used(s: &dyn Store) {
+    // A second run keeps a trial whose detail has the same bytes as one of the first run's.
+    let (other, other_job) = leased(s, "wx");
+    let shared = b"{\"shared\":1}".to_vec();
+    let mut keep = trial(0);
+    keep.detail = Some(shared.clone());
+    s.ingest_trials(
+        &other_job.id,
+        "wx",
+        true,
+        &batch(vec![row(0, "a.b", true)], vec![keep]),
+        5,
+    )
+    .unwrap();
+
+    let r = new_run(s, "t", 1);
+    let j = s.enqueue_job(&r.id, "run", "{}", 2).unwrap();
+    s.lease_job("w1", 10, 1_000).unwrap().unwrap();
+    let mut mine = trial(0);
+    mine.detail = Some(shared.clone());
+    mine.output = Some(b"{\"stdout\":\"only mine\"}".to_vec());
+    s.ingest_trials(
+        &j.id,
+        "w1",
+        true,
+        &batch(vec![row(0, "a.b", true)], vec![mine]),
+        1_100,
+    )
+    .unwrap();
+    let mine_row = s.get_trial(&r.id, 0).unwrap().unwrap();
+    let (detail_ref, output_ref) = (mine_row.detail_ref.unwrap(), mine_row.output_ref.unwrap());
+    assert!(s.get_blob(&output_ref).unwrap().is_some());
+
+    s.lease_job("w2", 10, 100_000).unwrap().unwrap();
+    s.ingest_trials(
+        &j.id,
+        "w2",
+        true,
+        &batch(vec![row(0, "x.y", true)], vec![trial(0)]),
+        100_001,
+    )
+    .unwrap();
+    assert!(
+        s.get_blob(&output_ref).unwrap().is_none(),
+        "an orphaned blob is collected"
+    );
+    assert!(
+        s.get_blob(&detail_ref).unwrap().is_some(),
+        "a blob another run still uses stays"
+    );
+    assert_eq!(s.count_trials(&other.id).unwrap(), 1);
 }

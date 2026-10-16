@@ -57,8 +57,9 @@ pub async fn register(
     if caps.len() > MAX_CAPS_BYTES {
         return Err(ApiError::bad_request("caps is too large"));
     }
-    let w = blocking(move || s.svc.register_worker(&b.name, &caps)).await?;
-    Ok(Json(json!({ "worker_id": w.id })))
+    let (w, secret) = blocking(move || s.svc.register_remote_worker(&b.name, &caps)).await?;
+    // The secret is shown once; only its hash is stored. The worker presents it to send trial records.
+    Ok(Json(json!({ "worker_id": w.id, "worker_secret": secret })))
 }
 
 #[derive(Deserialize)]
@@ -174,6 +175,8 @@ pub async fn heartbeat(
 #[derive(Deserialize)]
 pub struct TrialsBody {
     worker_id: String,
+    /// The secret issued at registration. Required: a worker id alone is not a credential.
+    worker_secret: Option<String>,
     trials: Vec<TrialReport>,
 }
 
@@ -187,7 +190,11 @@ pub async fn trials(
     caller.need(Role::Run)?;
     check_job(&job)?;
     check_worker(&b.worker_id)?;
-    let receipt = blocking(move || s.svc.ingest_trials(&job, &b.worker_id, &b.trials)).await?;
+    let receipt = blocking(move || {
+        s.svc
+            .ingest_trials_with_secret(&job, &b.worker_id, b.worker_secret.as_deref(), &b.trials)
+    })
+    .await?;
     Ok(Json(json!({
         "ok": true,
         "inserted": receipt.inserted,

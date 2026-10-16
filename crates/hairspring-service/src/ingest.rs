@@ -22,6 +22,15 @@ const MAX_HASH_CHARS: usize = 64;
 /// Prefix of the worker ids the process itself uses; remote workers get `wrk_` ids from the server.
 const LOCAL_WORKER_PREFIX: &str = "local-";
 
+/// Equality that does not stop at the first difference.
+fn same_text(a: &str, b: &str) -> bool {
+    a.len() == b.len()
+        && a.bytes()
+            .zip(b.bytes())
+            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+            == 0
+}
+
 fn invalid(why: impl Into<String>) -> ServiceError {
     ServiceError::InvalidRequest(why.into())
 }
@@ -248,12 +257,53 @@ impl Service {
 
     /// Stores a batch of trial records from the worker holding the job's lease, all or nothing. Sending a batch
     /// again changes nothing.
+    ///
+    /// This form is for the process's own workers, which need no secret. A remote worker uses
+    /// [`Service::ingest_trials_with_secret`].
     pub fn ingest_trials(
         &self,
         job_id: &str,
         worker_id: &str,
         reports: &[TrialReport],
     ) -> Result<IngestReceipt> {
+        self.ingest_trials_with_secret(job_id, worker_id, None, reports)
+    }
+
+    /// Checks that the caller really is the worker it names. A worker id is not a credential (anyone with a `run`
+    /// token can see ids), so a remote worker proves itself with the secret it was given at registration. Trust is
+    /// only ever read for an authenticated worker.
+    fn authenticate_worker(&self, worker_id: &str, secret: Option<&str>) -> Result<()> {
+        let denied = || invalid("invalid worker credential");
+        if worker_id.starts_with(LOCAL_WORKER_PREFIX) {
+            // The process's own workers are never reachable over the network and carry no secret.
+            return if secret.is_none() {
+                Ok(())
+            } else {
+                Err(denied())
+            };
+        }
+        let given = secret.filter(|s| !s.is_empty()).ok_or_else(denied)?;
+        let stored = self
+            .store
+            .worker_secret_hash(worker_id)?
+            .ok_or_else(denied)?;
+        if same_text(&hairspring_store::sha256_hex(given.as_bytes()), &stored) {
+            Ok(())
+        } else {
+            Err(denied())
+        }
+    }
+
+    /// Stores a batch of trial records from a remote worker, after checking its secret. See
+    /// [`Service::ingest_trials`].
+    pub fn ingest_trials_with_secret(
+        &self,
+        job_id: &str,
+        worker_id: &str,
+        secret: Option<&str>,
+        reports: &[TrialReport],
+    ) -> Result<IngestReceipt> {
+        self.authenticate_worker(worker_id, secret)?;
         if reports.len() > MAX_TRIALS_PER_BATCH {
             return Err(invalid(format!(
                 "a batch may hold at most {MAX_TRIALS_PER_BATCH} trials"

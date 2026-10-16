@@ -190,7 +190,13 @@ fn sleep_unless_stopped(stop: &AtomicBool, total: Duration) {
     }
 }
 
-fn register(api: &Api, cfg: &WorkerConfig, stop: &AtomicBool) -> Result<String, WorkerError> {
+/// Registers and returns the worker id with the secret the server issued for it. The secret proves later requests
+/// that carry trial records come from this worker and not from someone who read its id.
+fn register(
+    api: &Api,
+    cfg: &WorkerConfig,
+    stop: &AtomicBool,
+) -> Result<(String, String), WorkerError> {
     let mut backoff = Duration::from_millis(200);
     loop {
         match api.post(
@@ -198,11 +204,15 @@ fn register(api: &Api, cfg: &WorkerConfig, stop: &AtomicBool) -> Result<String, 
             &json!({ "name": cfg.name, "caps": { "backends": ["sim"] } }),
         ) {
             Ok((_, body)) => {
-                if let Some(id) = serde_json::from_str::<Value>(&body)
-                    .ok()
-                    .and_then(|v| v["worker_id"].as_str().map(str::to_string))
-                {
-                    return Ok(id);
+                let parsed = serde_json::from_str::<Value>(&body).ok();
+                let text = |key: &str| {
+                    parsed
+                        .as_ref()
+                        .and_then(|v| v[key].as_str().map(str::to_string))
+                };
+                if let Some(id) = text("worker_id") {
+                    // A server that predates worker secrets issues none; its workers send no trial records.
+                    return Ok((id, text("worker_secret").unwrap_or_default()));
                 }
             }
             Err(e) => {
@@ -224,6 +234,7 @@ fn execute(
     api: &Api,
     engine: &Engine,
     worker_id: &str,
+    secret: &str,
     job: &LeasedJob,
     heartbeat: Duration,
     stop: &AtomicBool,
@@ -270,7 +281,7 @@ fn execute(
             json!({ "worker_id": worker_id, "error": "interrupted by worker shutdown" }),
         ),
         Ok(Ok(outcome)) => {
-            let outcome = deliver_trials(api, worker_id, job, outcome);
+            let outcome = deliver_trials(api, worker_id, secret, job, outcome);
             (job_path("complete"), completion_body(worker_id, outcome))
         }
         Ok(Err(e)) => (
@@ -296,13 +307,19 @@ fn execute(
 /// Sends the run's per-trial records, batch by batch, and says in the outcome how many there were. A batch that cannot
 /// be delivered is reported and skipped: the count in the outcome then disagrees with the rows the server holds, and
 /// the server marks the run incomplete rather than treating the missing trials as passes.
-fn deliver_trials(api: &Api, worker_id: &str, job: &LeasedJob, outcome: RunOutcome) -> RunOutcome {
+fn deliver_trials(
+    api: &Api,
+    worker_id: &str,
+    secret: &str,
+    job: &LeasedJob,
+    outcome: RunOutcome,
+) -> RunOutcome {
     if outcome.trial_log.is_empty() {
         return outcome;
     }
     let path = format!("/api/worker/jobs/{}/trials", job.job_id);
     for batch in request_batches(&outcome.trial_log) {
-        let body = json!({ "worker_id": worker_id, "trials": batch });
+        let body = json!({ "worker_id": worker_id, "worker_secret": secret, "trials": batch });
         if let Err(e) = api.post_reliably(&path, &body, &AtomicBool::new(false)) {
             eprintln!(
                 "hairspring-worker: could not deliver {} trial records of job {}: {e}",
@@ -322,7 +339,7 @@ fn deliver_trials(api: &Api, worker_id: &str, job: &LeasedJob, outcome: RunOutco
 /// and rejected credentials end the loop.
 pub fn run_loop(engine: &Engine, cfg: &WorkerConfig, stop: &AtomicBool) -> Result<(), WorkerError> {
     let api = Api::new(cfg)?;
-    let mut worker_id = register(&api, cfg, stop)?;
+    let (mut worker_id, mut secret) = register(&api, cfg, stop)?;
     let mut backoff = Duration::from_millis(200);
     while !stop.load(Ordering::SeqCst) {
         match api.post("/api/worker/lease", &json!({ "worker_id": worker_id })) {
@@ -330,7 +347,7 @@ pub fn run_loop(engine: &Engine, cfg: &WorkerConfig, stop: &AtomicBool) -> Resul
             Ok((_, body)) => match serde_json::from_str::<LeasedJob>(&body) {
                 Ok(job) => {
                     backoff = Duration::from_millis(200);
-                    execute(&api, engine, &worker_id, &job, cfg.heartbeat, stop)?;
+                    execute(&api, engine, &worker_id, &secret, &job, cfg.heartbeat, stop)?;
                 }
                 Err(e) => {
                     eprintln!("hairspring-worker: ignoring an unreadable job from the server: {e}");
@@ -341,7 +358,7 @@ pub fn run_loop(engine: &Engine, cfg: &WorkerConfig, stop: &AtomicBool) -> Resul
                 eprintln!(
                     "hairspring-worker: the server no longer knows this worker; registering again"
                 );
-                worker_id = register(&api, cfg, stop)?;
+                (worker_id, secret) = register(&api, cfg, stop)?;
             }
             Err(e) => {
                 check_auth(&e)?;

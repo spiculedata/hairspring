@@ -248,3 +248,89 @@ fn only_the_lease_holder_may_send_trials_and_only_while_the_run_is_open() {
     assert!(matches!(err, ServiceError::InvalidRequest(_)));
     assert_eq!(store.count_trials(&job.run_id).unwrap(), 0);
 }
+
+fn rejected_with(svc: &Service, job: &LeasedJob, worker: &str, secret: Option<&str>) {
+    let err = svc
+        .ingest_trials_with_secret(&job.job_id, worker, secret, &[one(1)])
+        .unwrap_err();
+    assert!(matches!(err, ServiceError::InvalidRequest(_)), "{err}");
+}
+
+#[test]
+fn a_trusted_workers_id_is_useless_without_its_secret() {
+    let (svc, store, engine) = setup();
+    let (owner, secret) = svc.register_remote_worker("owner", "{}").unwrap();
+    svc.set_worker_trust(&owner.id, true).unwrap();
+    let job = lease(&svc, &engine, &owner.id);
+    // Another caller names the trusted worker's id.
+    rejected_with(&svc, &job, &owner.id, None);
+    rejected_with(&svc, &job, &owner.id, Some("not-the-secret"));
+    rejected_with(&svc, &job, &owner.id, Some(""));
+    // A second registered worker's own secret does not work under the owner's id either.
+    let (_, other_secret) = svc.register_remote_worker("other", "{}").unwrap();
+    rejected_with(&svc, &job, &owner.id, Some(&other_secret));
+    assert_eq!(store.count_trials(&job.run_id).unwrap(), 0);
+    // The owner, with its secret, is accepted and its rows count as trusted.
+    svc.ingest_trials_with_secret(&job.job_id, &owner.id, Some(&secret), &[one(1)])
+        .unwrap();
+    assert!(svc.run_trust(&job.run_id).unwrap().unwrap().all_trusted);
+}
+
+#[test]
+fn a_worker_registered_without_a_secret_cannot_send_trials_remotely() {
+    let (svc, _, engine) = setup();
+    let plain = svc.register_worker("plain", "{}").unwrap();
+    let job = lease(&svc, &engine, &plain.id);
+    rejected_with(&svc, &job, &plain.id, None);
+    rejected_with(&svc, &job, &plain.id, Some("anything"));
+}
+
+#[test]
+fn another_workers_secret_replayed_under_a_new_worker_id_is_refused() {
+    let (svc, _, engine) = setup();
+    let (_, victim_secret) = svc.register_remote_worker("victim", "{}").unwrap();
+    let (attacker, _) = svc.register_remote_worker("attacker", "{}").unwrap();
+    let job = lease(&svc, &engine, &attacker.id);
+    rejected_with(&svc, &job, &attacker.id, Some(&victim_secret));
+}
+
+#[test]
+fn the_local_prefix_cannot_be_claimed_by_a_remote_secret_holder() {
+    let (svc, _, engine) = setup();
+    let (_, secret) = svc.register_remote_worker("remote", "{}").unwrap();
+    let job = lease(&svc, &engine, &local());
+    // A worker id that merely starts with the local prefix is not registered and has no secret.
+    let err = svc
+        .ingest_trials_with_secret(&job.job_id, "local-not-ours", Some(&secret), &[one(1)])
+        .unwrap_err();
+    assert!(matches!(err, ServiceError::InvalidRequest(_)), "{err}");
+}
+
+#[test]
+fn failure_text_in_a_declaration_is_held_to_the_same_limits_as_event_text() {
+    use hairspring_props::{Decl, Loc};
+    let (svc, store, engine) = setup();
+    let job = lease(&svc, &engine, &local());
+    let good = one(1);
+    for (msg, file) in [
+        ("bidi \u{202e} text", "f.c"),
+        ("line\nbreak", "f.c"),
+        ("ansi \u{1b}[31m", "f.c"),
+        ("ok", "evil\u{202e}.c"),
+    ] {
+        let mut r = good.clone();
+        let mut d = TrialDigest::decode(&r.digest).unwrap();
+        d.entries[0].decl = Some(Decl {
+            msg: msg.to_string(),
+            loc: Some(Loc {
+                file: file.to_string(),
+                line: 1,
+                func: None,
+            }),
+        });
+        // The codec refuses what it is asked to read; build the bytes by hand-encoding then corrupting nothing:
+        // decoding must fail, so the service must too.
+        r.digest = d.encode();
+        refused(&svc, &store, &job, &[r]);
+    }
+}

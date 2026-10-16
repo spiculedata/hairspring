@@ -113,11 +113,11 @@ fn sending_a_batch_again_changes_nothing() {
 #[test]
 fn every_trial_row_names_its_worker_and_whether_it_was_trusted() {
     let (svc, store, engine) = setup();
-    let remote = svc.register_worker("remote", "{}").unwrap();
+    let (remote, secret) = svc.register_remote_worker("remote", "{}").unwrap();
     let job = lease(&svc, &engine, &remote.id);
     let mut rec = Recorder::new();
     let report = rec.pass(1, &props("a.id", AssertKind::Always, 3, 0));
-    svc.ingest_trials(&job.job_id, &remote.id, &[report])
+    svc.ingest_trials_with_secret(&job.job_id, &remote.id, Some(&secret), &[report])
         .unwrap();
     let row = store.get_trial(&job.run_id, 0).unwrap().unwrap();
     assert_eq!(
@@ -140,7 +140,7 @@ fn every_trial_row_names_its_worker_and_whether_it_was_trusted() {
     svc.set_worker_trust(&remote.id, true).unwrap();
     let job3 = lease(&svc, &engine, &remote.id);
     let report = Recorder::new().pass(1, &props("a.id", AssertKind::Always, 3, 0));
-    svc.ingest_trials(&job3.job_id, &remote.id, &[report])
+    svc.ingest_trials_with_secret(&job3.job_id, &remote.id, Some(&secret), &[report])
         .unwrap();
     assert!(
         store
@@ -155,11 +155,11 @@ fn every_trial_row_names_its_worker_and_whether_it_was_trusted() {
 fn a_run_with_one_untrusted_trial_is_flagged_unverified_and_the_claim_gate_refuses_it() {
     use hairspring_service::claims::{claim_gate, Confirmation, FailureEvidence};
     let (svc, _, engine) = setup();
-    let remote = svc.register_worker("remote", "{}").unwrap();
+    let (remote, secret) = svc.register_remote_worker("remote", "{}").unwrap();
     let job = lease(&svc, &engine, &remote.id);
     let mut rec = Recorder::new();
     let report = rec.pass(1, &props("a.id", AssertKind::Always, 3, 0));
-    svc.ingest_trials(&job.job_id, &remote.id, &[report])
+    svc.ingest_trials_with_secret(&job.job_id, &remote.id, Some(&secret), &[report])
         .unwrap();
     let trust = svc.run_trust(&job.run_id).unwrap().unwrap();
     assert!(!trust.all_trusted);
@@ -381,6 +381,56 @@ fn the_local_path_ingests_the_outcomes_trial_log_before_completing() {
     let run = store.get_run(&job.run_id).unwrap().unwrap();
     assert!(!run.ingest_incomplete);
     assert_eq!(svc.property_stats(&job.run_id).unwrap()[0].trials, 600);
+}
+
+/// Two trials that disagree about an id's kind, the second carrying the marker text in its message and location.
+fn mismatching_trials() -> Vec<TrialReport> {
+    let mut rec = Recorder::new();
+    let first = rec.pass(1, &props("guest.idmark", AssertKind::Always, 3, 0));
+    let mut other = props("guest.idmark", AssertKind::Sometimes, 3, 0);
+    other.properties[0].msg = "GUESTMSGMARK".to_string();
+    other.properties[0].loc = Some(hairspring_props::Loc {
+        file: "GUESTFILEMARK.c".to_string(),
+        line: 1,
+        func: None,
+    });
+    let second = rec.pass(2, &other);
+    vec![first, second]
+}
+
+#[test]
+fn the_programs_text_from_a_kind_mismatch_is_not_stored_in_the_run_summary() {
+    let (svc, store, engine) = setup();
+    let job = lease(&svc, &engine, &local());
+    svc.ingest_trials(&job.job_id, &local(), &mismatching_trials())
+        .unwrap();
+    finish(&svc, &job, &local(), passed(2, Some(2)));
+    let run = store.get_run(&job.run_id).unwrap().unwrap();
+    let stored = run.property_summary_json.clone().unwrap();
+    assert!(!stored.contains("MARK"), "{stored}");
+    let summary: hairspring_props::RunSummary = serde_json::from_str(&stored).unwrap();
+    assert_eq!(summary.kind_mismatches, 1, "the count stays");
+    assert!(summary.kind_mismatch_details.is_empty());
+    let outcome =
+        serde_json::to_string(&svc.outcome(&job.run_id).unwrap().unwrap().property_run).unwrap();
+    assert!(!outcome.contains("MARK"), "{outcome}");
+}
+
+#[test]
+fn nothing_from_the_program_appears_in_a_run_detail_outside_the_guest_object() {
+    let (svc, _, engine) = setup();
+    let job = lease(&svc, &engine, &local());
+    svc.ingest_trials(&job.job_id, &local(), &mismatching_trials())
+        .unwrap();
+    finish(&svc, &job, &local(), passed(2, Some(2)));
+    let mut detail = serde_json::to_value(svc.get_run(&job.run_id).unwrap().unwrap()).unwrap();
+    let guest = detail["properties"]["guest"].take();
+    assert!(guest.is_object(), "{detail}");
+    let outside = detail.to_string();
+    assert!(
+        !outside.contains("guest.idmark") && !outside.contains("MARK"),
+        "{outside}"
+    );
 }
 
 #[test]

@@ -271,17 +271,15 @@ impl Service {
     }
 }
 
-/// The run summary as JSON, small enough to store: kind-mismatch details are dropped first.
+/// The run summary as JSON. The kind-mismatch details are left out: they carry ids and failure text from the program
+/// under test, and nothing that reads a stored run should meet that text outside a marked `guest` object. The count
+/// of mismatches is kept.
 fn summary_json(summary: &RunSummary) -> Option<String> {
-    let full = serde_json::to_string(summary).ok()?;
-    if full.len() <= MAX_SUMMARY_BYTES {
-        return Some(full);
-    }
-    let short = RunSummary {
+    let plain = RunSummary {
         kind_mismatch_details: Vec::new(),
         ..summary.clone()
     };
-    serde_json::to_string(&short)
+    serde_json::to_string(&plain)
         .ok()
         .filter(|s| s.len() <= MAX_SUMMARY_BYTES)
 }

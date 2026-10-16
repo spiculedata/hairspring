@@ -484,6 +484,14 @@ impl Store for SqliteStore {
         trials::worker_trusted(&self.conn(), id)
     }
 
+    fn set_worker_secret_hash(&self, id: &str, hash: &str) -> Result<()> {
+        trials::set_worker_secret_hash(&self.conn(), id, hash)
+    }
+
+    fn worker_secret_hash(&self, id: &str) -> Result<Option<String>> {
+        trials::worker_secret_hash(&self.conn(), id)
+    }
+
     fn register_worker(&self, name: &str, caps_json: &str, now: i64) -> Result<WorkerRecord> {
         let id = new_id("wrk");
         self.conn().execute(
