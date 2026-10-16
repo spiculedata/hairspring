@@ -108,6 +108,18 @@ fn a_run_where_every_trial_timed_out_is_an_error_not_a_pass() {
 }
 
 #[test]
+fn an_all_timeout_error_counts_the_trials_it_attempted() {
+    let d = scratch("all-counts");
+    let out = engine(&d, "sleep 30", 2, false)
+        .run(&RunRequest::new("svc", 1), &mut |_| true)
+        .unwrap();
+    assert_eq!(out.status, RunStatus::Error, "{out:?}");
+    assert_eq!((out.trials, out.inconclusive), (2, 2), "{out:?}");
+    assert_eq!(out.steps_executed, 2, "{out:?}");
+    assert!(out.inconclusive <= out.trials, "{out:?}");
+}
+
+#[test]
 fn a_real_violation_after_a_timeout_is_still_found() {
     let d = scratch("then-violation");
     let out = engine(&d, HANG_THEN_VIOLATION, 5, false)

@@ -15,5 +15,7 @@ serde_json = "1.0.154"
 
 
 [dev-dependencies]
+# The all-inconclusive test runs a real Hermit-backed engine against a fake Hermit binary.
+hairspring-hermit = { path = "../hairspring-hermit" }
 # The shared test setup runs against PostgreSQL too when HAIRSPRING_TEST_PG_URL is set.
 hairspring-store = { path = "../hairspring-store", features = ["postgres"] }
