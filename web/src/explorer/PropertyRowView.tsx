@@ -5,7 +5,7 @@ import type { PropertyRow } from '../types';
 import { formatCount, seenInInconclusive, statusLabel, statusMark } from '../wording';
 
 /** Height of every row, which is what makes windowing a sum. */
-export const ROW_HEIGHT = 108;
+export const ROW_HEIGHT = 88;
 /** Vertical padding (2 x 8px) plus the 1px row border, set in explorer.css. */
 const ROW_CHROME = 17;
 /** Every cell's content sits in a block of exactly this height with overflow hidden, so no row can grow. */

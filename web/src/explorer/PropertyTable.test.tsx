@@ -1,6 +1,7 @@
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { row } from './fixtures';
+import { COLUMN_KEYS, COLUMN_WIDTHS_PX, columnBudgetPx } from './columns';
 import { CLIP_HEIGHT, ROW_HEIGHT } from './PropertyRowView';
 import { PropertyTable } from './PropertyTable';
 
@@ -95,6 +96,17 @@ describe('PropertyTable', () => {
     expect(body).toContain(`<tr aria-rowindex="2" style="height:${ROW_HEIGHT}px">`);
     expect(CLIP_HEIGHT).toBeLessThan(ROW_HEIGHT);
     expect(body).toContain('clip-line');
+  });
+
+  it('sets each column to its budgeted width, and the table to the budget so it scrolls instead of squeezing', () => {
+    const html = renderToString(<PropertyTable properties={[row()]} />);
+    const widths = [...html.matchAll(/<col style="width:(\d+)px"/g)].map((m) => Number(m[1]));
+    expect(widths).toEqual(COLUMN_KEYS.map((k) => COLUMN_WIDTHS_PX[k]));
+    expect(html).toContain(`min-width:${columnBudgetPx()}px`);
+  });
+
+  it('tells a narrow screen that the table scrolls sideways', () => {
+    expect(renderToString(<PropertyTable properties={[row()]} />)).toContain('class="scroll-hint"');
   });
 
   it('on a run stopped at its first failure, every row keeps its counts in the unclamped figure', () => {
