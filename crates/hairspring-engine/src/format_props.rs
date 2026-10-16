@@ -48,7 +48,7 @@ fn row(stat: &PropertyStat, stopped: bool) -> String {
 fn table(outcome: &RunOutcome) -> String {
     let mut out = String::new();
     let run = outcome.property_run.clone().unwrap_or_default();
-    let stopped = outcome.status == RunStatus::Failed;
+    let stopped = outcome.stopped_at_first_failure;
     out.push_str(&format!(
         "  properties ({} trials with events: {} degraded, {} perturbing, {} without an end report, {} timed out):\n",
         run.trials,

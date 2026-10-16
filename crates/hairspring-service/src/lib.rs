@@ -286,6 +286,7 @@ impl Service {
             elapsed_ms,
             failure,
             error,
+            stopped_at_first_failure: run.stopped_at_first_failure,
             properties,
             property_run,
             trial_log: Vec::new(),

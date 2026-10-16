@@ -134,6 +134,8 @@ fn outcome_with_one_rated_trial(status: hairspring_engine::report::RunStatus) ->
     let summary = run.summary();
     let mut outcome = RunOutcome::passed(1, 1, 1).with_properties(run.finish(), summary);
     outcome.status = status;
+    // Every failed run of this engine stopped at its first failure.
+    outcome.stopped_at_first_failure = status == hairspring_engine::report::RunStatus::Failed;
     outcome
 }
 
@@ -159,4 +161,29 @@ fn a_run_that_used_its_budget_prints_k_over_n_and_the_zero_failure_bound() {
     assert!(text.contains("95% upper bound 95.00% (exact)"), "{text}");
     assert!(!text.contains("at most"), "{text}");
     assert!(!text.contains("not a rate"), "{text}");
+}
+
+#[test]
+fn a_failed_run_that_did_not_stop_at_its_first_failure_still_prints_its_rate() {
+    // Sweep mode will fail a run without stopping it; the recorded flag, not the status, decides.
+    let outcome = RunOutcome {
+        stopped_at_first_failure: false,
+        ..outcome_with_one_rated_trial(hairspring_engine::report::RunStatus::Failed)
+    };
+    let text = hairspring_engine::format::to_text("svc", &outcome);
+    assert!(!text.contains("not a rate"), "{text}");
+    assert!(text.contains("0/1"), "{text}");
+}
+
+#[test]
+fn a_passed_run_whose_record_says_it_stopped_at_its_first_failure_prints_no_rate() {
+    let outcome = RunOutcome {
+        stopped_at_first_failure: true,
+        ..outcome_with_one_rated_trial(hairspring_engine::report::RunStatus::Passed)
+    };
+    let text = hairspring_engine::format::to_text("svc", &outcome);
+    assert!(
+        text.contains("not a rate (stopped at first failure)"),
+        "{text}"
+    );
 }
