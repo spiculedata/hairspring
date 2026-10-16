@@ -267,16 +267,13 @@ impl Service {
         let short = clean.status == RunStatus::Passed
             && uses_rows
             && budget.is_some_and(|b| held < b.max_trials);
-        let limited = short
-            && budget.is_some_and(|b| {
-                let started = self
-                    .store
-                    .get_run(run_id)
-                    .ok()
-                    .flatten()
-                    .and_then(|r| r.started_at);
+        let limited = match budget {
+            Some(b) if short => {
+                let started = self.store.get_run(run_id)?.and_then(|r| r.started_at);
                 hit_time_or_step_limit(&b, started, now_ms(), clean.steps_executed, attempt)
-            });
+            }
+            _ => false,
+        };
         let mut incomplete = !counts_match || (short && !limited);
         let (properties, property_summary_json) = if held == 0 {
             (Vec::new(), None)
