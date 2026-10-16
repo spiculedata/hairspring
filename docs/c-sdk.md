@@ -65,9 +65,9 @@ the thread-local slot pointer is declared `initial-exec` on Linux (one load from
 
 | Variable | Effect |
 |---|---|
-| `HAIRSPRING_EVENTS_FILE=path` | (ignored in a set-uid or set-gid process: `secure_getenv` on glibc, `issetugid` on macOS and the BSDs) write events to this file (`O_APPEND | O_NOFOLLOW`, so a symlink is refused) instead of stderr; if it cannot be opened, events go to stderr and `end.dropped` counts it |
+| `HAIRSPRING_EVENTS_FILE=path` | (ignored in a set-uid or set-gid process: `secure_getenv` on glibc 2.17 or newer, `issetugid` on macOS and the BSDs; on any other libc the SDK reads it with plain `getenv`, so a set-uid process still honours it there) write events to this file (`O_APPEND | O_NOFOLLOW`, so a symlink is refused) instead of stderr; if it cannot be opened, events go to stderr and `end.dropped` counts it |
 | `HAIRSPRING_EVENTS=off` | record as usual but write nothing |
-| `HAIRSPRING_SIGNAL_REPORT=1` | install SIGSEGV, SIGBUS, SIGABRT, SIGFPE, SIGILL and SIGTERM handlers that write the report (reason `signal`, status = the signal number) and re-raise; `hello.signal_handlers` is then true only if every handler was installed. A signal that already has a non-default action is left alone and counts as not installed: an inherited `SIG_IGN` (`trap '' TERM`, `nohup`) stays ignored, and a handler a sanitizer or another runtime put there stays in place (under AddressSanitizer, SIGSEGV and SIGBUS are such signals) Default off: handlers add syscalls at startup and change how a crash looks under Hermit |
+| `HAIRSPRING_SIGNAL_REPORT=1` | install SIGSEGV, SIGBUS, SIGABRT, SIGFPE, SIGILL and SIGTERM handlers that write the report (reason `signal`, status = the signal number) and re-raise; `hello.signal_handlers` is then true only if every handler was installed. A signal that already has a non-default action is left alone and counts as not installed: an inherited `SIG_IGN` (`trap '' TERM`, `nohup`) stays ignored, and a handler a sanitizer or another runtime put there stays in place (under AddressSanitizer, SIGSEGV and SIGBUS are such signals, and on macOS SIGFPE too). Default off: handlers add syscalls at startup and change how a crash looks under Hermit |
 | `HAIRSPRING_PROC=tag` | the root process tag: 1 to 64 bytes of `[A-Za-z0-9._:/-]`, not `_eval`; default `p1`. An invalid tag is refused (the default is used and `end.dropped` is incremented), never shortened |
 | `HAIRSPRING_PROC_PID` | set by the SDK (see below); do not set it |
 
@@ -76,11 +76,20 @@ the thread-local slot pointer is declared `initial-exec` on Linux (one load from
 At startup the SDK duplicates descriptor 2 (or opens the events file) to a high number with `fcntl(F_DUPFD_CLOEXEC)`
 and writes only to that copy, so a program that closes stderr and then opens `data.db` (which becomes descriptor 2)
 cannot receive the report. This is one extra syscall at startup (two when the first high number is refused), which
-the T3 "A" arm must also make. The SDK also remembers which file the copy refers to (`st_dev`, `st_ino`) and, before
-writing the report, checks it with one `fstat` (a second extra syscall for the "A" arm, this one at exit). A program
-that `dup2`s something onto the copy's number, or closes every descriptor, therefore loses the report rather than
-sending it somewhere else: the SDK writes nothing and counts it in `end.dropped` (which the lost report cannot show;
-the run's `report_missing` does). With a very low `RLIMIT_NOFILE` no private copy can be made; the SDK then falls back
+the T3 "A" arm must also make. The SDK also remembers which file the copy refers to (`st_dev`, `st_ino`) and checks it with one `fstat` before the
+exit report and before every `eval` line (so each `eval` line costs one extra syscall; the identity is recorded before
+the descriptor is published, so a second thread cannot see it half set up). A program that `dup2`s something onto the
+copy's number, or closes every descriptor, loses the events from then on: the SDK writes nothing and counts it in
+`end.dropped` (which a lost report cannot show; the run's `report_missing` does).
+
+This check is best effort, not a guarantee. The check and the `write` are separate steps, so a program thread that
+`dup2`s a file onto the descriptor between them can still receive one event line. The same holds while a long exit
+report is being written line by line (one check, many writes), and in the low-`RLIMIT_NOFILE` fallback below when
+another thread closes and reopens descriptor 0, 1 or 2. A reviewer reproduced this with a thread flipping the
+descriptor in a loop (10 of 200 runs received a line). User space cannot close the window, so programs under test must
+not redirect, close or reuse the events descriptor while running.
+
+With a very low `RLIMIT_NOFILE` no private copy can be made; the SDK then falls back
 to the original descriptor, still exposed to the program, and counts that in `end.dropped`. If stderr is already
 closed at startup there is no output. The copy is close-on-exec: an exec'd image makes its own copy from its inherited
 descriptor 2.
@@ -230,7 +239,7 @@ rule. For the T3 "A" arm (which replays the instrumented run's syscalls without 
   `work`, one per thread slot in use, one `end`. Each write's length is fixed by the catalog (ids, messages, file
   names) and the number of slots in use, never by a counter value.
 * Besides the writes: one `fcntl(F_DUPFD_CLOEXEC)` at startup (two if the first high number is refused; one `open`
-  more with `HAIRSPRING_EVENTS_FILE`), one `fstat` before the report, two `rt_sigprocmask` around the report (and
+  more with `HAIRSPRING_EVENTS_FILE`), one `fstat` before the report and one more before each `eval` line, two `rt_sigprocmask` around the report (and
   around each `eval` line), and with `HAIRSPRING_SIGNAL_REPORT=1` one `sigaltstack` and six `rt_sigaction` at startup.
 * The exit report can interleave with threads that are still running, and they can add lines of their own (an
   `eval`) between the report's.
@@ -546,7 +555,7 @@ On aarch64 Linux, gcc 13.3 and clang 18 produce the same structure with `bl __aa
   signal during the report, fork while another thread is inside `hs_thread`, a dup2 onto the events descriptor (also before an `eval` line, and in the low-limit fallback), an inherited ignored SIGTERM with handlers requested, a descriptor limit too low for a private copy, an empty catalog, constant thread-line length, and **two processes writing to one pipe**
   (Linux) or one events file (macOS), 20 rounds, every line checked to be one whole object.
 * AddressSanitizer and UBSan: `make -C sdks/c test BUILD=build/asan EXTRA="-fsanitize=address,undefined"` is clean on
-  macOS. Two tests skip with a message under ASan, because ASan owns SIGSEGV and the SDK leaves it alone: the
+  macOS. Two tests skip with a message under ASan, because ASan owns SIGSEGV (and SIGBUS, and on macOS also SIGFPE) and the SDK leaves them alone: the
   SIGSEGV crash tests, with and without `HAIRSPRING_SIGNAL_REPORT` (the SIGABRT test still runs).
 * `make nosyscall` and `make nosyscall-pic` (T1, Linux): the seccomp test, built normally and with `-fPIC`.
 * `make staticfail`: an id of 129 bytes, a message of 513 bytes and five values are rejected at compile time.
