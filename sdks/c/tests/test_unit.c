@@ -1,5 +1,6 @@
 /* test_unit.c -- in-process unit tests: formatting, counters, witnesses, merging, thread keys, slots, lines. */
 #include <pthread.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -367,6 +368,42 @@ static void test_a_failed_write_keeps_errno_and_is_counted(void) {
   hs_proc.dropped = dropped;
 }
 
+static void test_hs_report_leaves_errno_alone_even_when_the_events_descriptor_is_gone(void) {
+  int saved_fd = hs_proc.fd;
+  uint64_t dropped = hs_proc.dropped;
+  hs_proc.fd = 9999; /* not open: the descriptor check's fstat fails with EBADF */
+  hs_report_rearm();
+  errno = 1234;
+  hs_report();
+  CHECK_U64(errno, 1234);
+  hs_proc.fd = saved_fd;
+  hs_proc.dropped = dropped;
+  hs_report_rearm();
+}
+
+static void handler_for_test(int sig) { (void)sig; }
+
+static void test_existing_signal_handlers_are_left_alone(void) {
+  static const int signals[] = {SIGSEGV, SIGBUS, SIGABRT, SIGFPE, SIGILL, SIGTERM};
+  struct sigaction saved[sizeof signals / sizeof signals[0]];
+  stack_t saved_stack;
+  sigaltstack(NULL, &saved_stack);
+  for (size_t i = 0; i < sizeof signals / sizeof signals[0]; i++) sigaction(signals[i], NULL, &saved[i]);
+
+  struct sigaction mine;
+  memset(&mine, 0, sizeof mine);
+  mine.sa_handler = handler_for_test;
+  sigemptyset(&mine.sa_mask);
+  sigaction(SIGTERM, &mine, NULL);
+  CHECK(hs_install_signal_handlers() > 0); /* counted like a failed install */
+  struct sigaction now;
+  sigaction(SIGTERM, NULL, &now);
+  CHECK(now.sa_handler == handler_for_test);
+
+  for (size_t i = 0; i < sizeof signals / sizeof signals[0]; i++) sigaction(signals[i], &saved[i], NULL);
+  sigaltstack(&saved_stack, NULL);
+}
+
 static void test_ids_and_keys_are_cut_at_their_limits(void) {
   char longid[300];
   memset(longid, 'a', sizeof longid - 1);
@@ -382,6 +419,36 @@ static void test_ids_and_keys_are_cut_at_their_limits(void) {
 }
 
 /* ---- lines ---------------------------------------------------------------------------------------------------- */
+
+/* The offline section is a run of separate string globals. Under AddressSanitizer each has a poisoned redzone around
+** it, so the walk below must not be instrumented and must not call libc string functions (their interceptors check
+** the shadow). Redzone padding is zero bytes, so it reads as empty strings and is skipped. A future extractor that
+** reads this section from the binary file never sees redzones, but must skip NUL runs the same way. */
+#if defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 8)
+#define HS_T_NO_ASAN __attribute__((no_sanitize("address")))
+#else
+#define HS_T_NO_ASAN
+#endif
+
+HS_T_NO_ASAN static int offline_section_has(const char *want) {
+  const char *p = hs_offline_begin();
+  const char *end = hs_offline_end();
+  while (p < end) {
+    if (*p == 0) {
+      p++;
+      continue;
+    }
+    const char *a = p, *b = want;
+    while (*a && *a == *b) {
+      a++;
+      b++;
+    }
+    if (*a == 0 && *b == 0) return 1;
+    while (*a) a++;
+    p = a + 1;
+  }
+  return 0;
+}
 
 static void test_catalog_line_matches_offline_twin(void) {
   const struct hs_site *s = find_site("unit.always");
@@ -402,16 +469,7 @@ static void test_catalog_line_matches_offline_twin(void) {
   if (at) memmove(at, at + n, strlen(at + n) + 1);
   size_t body = strlen("HAIRSPRING_EVENT ");
   store[strlen(store) - 1] = 0; /* newline */
-  int found = 0;
-  const char *p = hs_offline_begin();
-  while (p < hs_offline_end()) {
-    if (*p == 0) {
-      p++;
-      continue;
-    }
-    if (strcmp(p, store + body) == 0) found = 1;
-    p += strlen(p) + 1;
-  }
+  int found = offline_section_has(store + body);
   CHECK(found);
 }
 
@@ -506,6 +564,8 @@ int main(void) {
   RUN(test_merged_witness_is_the_earliest_on_the_same_thread);
   RUN(test_conflicting_kinds_keep_their_own_counts_and_both_get_a_catalog_line);
   RUN(test_a_failed_write_keeps_errno_and_is_counted);
+  RUN(test_hs_report_leaves_errno_alone_even_when_the_events_descriptor_is_gone);
+  RUN(test_existing_signal_handlers_are_left_alone);
   RUN(test_ids_and_keys_are_cut_at_their_limits);
   RUN(test_catalog_line_matches_offline_twin);
   RUN(test_assert_line_length_ignores_counter_values);

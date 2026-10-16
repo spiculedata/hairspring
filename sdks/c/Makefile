@@ -20,7 +20,7 @@ SDK_OBJ := $(SDK_SRC:src/%.c=$(BUILD)/%.o)
 SDK_HDR := include/hairspring.h $(wildcard src/*.h)
 LIB := $(BUILD)/libhairspring.a
 
-SCENARIOS := basic merge fork threads crash exit_status eval big forkexec spawn closefd forklock execself dup2fd manyids conflict empty limits plain_exit segv abort threadsegv alive alarm
+SCENARIOS := basic merge fork threads crash exit_status eval big forkexec spawn closefd forklock execself dup2fd manyids conflict empty limits plain_exit segv abort threadsegv alive alarm evalfd sigign
 SAMPLES := $(SCENARIOS:%=$(BUILD)/hs_sample_%)
 
 .PHONY: all lib fixtures test unit proc nosyscall nosyscall-pic cxx staticfail disasm conformance clean

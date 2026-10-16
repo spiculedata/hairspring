@@ -19,6 +19,14 @@
 #define LINE_CAP 4096
 #define PREFIX "HAIRSPRING_EVENT "
 
+#if defined(__SANITIZE_ADDRESS__)
+#define HS_T_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define HS_T_ASAN 1
+#endif
+#endif
+
 static const char *g_dir; /* directory holding the hs_sample_<scenario> binaries */
 
 struct capture {
@@ -57,6 +65,10 @@ static pid_t spawn(const char *scenario, const char *arg, const char *const *env
   }
   char path[512];
   snprintf(path, sizeof path, "%s/hs_sample_%s", g_dir, scenario);
+  if (getenv("HS_TEST_IGNORE_TERM")) { /* test hook: SIG_IGN survives the exec, as with `trap '' TERM` */
+    signal(SIGTERM, SIG_IGN);
+    unsetenv("HS_TEST_IGNORE_TERM");
+  }
   const char *nofile = getenv("HS_TEST_NOFILE"); /* test hook: shrink the descriptor limit before the exec */
   if (nofile) {
     struct rlimit lim = {(rlim_t)atoi(nofile), (rlim_t)atoi(nofile)};
@@ -274,8 +286,13 @@ static void test_threads_beyond_the_table_are_capped_and_counted(void) {
 }
 
 static void test_signal_report_is_opt_in(void) {
+  struct capture *c;
+#ifdef HS_T_ASAN
+  /* ASan owns SIGSEGV; the SDK leaves an existing handler alone, so the opt-in report cannot be observed. */
+  printf("skip: signal report for SIGSEGV under AddressSanitizer\n");
+#else
   const char *on[] = {"HAIRSPRING_SIGNAL_REPORT=1", NULL};
-  struct capture *c = run_capture("crash", NULL, on);
+  c = run_capture("crash", NULL, on);
   CHECK(WIFSIGNALED(c->status) && WTERMSIG(c->status) == SIGSEGV);
   check_all_lines_wellformed(c);
   CHECK(has(c->lines[0], "\"signal_handlers\":true"));
@@ -285,6 +302,7 @@ static void test_signal_report_is_opt_in(void) {
   CHECK_U64(field(find_line(c, "assert", "p1", "crash.before"), "hits"), 1);
   CHECK_U64(count(c, "end", "p1"), 1);
   free_capture(c);
+#endif
 
   c = run_capture("crash", NULL, NULL);
   CHECK(WIFSIGNALED(c->status) && WTERMSIG(c->status) == SIGSEGV);
@@ -489,9 +507,13 @@ static void crash_reports(const char *scenario, int expected_signal, const char 
 }
 
 static void test_real_faults_are_reported_when_handlers_are_on(void) {
+#ifdef HS_T_ASAN
+  printf("skip: SIGSEGV reports under AddressSanitizer\n");
+#else
   crash_reports("segv", SIGSEGV, "segv.before");
-  crash_reports("abort", SIGABRT, "abort.before");
   crash_reports("threadsegv", SIGSEGV, "threadsegv.worker");
+#endif
+  crash_reports("abort", SIGABRT, "abort.before");
 }
 
 static void test_report_survives_a_timer_signal_during_the_write(void) {
@@ -529,6 +551,40 @@ static void test_a_lost_events_descriptor_is_dropped_not_redirected(void) {
   CHECK(!any_line_has(&data, "HAIRSPRING_EVENT")); /* the program's file never receives events */
   free(data.buf);
   unlink(path);
+  free_capture(c);
+}
+
+static void eval_after_losing_the_descriptor(const char *const *env) {
+  char path[] = "/tmp/hs_evalfd_XXXXXX";
+  int tmp = mkstemp(path);
+  CHECK(tmp >= 0);
+  close(tmp);
+  struct capture *c = run_capture("evalfd", path, env);
+  CHECK(WIFEXITED(c->status) && WEXITSTATUS(c->status) == 0);
+  struct capture data = {0};
+  data.buf = malloc(MAX_OUT);
+  read_file_into(&data, path);
+  CHECK(!any_line_has(&data, "HAIRSPRING_EVENT")); /* the program's file never receives an eval line */
+  free(data.buf);
+  unlink(path);
+  free_capture(c);
+}
+
+static void test_eval_lines_check_the_events_descriptor_too(void) {
+  const char *high[] = {"HS_EVALFD_MODE=high", NULL};
+  eval_after_losing_the_descriptor(high);
+  /* The fallback: with no room for a private copy the original stderr is the events descriptor. */
+  const char *low[] = {"HS_EVALFD_MODE=low", "HS_TEST_NOFILE=10", NULL};
+  eval_after_losing_the_descriptor(low);
+}
+
+static void test_an_ignored_signal_stays_ignored_and_is_reported_as_not_installed(void) {
+  const char *env[] = {"HAIRSPRING_SIGNAL_REPORT=1", "HS_TEST_IGNORE_TERM=1", NULL};
+  struct capture *c = run_capture("sigign", NULL, env);
+  CHECK(WIFEXITED(c->status) && WEXITSTATUS(c->status) == 0); /* SIGTERM stayed ignored */
+  check_all_lines_wellformed(c);
+  CHECK(c->n_lines > 0 && has(c->lines[0], "\"signal_handlers\":false"));
+  CHECK_U64(field(find_line(c, "assert", "p1", "sigign.after"), "hits"), 1);
   free_capture(c);
 }
 
@@ -603,6 +659,8 @@ int main(int argc, char **argv) {
   RUN(test_empty_catalog_reports_work_and_end);
   RUN(test_fork_while_another_thread_holds_the_key_lock_does_not_hang_the_child);
   RUN(test_a_lost_events_descriptor_is_dropped_not_redirected);
+  RUN(test_eval_lines_check_the_events_descriptor_too);
+  RUN(test_an_ignored_signal_stays_ignored_and_is_reported_as_not_installed);
   RUN(test_falling_back_to_the_original_descriptor_is_counted);
   RUN(test_reserved_and_malformed_root_tags_are_refused_not_shortened);
   RUN(test_a_long_root_tag_gets_a_readable_hashed_child_tag);

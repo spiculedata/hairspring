@@ -374,6 +374,38 @@ int main(int argc, char **argv) {
   return 0;
 }
 
+#elif defined(HS_SCENARIO_evalfd)
+
+#include <fcntl.h>
+
+/* Usage: hs_sample_evalfd <data-file>, with HS_EVALFD_MODE=high|low. The program takes the events descriptor away from the SDK, then
+** emits an eval line. high: closes every descriptor from 3 up and puts the file on 200. low: closes stderr and the
+** file becomes descriptor 2 (the fallback when there is no room for a private copy). */
+int main(int argc, char **argv) {
+  const char *mode = getenv("HS_EVALFD_MODE");
+  if (argc < 2 || !mode) return 2;
+  if (strcmp(mode, "high") == 0) {
+    for (int fd = 3; fd < 256; fd++) close(fd);
+    int data = open(argv[1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (data < 0 || fcntl(data, F_DUPFD, 200) < 0) return 3;
+    close(data);
+  } else {
+    close(2);
+    if (open(argv[1], O_WRONLY | O_CREAT | O_TRUNC, 0644) < 0) return 3;
+  }
+  HS_EVAL_ALWAYS(1, "evalfd.check");
+  return 0;
+}
+
+#elif defined(HS_SCENARIO_sigign)
+
+/* The parent asked for SIGTERM to be ignored (as `trap '' TERM` does). The program signals itself and carries on. */
+int main(void) {
+  kill(getpid(), SIGTERM);
+  HS_REACHABLE("sigign.after", "survived");
+  return 0;
+}
+
 #elif defined(HS_SCENARIO_alarm)
 
 #include <sys/time.h>
