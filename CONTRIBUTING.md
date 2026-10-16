@@ -8,18 +8,37 @@ Thanks for helping. Hairspring is small enough that one person can hold the desi
 rustup toolchain install stable      # Rust 1.85+ recommended
 make ui                              # Node 22+: builds the web UI that the server embeds
 make test                            # cargo test --workspace --no-fail-fast
-make lint                            # clippy with warnings as errors
+make lint                            # cargo clippy --workspace --all-targets -- -D warnings
+make fmt                             # cargo fmt --all (CI runs it with --check)
 ```
 
-PostgreSQL tests are skipped unless you provide a database:
+Run one crate's tests with `cargo test -p <crate>`, for example `cargo test -p hairspring-store`.
+
+Web UI tests (Node 22+):
+
+```bash
+cd web && npm ci && npm run typecheck && npm test
+```
+
+C SDK tests (a C11 compiler and POSIX threads; some tests need Linux, see `sdks/c/Makefile`):
+
+```bash
+make -C sdks/c test
+```
+
+PostgreSQL tests are skipped unless `HAIRSPRING_TEST_PG_URL` is set. Besides the store conformance suite, the
+service and CLI tests also run against PostgreSQL when it is set:
 
 ```bash
 docker run -d --name pg -e POSTGRES_PASSWORD=x -e POSTGRES_DB=hairspring -p 127.0.0.1:54329:5432 postgres:17-alpine
-HAIRSPRING_TEST_PG_URL=postgres://postgres:x@127.0.0.1:54329/hairspring cargo test -p hairspring-store --features postgres
+export HAIRSPRING_TEST_PG_URL=postgres://postgres:x@127.0.0.1:54329/hairspring
+cargo test -p hairspring-store --features postgres
+cargo test -p hairspring-service -p hairspring-cli
 ```
 
 Tests against the real Hermit need x86-64 Linux with performance counters:
 `HAIRSPRING_HERMIT=/path/to/hermit HAIRSPRING_HERMIT_REAL=1 cargo test -p hairspring-hermit --test real_hermit`.
+CI does not run these.
 
 ## How we work
 
@@ -27,7 +46,7 @@ Tests against the real Hermit need x86-64 Linux with performance counters:
 - **Say what you verified.** A claim in docs or a PR ("works on Linux", "deterministic") should name how it was checked.
 - **Small, immutable-leaning code.** Functions under ~50 lines, files under ~400 (800 hard limit), early returns, named constants, no mutation where a new value is as clear. Handle errors explicitly; never swallow them.
 - **No secrets in the repo, logs or error messages.** Treat anything from a worker, a target or a network client as untrusted.
-- **Dependencies are a cost.** `hairspring-core` is std-only on purpose. Before adding a crate or npm package, check it is maintained, has no known advisories (`cargo audit`), and that the standard library cannot do the job in a few lines.
+- **Dependencies are a cost.** `hairspring-core` is std-only on purpose. Before adding a crate or npm package, check it is maintained, has no known advisories (`cargo audit`), and that the standard library cannot do the job in a few lines. The dependency list in `NOTICE` is maintained by hand: update it when you add or remove a direct dependency, and treat `cargo metadata --locked` as authoritative.
 - **Commits:** `type: description` with types `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`.
 
 ## Where things go
@@ -41,5 +60,6 @@ Tests against the real Hermit need x86-64 Linux with performance counters:
 
 ## Pull requests
 
-CI runs fmt, clippy, tests on Linux and macOS, the UI build and tests, and dependency audits. Describe the problem,
-the approach, and how you tested it. Security-sensitive changes (auth, input handling, process execution) get extra review.
+CI runs fmt, clippy, tests on Linux and macOS, the UI typecheck, tests and build, and dependency audits (`make audit`
+runs the same audits locally). Use a conventional-commit title (`docs: ...`, `fix: ...`). Describe the problem,
+the approach, and how you tested it; the pull request template has a checklist. Security-sensitive changes (auth, input handling, process execution) get extra review.

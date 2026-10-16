@@ -1,0 +1,59 @@
+Hairspring
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+This product uses the third-party software listed below. Each component is
+distributed under its own licence; the licence texts are included in the
+source packages that Cargo and npm download, and can be listed with
+`cargo metadata` and `npm ls --all`. Versions are those pinned in Cargo.lock
+and web/package-lock.json at the time of writing.
+
+This file covers source distributions. Release binaries and the Docker image
+must ship the third-party attribution texts with them, in a bundle generated
+at release time.
+
+Rust crates (direct dependencies of the workspace)
+
+  axum 0.8              MIT
+  clap 4                MIT OR Apache-2.0
+  futures-util 0.3      MIT OR Apache-2.0
+  postgres 0.19         MIT OR Apache-2.0
+  r2d2 0.8              MIT OR Apache-2.0
+  r2d2_postgres 0.18    MIT
+  rusqlite 0.40         MIT
+  rust-embed 8          MIT
+  serde 1               MIT OR Apache-2.0
+  serde_json 1          MIT OR Apache-2.0
+  sha2 0.10, 0.11       MIT OR Apache-2.0
+  tokio 1               MIT
+  toml 1                MIT OR Apache-2.0
+  ureq 3                MIT OR Apache-2.0
+  wasmtime 49           Apache-2.0 WITH LLVM-exception
+
+Their transitive dependencies are recorded in Cargo.lock.
+
+SQLite is compiled into the binaries through the "bundled" feature of
+rusqlite (libsqlite3-sys, MIT). SQLite itself is in the public domain.
+
+Web UI (web/, built with Vite and embedded into the server binary)
+
+  react, react-dom      MIT
+  vite                  MIT
+  @vitejs/plugin-react  MIT
+  typescript            Apache-2.0
+  vitest                MIT
+  @types/react, @types/react-dom  MIT
+
+Only react and react-dom are runtime dependencies; the others are build and
+test tooling. Transitive packages are recorded in web/package-lock.json.
+
+Hermit
+
+Hairspring's process backend runs programs under Hermit
+(https://github.com/facebookexperimental/hermit, BSD-3-Clause, Copyright Meta
+Platforms, Inc. and affiliates); the helper script
+experiments/linux-hermit-fork.sh clones the fork
+https://github.com/rrnewton/hermit at run time. Hermit is not included: it is
+a separate program that the user installs and that Hairspring invokes as an
+external command. No Hermit source code is in this repository or in
+Hairspring's binaries.
