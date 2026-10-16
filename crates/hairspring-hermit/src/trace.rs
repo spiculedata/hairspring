@@ -22,6 +22,10 @@ pub enum Verdict {
     Inconclusive(String),
 }
 
+/// Names how `behaviour_hash` treats a stream over the capture cap (head, tail and a hash of the omitted middle).
+/// Bundles record it; one without it was hashed from the first 1 MiB alone, and cannot be compared on cut output.
+pub const HASH_SCHEME: &str = "2";
+
 /// FNV-1a over the guest's observable behaviour (exit status and stdout).
 pub fn behaviour_hash(t: &Trial) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;

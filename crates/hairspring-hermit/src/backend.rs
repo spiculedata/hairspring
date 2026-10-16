@@ -3,7 +3,7 @@ use crate::exec::{run_trial, scheduler_flags, Dirs, ProcessSpec, SpawnError, Tri
 use crate::property_verdict::{self, FailureKey};
 use crate::summary_dir::PrivateDir;
 use crate::tally::{Tally, TrialObserver};
-use crate::trace::{behaviour_hash, classify, steps, Verdict};
+use crate::trace::{behaviour_hash, classify, steps, Verdict, HASH_SCHEME};
 use crate::HermitSettings;
 use hairspring_core::bundle::Bundle;
 use hairspring_engine::backend::{Backend, Progress, RunRequest};
@@ -345,7 +345,8 @@ impl HermitBackend {
             .with_param("hermit_args", p.hermit_args.join(" "))
             .with_param("hang_is_violation", p.hang_is_violation.to_string())
             .with_param("events_transport", self.events_transport())
-            .with_param("output_hash", hash);
+            .with_param("output_hash", hash)
+            .with_param("output_hash_scheme", HASH_SCHEME);
         if let Some(schedule) = &t.schedule {
             bundle = bundle.with_param("schedule_fingerprint", schedule.fingerprint.clone());
         }
@@ -376,6 +377,17 @@ impl HermitBackend {
     }
 }
 
+/// Whether the rerun's output hashes like the recording; `None` when the bundle has no hash, or when it was hashed by
+/// the earlier scheme (no `output_hash_scheme`) and this rerun's output was cut, which that scheme hashed differently.
+fn output_matches(bundle: &Bundle, trial: &Trial) -> Option<bool> {
+    let recorded = bundle.params.get("output_hash")?;
+    let older_scheme = !bundle.params.contains_key("output_hash_scheme");
+    if older_scheme && trial.stdout_omitted.is_truncated() {
+        return None;
+    }
+    Some(*recorded == behaviour_hash(trial))
+}
+
 /// What replay says about how closely the rerun matched the recording: the output, and the schedule when both are known.
 fn replay_notes(
     bundle: &Bundle,
@@ -390,13 +402,15 @@ fn replay_notes(
             "timed out again; this target no longer treats a hang as a violation".to_string(),
         );
     }
-    if let Some(recorded) = bundle.params.get("output_hash") {
-        let same = *recorded == behaviour_hash(trial);
-        notes.push(if same {
-            "output matches the recording: yes".to_string()
-        } else {
-            "output matches the recording: no (the program or environment changed)".to_string()
-        });
+    match output_matches(bundle, trial) {
+        Some(true) => notes.push("output matches the recording: yes".to_string()),
+        Some(false) => notes.push(
+            "output matches the recording: no (the program or environment changed)".to_string(),
+        ),
+        None if bundle.params.contains_key("output_hash") => {
+            notes.push("hash scheme changed; output not compared".to_string())
+        }
+        None => {}
     }
     if let (Some(recorded), Some(now)) =
         (bundle.params.get("schedule_fingerprint"), &trial.schedule)
@@ -587,10 +601,7 @@ impl Backend for HermitBackend {
         let hang_relaxed = matches!(verdict, Verdict::Hang(_))
             && bundle.params.get("hang_is_violation").map(String::as_str) == Some("true");
         let notes = replay_notes(bundle, &trial, &verdict, hang_relaxed);
-        let matches = bundle
-            .params
-            .get("output_hash")
-            .map(|h| *h == behaviour_hash(&trial));
+        let matches = output_matches(bundle, &trial);
         Ok(ReplayOutcome {
             reproduced: matches!(verdict, Verdict::Violation(_))
                 && matches != Some(false)
