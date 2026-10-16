@@ -1,9 +1,10 @@
 # Hairspring C SDK. Plain make; no dependencies beyond a C11 compiler (gcc or clang) and POSIX threads.
 #
-#   make test            unit tests + process tests + the no-syscall test (Linux)
+#   make test            unit, audit and process tests, the C++ checks (incl. audit-control), the no-syscall test (Linux)
 #   make disasm         machine code of two call sites
 #   make test CC=gcc     the same with another compiler (warnings are errors either way)
-#   make conformance     fold the sample programs' output with the Rust parser (needs cargo)
+#   make tsan-signals   the process tests under TSan with its signal handlers off (runs the SIGSEGV report tests)
+#   make conformance    fold the sample programs' output with the Rust parser (needs cargo)
 #   make clean
 
 CC ?= cc
@@ -23,7 +24,7 @@ LIB := $(BUILD)/libhairspring.a
 SCENARIOS := basic merge fork threads crash exit_status eval big forkexec spawn closefd forklock execself dup2fd manyids conflict empty limits plain_exit segv abort threadsegv alive alarm evalfd sigign
 SAMPLES := $(SCENARIOS:%=$(BUILD)/hs_sample_%)
 
-.PHONY: all lib fixtures test unit audit proc nosyscall nosyscall-pic cxx cxx-templates audit-control cxx-mixed staticfail gnusource disasm conformance clean
+.PHONY: all lib fixtures test unit audit proc tsan-signals nosyscall nosyscall-pic cxx cxx-templates audit-control cxx-mixed staticfail gnusource disasm conformance clean
 
 all: lib
 
@@ -63,6 +64,14 @@ unit: $(BUILD)/test_unit
 proc: $(BUILD)/test_proc $(SAMPLES)
 	$(BUILD)/test_proc $(BUILD)
 
+# The process tests under ThreadSanitizer with TSan's own fatal-signal handlers switched off (TSAN_OPTIONS handle_segv=0
+# and friends, set by the test), so the SDK installs its handlers and the SIGSEGV report tests run instead of skipping.
+# Not part of `make test`. Whether the runtime leaves the signals alone is the runtime's behaviour, not the SDK's.
+TSAN_BUILD ?= build/tsan
+
+tsan-signals:
+	env HS_TEST_TSAN_SIGNALS=1 $(MAKE) proc BUILD=$(TSAN_BUILD) EXTRA=-fsanitize=thread
+
 # T1: no system call at a call site (seccomp; the test itself prints "skip" off Linux).
 $(BUILD)/test_nosyscall: tests/test_nosyscall.c $(LIB) $(SDK_HDR) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $< $(LIB) $(LDFLAGS)
@@ -87,7 +96,7 @@ CXXC := $(if $(findstring clang,$(CC)),clang++,$(if $(findstring gcc,$(CC)),g++,
 $(BUILD)/cxx_sample: tests/fixtures/cxx_sample.cc $(LIB) $(SDK_HDR) | $(BUILD)
 	$(CXXC) -std=gnu++17 $(OPT) -g $(WARN) -pthread $(EXTRA) -o $@ $< $(LIB) $(LDFLAGS)
 
-cxx:
+cxx: $(LIB)
 	@if command -v $(CXXC) >/dev/null 2>&1; then $(MAKE) $(BUILD)/cxx_sample && \
 	  out=$$($(BUILD)/cxx_sample 2>&1) && echo "$$out" | grep -q '"kind":"end"' && echo "ok   C++ sample reports" ; \
 	else echo "skip: $(CXXC) not installed"; fi
@@ -101,7 +110,7 @@ CXX_FIXTURE_SRC := tests/fixtures/cxx_templates.cc tests/fixtures/cxx_templates_
 $(BUILD)/cxx_templates: $(CXX_FIXTURE_SRC) $(LIB) $(SDK_HDR) | $(BUILD)
 	$(CXXC) -std=gnu++17 $(OPT) -g $(WARN) -pthread $(EXTRA) -o $@ $(CXX_FIXTURE_SRC) $(LIB) $(LDFLAGS)
 
-cxx-templates:
+cxx-templates: $(LIB)
 	@if command -v $(CXXC) >/dev/null 2>&1; then $(MAKE) $(BUILD)/cxx_templates && \
 	  env -u HAIRSPRING_EVENTS -u HAIRSPRING_EVENTS_FILE $(BUILD)/cxx_templates 2>$(BUILD)/cxx_templates.events && \
 	  sh tests/check_cxx_templates.sh $(BUILD)/cxx_templates.events $(CXX_TEMPLATE_MODE) ; \
@@ -112,8 +121,8 @@ cxx-templates:
 # 7 evaluations (tmpl.zero 3, tmpl.member 2, tmpl.inline 1, tmpl.main 1).
 CTL := $(BUILD)/ctl
 
-audit-control: | $(BUILD)
-	@if command -v $(CXXC) >/dev/null 2>&1; then $(MAKE) $(LIB) && \
+audit-control: $(LIB) | $(BUILD)
+	@if command -v $(CXXC) >/dev/null 2>&1; then \
 	  rm -rf $(CTL) && mkdir -p $(CTL)/include $(CTL)/tests/fixtures && \
 	  sed -e 's/hs_catalog_str_v1/hs_ctl_str_v1/; s/hs_catalog_v1/hs_ctl_v1/; s/__hs_catalog"/__hs_ctl"/; s/__hs_catstr"/__hs_ctlstr"/' include/hairspring.h > $(CTL)/include/hairspring.h && \
 	  cp $(CXX_FIXTURE_SRC) $(CTL)/tests/fixtures/ && \
@@ -146,7 +155,7 @@ staticfail:
 gnusource: | $(BUILD)
 	$(CC) $(CFLAGS) -D_GNU_SOURCE -c -o $(BUILD)/gnusource.o src/hairspring.c && echo "ok   builds with -D_GNU_SOURCE"
 
-test: unit audit proc nosyscall nosyscall-pic staticfail cxx cxx-templates gnusource
+test: unit audit proc nosyscall nosyscall-pic staticfail cxx cxx-templates audit-control gnusource
 
 conformance: $(SAMPLES)
 	cd ../.. && HS_C_SDK_BUILD=$(abspath $(BUILD)) cargo test -p hairspring-props --test c_sdk
