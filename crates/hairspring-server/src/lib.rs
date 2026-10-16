@@ -3,6 +3,7 @@ mod api;
 mod auth;
 mod error;
 mod ratelimit;
+mod read_api;
 mod sse;
 mod ui;
 mod worker_api;
@@ -236,6 +237,15 @@ fn router(state: AppState) -> Router {
         .route("/api/runs/{id}", get(api::get_run))
         .route("/api/runs/{id}/cancel", post(api::cancel_run))
         .route("/api/runs/{id}/events", get(sse::events))
+        .route("/api/runs/{id}/properties", get(read_api::properties))
+        .route("/api/runs/{id}/properties/{idx}", get(read_api::property))
+        .route("/api/runs/{id}/trials", get(read_api::trials))
+        .route("/api/runs/{id}/trials/{seq}", get(read_api::trial))
+        .route(
+            "/api/runs/{id}/trials/{seq}/output/{stream}",
+            get(read_api::trial_output),
+        )
+        .route("/api/runs/{id}/coverage", get(read_api::coverage))
         .route("/api/failures", get(api::list_failures))
         .route("/api/failures/{id}", get(api::get_failure))
         .route("/api/bundles/{hash}", get(api::get_bundle))
