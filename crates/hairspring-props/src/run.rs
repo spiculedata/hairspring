@@ -423,30 +423,6 @@ impl IdAcc {
     }
 }
 
-impl PropertyStat {
-    /// The rate as text: `k/n (p%) [lower%, upper%]`, with `3/N` when `k` is zero, or
-    /// `unrated (0 rated trials)` when no clean trial exists (which is not the same as 0%).
-    pub fn rate_text(&self) -> String {
-        let Some(r) = self.rate else {
-            return "unrated (0 rated trials)".to_owned();
-        };
-        let pct = |x: f64| format!("{:.1}%", x * 100.0);
-        let bound = r
-            .rule_of_three
-            .map(|b| format!(", 3/N bound {}", pct(b)))
-            .unwrap_or_default();
-        format!(
-            "{}/{} ({}) [{}, {}]{}",
-            r.k,
-            r.n,
-            pct(r.point),
-            pct(r.lower),
-            pct(r.upper),
-            bound
-        )
-    }
-}
-
 /// The counts the fold keeps, apart from the catalog that gives ids their indexes.
 #[derive(Debug, Clone)]
 struct FoldState {

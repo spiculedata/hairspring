@@ -130,6 +130,11 @@ impl RunOutcome {
         }
     }
 
+    /// Records how long the run took, for an outcome built by a constructor that does not take the time.
+    pub fn with_elapsed_ms(self, elapsed_ms: u64) -> Self {
+        RunOutcome { elapsed_ms, ..self }
+    }
+
     pub fn with_schedule_stats(self, distinct_schedules: u64, work: u64) -> Self {
         RunOutcome {
             distinct_schedules,

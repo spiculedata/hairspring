@@ -1,4 +1,6 @@
 //! A Hermit-backed run in which every trial is inconclusive ends in an error that says why, not in a validation error.
+#![cfg(unix)]
+
 mod common;
 
 use common::{local, setup};

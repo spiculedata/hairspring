@@ -70,7 +70,12 @@ impl Auth {
     /// varying the whitespace.
     pub fn identify(&self, header: Option<&str>) -> Option<(Role, String)> {
         let raw = header?;
-        let token = raw.strip_prefix("Bearer ")?.trim();
+        let (scheme, rest) = raw.split_once([' ', '\t'])?;
+        // RFC 7235: the scheme name is case-insensitive.
+        if !scheme.eq_ignore_ascii_case("bearer") {
+            return None;
+        }
+        let token = rest.trim();
         let presented = digest(token);
         let key = format!("t:{}", crate::digest_prefix(token));
         let mut found = None;
@@ -149,6 +154,44 @@ mod tests {
                 (Role::Run, plain.as_str()),
                 "{variant:?}"
             );
+        }
+    }
+
+    #[test]
+    fn the_scheme_name_is_case_insensitive_and_keeps_one_key() {
+        let a = auth();
+        let (_, plain) = a.identify(Some(&format!("Bearer {TOKEN}"))).unwrap();
+        for variant in [
+            format!("bearer {TOKEN}"),
+            format!("BEARER {TOKEN}"),
+            format!("bEaReR {TOKEN}"),
+            format!("bearer\t{TOKEN}"),
+            format!("BEARER \t {TOKEN}  "),
+        ] {
+            let (role, key) = a.identify(Some(&variant)).expect("authenticates");
+            assert_eq!(
+                (role, key.as_str()),
+                (Role::Run, plain.as_str()),
+                "{variant:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn odd_spellings_that_are_not_one_scheme_and_one_token_are_refused() {
+        let a = auth();
+        for variant in [
+            format!("Bearer Bearer {TOKEN}"),
+            format!("Bearer{TOKEN}"),
+            format!("Basic {TOKEN}"),
+            format!(" Bearer {TOKEN}"),
+            format!("Bearer {TOKEN} extra"),
+            "Bearer".to_string(),
+            "Bearer ".to_string(),
+            "bearer \t ".to_string(),
+            String::new(),
+        ] {
+            assert!(a.identify(Some(&variant)).is_none(), "{variant:?}");
         }
     }
 
