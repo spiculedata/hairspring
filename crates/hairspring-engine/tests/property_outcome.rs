@@ -127,3 +127,35 @@ fn the_text_report_separates_timed_out_trials_and_flags_dropped_ids() {
         "{text}"
     );
 }
+
+fn outcome_with_one_rated_trial(status: hairspring_engine::report::RunStatus) -> RunOutcome {
+    let trial = TrialEvents::from_output(report(AssertKind::Always).as_bytes()).fold();
+    let run = RunProps::new().add(1, &trial);
+    let summary = run.summary();
+    let mut outcome = RunOutcome::passed(1, 1, 1).with_properties(run.finish(), summary);
+    outcome.status = status;
+    outcome
+}
+
+#[test]
+fn a_run_that_stopped_at_its_first_failure_prints_no_rate_for_any_property() {
+    let outcome = outcome_with_one_rated_trial(hairspring_engine::report::RunStatus::Failed);
+    let text = hairspring_engine::format::to_text("svc", &outcome);
+    assert!(
+        text.contains("not a rate (stopped at first failure)"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("upper bound") && !text.contains("3/N"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_run_that_used_its_budget_prints_k_over_n_and_the_rule_of_three() {
+    let outcome = outcome_with_one_rated_trial(hairspring_engine::report::RunStatus::Passed);
+    let text = hairspring_engine::format::to_text("svc", &outcome);
+    assert!(text.contains("0/1"), "{text}");
+    assert!(text.contains("approx. 95% upper bound"), "{text}");
+    assert!(!text.contains("not a rate"), "{text}");
+}

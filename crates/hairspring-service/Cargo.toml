@@ -13,3 +13,7 @@ hairspring-store = { path = "../hairspring-store" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 
+
+[dev-dependencies]
+# The shared test setup runs against PostgreSQL too when HAIRSPRING_TEST_PG_URL is set.
+hairspring-store = { path = "../hairspring-store", features = ["postgres"] }
