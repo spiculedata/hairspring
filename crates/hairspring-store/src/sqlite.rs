@@ -1,4 +1,7 @@
+use crate::lineage::*;
+use crate::sqlite_lineage as lineage;
 use crate::sqlite_schema;
+use crate::sqlite_tree_query as query;
 use crate::sqlite_trials as trials;
 use crate::trials::*;
 use crate::types::*;
@@ -64,6 +67,8 @@ fn is_busy(e: &rusqlite::Error) -> bool {
 
 pub struct SqliteStore {
     conn: Mutex<Connection>,
+    /// How subtree queries are answered; the store's own rule unless a caller changes it.
+    query_rule: Mutex<TreeQueryRule>,
 }
 
 fn run_from_row(r: &Row<'_>) -> rusqlite::Result<RunRecord> {
@@ -144,12 +149,45 @@ impl SqliteStore {
         sqlite_schema::migrate(&conn)?;
         Ok(SqliteStore {
             conn: Mutex::new(conn),
+            query_rule: Mutex::new(TreeQueryRule::StoreDefault),
         })
+    }
+
+    fn rule(&self) -> TreeQueryRule {
+        *self.query_rule.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn conn(&self) -> MutexGuard<'_, Connection> {
         // A poisoned mutex only means another thread panicked mid-query; SQLite state is still consistent.
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Runs `f` on the store's own connection, so tests can inspect or seed an in-memory database with raw SQL. Not
+    /// part of the supported interface.
+    #[doc(hidden)]
+    pub fn with_connection<R>(&self, f: impl FnOnce(&mut Connection) -> R) -> R {
+        f(&mut self.conn())
+    }
+
+    /// The plan SQLite chooses for a tree query in one form, one line per step, bound with real values for the given
+    /// node. For tests that assert the plan; not part of the supported interface.
+    #[doc(hidden)]
+    pub fn explain_tree_query(
+        &self,
+        query: TreeQuery,
+        form: TreeQueryForm,
+        tree_id: &str,
+        node: u64,
+    ) -> Result<Vec<String>> {
+        query::explain(&self.conn(), query, form, tree_id, node)
+    }
+
+    /// The form the current rule gives subtree queries on this tree. For tests; not a supported interface.
+    #[doc(hidden)]
+    pub fn tree_query_form(&self, tree_id: &str) -> Result<TreeQueryForm> {
+        let tree = lineage::get_tree(&self.conn(), tree_id)?
+            .ok_or_else(|| StoreError::NotFound(format!("tree {tree_id}")))?;
+        Ok(query::form_for(self.rule(), tree.node_count))
     }
 }
 
@@ -556,6 +594,98 @@ impl Store for SqliteStore {
             last_seen: now,
             trusted: false,
         })
+    }
+
+    fn put_run_identity(&self, identity: &RunIdentity) -> Result<IdentityOutcome> {
+        lineage::put_identity(&mut self.conn(), identity)
+    }
+
+    fn get_run_identity(&self, run_id: &str) -> Result<Option<RunIdentity>> {
+        lineage::get_identity(&self.conn(), run_id)
+    }
+
+    fn create_tree(&self, new: &NewTree, now: i64) -> Result<TreeOutcome> {
+        lineage::create_tree(&mut self.conn(), new, now)
+    }
+
+    fn get_tree(&self, id: &str) -> Result<Option<TreeRecord>> {
+        lineage::get_tree(&self.conn(), id)
+    }
+
+    fn tree_of_run(&self, run_id: &str) -> Result<Option<String>> {
+        lineage::tree_of_run(&self.conn(), run_id)
+    }
+
+    fn add_tree_node(&self, tree_id: &str, new: &NewNode, now: i64) -> Result<NodeOutcome> {
+        lineage::add_node(&mut self.conn(), tree_id, new, now)
+    }
+
+    fn get_tree_node(&self, tree_id: &str, node: u64) -> Result<Option<NodeRecord>> {
+        lineage::get_node(&self.conn(), tree_id, node)
+    }
+
+    fn tree_node_of_trial(&self, run_id: &str, seq: u64) -> Result<Option<NodeRecord>> {
+        lineage::node_of_trial(&self.conn(), run_id, seq)
+    }
+
+    fn set_node_verified(&self, tree_id: &str, node: u64, verified: Verified) -> Result<()> {
+        lineage::set_verified(&self.conn(), tree_id, node, verified)
+    }
+
+    fn set_tree_query_rule(&self, rule: TreeQueryRule) {
+        *self.query_rule.lock().unwrap_or_else(|e| e.into_inner()) = rule;
+    }
+
+    fn tree_query_rule(&self) -> TreeQueryRule {
+        self.rule()
+    }
+
+    fn subtree_descendants(
+        &self,
+        tree_id: &str,
+        node: u64,
+        after: Option<u64>,
+        limit: u32,
+    ) -> Result<NodePage> {
+        query::descendants(&self.conn(), self.rule(), tree_id, node, after, limit)
+    }
+
+    fn subtree_tally(&self, tree_id: &str, node: u64) -> Result<Vec<VerdictCount>> {
+        query::tally(&self.conn(), self.rule(), tree_id, node)
+    }
+
+    fn subtree_first_failing(&self, tree_id: &str, node: u64) -> Result<Option<u64>> {
+        query::first_failing(&self.conn(), self.rule(), tree_id, node)
+    }
+
+    fn tree_children(
+        &self,
+        tree_id: &str,
+        node: u64,
+        after: Option<u64>,
+        limit: u32,
+    ) -> Result<NodePage> {
+        query::children(&self.conn(), tree_id, node, after, limit)
+    }
+
+    fn tree_ancestors(&self, tree_id: &str, node: u64) -> Result<Vec<NodeRecord>> {
+        query::ancestors(&self.conn(), tree_id, node)
+    }
+
+    fn add_tree_branch(&self, new: &NewBranch, now: i64) -> Result<BranchOutcome> {
+        lineage::add_branch(&mut self.conn(), new, now)
+    }
+
+    fn get_tree_branch(&self, run_id: &str) -> Result<Option<BranchRecord>> {
+        lineage::get_branch(&self.conn(), run_id)
+    }
+
+    fn find_tree_branch(&self, tree_id: &str, command_hash: &str) -> Result<Option<BranchRecord>> {
+        lineage::find_branch(&self.conn(), tree_id, command_hash)
+    }
+
+    fn record_branch_verify(&self, run_id: &str, matched: bool) -> Result<()> {
+        lineage::record_verify(&self.conn(), run_id, matched)
     }
 
     fn set_worker_secret_hash(&self, id: &str, hash: &str) -> Result<()> {

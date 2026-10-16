@@ -6,7 +6,7 @@
 use crate::types::{Result, StoreError};
 use rusqlite::Connection;
 
-pub(crate) const SCHEMA_VERSION: i64 = 2;
+pub(crate) const SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA_V1: &str = "
 CREATE TABLE runs (
@@ -80,6 +80,51 @@ CREATE INDEX trials_verdict ON trials(run_id, verdict);
 CREATE INDEX trials_schedule ON trials(run_id, schedule_fp);
 ";
 
+/// Version 3: the execution inputs of a run, trial trees (nodes with a materialised path, branch runs). Purely
+/// additive: `runs` and `trials` are not touched. `trial_lineage` is a WITHOUT ROWID table so that its primary key is
+/// the clustered key and a window of node numbers is one range scan in node order. A path is the LEB128 encoding of
+/// the node numbers from the root; SQLite sorts a TEXT value before any BLOB, so the CHECK keeps text out of the column
+/// (it would otherwise escape every range).
+const MIGRATE_V2_TO_V3: &str = "
+CREATE TABLE IF NOT EXISTS run_identity (
+  run_id TEXT PRIMARY KEY REFERENCES runs(id), scheme TEXT NOT NULL, identity_text TEXT NOT NULL,
+  identity_hash TEXT NOT NULL, complete INTEGER NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS trees (
+  id TEXT PRIMARY KEY REFERENCES runs(id), backend TEXT NOT NULL, target TEXT NOT NULL, identity_hash TEXT,
+  node_count INTEGER NOT NULL DEFAULT 0, run_count INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS trial_lineage (
+  tree_id TEXT NOT NULL REFERENCES trees(id), node INTEGER NOT NULL, run_id TEXT NOT NULL, seq INTEGER NOT NULL,
+  parent_node INTEGER, depth INTEGER NOT NULL, path BLOB NOT NULL, verdict TEXT NOT NULL, operator TEXT NOT NULL,
+  cut_kind TEXT NOT NULL, cut_at INTEGER NOT NULL, suffix_seed INTEGER, edge_ref TEXT, origin TEXT NOT NULL,
+  reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, verified TEXT NOT NULL DEFAULT 'no',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (tree_id, node), UNIQUE (run_id, seq),
+  CHECK (typeof(path) = 'blob'),
+  CHECK (parent_node IS NULL OR parent_node < node),
+  FOREIGN KEY (run_id, seq) REFERENCES trials(run_id, seq),
+  FOREIGN KEY (tree_id, parent_node) REFERENCES trial_lineage(tree_id, node)) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS lineage_children ON trial_lineage(tree_id, parent_node, node);
+CREATE INDEX IF NOT EXISTS lineage_path ON trial_lineage(tree_id, path);
+CREATE INDEX IF NOT EXISTS lineage_verdict ON trial_lineage(tree_id, verdict, depth, node);
+CREATE INDEX IF NOT EXISTS lineage_edge ON trial_lineage(edge_ref) WHERE edge_ref IS NOT NULL;
+CREATE TABLE IF NOT EXISTS tree_branches (
+  run_id TEXT PRIMARY KEY REFERENCES runs(id), tree_id TEXT NOT NULL REFERENCES trees(id),
+  source_node INTEGER NOT NULL, cut_kind TEXT NOT NULL, cut_at INTEGER NOT NULL, point_hash TEXT NOT NULL,
+  command_json TEXT NOT NULL, command_hash TEXT NOT NULL, seed_source TEXT NOT NULL,
+  verify_runs INTEGER NOT NULL DEFAULT 0, verify_matches INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE (tree_id, command_hash));
+";
+
+/// The tables a version 3 database must have.
+const V3_TABLES: [&str; 4] = ["run_identity", "trees", "trial_lineage", "tree_branches"];
+/// The indexes of `trial_lineage`.
+const V3_INDEXES: [&str; 4] = [
+    "lineage_children",
+    "lineage_path",
+    "lineage_verdict",
+    "lineage_edge",
+];
+
 fn user_version(conn: &Connection) -> Result<i64> {
     Ok(conn.query_row("PRAGMA user_version", [], |r| r.get(0))?)
 }
@@ -103,14 +148,41 @@ fn ensure_secret_column(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// A current database is only looked at. Nothing is created or altered, so opening needs no more than the right to
+/// write rows; a database that lost a table or an index is reported, not repaired (the children query names its
+/// index, so a missing one would otherwise fail later, at the first read).
+fn verify_current(conn: &Connection) -> Result<()> {
+    let wanted = V3_TABLES
+        .iter()
+        .map(|t| ("table", *t))
+        .chain(V3_INDEXES.iter().map(|i| ("index", *i)));
+    for (kind, name) in wanted {
+        let present: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type=? AND name=?",
+            [kind, name],
+            |r| r.get(0),
+        )?;
+        if present == 0 {
+            return Err(StoreError::Backend(format!(
+                "database schema version {SCHEMA_VERSION} is incomplete: {kind} {name} is missing"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn upgrade(conn: &Connection, from: i64) -> Result<()> {
     if from == 0 {
         conn.execute_batch(SCHEMA_V1)?;
     }
     if from <= 1 {
         conn.execute_batch(MIGRATE_V1_TO_V2)?;
-        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
+    if from == 2 {
+        ensure_secret_column(conn)?;
+    }
+    conn.execute_batch(MIGRATE_V2_TO_V3)?;
+    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }
 
@@ -119,7 +191,7 @@ fn upgrade(conn: &Connection, from: i64) -> Result<()> {
 pub(crate) fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch("BEGIN IMMEDIATE")?;
     let outcome = match user_version(conn) {
-        Ok(v) if v == SCHEMA_VERSION => ensure_secret_column(conn),
+        Ok(v) if v == SCHEMA_VERSION => verify_current(conn),
         Ok(v) if (0..SCHEMA_VERSION).contains(&v) => upgrade(conn, v),
         Ok(v) => Err(unsupported(v)),
         Err(e) => Err(e),

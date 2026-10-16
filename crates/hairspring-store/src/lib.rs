@@ -3,22 +3,39 @@
 //! One [`Store`] trait, implemented for SQLite (default, zero config) and
 //! Postgres (added in a later phase). All time values are milliseconds since the
 //! Unix epoch and are passed in explicitly so behaviour is testable.
+#[macro_use]
+mod types;
+mod downgrade;
+#[macro_use]
+mod lineage;
 #[cfg(feature = "postgres")]
 mod pg;
 #[cfg(feature = "postgres")]
+mod pg_downgrade;
+#[cfg(feature = "postgres")]
+mod pg_lineage;
+#[cfg(feature = "postgres")]
 mod pg_schema;
+#[cfg(feature = "postgres")]
+mod pg_tree_query;
 #[cfg(feature = "postgres")]
 mod pg_trials;
 mod sqlite;
+mod sqlite_downgrade;
+mod sqlite_lineage;
 mod sqlite_schema;
+mod sqlite_tree_query;
 mod sqlite_trials;
-#[macro_use]
-mod types;
 mod trials;
 
+pub use downgrade::*;
+pub use lineage::*;
 #[cfg(feature = "postgres")]
 pub use pg::PgStore;
+#[cfg(feature = "postgres")]
+pub use pg_downgrade::downgrade_postgres;
 pub use sqlite::SqliteStore;
+pub use sqlite_downgrade::downgrade_sqlite;
 pub use trials::*;
 pub use types::*;
 
@@ -156,6 +173,63 @@ pub trait Store: Send + Sync {
     fn list_run_properties(&self, run_id: &str) -> Result<Vec<RunPropertyRow>>;
     /// The workers that reported trials for the run, with whether all of their rows were from a trusted worker.
     fn run_contributors(&self, run_id: &str) -> Result<Vec<Contributor>>;
+
+    // run identity and trial trees (schema version 3)
+    /// Records the execution inputs of a run. Written once: the same identity again is a duplicate, a different one is
+    /// refused.
+    fn put_run_identity(&self, identity: &RunIdentity) -> Result<IdentityOutcome>;
+    fn get_run_identity(&self, run_id: &str) -> Result<Option<RunIdentity>>;
+    /// Creates the tree rooted at a run. `identity_hash` must be the root run's identity hash, or `None` when the run
+    /// has no complete identity (a tree without point identity: reads work, branches are refused).
+    fn create_tree(&self, new: &NewTree, now: i64) -> Result<TreeOutcome>;
+    fn get_tree(&self, id: &str) -> Result<Option<TreeRecord>>;
+    /// The tree a run roots or branches from.
+    fn tree_of_run(&self, run_id: &str) -> Result<Option<String>>;
+    /// Attaches a stored trial to the tree. Number, depth, path and verdict are derived here, never taken from the
+    /// caller; the depth, fan-out and node caps are enforced.
+    fn add_tree_node(&self, tree_id: &str, new: &NewNode, now: i64) -> Result<NodeOutcome>;
+    fn get_tree_node(&self, tree_id: &str, node: u64) -> Result<Option<NodeRecord>>;
+    fn tree_node_of_trial(&self, run_id: &str, seq: u64) -> Result<Option<NodeRecord>>;
+    /// The one mutable column of a node. Fails with `NotFound` for an unknown node.
+    fn set_node_verified(&self, tree_id: &str, node: u64, verified: Verified) -> Result<()>;
+    /// Chooses how subtree queries are answered (see [`TreeQueryRule`]). The answers do not depend on it; only the
+    /// cost does. The default is each store's own rule.
+    fn set_tree_query_rule(&self, rule: TreeQueryRule);
+    fn tree_query_rule(&self) -> TreeQueryRule;
+    /// The descendants of a node (not the node), in node order. Every tree list uses one cursor rule: the cursor is a
+    /// decimal node number and lists are in node order. In the recursive form (and for children) the next cursor is
+    /// the last node returned when more exist, else `None`. In the path form a request scans at most [`NODE_WINDOW`]
+    /// numbers after the cursor, and the next cursor is the last node returned if the page filled, else the end of
+    /// the window; `None` once no later node can exist. In the recursive form a node with more than
+    /// [`MAX_CTE_DESCENDANTS`] descendants is answered with [`StoreError::LimitExceeded`]: page by children.
+    fn subtree_descendants(
+        &self,
+        tree_id: &str,
+        node: u64,
+        after: Option<u64>,
+        limit: u32,
+    ) -> Result<NodePage>;
+    /// Verdict counts of the node and all of its descendants.
+    fn subtree_tally(&self, tree_id: &str, node: u64) -> Result<Vec<VerdictCount>>;
+    /// The shallowest, then earliest, violating node at or below the node.
+    fn subtree_first_failing(&self, tree_id: &str, node: u64) -> Result<Option<u64>>;
+    /// The children of a node, in node order, by keyset paging on the parent index (no window: siblings can be far
+    /// apart in node numbers).
+    fn tree_children(
+        &self,
+        tree_id: &str,
+        node: u64,
+        after: Option<u64>,
+        limit: u32,
+    ) -> Result<NodePage>;
+    /// The nodes above a node, root first (not the node itself).
+    fn tree_ancestors(&self, tree_id: &str, node: u64) -> Result<Vec<NodeRecord>>;
+    /// Registers a branch run of a tree. A command already stored for the tree answers `Existing`.
+    fn add_tree_branch(&self, new: &NewBranch, now: i64) -> Result<BranchOutcome>;
+    fn get_tree_branch(&self, run_id: &str) -> Result<Option<BranchRecord>>;
+    fn find_tree_branch(&self, tree_id: &str, command_hash: &str) -> Result<Option<BranchRecord>>;
+    /// Counts one verification re-run of a branch, and whether it matched.
+    fn record_branch_verify(&self, run_id: &str, matched: bool) -> Result<()>;
 
     // workers
     fn set_worker_trusted(&self, id: &str, trusted: bool) -> Result<()>;

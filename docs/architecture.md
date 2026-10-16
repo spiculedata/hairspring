@@ -102,6 +102,39 @@ Opening a version 1 database migrates it in place under one transaction (SQLite)
 old runs read back with zero counts. **Back up the database before upgrading: there is no downgrade from version 2
 to version 1**, and an older release refuses a version 2 database.
 
+## Trial trees (schema version 3)
+
+Version 3 adds four tables and changes nothing in the existing ones (`runs` and `trials` keep their columns and rows).
+Nothing writes to them yet except through the store interface; the server routes that use them come later.
+
+- `run_identity`: the execution inputs of a run, recorded once. A run whose identity is incomplete has no point
+  identity.
+- `trees`: one tree per root run (its id is the root run's id). `identity_hash` is NULL for a tree without point
+  identity: such a tree can be read, but no branch run can be attached to it.
+- `trial_lineage`: one row per tree node, pointing at a stored trial. The server derives the node number (dense per
+  tree), depth and a materialised path (the unsigned LEB128 encodings of the node numbers from the root, stored as a
+  BLOB, so the descendants of a node are one byte range). The parent always has a smaller node number, and a SQLite
+  CHECK keeps a TEXT value out of the path column. At most 512 levels, 1,024 children per parent and cut, 100,000
+  nodes per tree and 1,000 branch runs per tree.
+- `tree_branches`: one row per branch run created from a point of a tree, with the stored command and its hash, so a
+  repeated command is answered from the stored branch.
+
+Subtree queries (`subtree_descendants`, `subtree_tally`, `subtree_first_failing`) exist in two forms behind one query
+layer: a recursive query over `parent_node`, and a range scan of the path. Both return the same rows. SQLite always
+uses the recursive form; PostgreSQL uses it below 100,000 nodes in the tree and the path form at or above. Ancestors
+always use the recursive form, and children are paged by keyset on the parent index. A recursive-form descendant
+listing for a node with more than 50,000 descendants is refused (`LimitExceeded`): page by children instead.
+
+Opening a version 3 database runs no DDL; it only checks that the four tables exist. Opening a version 2 database
+adds them in the same transaction as the version bump.
+
+**Downgrade to version 2** (offline; back up first, nothing is downgraded automatically):
+`hairspring_store::downgrade_sqlite` and `downgrade_postgres` (also `cargo run -p hairspring-store --example
+store_downgrade`) drop the four tables and set the version to 2. Branch runs, which exist only because of version 3,
+are listed first and kept by default as ordinary runs; `--drop-branch-runs` deletes them, with their trials, jobs,
+events and failures, in the same transaction and removes the blobs nothing else refers to. `--dry-run` only reports.
+Upgrading again later restores empty tree tables.
+
 ## Bundles
 
 A bundle is a small text file: `seed`, `build`, `target`, `backend`, `param.*` and `path` (hex action ids or
