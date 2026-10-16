@@ -2,7 +2,11 @@ import { useEffect, useState } from 'react';
 import { api, streamRunEvents } from '../api';
 import { Link } from '../components/Layout';
 import { StateBadge } from '../components/Badge';
+import { ErrorBoundary } from '../components/ErrorBoundary';
+import { PropertyOverviewPanel } from '../explorer/PropertyOverviewPanel';
+import { usePropertyOverview } from '../explorer/usePropertyOverview';
 import { formatDuration, relativeTime } from '../format';
+import { noFailuresText } from '../wording';
 import type { SseEvent } from '../sse';
 import { usePolling } from '../usePolling';
 
@@ -32,11 +36,13 @@ export function RunPage({ id }: { id: string }) {
   const detail = usePolling(() => api.run(id), 1000, (d) => TERMINAL.has(d.run.state));
   const [cancelMsg, setCancelMsg] = useState<string>();
   const run = detail.data?.run;
+  const live = run === undefined || !TERMINAL.has(run.state);
+  const properties = usePropertyOverview(id, live);
 
+  if (detail.notFound) return <p className="error" role="alert">This run does not exist (it may have been removed).</p>;
   if (detail.error && !run) return <p className="error" role="alert">{detail.error}</p>;
   if (!run) return <p className="muted">Loading…</p>;
 
-  const live = !TERMINAL.has(run.state);
   const duration = run.started_at && run.finished_at ? formatDuration(run.finished_at - run.started_at) : undefined;
   return (
     <>
@@ -75,8 +81,11 @@ export function RunPage({ id }: { id: string }) {
         </button>
       )}
       {cancelMsg && <span className="muted"> {cancelMsg}</span>}
+      <ErrorBoundary label="Property table">
+        <PropertyOverviewPanel model={properties} />
+      </ErrorBoundary>
       <h2>Failures</h2>
-      {detail.data?.failures.length === 0 && <p className="muted">{live ? 'None found yet.' : 'No property violations found.'}</p>}
+      {detail.data?.failures.length === 0 && <p className="muted">{noFailuresText({ live, headline: properties.page?.headline })}</p>}
       <ul>
         {detail.data?.failures.map((f) => (
           <li key={f.id}>

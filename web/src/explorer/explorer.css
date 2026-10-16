@@ -1,0 +1,72 @@
+/* Results explorer: run overview. Meaning is always in the text; colour and marks only add emphasis. */
+.run-summary p { margin: .35rem 0; }
+.run-summary .headline { font-size: 1.05rem; }
+.run-summary .claim { font-weight: 600; }
+.notes { margin: .35rem 0 0; padding-left: 1.2rem; color: var(--muted); }
+.excluded { color: var(--fg); }
+
+.chips { display: flex; flex-wrap: wrap; gap: .4rem; list-style: none; padding: 0; margin: .5rem 0; }
+.chip { font-size: .78rem; padding: .1rem .55rem; border-radius: 999px; border: 1px solid currentColor; }
+.chip-muted { color: var(--muted); border-style: dashed; }
+.chip-warn { color: var(--busy); }
+.chip-info { color: var(--fg); }
+
+.filters label { min-width: 9rem; }
+.table-scroll { overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
+.table-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+table.props { margin-top: 0; table-layout: fixed; width: 100%; }
+table.props caption { text-align: left; padding: .4rem .5rem; color: var(--muted); font-size: .8rem; }
+table.props thead th { position: sticky; top: 0; background: var(--card); z-index: 1; }
+/* Row height is 88px = 8px + 71px clipped block + 8px + 1px border (ROW_HEIGHT and CLIP_HEIGHT in PropertyRowView). */
+table.props tbody td, table.props tbody th { padding: 8px .5rem; border-bottom: 1px solid var(--line); overflow: hidden; vertical-align: top; font-weight: 400; line-height: 1.25; }
+.cell-clip { overflow: hidden; }
+.clip-line { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The figure (the counts) is one unclamped line; only the qualifier below it is clamped. */
+.rate-figure { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rate-qualifier { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; color: var(--muted); font-size: .85rem; }
+/* Column widths are inline from columns.ts (they sum to no more than the 968px page content). The hint shows only where the table is wider than the page. */
+.scroll-hint { display: none; margin: .25rem 0; color: var(--muted); font-size: .8rem; }
+@media (max-width: 1000px) {
+  .scroll-hint { display: block; }
+  /* Shadows at the edges that appear while there is more to scroll to. */
+  .table-scroll {
+    background:
+      linear-gradient(to right, var(--card) 30%, transparent) left / 24px 100% no-repeat local,
+      linear-gradient(to left, var(--card) 30%, transparent) right / 24px 100% no-repeat local,
+      linear-gradient(to right, rgba(0, 0, 0, .25), transparent) left / 10px 100% no-repeat scroll,
+      linear-gradient(to left, rgba(0, 0, 0, .25), transparent) right / 10px 100% no-repeat scroll,
+      var(--card);
+  }
+}
+/* Phones: drop kind, seed and evals so the rate column is on screen; they return at the wider width. */
+@media (max-width: 40rem) {
+  table.props { min-width: 0 !important; width: 29.5rem; }
+  table.props col:nth-child(1) { width: 5.5rem !important; }
+  table.props col:nth-child(3) { width: 8rem !important; }
+  table.props col:nth-child(4) { width: 16rem !important; }
+  table.props col:nth-child(2), table.props col:nth-child(5), table.props col:nth-child(6),
+  table.props th:nth-child(2), table.props td:nth-child(2),
+  table.props th:nth-child(5), table.props td:nth-child(5),
+  table.props th:nth-child(6), table.props td:nth-child(6) { display: none; }
+}
+.prop-sub { color: var(--muted); font-size: .8rem; }
+.guest-text { unicode-bidi: isolate; white-space: pre-wrap; word-break: break-word; }
+.clip-line .guest-text { white-space: nowrap; }
+.guest-esc { font-family: ui-monospace, monospace; font-size: .85em; background: var(--line); border-radius: 3px; padding: 0 .15em; }
+.guest-trunc { color: var(--muted); font-style: italic; }
+.guest-more { text-decoration: underline; color: var(--accent); }
+
+.status { font-weight: 600; white-space: nowrap; }
+.status-violation { color: var(--bad); }
+.status-unmet { color: var(--busy); }
+.status-pass { color: var(--good); }
+.status-unrated { color: var(--muted); }
+
+.rate-cell { display: block; }
+.rate-bar { display: block; position: relative; height: 6px; margin-top: 4px; background: var(--line); border-radius: 3px; }
+.rate-bar-fill { position: absolute; top: 0; bottom: 0; min-width: 3px; background: var(--fg); border-radius: 3px; }
+.unmet-note, .inconclusive-note { display: block; color: var(--muted); font-size: .8rem; }
+
+.unmet { border-left: 4px solid var(--busy); padding-left: .75rem; margin-top: 1.5rem; }
+.unmet ul { padding-left: 1.2rem; }
+.unmet .kind { color: var(--muted); }

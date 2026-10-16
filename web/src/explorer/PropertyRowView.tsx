@@ -1,0 +1,89 @@
+import type { ReactNode } from 'react';
+import { GuestText } from '../components/GuestText';
+import { RateCell } from '../components/RateCell';
+import type { PropertyRow } from '../types';
+import { formatCount, seenInInconclusive, statusLabel, statusMark } from '../wording';
+
+/** Height of every row, which is what makes windowing a sum. */
+export const ROW_HEIGHT = 88;
+/** Vertical padding (2 x 8px) plus the 1px row border, set in explorer.css. */
+const ROW_CHROME = 17;
+/** Every cell's content sits in a block of exactly this height with overflow hidden, so no row can grow. */
+export const CLIP_HEIGHT = ROW_HEIGHT - ROW_CHROME;
+const ID_CHARS = 96;
+const MSG_CHARS = 140;
+const LOC_CHARS = 80;
+
+export const kindLabel = (kind: string): string => kind.replace(/_/g, ' ');
+
+function Clip({ children }: { children: ReactNode }) {
+  return (
+    <div className="cell-clip" style={{ height: CLIP_HEIGHT }}>
+      {children}
+    </div>
+  );
+}
+
+function Location({ row }: { row: PropertyRow }) {
+  const loc = row.guest.loc;
+  if (!loc) return null;
+  return (
+    <>
+      {' '}
+      <GuestText text={loc.file} max={LOC_CHARS} expandable={false} />
+      {`:${loc.line}`}
+      {loc.func !== null && (
+        <>
+          {' '}
+          <GuestText text={loc.func} max={LOC_CHARS} expandable={false} />
+        </>
+      )}
+    </>
+  );
+}
+
+/** One property as a table row. Guest strings (id, message, location) go through `GuestText` and nowhere else. */
+export function PropertyRowView({ row, rowIndex }: { row: PropertyRow; rowIndex: number }) {
+  return (
+    <tr aria-rowindex={rowIndex} style={{ height: ROW_HEIGHT }}>
+      <td className={`status status-${row.status}`}>
+        <Clip>
+          <span aria-hidden="true">{statusMark(row.status)}</span> {statusLabel(row.status)}
+        </Clip>
+      </td>
+      <td>
+        <Clip>{kindLabel(row.kind)}</Clip>
+      </td>
+      <th scope="row" className="prop-id">
+        <Clip>
+          <span className="clip-line prop-name">
+            <GuestText text={row.guest.id} max={ID_CHARS} expandable={false} />
+          </span>
+          <span className="clip-line prop-sub">
+            {row.guest.msg !== '' && <GuestText text={row.guest.msg} max={MSG_CHARS} expandable={false} />}
+            <Location row={row} />
+          </span>
+        </Clip>
+      </th>
+      <td>
+        <Clip>
+          <RateCell cell={row.rate} />
+          {row.unmet !== null && (
+            <span className="clip-line unmet-note" title={row.unmet}>
+              {row.unmet}
+            </span>
+          )}
+          {row.failures_seen_in_inconclusive_trials > 0 && (
+            <span className="clip-line inconclusive-note">{seenInInconclusive(row.failures_seen_in_inconclusive_trials)}</span>
+          )}
+        </Clip>
+      </td>
+      <td>
+        <Clip>{row.first_failing_seed === null ? '–' : `seed ${row.first_failing_seed}`}</Clip>
+      </td>
+      <td className="num">
+        <Clip>{formatCount(row.evals)}</Clip>
+      </td>
+    </tr>
+  );
+}
