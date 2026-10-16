@@ -1,7 +1,10 @@
 //! Typed events of protocol v1, as produced by [`crate::parse_line`].
 
 /// The five assertion kinds and their trial/run semantics (see `docs/guest-protocol.md`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum AssertKind {
     Always,
     AlwaysOrUnreachable,
@@ -50,7 +53,7 @@ impl AssertKind {
 }
 
 /// Source location of a call site.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Loc {
     pub file: String,
     pub line: u64,

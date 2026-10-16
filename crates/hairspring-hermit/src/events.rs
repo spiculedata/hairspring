@@ -8,7 +8,6 @@
 use crate::capture::EventLines;
 use crate::safe_open::open_regular;
 use crate::summary_dir::ScratchDir;
-use hairspring_props::limits::MAX_EVENT_BYTES_PER_TRIAL;
 use hairspring_props::{EventHealth, TrialEvents, TrialProps};
 use std::io::Read;
 use std::path::Path;
@@ -123,7 +122,7 @@ pub struct FileEvents {
 
 /// Reads the events file the guest left in `dir`, at most the per-trial budget. `Ok(None)` when the guest never
 /// created it. Anything that is not a regular file (a symlink the guest planted, a FIFO, a device) is refused.
-pub fn read_events_file(dir: &Path) -> Result<Option<FileEvents>, EventsFault> {
+pub fn read_events_file(dir: &Path, budget: usize) -> Result<Option<FileEvents>, EventsFault> {
     let path = dir.join(HOST_FILE_NAME);
     let file = match open_regular(&path) {
         Ok(f) => f,
@@ -136,12 +135,12 @@ pub fn read_events_file(dir: &Path) -> Result<Option<FileEvents>, EventsFault> {
     };
     let mut bytes = Vec::new();
     // One byte past the budget tells "exactly full" from "cut".
-    let limit = MAX_EVENT_BYTES_PER_TRIAL as u64 + 1;
+    let limit = (budget as u64).saturating_add(1);
     file.take(limit)
         .read_to_end(&mut bytes)
         .map_err(|e| EventsFault::Guest(format!("cannot read the events file: {e}")))?;
-    let truncated = bytes.len() > MAX_EVENT_BYTES_PER_TRIAL;
-    bytes.truncate(MAX_EVENT_BYTES_PER_TRIAL);
+    let truncated = bytes.len() > budget;
+    bytes.truncate(budget);
     Ok(Some(FileEvents { bytes, truncated }))
 }
 
@@ -188,6 +187,7 @@ pub fn fold_sources(
     file: Option<&FileEvents>,
     stdout: &EventLines,
     stderr: &EventLines,
+    budget: usize,
 ) -> Option<TrialProps> {
     let file_lines = file
         .into_iter()
@@ -196,7 +196,7 @@ pub fn fold_sources(
     if is_silent(file, stdout, stderr) {
         return None;
     }
-    let props = TrialEvents::fold_stream(lines);
+    let props = TrialEvents::fold_stream_with_budget(lines, budget);
     let refused = stdout.dropped + stderr.dropped + u64::from(file.is_some_and(|f| f.truncated));
     Some(TrialProps {
         health: EventHealth {
@@ -210,6 +210,7 @@ pub fn fold_sources(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hairspring_props::limits::MAX_EVENT_BYTES_PER_TRIAL;
 
     fn lines(text: &str, dropped: u64) -> EventLines {
         EventLines {
@@ -223,8 +224,14 @@ mod tests {
     #[test]
     fn nothing_from_anywhere_is_no_events() {
         let none = EventLines::default();
-        assert!(fold_sources(None, &none, &none).is_none());
-        assert!(fold_sources(Some(&FileEvents::default()), &none, &none).is_none());
+        assert!(fold_sources(None, &none, &none, MAX_EVENT_BYTES_PER_TRIAL).is_none());
+        assert!(fold_sources(
+            Some(&FileEvents::default()),
+            &none,
+            &none,
+            MAX_EVENT_BYTES_PER_TRIAL
+        )
+        .is_none());
     }
 
     #[test]
@@ -233,7 +240,13 @@ mod tests {
             bytes: END.as_bytes().to_vec(),
             truncated: false,
         };
-        let props = fold_sources(Some(&file), &lines(END, 0), &lines(END, 0)).unwrap();
+        let props = fold_sources(
+            Some(&file),
+            &lines(END, 0),
+            &lines(END, 0),
+            MAX_EVENT_BYTES_PER_TRIAL,
+        )
+        .unwrap();
         assert_eq!(props.health.accepted, 3);
     }
 
@@ -243,7 +256,13 @@ mod tests {
             bytes: Vec::new(),
             truncated: true,
         };
-        let props = fold_sources(Some(&file), &lines("", 2), &lines("", 3)).unwrap();
+        let props = fold_sources(
+            Some(&file),
+            &lines("", 2),
+            &lines("", 3),
+            MAX_EVENT_BYTES_PER_TRIAL,
+        )
+        .unwrap();
         assert_eq!(props.health.over_limit, 6);
         assert!(props.is_degraded());
     }
@@ -253,9 +272,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hairspring-ev-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let _ = std::fs::remove_file(dir.join(HOST_FILE_NAME));
-        assert_eq!(read_events_file(&dir), Ok(None));
+        assert_eq!(read_events_file(&dir, MAX_EVENT_BYTES_PER_TRIAL), Ok(None));
         std::os::unix::fs::symlink("/etc/hosts", dir.join(HOST_FILE_NAME)).unwrap();
-        assert!(matches!(read_events_file(&dir), Err(EventsFault::Guest(_))));
+        assert!(matches!(
+            read_events_file(&dir, MAX_EVENT_BYTES_PER_TRIAL),
+            Err(EventsFault::Guest(_))
+        ));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -268,9 +290,22 @@ mod tests {
             vec![b'x'; MAX_EVENT_BYTES_PER_TRIAL + 10],
         )
         .unwrap();
-        let read = read_events_file(&dir).unwrap().unwrap();
+        let read = read_events_file(&dir, MAX_EVENT_BYTES_PER_TRIAL)
+            .unwrap()
+            .unwrap();
         assert_eq!(read.bytes.len(), MAX_EVENT_BYTES_PER_TRIAL);
         assert!(read.truncated);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unbounded_budget_reads_the_whole_file_without_overflowing() {
+        let dir = std::env::temp_dir().join(format!("hairspring-ev-max-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(HOST_FILE_NAME), b"HAIRSPRING_EVENT {}\n").unwrap();
+        let read = read_events_file(&dir, usize::MAX).unwrap().unwrap();
+        assert_eq!(read.bytes, b"HAIRSPRING_EVENT {}\n");
+        assert!(!read.truncated);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -313,21 +348,51 @@ mod tests {
 
     #[test]
     fn a_line_of_exactly_4096_bytes_is_accepted_and_4097_is_too_long() {
-        let ok = fold_sources(None, &through(&line_of(4096)), &EventLines::default()).unwrap();
+        let ok = fold_sources(
+            None,
+            &through(&line_of(4096)),
+            &EventLines::default(),
+            MAX_EVENT_BYTES_PER_TRIAL,
+        )
+        .unwrap();
         assert_eq!((ok.health.accepted, ok.health.too_long), (1, 0));
-        let long = fold_sources(None, &through(&line_of(4097)), &EventLines::default()).unwrap();
+        let long = fold_sources(
+            None,
+            &through(&line_of(4097)),
+            &EventLines::default(),
+            MAX_EVENT_BYTES_PER_TRIAL,
+        )
+        .unwrap();
         assert_eq!((long.health.accepted, long.health.too_long), (0, 1));
-        let huge = fold_sources(None, &through(&line_of(300_000)), &EventLines::default()).unwrap();
+        let huge = fold_sources(
+            None,
+            &through(&line_of(300_000)),
+            &EventLines::default(),
+            MAX_EVENT_BYTES_PER_TRIAL,
+        )
+        .unwrap();
         assert_eq!((huge.health.accepted, huge.health.too_long), (0, 1));
     }
 
     #[test]
     fn nul_bytes_and_invalid_utf8_are_counted_not_fatal() {
         let bad_utf8 = through(b"HAIRSPRING_EVENT {\"v\":1,\"kind\":\"work\",\"proc\":\"\xff\"}\n");
-        let p = fold_sources(None, &bad_utf8, &EventLines::default()).unwrap();
+        let p = fold_sources(
+            None,
+            &bad_utf8,
+            &EventLines::default(),
+            MAX_EVENT_BYTES_PER_TRIAL,
+        )
+        .unwrap();
         assert_eq!(p.health.invalid_utf8, 1);
         let nul = through(b"HAIRSPRING_EVENT {\"v\":1,\"kind\":\"work\",\"proc\":\"a\0b\"}\n");
-        let p = fold_sources(None, &nul, &EventLines::default()).unwrap();
+        let p = fold_sources(
+            None,
+            &nul,
+            &EventLines::default(),
+            MAX_EVENT_BYTES_PER_TRIAL,
+        )
+        .unwrap();
         assert_eq!(p.health.malformed + p.health.over_limit, 1);
         assert_eq!(p.health.accepted, 0);
     }
@@ -350,7 +415,7 @@ mod tests {
         let stored = ev.lines().count() as u64;
         assert_eq!(stored + ev.dropped, sent);
         assert!(ev.dropped > 0);
-        let p = fold_sources(None, &ev, &EventLines::default()).unwrap();
+        let p = fold_sources(None, &ev, &EventLines::default(), MAX_EVENT_BYTES_PER_TRIAL).unwrap();
         assert_eq!(
             p.health.over_limit, ev.dropped,
             "the fold refused nothing more"
@@ -372,6 +437,7 @@ mod tests {
             Some(&file),
             &lines(&END.repeat(3), 0),
             &EventLines::default(),
+            MAX_EVENT_BYTES_PER_TRIAL,
         )
         .unwrap();
         assert_eq!(p.health.over_limit, 3, "{:?}", p.health);

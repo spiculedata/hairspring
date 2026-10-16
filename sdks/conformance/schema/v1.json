@@ -29,7 +29,7 @@
     "max_ids_per_proc": 4096,
     "max_threads_per_proc": 256,
     "max_procs_per_trial": 64,
-    "max_event_bytes_per_trial": 1048576,
+    "max_event_bytes_per_trial": 4194304,
     "max_json_depth": 4
   },
   "$defs": {

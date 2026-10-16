@@ -1,6 +1,9 @@
 //! Remote worker: pulls jobs from an Hairspring server, runs them on the local engine
 //! (which may have backends the server lacks, such as Hermit on a Linux box) and
 //! reports progress and results back.
+mod completion;
+
+use completion::completion_body;
 use hairspring_engine::backend::Progress;
 use hairspring_engine::engine::{Engine, RunRequest};
 use hairspring_engine::report::RunOutcome;
@@ -264,13 +267,10 @@ fn execute(
             job_path("fail"),
             json!({ "worker_id": worker_id, "error": "interrupted by worker shutdown" }),
         ),
-        Ok(Ok(outcome)) => (
-            job_path("complete"),
-            json!({ "worker_id": worker_id, "outcome": outcome }),
-        ),
+        Ok(Ok(outcome)) => (job_path("complete"), completion_body(worker_id, outcome)),
         Ok(Err(e)) => (
             job_path("complete"),
-            json!({ "worker_id": worker_id, "outcome": RunOutcome::error(e.to_string()) }),
+            completion_body(worker_id, RunOutcome::error(e.to_string())),
         ),
         Err(_) => (
             job_path("fail"),

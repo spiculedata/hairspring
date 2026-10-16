@@ -1,5 +1,7 @@
 //! Verdicts and the readable trace for a trial.
+use crate::events::EventsFault;
 use crate::exec::Trial;
+use crate::property_verdict;
 use hairspring_engine::report::Step;
 
 const MARKER: &str = "HAIRSPRING_VIOLATION";
@@ -20,8 +22,11 @@ pub enum Verdict {
     Violation(String),
     /// The trial hit its time limit: possibly a hang or deadlock, possibly just slow. Not a finding by itself.
     Hang(String),
-    /// Hermit itself failed: not a finding about the target.
+    /// Hermit itself failed, or the run is misconfigured: not a finding about the target, and the run cannot go on.
     Infra(String),
+    /// This trial cannot be judged (the host failed to collect its events, or the guest's events are unusable) but
+    /// the run can go on. Counted apart from passes and never a finding by itself.
+    Inconclusive(String),
 }
 
 /// FNV-1a over the guest's observable behaviour (exit status and stdout).
@@ -69,6 +74,10 @@ fn hermit_own_failure(stderr: &str) -> Option<String> {
     None
 }
 
+/// Judges a trial. Order: Hermit's own failures and misconfiguration (the run cannot go on), then a timeout, then host
+/// faults collecting events (both inconclusive, never a pass), then property failures (a false that was read counts
+/// even when the rest of the report is damaged), then the legacy violation line, then the exit status. A trial that
+/// exits cleanly but whose events are unusable is inconclusive, not a pass.
 pub fn classify(t: &Trial, timeout_secs: u64) -> Verdict {
     if t.stderr.contains(INTERNAL_FAILURE) {
         let detail = first_line(&t.stderr, "Error:")
@@ -78,10 +87,22 @@ pub fn classify(t: &Trial, timeout_secs: u64) -> Verdict {
     if let Some(reason) = hermit_own_failure(&t.stderr) {
         return Verdict::Infra(reason);
     }
+    if let Some(EventsFault::Config(problem)) = &t.events_error {
+        return Verdict::Infra(problem.clone());
+    }
     if t.timed_out {
         return Verdict::Hang(format!(
             "timed out after {timeout_secs}s (possible hang or deadlock)"
         ));
+    }
+    if let Some(EventsFault::Infra(problem)) = &t.events_error {
+        return Verdict::Inconclusive(format!(
+            "the guest's events could not be collected: {problem}"
+        ));
+    }
+    let failed = property_verdict::failures(t);
+    if !failed.is_empty() {
+        return Verdict::Violation(property_verdict::describe(&failed));
     }
     if let Some(line) = t
         .stdout
@@ -102,7 +123,10 @@ pub fn classify(t: &Trial, timeout_secs: u64) -> Verdict {
         });
     }
     match (t.exit_code, t.signal) {
-        (Some(0), _) => Verdict::Pass,
+        (Some(0), _) => match property_verdict::unusable_events(t) {
+            Some(why) => Verdict::Inconclusive(why),
+            None => Verdict::Pass,
+        },
         (Some(code), _) => Verdict::Violation(format!("exit code {code}")),
         (None, Some(sig)) => Verdict::Violation(format!("terminated by signal {sig}")),
         (None, None) => Verdict::Violation("terminated abnormally".to_string()),

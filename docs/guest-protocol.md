@@ -130,6 +130,32 @@ Per id, evidence counts and rate counts are kept separately.
 * If a trial declares an id with a different kind from the first trial that did, its data for that id is not merged;
   the mismatch and that trial's own failure are listed in the run summary.
 
+## How the Hermit backend judges a trial
+
+In this order, the first rule that applies decides:
+
+1. Hermit's own failure, or a misconfigured events setup (a Config fault): the run is an error and no trial is spent.
+2. A timeout: inconclusive (or a violation when the target sets `hang_is_violation`).
+3. The host failed to collect the events (an Infra fault: scratch I/O or cleanup failed): inconclusive, never a pass.
+4. A trial-level property failure (`always` false, `unreachable` hit, catalog conflict): the trial fails and gets a
+   bundle recording `property` and `property_kind`. This holds for degraded trials too: a false that was read is a
+   false.
+5. A `HAIRSPRING_VIOLATION:` line, then the exit status, as before.
+6. Otherwise a clean exit is a pass, unless the events are unusable (a Guest fault such as an unreadable, oversized or
+   truncated file or an output stream that never closed; lost or contradictory data; a process with no `end`). Such a
+   trial is degraded and inconclusive: it is never a pass, is not rated, and makes no must-hit claim.
+
+UNMET (`sometimes`, `reachable`, `always` never evaluated) is a run-level finding over claimable trials only (rated and
+not perturbing). It never fails a trial, and it is listed in its own section of the report. A run that stops at its first
+failure, or tested nothing, makes no UNMET claim: such a property is `Unrated` in the data. `confirm` reruns count only
+when they fail the same property ids, kinds and reasons and reproduce the behaviour hash (which includes the reported
+events); reruns that could not be judged (a timeout, a host or events fault) are counted as inconclusive, not as
+non-reproduction. Replay of a bundle with a `property` also requires that property to fail again.
+
+A trial that timed out is inconclusive: the report of a killed process decides nothing. A failure it shows is not a
+finding and is not recorded in the bundle; the run counts it in `trials_inconclusive_with_failures` and the report says
+"seen in an inconclusive trial".
+
 ## Versioning and unknowns
 
 `v` is a major version. A line with `v` greater than 1 is counted and ignored. Within v1, unknown kinds and unknown
@@ -139,9 +165,17 @@ fields are counted and ignored, so new fields and kinds can be added without bre
 
 Ids and process tags are 1 to 128 and 1 to 64 bytes of `[A-Za-z0-9._:/-]`; thread keys are 1 to 64 bytes of the same
 set plus `#`; messages are at most 512 bytes. At most 4096 ids per process, 256 `thread` lines per process, 64
-processes and 1 MiB of event lines per trial. Malformed, over-limit, duplicate and uncatalogued lines are dropped
+processes and 4 MiB of event lines per trial. Malformed, over-limit, duplicate and uncatalogued lines are dropped
 (duplicate asserts are summed) and counted; a trial with any of those, a conflict or a failed cross-check is marked
 degraded.
+
+The 4 MiB event budget (`max_event_bytes_per_trial` in the schema; 1 MiB before it was raised) applies to each
+transport separately (stdout, stderr and the events file), and within one transport it is shared by every process in the
+trial, newlines included. The fold then applies the budget again to the merged stream, so the events kept per trial
+never exceed it, but a trial that fills all three transports can hold up to about 3x the budget in memory while it runs.
+A catalog line plus an assert line cost about 850 bytes per id, so the budget holds about 4,900 ids, or about 1,200 ids per MiB summed over
+processes. Backends take the budget as a setting (`HermitSettings::max_event_bytes`, default 4 MiB). The capture buffer
+is a cap, not an allocation: it grows as events arrive, so only trials that emit events spend memory.
 
 A process with no `end` line is reported as `report_missing`: its report was lost or cut, or it crashed with signal
 handlers off.

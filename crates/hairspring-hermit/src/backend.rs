@@ -1,6 +1,8 @@
 use crate::events;
 use crate::exec::{run_trial, scheduler_flags, Dirs, ProcessSpec, SpawnError, Trial};
+use crate::property_verdict::{self, FailureKey};
 use crate::summary_dir::PrivateDir;
+use crate::tally::{Tally, TrialObserver};
 use crate::trace::{behaviour_hash, classify, steps, Verdict};
 use crate::HermitSettings;
 use hairspring_core::bundle::Bundle;
@@ -10,6 +12,8 @@ use hairspring_engine::report::{
     DoctorDivergence, DoctorReport, FailureReport, ReplayOutcome, RunOutcome,
 };
 use hairspring_engine::EngineError;
+use hairspring_props::AssertKind;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const BUILD: &str = env!("CARGO_PKG_VERSION");
@@ -24,7 +28,33 @@ struct Found<'a> {
     seed: u64,
     trial: &'a Trial,
     reason: &'a str,
-    confirmed: u32,
+    confirmed: &'a Confirmation,
+}
+
+/// How the confirmation reruns of a violating seed went.
+#[derive(Clone)]
+struct Confirmation {
+    reproduced: u32,
+    /// Reruns that could not be judged (a timeout, a host or events fault): they say nothing about the program.
+    inconclusive: u32,
+    /// Why the first rerun that failed to start could not, so the report says what went wrong on the host.
+    first_error: Option<String>,
+}
+
+/// The failure message's account of reruns that could not be judged.
+fn inconclusive_text(count: u32, first_error: Option<&str>) -> String {
+    let reruns = if count == 1 { "rerun" } else { "reruns" };
+    let cause = first_error.map(|e| format!(": {e}")).unwrap_or_default();
+    format!("; {count} {reruns} inconclusive (host or infrastructure, not the program{cause})")
+}
+
+/// What one confirmation rerun showed.
+enum Rerun {
+    Reproduced,
+    Different,
+    Inconclusive,
+    /// The rerun could not start; the text is why.
+    NotStarted(String),
 }
 
 /// One finished trial and everything needed to judge it.
@@ -47,6 +77,8 @@ pub struct HermitBackend {
     summaries: Option<PrivateDir>,
     /// Where the events file's per-trial directories go when `events_dir` is set; otherwise `summaries` is used.
     events_scratch: Option<PrivateDir>,
+    /// Told about every trial of every run; `None` does nothing.
+    observer: Option<Arc<dyn TrialObserver>>,
 }
 
 impl HermitBackend {
@@ -63,6 +95,16 @@ impl HermitBackend {
             settings,
             summaries,
             events_scratch,
+            observer: None,
+        }
+    }
+
+    /// Reports every trial of every run to `observer` (see [`TrialObserver`]).
+    #[must_use]
+    pub fn with_observer(self, observer: Arc<dyn TrialObserver>) -> HermitBackend {
+        HermitBackend {
+            observer: Some(observer),
+            ..self
         }
     }
 
@@ -152,16 +194,42 @@ impl HermitBackend {
         run_trial(&self.settings, p, seed, timeout, self.dirs())
     }
 
-    /// Re-runs a violating seed and counts how many runs show the same behaviour.
-    fn confirm(&self, p: &ProcessSpec, seed: u64, reference: &str, timeout: Duration) -> u32 {
-        (0..self.settings.repro_runs)
-            .filter(|_| {
-                self.trial(p, seed, timeout).is_ok_and(|t| {
-                    matches!(self.verdict(p, &t, timeout), Verdict::Violation(_))
-                        && behaviour_hash(&t) == reference
-                })
+    /// Re-runs a violating seed. A rerun reproduces it when it is a violation with the same behaviour hash (which
+    /// includes the guest's reported events) and the same failing properties, by id, kind and reason. A rerun that
+    /// fails a different property is a different bug, not a reproduction. A rerun that could not be judged is counted
+    /// apart, because it says nothing about whether the program is deterministic.
+    fn confirm(
+        &self,
+        p: &ProcessSpec,
+        seed: u64,
+        reference: &Trial,
+        timeout: Duration,
+    ) -> Confirmation {
+        let hash = behaviour_hash(reference);
+        let failing = property_verdict::failing_keys(reference);
+        let reruns: Vec<Rerun> = (0..self.settings.repro_runs)
+            .map(|_| match self.trial(p, seed, timeout) {
+                Err(e) => Rerun::NotStarted(e.to_string()),
+                Ok(t) => match self.verdict(p, &t, timeout) {
+                    Verdict::Violation(_) if property_verdict::reproduces(&hash, &failing, &t) => {
+                        Rerun::Reproduced
+                    }
+                    Verdict::Violation(_) | Verdict::Pass => Rerun::Different,
+                    Verdict::Hang(_) | Verdict::Inconclusive(_) | Verdict::Infra(_) => {
+                        Rerun::Inconclusive
+                    }
+                },
             })
-            .count() as u32
+            .collect();
+        let count = |want: fn(&Rerun) -> bool| reruns.iter().filter(|r| want(r)).count() as u32;
+        Confirmation {
+            reproduced: count(|r| matches!(r, Rerun::Reproduced)),
+            inconclusive: count(|r| matches!(r, Rerun::Inconclusive | Rerun::NotStarted(_))),
+            first_error: reruns.iter().find_map(|r| match r {
+                Rerun::NotStarted(why) => Some(why.clone()),
+                _ => None,
+            }),
+        }
     }
 
     /// Runs the trials for the seeds `base + range` at the same time, returning results in range order.
@@ -192,9 +260,13 @@ impl HermitBackend {
 
     /// Decides what one finished trial means. Returns the run's outcome when the run should end here.
     fn judge(&self, j: &Judged, tally: &mut Tally) -> Option<RunOutcome> {
-        tally.record_schedule(j.trial);
+        tally.on_trial(j.seed, j.trial);
         match self.verdict(j.p, j.trial, j.timeout) {
             Verdict::Infra(msg) => Some(infra(msg)),
+            Verdict::Inconclusive(_) => {
+                tally.unusable();
+                None
+            }
             Verdict::Hang(_) | Verdict::Violation(_) if j.trial.timed_out && j.clipped => {
                 // Out of budget, not out of patience: inconclusive, never a finding. The rest of the batch is still
                 // judged first, because a violation among trials that already ran must not be thrown away.
@@ -206,7 +278,7 @@ impl HermitBackend {
                 None
             }
             Verdict::Violation(reason) => {
-                let confirmed = self.confirm(j.p, j.seed, &behaviour_hash(j.trial), j.timeout);
+                let confirmed = self.confirm(j.p, j.seed, j.trial, j.timeout);
                 let failure = self.failure(&Found {
                     spec: j.spec,
                     p: j.p,
@@ -214,14 +286,16 @@ impl HermitBackend {
                     seed: j.seed,
                     trial: j.trial,
                     reason: &reason,
-                    confirmed,
+                    confirmed: &confirmed,
                 });
                 let ms = j.started.elapsed().as_millis() as u64;
                 let (distinct, work) = tally.schedule_stats();
                 Some(
-                    RunOutcome::failed(j.index + 1, j.index + 1, ms, failure)
-                        .with_inconclusive(tally.inconclusive)
-                        .with_schedule_stats(distinct, work),
+                    tally.with_partial_properties(
+                        RunOutcome::failed(j.index + 1, j.index + 1, ms, failure)
+                            .with_inconclusive(tally.inconclusive)
+                            .with_schedule_stats(distinct, work),
+                    ),
                 )
             }
             Verdict::Pass => {
@@ -243,10 +317,17 @@ impl HermitBackend {
         } = *found;
         let hash = behaviour_hash(t);
         let total = self.settings.repro_runs;
+        let (reproduced, inconclusive) = (confirmed.reproduced, confirmed.inconclusive);
         let mut message = format!(
-            "property violated at sched-seed {seed} ({reason}); reproduced {confirmed}/{total}"
+            "property violated at sched-seed {seed} ({reason}); reproduced {reproduced}/{total}"
         );
-        if confirmed < total {
+        if inconclusive > 0 {
+            message.push_str(&inconclusive_text(
+                inconclusive,
+                confirmed.first_error.as_deref(),
+            ));
+        }
+        if reproduced + inconclusive < total {
             message.push_str(" - not reproducible: the program or its environment is non-deterministic under hermit");
         }
         let mut bundle = Bundle::new(seed, BUILD, vec![])
@@ -262,6 +343,13 @@ impl HermitBackend {
             .with_param("output_hash", hash);
         if let Some(schedule) = &t.schedule {
             bundle = bundle.with_param("schedule_fingerprint", schedule.fingerprint.clone());
+        }
+        if let Some(key) = property_verdict::primary_key(t) {
+            // What replay must see fail again; bundles without these (older ones, legacy violations) skip the check.
+            bundle = bundle
+                .with_param("property", key.id)
+                .with_param("property_kind", key.kind.as_str())
+                .with_param("property_reason", property_verdict::reason_name(key.reason));
         }
         let steps = steps(
             p.command,
@@ -284,7 +372,12 @@ impl HermitBackend {
 }
 
 /// What replay says about how closely the rerun matched the recording: the output, and the schedule when both are known.
-fn replay_notes(bundle: &Bundle, trial: &Trial, hang_relaxed: bool) -> Option<String> {
+fn replay_notes(
+    bundle: &Bundle,
+    trial: &Trial,
+    verdict: &Verdict,
+    hang_relaxed: bool,
+) -> Option<String> {
     let yes_no = |same: bool| if same { "yes" } else { "no" };
     let mut notes = Vec::new();
     if hang_relaxed {
@@ -308,74 +401,38 @@ fn replay_notes(bundle: &Bundle, trial: &Trial, hang_relaxed: bool) -> Option<St
             yes_no(*recorded == now.fingerprint)
         ));
     }
+    if let Some(same) = property_matches(bundle, trial) {
+        notes.push(format!(
+            "the recorded property failed again: {}",
+            yes_no(same)
+        ));
+    }
+    if let Verdict::Inconclusive(why) = verdict {
+        notes.push(format!("the rerun was inconclusive: {why}"));
+    }
     (!notes.is_empty()).then(|| notes.join("; "))
 }
 
-/// Running totals for one run. Timeouts are counted apart from passes so a run that tested nothing is never a pass.
-#[derive(Default)]
-struct Tally {
-    trials: u64,
-    inconclusive: u64,
-    /// Fingerprints of the schedules the trials ran, and the total work they did.
-    schedules: std::collections::HashSet<String>,
-    work: u64,
-    /// The wall-clock budget, not the target's own limit, cut the last trial short.
-    budget_cut: bool,
-}
-
-impl Tally {
-    fn pass(&mut self) {
-        self.trials += 1;
-    }
-
-    fn record_schedule(&mut self, t: &Trial) {
-        if let Some(schedule) = &t.schedule {
-            self.schedules.insert(schedule.fingerprint.clone());
-            self.work = self.work.saturating_add(schedule.syscalls);
-        }
-    }
-
-    fn schedule_stats(&self) -> (u64, u64) {
-        (self.schedules.len() as u64, self.work)
-    }
-
-    fn hang(&mut self) {
-        self.trials += 1;
-        self.inconclusive += 1;
-    }
-
-    fn cut_by_budget(&mut self) {
-        self.hang();
-        self.budget_cut = true;
-    }
-
-    fn progress_message(&self, of: u64) -> String {
-        match self.inconclusive {
-            0 => format!("{} of {of} seeds explored", self.trials),
-            n => format!("{} of {of} seeds explored ({n} timed out)", self.trials),
-        }
-    }
-
-    fn nothing_tested(&self) -> String {
-        if self.budget_cut {
-            return "the wall-clock budget ran out before any trial finished; nothing was tested (raise wall_secs or lower trial_timeout_secs)".to_string();
-        }
-        format!(
-            "all {} trials timed out; nothing was tested (raise trial_timeout_secs, or set hang_is_violation = true if a hang is the bug)",
-            self.trials
-        )
-    }
-
-    fn finish(&self, started: Instant) -> RunOutcome {
-        if self.inconclusive > 0 && self.inconclusive == self.trials {
-            return RunOutcome::error(self.nothing_tested()).with_inconclusive(self.inconclusive);
-        }
-        let ms = started.elapsed().as_millis() as u64;
-        let (distinct, work) = self.schedule_stats();
-        RunOutcome::passed(self.trials, self.trials, ms)
-            .with_inconclusive(self.inconclusive)
-            .with_schedule_stats(distinct, work)
-    }
+/// Whether the rerun failed the property the bundle recorded; `None` for bundles that recorded none (older ones, and
+/// failures that were an exit status or a legacy violation line). A kind or reason this build cannot parse matches
+/// nothing: replay would rather say "not reproduced" than confirm a property it cannot identify. Bundles from before
+/// `property_reason` existed match on id and kind alone.
+fn property_matches(bundle: &Bundle, trial: &Trial) -> Option<bool> {
+    let id = bundle.params.get("property")?;
+    let kind = match bundle.params.get("property_kind") {
+        Some(k) => match AssertKind::from_wire(k) {
+            Some(kind) => Some(kind),
+            None => return Some(false),
+        },
+        None => None,
+    };
+    let reason = bundle.params.get("property_reason");
+    let failing = property_verdict::failing_keys(trial);
+    Some(failing.iter().any(|k: &FailureKey| {
+        k.id == *id
+            && kind.is_none_or(|expected| expected == k.kind)
+            && reason.is_none_or(|r| r == property_verdict::reason_name(k.reason))
+    }))
 }
 
 /// Replay is only meaningful under the scheduling strategy the bundle was recorded with. Bundles from before scheduler
@@ -451,7 +508,7 @@ impl Backend for HermitBackend {
         let wall = Duration::from_secs(budget.wall_secs);
         let trials = budget.max_trials.max(1);
         let width = u64::from(p.parallelism.max(1));
-        let mut tally = Tally::default();
+        let mut tally = Tally::new(self.observer.clone());
         let mut next = 0u64;
         while next < trials {
             let remaining = wall.saturating_sub(started.elapsed());
@@ -524,13 +581,15 @@ impl Backend for HermitBackend {
         }
         let hang_relaxed = matches!(verdict, Verdict::Hang(_))
             && bundle.params.get("hang_is_violation").map(String::as_str) == Some("true");
-        let notes = replay_notes(bundle, &trial, hang_relaxed);
+        let notes = replay_notes(bundle, &trial, &verdict, hang_relaxed);
         let matches = bundle
             .params
             .get("output_hash")
             .map(|h| *h == behaviour_hash(&trial));
         Ok(ReplayOutcome {
-            reproduced: matches!(verdict, Verdict::Violation(_)) && matches != Some(false),
+            reproduced: matches!(verdict, Verdict::Violation(_))
+                && matches != Some(false)
+                && property_matches(bundle, &trial) != Some(false),
             steps: steps(
                 p.command,
                 seed,
@@ -584,5 +643,25 @@ impl Backend for HermitBackend {
             steps_per_seed: 0,
             divergence: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inconclusive_text;
+
+    #[test]
+    fn the_inconclusive_note_keeps_the_spawn_error_text() {
+        let text = inconclusive_text(2, Some("cannot start hermit: no such file"));
+        assert!(text.contains("2 reruns inconclusive"), "{text}");
+        assert!(text.contains("cannot start hermit: no such file"), "{text}");
+    }
+
+    #[test]
+    fn the_inconclusive_note_without_a_spawn_error_is_unchanged() {
+        assert_eq!(
+            inconclusive_text(1, None),
+            "; 1 rerun inconclusive (host or infrastructure, not the program)"
+        );
     }
 }

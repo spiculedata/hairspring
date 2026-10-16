@@ -202,7 +202,11 @@ fn counters_saturate_instead_of_overflowing() {
 #[test]
 fn an_empty_run_has_no_stats() {
     let (summary, stats) = run_of(&[]);
-    assert_eq!(summary, RunSummary::default());
+    let expected = RunSummary {
+        id_cap: hairspring_props::limits::MAX_IDS_PER_RUN,
+        ..RunSummary::default()
+    };
+    assert_eq!(summary, expected);
     assert!(stats.is_empty());
 }
 

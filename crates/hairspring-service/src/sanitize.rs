@@ -130,6 +130,8 @@ pub fn outcome(outcome: &RunOutcome, run_target: &str) -> Result<RunOutcome, Ser
     Ok(RunOutcome {
         error: outcome.error.as_deref().map(single_line),
         failure,
-        ..outcome.clone()
+        // Worker-reported property data is untrusted and has no limits or consistency checks yet (E6). It is dropped
+        // here rather than passed through unchecked.
+        ..outcome.clone().without_properties()
     })
 }

@@ -1,3 +1,4 @@
+use hairspring_props::{PropertyStat, RunSummary};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,7 +39,7 @@ pub struct FailureReport {
     pub bundle: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunOutcome {
     pub status: RunStatus,
     pub steps_executed: u64,
@@ -56,9 +57,45 @@ pub struct RunOutcome {
     pub elapsed_ms: u64,
     pub failure: Option<FailureReport>,
     pub error: Option<String>,
+    /// Per-property statistics from the guest event protocol, sorted by id. Empty when the guest reported no
+    /// properties, and absent in older stored runs. Not yet persisted by the store (issues #7 and #11).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub properties: Vec<PropertyStat>,
+    /// Run-wide counts behind `properties` (degraded, perturbing and report-missing trials). `None` without events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub property_run: Option<RunSummary>,
 }
 
 impl RunOutcome {
+    /// Attaches the run's property statistics.
+    pub fn with_properties(self, properties: Vec<PropertyStat>, run: RunSummary) -> Self {
+        RunOutcome {
+            property_run: (!properties.is_empty() || run.trials > 0).then_some(run),
+            properties,
+            ..self
+        }
+    }
+
+    /// The outcome without its property statistics. Used where the statistics must not travel: a worker posting a
+    /// result (thousands of ids would exceed the server's body limit) and the service receiving one (worker data is
+    /// untrusted until the property checks of E6 exist). Remove its callers when E4 and E6 land.
+    pub fn without_properties(self) -> Self {
+        RunOutcome {
+            properties: Vec::new(),
+            property_run: None,
+            ..self
+        }
+    }
+
+    /// Properties that are must-hit and were never satisfied in any claimable trial. A run-level finding: it never
+    /// fails an individual trial or turns a passing run into a failed one.
+    pub fn unmet(&self) -> Vec<&PropertyStat> {
+        self.properties
+            .iter()
+            .filter(|p| p.status == hairspring_props::PropertyStatus::Unmet)
+            .collect()
+    }
+
     pub fn with_inconclusive(self, inconclusive: u64) -> Self {
         RunOutcome {
             inconclusive,
@@ -85,6 +122,8 @@ impl RunOutcome {
             elapsed_ms,
             failure: None,
             error: None,
+            properties: Vec::new(),
+            property_run: None,
         }
     }
     pub fn failed(
@@ -103,6 +142,8 @@ impl RunOutcome {
             elapsed_ms,
             failure: Some(failure),
             error: None,
+            properties: Vec::new(),
+            property_run: None,
         }
     }
     pub fn error(message: impl Into<String>) -> Self {
@@ -116,6 +157,8 @@ impl RunOutcome {
             elapsed_ms: 0,
             failure: None,
             error: Some(message.into()),
+            properties: Vec::new(),
+            property_run: None,
         }
     }
 }

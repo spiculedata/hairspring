@@ -245,6 +245,9 @@ impl Service {
             elapsed_ms,
             failure,
             error,
+            // Not persisted yet either (issues #7 and #11).
+            properties: Vec::new(),
+            property_run: None,
         }))
     }
 
