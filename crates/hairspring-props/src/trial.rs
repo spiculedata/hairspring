@@ -131,7 +131,9 @@ pub struct CatalogConflict {
 }
 
 /// A failure of a trial-level rule (a finding that gets a bundle).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum FailureReason {
     /// An `always` or `always_or_unreachable` evaluated false.
     AlwaysFalse,

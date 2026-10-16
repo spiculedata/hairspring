@@ -84,6 +84,10 @@ pub struct PropertyStat {
     pub trials_perturbing: u64,
     /// Trials in which the id had conflicting declarations.
     pub trials_conflicted: u64,
+    /// Inconclusive trials (timed out) whose report showed a failure of this id. The failure is not counted as a
+    /// finding, because the report of a killed trial cannot be trusted; this keeps it visible.
+    #[serde(default)]
+    pub trials_inconclusive_with_failures: u64,
     /// Trials that may back a must-hit claim: rated and not perturbing. UNMET is decided over these only.
     #[serde(default)]
     pub trials_claimable: u64,
@@ -118,6 +122,9 @@ pub struct RunSummary {
     /// Trials containing `eval` lines; exclude them from tier claims.
     pub perturbing_trials: u64,
     pub degraded_trials: u64,
+    /// Trials added with [`RunProps::add_inconclusive`]: their failures are not findings.
+    #[serde(default)]
+    pub inconclusive_trials: u64,
     /// Trials in which at least one process sent no `end`.
     pub report_missing_trials: u64,
     /// Trials with a catalog conflict.
@@ -135,15 +142,18 @@ struct TrialClass {
     unreported: bool,
     degraded: bool,
     perturbing: bool,
+    /// The trial was inconclusive (it timed out): its data is evidence of nothing.
+    inconclusive: bool,
 }
 
 impl TrialClass {
-    fn of(seed: u64, t: &TrialProps) -> Self {
+    fn of(seed: u64, t: &TrialProps, inconclusive: bool) -> Self {
         TrialClass {
             seed,
-            unreported: !t.report_missing().is_empty(),
+            unreported: inconclusive || !t.report_missing().is_empty(),
             degraded: t.is_degraded(),
             perturbing: t.perturbing,
+            inconclusive,
         }
     }
 
@@ -164,6 +174,7 @@ struct IdAcc {
     degraded: u64,
     perturbing: u64,
     conflicted: u64,
+    inconclusive_failures: u64,
     trials_hit: u64,
     trials_true: u64,
     trials_false: u64,
@@ -191,6 +202,7 @@ impl IdAcc {
             degraded: 0,
             perturbing: 0,
             conflicted: 0,
+            inconclusive_failures: 0,
             trials_hit: 0,
             trials_true: 0,
             trials_false: 0,
@@ -215,6 +227,13 @@ impl IdAcc {
     }
 
     fn with_trial(mut self, class: TrialClass, p: &TrialProperty) -> Self {
+        if class.inconclusive {
+            self.trials += 1;
+            self.unreported += 1;
+            self.perturbing += u64::from(class.perturbing);
+            self.inconclusive_failures += u64::from(p.failure().is_some());
+            return self;
+        }
         let (hit, tru, fal) = (
             u64::from(p.hits > 0),
             u64::from(p.trues > 0),
@@ -316,6 +335,7 @@ impl IdAcc {
             trials_degraded: self.degraded,
             trials_perturbing: self.perturbing,
             trials_conflicted: self.conflicted,
+            trials_inconclusive_with_failures: self.inconclusive_failures,
             trials_claimable: self.claimable,
             trials_hit: self.trials_hit,
             trials_true: self.trials_true,
@@ -370,14 +390,27 @@ impl RunProps {
     /// Fold one trial in. `seed` identifies the trial in first-failure reports.
     #[must_use]
     pub fn add(self, seed: u64, trial: &TrialProps) -> RunProps {
+        self.add_classified(seed, trial, false)
+    }
+
+    /// Fold in a trial that was inconclusive (it timed out). Its report cannot be trusted, so it is counted as
+    /// unreported, adds no hit, true or false counts and no first failure, and cannot make a property a violation;
+    /// a failure it showed is only counted in `trials_inconclusive_with_failures`.
+    #[must_use]
+    pub fn add_inconclusive(self, seed: u64, trial: &TrialProps) -> RunProps {
+        self.add_classified(seed, trial, true)
+    }
+
+    fn add_classified(self, seed: u64, trial: &TrialProps, inconclusive: bool) -> RunProps {
         let RunProps {
             mut summary,
             mut ids,
         } = self;
-        let class = TrialClass::of(seed, trial);
+        let class = TrialClass::of(seed, trial, inconclusive);
         summary.trials += 1;
         summary.perturbing_trials += u64::from(class.perturbing);
         summary.degraded_trials += u64::from(class.degraded);
+        summary.inconclusive_trials += u64::from(class.inconclusive);
         summary.report_missing_trials += u64::from(class.unreported);
         summary.conflict_trials += u64::from(!trial.conflicts.is_empty());
         for p in &trial.properties {
@@ -401,7 +434,12 @@ impl RunProps {
             };
             ids.insert(p.id.clone(), acc);
         }
-        let conflicted: HashSet<&str> = trial.conflicts.iter().map(|c| c.id.as_str()).collect();
+        let conflicted: HashSet<&str> = trial
+            .conflicts
+            .iter()
+            .filter(|_| !inconclusive)
+            .map(|c| c.id.as_str())
+            .collect();
         for id in conflicted {
             if let Some(acc) = ids.remove(id) {
                 ids.insert(id.to_owned(), acc.with_conflict(seed));

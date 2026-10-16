@@ -53,3 +53,31 @@ fn property_stats_round_trip_through_json() {
     let json = serde_json::to_string(&stat).unwrap();
     assert_eq!(serde_json::from_str::<PropertyStat>(&json).unwrap(), stat);
 }
+
+#[test]
+fn a_false_in_an_inconclusive_trial_is_not_a_finding_but_stays_visible() {
+    let t = fold(&single(AssertKind::Always, 1, 1));
+    let run = RunProps::new().add_inconclusive(3, &t);
+    assert_eq!(run.summary().inconclusive_trials, 1);
+    let stat = run.finish().remove(0);
+    assert_eq!(stat.status, PropertyStatus::Unrated);
+    assert_eq!(stat.trials_inconclusive_with_failures, 1);
+    assert_eq!((stat.trials, stat.trials_false, stat.trials_rated), (1, 0, 0));
+    assert!(stat.first_failure.is_none());
+}
+
+#[test]
+fn an_inconclusive_trial_never_backs_a_must_hit_claim() {
+    let hit = fold(&single(AssertKind::Sometimes, 2, 0));
+    let miss = fold(&single(AssertKind::Sometimes, 0, 2));
+    let run = RunProps::new().add(1, &miss).add_inconclusive(2, &hit);
+    assert_eq!(run.finish().remove(0).status, PropertyStatus::Unmet);
+}
+
+#[test]
+fn a_conflict_and_an_always_false_on_one_id_are_different_failure_reasons() {
+    assert_ne!(FailureReason::AlwaysFalse, FailureReason::CatalogConflict);
+    let mut reasons = vec![FailureReason::CatalogConflict, FailureReason::AlwaysFalse];
+    reasons.sort();
+    assert_eq!(reasons[0], FailureReason::AlwaysFalse);
+}
