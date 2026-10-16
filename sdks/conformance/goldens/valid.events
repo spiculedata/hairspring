@@ -1,0 +1,10 @@
+HAIRSPRING_EVENT {"v":1,"kind":"hello","sdk":"c","sdk_version":"0.1.0","proc":"p1","catalog_hash":"9f2c","signal_handlers":false}
+HAIRSPRING_EVENT {"v":1,"kind":"catalog","proc":"p1","id":"wal.ckpt.nbackfill_le_mxframe","type":"always","must_hit":true,"msg":"nBackfill <= live mxFrame","loc":{"file":"sqlite3.c","line":66123,"func":"walCheckpoint"}}
+HAIRSPRING_EVENT {"v":1,"kind":"catalog","proc":"p1","id":"wal.reset.reached","type":"reachable","must_hit":true}
+HAIRSPRING_EVENT {"v":1,"kind":"catalog","proc":"p1","id":"wal.never","type":"unreachable","must_hit":false,"msg":"must not happen"}
+HAIRSPRING_EVENT {"v":1,"kind":"assert","proc":"p1","id":"wal.ckpt.nbackfill_le_mxframe","hits":                 412,"trues":                 411,"falses":                   1,"first_false":{"thread":"writer-0","ord":                 675,"vals":[71,8,0,0]},"first_true":{"thread":"ckpt","ord":                   3,"vals":[0,5,0,0]}}
+HAIRSPRING_EVENT {"v":1,"kind":"assert","proc":"p1","id":"wal.reset.reached","hits":2,"trues":2,"falses":0,"first_false":null,"first_true":{"thread":"t#1","ord":1,"vals":[-1,0,0,9223372036854775807]}}
+HAIRSPRING_EVENT {"v":1,"kind":"assert","proc":"p1","id":"wal.never","hits":0,"trues":0,"falses":0}
+HAIRSPRING_EVENT {"v":1,"kind":"work","proc":"p1","ops":                 300,"future_field":{"nested":[1,2]}}
+HAIRSPRING_EVENT {"v":1,"kind":"end","proc":"p1","reason":"exit","status":0,"sites":3,"evals":                 414,"dropped":0,"threads":[{"thread":"writer-0","evals":400,"tape_consumed":312},{"thread":"t#1","evals":14,"tape_consumed":57,"key_stable":false}]}
+HAIRSPRING_EVENT {"v":1,"kind":"eval","id":"script.check","type":"sometimes","ok":true}
