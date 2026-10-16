@@ -27,6 +27,15 @@
 #endif
 #endif
 
+/* TSan installs its own SEGV handling; the SDK keeps a handler it did not install (has_default_action in hs_report.c). */
+#if defined(__SANITIZE_THREAD__)
+#define HS_T_TSAN 1
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define HS_T_TSAN 1
+#endif
+#endif
+
 static const char *g_dir; /* directory holding the hs_sample_<scenario> binaries */
 
 struct capture {
@@ -289,6 +298,8 @@ static void test_signal_report_is_opt_in(void) {
 #ifdef HS_T_ASAN
   /* ASan owns SIGSEGV: the SDK leaves that handler alone, and without the opt-in ASan ends the run itself. */
   printf("skip: SIGSEGV opt-in report under AddressSanitizer\n");
+#elif defined(HS_T_TSAN)
+  printf("skip: SIGSEGV opt-in report under ThreadSanitizer\n");
 #else
   const char *on[] = {"HAIRSPRING_SIGNAL_REPORT=1", NULL};
   struct capture *c = run_capture("crash", NULL, on);
@@ -508,6 +519,8 @@ static void crash_reports(const char *scenario, int expected_signal, const char 
 static void test_real_faults_are_reported_when_handlers_are_on(void) {
 #ifdef HS_T_ASAN
   printf("skip: SIGSEGV reports under AddressSanitizer\n");
+#elif defined(HS_T_TSAN)
+  printf("skip: SIGSEGV reports under ThreadSanitizer\n");
 #else
   crash_reports("segv", SIGSEGV, "segv.before");
   crash_reports("threadsegv", SIGSEGV, "threadsegv.worker");

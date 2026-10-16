@@ -270,11 +270,11 @@ int main(void) {
 
 #include <time.h>
 
-static volatile int g_stop;
+static int g_stop; /* accessed only through __atomic builtins: volatile is not synchronisation */
 
 static void *spinner(void *arg) {
   (void)arg;
-  while (!g_stop) HS_SOMETIMES(1, "alive.spin", "spinning");
+  while (!__atomic_load_n(&g_stop, __ATOMIC_ACQUIRE)) HS_SOMETIMES(1, "alive.spin", "spinning");
   return NULL;
 }
 
@@ -286,7 +286,7 @@ static void *short_lived(void *arg) {
 
 static void *spawner(void *arg) {
   (void)arg;
-  while (!g_stop) {
+  while (!__atomic_load_n(&g_stop, __ATOMIC_ACQUIRE)) {
     pthread_t t;
     if (pthread_create(&t, NULL, short_lived, NULL) == 0) pthread_detach(t);
     struct timespec ts = {0, 20000};
@@ -309,7 +309,7 @@ int main(void) {
 
 #include <time.h>
 
-static volatile int g_stop;
+static int g_stop; /* accessed only through __atomic builtins: volatile is not synchronisation */
 
 static void *claimer(void *arg) {
   (void)arg;
@@ -319,7 +319,7 @@ static void *claimer(void *arg) {
 
 static void *renamer(void *arg) {
   (void)arg;
-  for (unsigned i = 0; !g_stop; i++) hs_thread("spin", i % 1000);
+  for (unsigned i = 0; !__atomic_load_n(&g_stop, __ATOMIC_ACQUIRE); i++) hs_thread("spin", i % 1000);
   return NULL;
 }
 
@@ -345,7 +345,7 @@ int main(void) {
     waitpid(pid, &status, 0);
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) failures++;
   }
-  g_stop = 1;
+  __atomic_store_n(&g_stop, 1, __ATOMIC_RELEASE);
   pthread_join(spinner, NULL);
   return failures ? 1 : 0;
 }
