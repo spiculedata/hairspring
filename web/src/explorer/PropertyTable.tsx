@@ -24,7 +24,7 @@ function Spacer({ height }: { height: number }) {
  * height lets blank spacer rows stand in for the rest, and `aria-rowcount` / `aria-rowindex` keep the full size
  * available to assistive technology. It stays a real table so keyboard and screen reader navigation work.
  */
-export function PropertyTable({ properties }: { properties: readonly PropertyRow[] }) {
+export function PropertyTable({ properties, total }: { properties: readonly PropertyRow[]; total?: number }) {
   const [scrollTop, setScrollTop] = useState(0);
   if (properties.length === 0) return <p className="muted">{NO_PROPERTIES}</p>;
   const win = computeWindow({
@@ -43,7 +43,7 @@ export function PropertyTable({ properties }: { properties: readonly PropertyRow
       style={{ maxHeight: VIEWPORT_HEIGHT }}
       onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
     >
-      <table className="props" aria-rowcount={properties.length + HEADER_ROWS}>
+      <table className="props" aria-rowcount={(total ?? properties.length) + HEADER_ROWS}>
         <caption>{GUEST_TABLE_NOTE}</caption>
         <thead>
           <tr aria-rowindex={1}>

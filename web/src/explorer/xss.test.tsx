@@ -21,13 +21,18 @@ const CORPUS: ReadonlyArray<readonly [string, string]> = [
   ['line separator', `a${CH.LS}b${CH.PS}c`],
   ['ansi escape', `${CH.ESC}[31mred${CH.ESC}[2J${CH.ESC}]0;title${CH.BEL}`],
   ['nul and del', `a${CH.NUL}b${CH.DEL}c`],
+  ['arabic letter mark', `a${CH.ALM}b`],
+  ['noncharacter', `a${CH.NONCHAR}b`],
+  ['tag characters', `a${CH.TAG_BEGIN}b`],
+  ['lone surrogate', `a${CH.LONE_SURROGATE}b`],
+  ['hangul fillers', `${CH.HANGUL_CHOSEONG_FILLER}${CH.HANGUL_JUNGSEONG_FILLER}${CH.HANGUL_FILLER}${CH.HALFWIDTH_HANGUL_FILLER}`],
   ['512 bytes', '<b>'.repeat(171)],
   ['10 MB', '<script>'.repeat((10 * 1024 * 1024) / 8)],
 ];
 
 /** Control, format and separator characters that must never reach the page raw. */
 const UNSAFE_IN_MARKUP = new RegExp(
-  '[\\u0000-\\u0008\\u000b-\\u001f\\u007f\\u0080-\\u009f\\u200b-\\u200f\\u2028-\\u202e\\u2060-\\u206f\\ufeff]',
+  '[\\u0000-\\u0008\\u000b-\\u001f\\u007f\\u0080-\\u009f\\u061c\\u115f\\u1160\\u17b4\\u17b5\\u200b-\\u200f\\u2028-\\u202e\\u2060-\\u206f\\u2800\\u3164\\ufeff\\uffa0\\ufffe\\uffff\\ud800-\\udfff]',
 );
 
 function hostileRow(text: string, status: PropertyRow['status'] = 'violation'): PropertyRow {

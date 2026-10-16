@@ -25,7 +25,7 @@ export function PropertyOverviewView({ page, rows, query, onQuery, onLoadMore, l
       <RunSummary page={page} />
       <h2 id="properties-title">{propertiesTitle(allProperties)}</h2>
       <PropertyFilters query={query} onQuery={onQuery} />
-      <PropertyTable properties={rows} />
+      <PropertyTable properties={rows} total={page.total} />
       {onLoadMore && (
         <p>
           <button type="button" onClick={onLoadMore} disabled={loadingMore}>

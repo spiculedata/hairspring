@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, streamRunEvents } from '../api';
 import { Link } from '../components/Layout';
 import { StateBadge } from '../components/Badge';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import { PropertyOverviewPanel } from '../explorer/PropertyOverviewPanel';
 import { usePropertyOverview } from '../explorer/usePropertyOverview';
 import { formatDuration, relativeTime } from '../format';
@@ -79,7 +80,9 @@ export function RunPage({ id }: { id: string }) {
         </button>
       )}
       {cancelMsg && <span className="muted"> {cancelMsg}</span>}
-      <PropertyOverviewPanel model={properties} />
+      <ErrorBoundary label="Property table">
+        <PropertyOverviewPanel model={properties} />
+      </ErrorBoundary>
       <h2>Failures</h2>
       {detail.data?.failures.length === 0 && <p className="muted">{noFailuresText({ live, headline: properties.page?.headline })}</p>}
       <ul>

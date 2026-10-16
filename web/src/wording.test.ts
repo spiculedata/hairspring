@@ -42,9 +42,17 @@ describe('rateText truth table', () => {
   it('k = n: still k/n with an interval', () => {
     expect(rateText(rate(16, 16, 0.806, 1))).toBe('16/16 · 100.00% · [80.60%–100.00%]');
   });
-  it('k = 0: 0/n and the rule-of-three bound, named as approximate', () => {
-    const cell: RateCellData = { kind: 'zero_events', basis: 'trials_false', n: 4790, upper_bound: 3 / 4790 };
-    expect(rateText(cell)).toBe('0/4,790 · at most 3/4,790 (0.06%) · approx. 95% upper bound');
+  it('k = 0: the exact bound the server sent, worded as the server words it, with 3/n only as a note', () => {
+    const cell: RateCellData = { kind: 'zero_events', basis: 'trials_false', n: 4790, upper_bound: 1 - 0.05 ** (1 / 4790) };
+    expect(rateText(cell)).toBe('0/4,790, exact one-sided 95% upper bound 0.06% (binomial, 0 of 4,790); about 3/4,790');
+  });
+  it('k = 0 with few trials: no 3/n note below 30 trials, and never "at most"', () => {
+    const cell: RateCellData = { kind: 'zero_events', basis: 'trials_false', n: 10, upper_bound: 1 - 0.05 ** (1 / 10) };
+    const text = rateText(cell);
+    expect(text).toBe('0/10, exact one-sided 95% upper bound 25.89% (binomial, 0 of 10)');
+    expect(text).not.toMatch(/at most|3\/|approx/);
+    expect(rateText({ ...cell, n: 29 })).not.toContain('about 3/');
+    expect(rateText({ ...cell, n: 30 })).toContain('; about 3/30');
   });
   it('unrated is never 0%', () => {
     const text = rateText({ kind: 'unrated' });

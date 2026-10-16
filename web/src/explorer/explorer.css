@@ -17,16 +17,19 @@
 table.props { margin-top: 0; table-layout: fixed; min-width: 56rem; }
 table.props caption { text-align: left; padding: .4rem .5rem; color: var(--muted); font-size: .8rem; }
 table.props thead th { position: sticky; top: 0; background: var(--card); z-index: 1; }
-table.props tbody tr { height: 56px; }
-table.props td, table.props tbody th { overflow: hidden; vertical-align: top; font-weight: 400; }
+/* Row height is 88px = 8px + 71px clipped block + 8px + 1px border (ROW_HEIGHT and CLIP_HEIGHT in PropertyRowView). */
+table.props tbody td, table.props tbody th { padding: 8px .5rem; border-bottom: 1px solid var(--line); overflow: hidden; vertical-align: top; font-weight: 400; line-height: 1.25; }
+.cell-clip { overflow: hidden; }
+.clip-line { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rate-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
 table.props th:nth-child(1) { width: 9.5rem; }
 table.props th:nth-child(2) { width: 7rem; }
 table.props th:nth-child(3) { width: 20rem; }
 table.props th:nth-child(5) { width: 8rem; }
 table.props th:nth-child(6) { width: 6rem; }
-.prop-id { word-break: break-all; }
-.prop-msg, .prop-loc { display: block; color: var(--muted); font-size: .8rem; max-height: 1.3em; overflow: hidden; }
+.prop-sub { color: var(--muted); font-size: .8rem; }
 .guest-text { unicode-bidi: isolate; white-space: pre-wrap; word-break: break-word; }
+.clip-line .guest-text { white-space: nowrap; }
 .guest-esc { font-family: ui-monospace, monospace; font-size: .85em; background: var(--line); border-radius: 3px; padding: 0 .15em; }
 .guest-trunc { color: var(--muted); font-style: italic; }
 .guest-more { text-decoration: underline; color: var(--accent); }

@@ -23,4 +23,12 @@ export const CH = {
   BOM: c(0xfeff),
   LONE_SURROGATE: String.fromCharCode(0xd800),
   GRIN: c(0x1f600),
+  ALM: c(0x61c),
+  NONCHAR: c(0xfffe),
+  TAG_BEGIN: c(0xe0001),
+  HANGUL_CHOSEONG_FILLER: c(0x115f),
+  HANGUL_JUNGSEONG_FILLER: c(0x1160),
+  HANGUL_FILLER: c(0x3164),
+  HALFWIDTH_HANGUL_FILLER: c(0xffa0),
+  BRAILLE_BLANK: c(0x2800),
 } as const;

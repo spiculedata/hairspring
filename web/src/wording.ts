@@ -41,6 +41,8 @@ function eventsPhrase(basis: RateBasis, k: number): string {
 export const UNRATED_TEXT = 'unrated (0 rated trials)';
 export const NOT_A_RATE_TEXT = 'not a rate (stopped at first failure)';
 const SEP = ' · ';
+/** The smallest n at which "about 3/n" is shown as a note beside the exact bound. */
+const THREE_OVER_N_NOTE_FROM = 30;
 
 /**
  * A rate as text. A rate is always `k/n` with its interval, never a bare percentage; nothing rated is "unrated", never
@@ -53,8 +55,10 @@ export function rateText(cell: RateCellData): string {
     case 'not_a_rate':
       return `${NOT_A_RATE_TEXT}${SEP}${eventsPhrase(cell.basis, cell.k)} in ${plural(cell.n, 'rated trial', 'rated trials')}`;
     case 'zero_events': {
+      // The server's wording (hairspring-props honesty.rs): the bound is exact, and 3/n is only a note from 30 trials.
       const n = formatCount(cell.n);
-      return `0/${n}${SEP}at most 3/${n} (${formatPct(cell.upper_bound)})${SEP}approx. 95% upper bound`;
+      const note = cell.n >= THREE_OVER_N_NOTE_FROM ? `; about 3/${n}` : '';
+      return `0/${n}, exact one-sided 95% upper bound ${formatPct(cell.upper_bound)} (binomial, 0 of ${n})${note}`;
     }
     case 'rate':
       if (cell.n === 0) return UNRATED_TEXT;

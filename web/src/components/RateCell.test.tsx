@@ -27,9 +27,10 @@ describe('RateCell', () => {
   });
 
   it('zero failures: 0/n and the 3/n bound, no interval bar', () => {
-    const html = renderToString(<RateCell cell={{ kind: 'zero_events', basis: 'trials_false', n: 4790, upper_bound: 3 / 4790 }} />);
+    const html = renderToString(<RateCell cell={{ kind: 'zero_events', basis: 'trials_false', n: 4790, upper_bound: 1 - 0.05 ** (1 / 4790) }} />);
     expect(html).toContain('0/4,790');
-    expect(html).toContain('at most 3/4,790');
+    expect(html).toContain('exact one-sided 95% upper bound 0.06% (binomial, 0 of 4,790)');
+    expect(html).not.toContain('at most');
     expect(html).not.toContain('role="img"');
   });
 

@@ -19,7 +19,7 @@ function IntervalBar({ lower, upper }: { lower: number; upper: number }) {
 }
 
 /**
- * One property's rate. Always `k/n` with its interval; zero events show the 3/n bound; nothing rated is "unrated";
+ * One property's rate. Always `k/n` with its interval; zero events show the exact one-sided bound; nothing rated is "unrated";
  * a run that stopped at its first failure shows counts and no rate. The wording is in wording.ts.
  */
 export function RateCell({ cell }: { cell: RateCellData }) {

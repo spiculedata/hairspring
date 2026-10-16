@@ -45,6 +45,16 @@ describe('escapeGuest', () => {
     expect(joined(`a${CH.LONE_SURROGATE}b`)).toBe('a\\u{D800}b');
   });
 
+  it('shows Arabic letter mark, noncharacters and tag characters', () => {
+    expect(joined(`${CH.ALM}${CH.NONCHAR}${CH.TAG_BEGIN}`)).toBe('\\u{61C}\\u{FFFE}\\u{E0001}');
+  });
+
+  it('shows invisible letters (Hangul fillers, braille blank) that no category rule catches', () => {
+    expect(
+      joined(`${CH.HANGUL_CHOSEONG_FILLER}${CH.HANGUL_JUNGSEONG_FILLER}${CH.HANGUL_FILLER}${CH.HALFWIDTH_HANGUL_FILLER}${CH.BRAILLE_BLANK}`),
+    ).toBe('\\u{115F}\\u{1160}\\u{3164}\\u{FFA0}\\u{2800}');
+  });
+
   it('keeps astral characters whole', () => {
     expect(joined(`ok ${CH.GRIN} ok`)).toBe(`ok ${CH.GRIN} ok`);
   });

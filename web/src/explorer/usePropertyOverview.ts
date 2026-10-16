@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api } from '../api';
+import { ApiError, api } from '../api';
 import type { PropertyPage, PropertyQuery, PropertyRow } from '../types';
 
 /** Rows asked for per request; the server caps this, and the table windows what is loaded. */
 export const PAGE_SIZE = 200;
-const LIVE_REFRESH_MS = 2000;
+export const LIVE_REFRESH_MS = 2000;
+const UNAUTHORIZED = 401;
 
 export interface PropertyOverviewModel {
   /** First page for the current filters: carries the header, claim and counts. */
@@ -20,10 +21,20 @@ export interface PropertyOverviewModel {
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+/** How long to wait before asking again: the usual interval, or longer if the server said so (429 Retry-After). */
+export function nextDelay(error: unknown): number {
+  return Math.max(LIVE_REFRESH_MS, error instanceof ApiError ? (error.retryAfterMs ?? 0) : 0);
+}
+
 /**
- * Loads a run's property table. The first page is refreshed while the run is live (figures are written when it ends);
- * "load more" appends the next page for the same filters. Changing a filter starts over, and a response that belongs
- * to an earlier filter is dropped.
+ * Loads a run's property table.
+ *
+ * - While the run is live the first page is refreshed, because figures are written when it ends. A refresh replaces the
+ *   rows, so it is skipped once the reader has loaded further pages (their rows are never dropped silently); when the
+ *   run ends the table is reloaded from the start with the final figures.
+ * - A response that belongs to an earlier filter, or that arrives after a refresh replaced the rows it would extend,
+ *   is dropped, and a superseded request is aborted.
+ * - A 429 delays the next refresh by Retry-After, and a 401 stops refreshing (the token prompt has been raised once).
  */
 export function usePropertyOverview(runId: string, live: boolean): PropertyOverviewModel {
   const [query, setQuery] = useState<PropertyQuery>({});
@@ -32,29 +43,41 @@ export function usePropertyOverview(runId: string, live: boolean): PropertyOverv
   const [cursor, setCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string>();
-  const generation = useRef(0);
+  const epoch = useRef(0);
+  const moreCount = useRef(0);
+  const moreRequest = useRef<AbortController | undefined>(undefined);
   const queryKey = JSON.stringify(query);
 
   useEffect(() => {
-    const mine = ++generation.current;
+    const ctl = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let first = true;
     const load = async () => {
-      try {
-        const next = await api.properties(runId, { ...query, limit: PAGE_SIZE });
-        if (generation.current !== mine) return;
-        setPage(next);
-        setMore([]);
-        setCursor(next.next_cursor);
-        setError(undefined);
-      } catch (e) {
-        if (generation.current !== mine) return;
-        setError(messageOf(e));
+      let delay = LIVE_REFRESH_MS;
+      if (first || moreCount.current === 0) {
+        try {
+          const next = await api.properties(runId, { ...query, limit: PAGE_SIZE }, ctl.signal);
+          if (ctl.signal.aborted) return;
+          epoch.current++;
+          moreCount.current = 0;
+          setPage(next);
+          setMore([]);
+          setCursor(next.next_cursor);
+          setError(undefined);
+        } catch (e) {
+          if (ctl.signal.aborted) return;
+          setError(messageOf(e));
+          if (e instanceof ApiError && e.status === UNAUTHORIZED) return;
+          delay = nextDelay(e);
+        }
       }
-      if (live && generation.current === mine) timer = setTimeout(load, LIVE_REFRESH_MS);
+      first = false;
+      if (live && !ctl.signal.aborted) timer = setTimeout(load, delay);
     };
     void load();
     return () => {
-      generation.current++;
+      ctl.abort();
+      moreRequest.current?.abort();
       if (timer) clearTimeout(timer);
     };
     // `queryKey` stands in for `query`, which is a new object on every change.
@@ -62,19 +85,25 @@ export function usePropertyOverview(runId: string, live: boolean): PropertyOverv
 
   const loadMore = useCallback(() => {
     if (cursor === null) return;
-    const mine = generation.current;
+    moreRequest.current?.abort();
+    const ctl = new AbortController();
+    moreRequest.current = ctl;
+    const startedAt = epoch.current;
     setLoadingMore(true);
     api
-      .properties(runId, { ...query, cursor, limit: PAGE_SIZE })
+      .properties(runId, { ...query, cursor, limit: PAGE_SIZE }, ctl.signal)
       .then((next) => {
-        if (generation.current !== mine) return;
+        if (ctl.signal.aborted || epoch.current !== startedAt) return;
+        moreCount.current += next.properties.length;
         setMore((prev) => [...prev, ...next.properties]);
         setCursor(next.next_cursor);
       })
       .catch((e: unknown) => {
-        if (generation.current === mine) setError(messageOf(e));
+        if (!ctl.signal.aborted && epoch.current === startedAt) setError(messageOf(e));
       })
-      .finally(() => setLoadingMore(false));
+      .finally(() => {
+        if (moreRequest.current === ctl) setLoadingMore(false);
+      });
     // `queryKey` stands in for `query`.
   }, [runId, cursor, queryKey]);
 

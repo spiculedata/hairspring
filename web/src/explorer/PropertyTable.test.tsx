@@ -1,6 +1,7 @@
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { row } from './fixtures';
+import { CLIP_HEIGHT, ROW_HEIGHT } from './PropertyRowView';
 import { PropertyTable } from './PropertyTable';
 
 const many = (n: number) =>
@@ -71,6 +72,29 @@ describe('PropertyTable', () => {
     expect(html).toContain('aria-rowcount="5001"');
     expect(html).toContain('prop.0');
     expect(html).not.toContain('prop.4999');
+  });
+
+  it('reports the size of the whole result, not of what is loaded, in aria-rowcount', () => {
+    const html = renderToString(<PropertyTable properties={many(10)} total={250} />);
+    expect(html).toContain('aria-rowcount="251"');
+  });
+
+  it('keeps every row exactly one height: each cell clips its content to a fixed-height block', () => {
+    const worst = row({
+      status: 'unmet',
+      unmet: 'coverage gap, not a finding: never satisfied in 4,790 claimable trials',
+      failures_seen_in_inconclusive_trials: 3,
+      rate: { kind: 'zero_events', basis: 'TrialsTrue', n: 4790, upper_bound: 0.000626 },
+      guest: { id: 'i'.repeat(96), msg: 'm'.repeat(140), loc: { file: 'f'.repeat(80), line: 1, func: 'g'.repeat(80) } },
+    });
+    const html = renderToString(<PropertyTable properties={[worst]} />);
+    const body = html.slice(html.indexOf('<tbody'));
+    const clips = body.match(/<div class="cell-clip" style="height:(\d+)px">/g) ?? [];
+    expect(clips).toHaveLength(6);
+    for (const c of clips) expect(Number(/height:(\d+)px/.exec(c)?.[1])).toBe(CLIP_HEIGHT);
+    expect(body).toContain(`<tr aria-rowindex="2" style="height:${ROW_HEIGHT}px">`);
+    expect(CLIP_HEIGHT).toBeLessThan(ROW_HEIGHT);
+    expect(body).toContain('clip-line');
   });
 
   it('renders an empty list as a message, not an empty table', () => {

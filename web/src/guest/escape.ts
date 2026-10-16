@@ -30,6 +30,9 @@ export interface Escaped {
 /** Cc controls, Cf format (bidi, zero-width, BOM), Zl and Zp separators, surrogates, private use and unassigned. */
 const MUST_ESCAPE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}\p{Co}\p{Cn}]/u;
 
+/** Letters and symbols that draw nothing, so no category rule catches them: Hangul fillers, Khmer inherent vowels, braille blank. */
+const INVISIBLE_LETTERS = new Set([0x115f, 0x1160, 0x17b4, 0x17b5, 0x2800, 0x3164, 0xffa0]);
+
 const HEX_RADIX = 16;
 const ASTRAL_START = 0x10000;
 
@@ -47,7 +50,7 @@ export function escapeGuest(input: string, maxUnits: number): Escaped {
     const width = codePoint >= ASTRAL_START ? 2 : 1;
     if (pos + width > maxUnits) break;
     const char = String.fromCodePoint(codePoint);
-    if (MUST_ESCAPE.test(char)) {
+    if (INVISIBLE_LETTERS.has(codePoint) || MUST_ESCAPE.test(char)) {
       if (literal) segments.push({ text: literal, escaped: false });
       literal = '';
       segments.push({ text: escapeOf(codePoint), escaped: true });

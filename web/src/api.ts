@@ -7,9 +7,34 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** How long the server asked callers to wait (429 Retry-After), in milliseconds. */
+    public retryAfterMs?: number,
   ) {
     super(message);
   }
+}
+
+const MAX_RETRY_AFTER_MS = 300_000;
+
+/** A `Retry-After` header (delta-seconds or an HTTP date) in milliseconds, capped; `undefined` if absent or invalid. */
+export function parseRetryAfter(value: string | null, now: number): number | undefined {
+  if (value === null) return undefined;
+  const text = value.trim();
+  const isDelta = /^\d+$/.test(text);
+  if (!isDelta && !/[a-z]/i.test(text)) return undefined;
+  const ms = isDelta ? Number(text) * 1000 : Date.parse(text) - now;
+  if (!Number.isFinite(ms) || ms < 0) return undefined;
+  return Math.min(ms, MAX_RETRY_AFTER_MS);
+}
+
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** Checks the parts of a properties response the page reads, so a wrong-shaped body is an error and not a crash. */
+export function isPropertyPage(v: unknown): v is PropertyPage {
+  if (!isObject(v)) return false;
+  if (typeof v.headline !== 'string' || !isObject(v.header) || !isObject(v.claim) || !isObject(v.counts_by_status)) return false;
+  if (!Array.isArray(v.notes) || typeof v.total !== 'number' || !Array.isArray(v.properties)) return false;
+  return v.properties.every((p) => isObject(p) && isObject(p.guest) && isObject(p.rate) && typeof p.status === 'string');
 }
 
 type Listener = () => void;
@@ -55,7 +80,7 @@ async function failure(res: Response): Promise<ApiError> {
   } catch {
     // Non-JSON error body: keep the status text.
   }
-  return new ApiError(res.status, message);
+  return new ApiError(res.status, message, parseRetryAfter(res.headers.get('Retry-After'), Date.now()));
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -78,7 +103,11 @@ export function propertiesUrl(runId: string, query: PropertyQuery): string {
 }
 
 export const api = {
-  properties: (runId: string, query: PropertyQuery = {}) => request<PropertyPage>(propertiesUrl(runId, query)),
+  properties: async (runId: string, query: PropertyQuery = {}, signal?: AbortSignal): Promise<PropertyPage> => {
+    const body = await request<unknown>(propertiesUrl(runId, query), { signal });
+    if (!isPropertyPage(body)) throw new ApiError(502, 'the server sent a properties response in an unexpected shape');
+    return body;
+  },
   health: () => request<{ status: string; version: string }>('/api/health'),
   targets: async () => (await request<{ targets: Target[] }>('/api/targets')).targets,
   runs: async (limit = 50) => (await request<{ runs: Run[] }>(`/api/runs?limit=${limit}`)).runs,
