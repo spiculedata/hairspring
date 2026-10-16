@@ -135,7 +135,7 @@ pub fn read_events_file(dir: &Path, budget: usize) -> Result<Option<FileEvents>,
     };
     let mut bytes = Vec::new();
     // One byte past the budget tells "exactly full" from "cut".
-    let limit = budget as u64 + 1;
+    let limit = (budget as u64).saturating_add(1);
     file.take(limit)
         .read_to_end(&mut bytes)
         .map_err(|e| EventsFault::Guest(format!("cannot read the events file: {e}")))?;
@@ -295,6 +295,17 @@ mod tests {
             .unwrap();
         assert_eq!(read.bytes.len(), MAX_EVENT_BYTES_PER_TRIAL);
         assert!(read.truncated);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unbounded_budget_reads_the_whole_file_without_overflowing() {
+        let dir = std::env::temp_dir().join(format!("hairspring-ev-max-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(HOST_FILE_NAME), b"HAIRSPRING_EVENT {}\n").unwrap();
+        let read = read_events_file(&dir, usize::MAX).unwrap().unwrap();
+        assert_eq!(read.bytes, b"HAIRSPRING_EVENT {}\n");
+        assert!(!read.truncated);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
