@@ -97,24 +97,33 @@ impl From<PropertyStat> for SubtreeStat {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubtreeFold {
     pub tally: NodeTally,
+    /// The run fold's summary over these digests. Its `kind_mismatch_details` hold text a guest process wrote (ids,
+    /// messages, locations): a reader must fence it as untrusted before showing it. Its `degraded_trials` counts
+    /// trials, timed-out ones included, and can differ from the per-property `trials_degraded` of the stats.
     pub summary: RunSummary,
     /// Per-property counts sorted by id.
     pub stats: Vec<SubtreeStat>,
 }
 
-/// Folds a stream of `(seed, digest)` pairs whose indexes refer to `catalog` (a tree catalog, after
-/// [`TrialDigest::remap`]). `seed` identifies a trial in first-failure reports.
+/// Folds a stream of `(seed, verdict, digest)` triples whose indexes refer to `catalog` (a tree catalog, after
+/// [`TrialDigest::remap`]). `seed` identifies a trial in first-failure reports. `verdict` is the store's verdict
+/// name for the trial; it alone decides the tally's verdict counts, because a digest cannot show a violation that
+/// has no failing property.
+///
+/// The tally's failing ids are the properties the run fold reports as violated, so they match [`RunProps`] exactly,
+/// including its handling of kind mismatches and conflict-only entries.
 ///
 /// Reads at most [`MAX_DIGESTS_PER_FOLD`] digests; one more is an error, and the stream is not read further.
-pub fn fold_subtree<I, D>(digests: I, catalog: &RunCatalog) -> Result<SubtreeFold, FoldError>
+pub fn fold_subtree<I, V, D>(trials: I, catalog: &RunCatalog) -> Result<SubtreeFold, FoldError>
 where
-    I: IntoIterator<Item = (u64, D)>,
+    I: IntoIterator<Item = (u64, V, D)>,
+    V: AsRef<str>,
     D: Borrow<TrialDigest>,
 {
     let mut read = 0usize;
     let mut tally = NodeTally::empty();
     let mut run = RunProps::new();
-    for (seed, digest) in digests {
+    for (seed, verdict, digest) in trials {
         read += 1;
         if read > MAX_DIGESTS_PER_FOLD {
             return Err(FoldError::LimitExceeded {
@@ -122,13 +131,23 @@ where
             });
         }
         let digest = digest.borrow();
-        tally = tally.merge(&NodeTally::of_digest(digest));
+        tally = tally.merge(&NodeTally::of_trial(
+            verdict.as_ref(),
+            Some(digest),
+            catalog,
+        ));
         run = run.add_digest(seed, digest, catalog);
     }
     let summary = run.summary();
+    let stats: Vec<SubtreeStat> = run.finish().into_iter().map(SubtreeStat::from).collect();
+    let violated = stats
+        .iter()
+        .filter(|s| s.violated)
+        .filter_map(|s| catalog.index_of(&s.id))
+        .collect();
     Ok(SubtreeFold {
-        tally,
+        tally: tally.with_known_failing_ids(violated),
         summary,
-        stats: run.finish().into_iter().map(SubtreeStat::from).collect(),
+        stats,
     })
 }
