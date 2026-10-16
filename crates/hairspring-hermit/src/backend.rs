@@ -28,15 +28,24 @@ struct Found<'a> {
     seed: u64,
     trial: &'a Trial,
     reason: &'a str,
-    confirmed: Confirmation,
+    confirmed: &'a Confirmation,
 }
 
 /// How the confirmation reruns of a violating seed went.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Confirmation {
     reproduced: u32,
     /// Reruns that could not be judged (a timeout, a host or events fault): they say nothing about the program.
     inconclusive: u32,
+    /// Why the first rerun that failed to start could not, so the report says what went wrong on the host.
+    first_error: Option<String>,
+}
+
+/// The failure message's account of reruns that could not be judged.
+fn inconclusive_text(count: u32, first_error: Option<&str>) -> String {
+    let reruns = if count == 1 { "rerun" } else { "reruns" };
+    let cause = first_error.map(|e| format!(": {e}")).unwrap_or_default();
+    format!("; {count} {reruns} inconclusive (host or infrastructure, not the program{cause})")
 }
 
 /// What one confirmation rerun showed.
@@ -44,6 +53,8 @@ enum Rerun {
     Reproduced,
     Different,
     Inconclusive,
+    /// The rerun could not start; the text is why.
+    NotStarted(String),
 }
 
 /// One finished trial and everything needed to judge it.
@@ -198,7 +209,7 @@ impl HermitBackend {
         let failing = property_verdict::failing_keys(reference);
         let reruns: Vec<Rerun> = (0..self.settings.repro_runs)
             .map(|_| match self.trial(p, seed, timeout) {
-                Err(_) => Rerun::Inconclusive,
+                Err(e) => Rerun::NotStarted(e.to_string()),
                 Ok(t) => match self.verdict(p, &t, timeout) {
                     Verdict::Violation(_) if property_verdict::reproduces(&hash, &failing, &t) => {
                         Rerun::Reproduced
@@ -213,7 +224,11 @@ impl HermitBackend {
         let count = |want: fn(&Rerun) -> bool| reruns.iter().filter(|r| want(r)).count() as u32;
         Confirmation {
             reproduced: count(|r| matches!(r, Rerun::Reproduced)),
-            inconclusive: count(|r| matches!(r, Rerun::Inconclusive)),
+            inconclusive: count(|r| matches!(r, Rerun::Inconclusive | Rerun::NotStarted(_))),
+            first_error: reruns.iter().find_map(|r| match r {
+                Rerun::NotStarted(why) => Some(why.clone()),
+                _ => None,
+            }),
         }
     }
 
@@ -271,7 +286,7 @@ impl HermitBackend {
                     seed: j.seed,
                     trial: j.trial,
                     reason: &reason,
-                    confirmed,
+                    confirmed: &confirmed,
                 });
                 let ms = j.started.elapsed().as_millis() as u64;
                 let (distinct, work) = tally.schedule_stats();
@@ -302,17 +317,14 @@ impl HermitBackend {
         } = *found;
         let hash = behaviour_hash(t);
         let total = self.settings.repro_runs;
-        let Confirmation {
-            reproduced,
-            inconclusive,
-        } = confirmed;
+        let (reproduced, inconclusive) = (confirmed.reproduced, confirmed.inconclusive);
         let mut message = format!(
             "property violated at sched-seed {seed} ({reason}); reproduced {reproduced}/{total}"
         );
         if inconclusive > 0 {
-            let reruns = if inconclusive == 1 { "rerun" } else { "reruns" };
-            message.push_str(&format!(
-                "; {inconclusive} {reruns} inconclusive (host or infrastructure, not the program)"
+            message.push_str(&inconclusive_text(
+                inconclusive,
+                confirmed.first_error.as_deref(),
             ));
         }
         if reproduced + inconclusive < total {
@@ -631,5 +643,25 @@ impl Backend for HermitBackend {
             steps_per_seed: 0,
             divergence: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inconclusive_text;
+
+    #[test]
+    fn the_inconclusive_note_keeps_the_spawn_error_text() {
+        let text = inconclusive_text(2, Some("cannot start hermit: no such file"));
+        assert!(text.contains("2 reruns inconclusive"), "{text}");
+        assert!(text.contains("cannot start hermit: no such file"), "{text}");
+    }
+
+    #[test]
+    fn the_inconclusive_note_without_a_spawn_error_is_unchanged() {
+        assert_eq!(
+            inconclusive_text(1, None),
+            "; 1 rerun inconclusive (host or infrastructure, not the program)"
+        );
     }
 }
