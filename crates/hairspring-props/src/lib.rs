@@ -11,6 +11,7 @@ mod fold;
 mod json;
 pub mod limits;
 pub mod line;
+pub mod record;
 pub mod run;
 pub mod stats;
 pub mod trial;

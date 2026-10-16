@@ -11,6 +11,7 @@ mod format_props;
 pub mod report;
 pub mod scheduler;
 pub mod sim_backend;
+pub mod trial_log;
 
 use std::fmt;
 

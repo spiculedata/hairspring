@@ -312,3 +312,34 @@ fn every_props_test_fixture_shape_folds_identically() {
         as_json(&via_bytes(&trials, MAX_IDS_PER_RUN))
     );
 }
+
+#[test]
+fn an_excluded_digest_changes_nothing_in_the_run() {
+    let trials = random_run(4242, 25, 8);
+    let mut catalog = RunCatalog::new();
+    let mut plain = RunProps::new();
+    let mut with_excluded = RunProps::new();
+    for (seed, t, inconclusive) in &trials {
+        let rec = catalog.record(t, *inconclusive, MAX_IDS_PER_RUN);
+        catalog = rec.catalog;
+        plain = plain.add_digest(*seed, &rec.digest, &catalog);
+        with_excluded = with_excluded.add_digest(*seed, &rec.digest, &catalog);
+        let excluded = TrialDigest {
+            flags: DigestFlags {
+                excluded: true,
+                degraded: true,
+                inconclusive: true,
+                ..DigestFlags::default()
+            },
+            ids_dropped: 5,
+            entries: rec.digest.entries.clone(),
+        };
+        with_excluded = with_excluded.add_digest(*seed, &excluded, &catalog);
+    }
+    let (a, b) = (plain.summary(), with_excluded.summary());
+    assert_eq!(a, b);
+    assert_eq!(
+        as_json(&(plain.finish(), a)),
+        as_json(&(with_excluded.finish(), b))
+    );
+}

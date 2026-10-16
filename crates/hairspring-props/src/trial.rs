@@ -3,7 +3,7 @@
 use crate::event::{AssertKind, EndReason, Loc, ThreadReport};
 
 /// Counters for everything the parser or folder dropped, ignored or merged.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EventHealth {
     /// Event lines accepted into the fold.
     pub accepted: u64,
@@ -71,7 +71,7 @@ pub struct Witness {
 }
 
 /// One id folded across the processes of a trial.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TrialProperty {
     pub id: String,
     pub kind: AssertKind,
@@ -86,7 +86,7 @@ pub struct TrialProperty {
 }
 
 /// What `end` said about one process.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EndReport {
     pub reason: EndReason,
     pub status: i64,
@@ -98,7 +98,7 @@ pub struct EndReport {
 }
 
 /// Everything one process reported.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ProcReport {
     pub tag: String,
     pub sdk: Option<String>,
@@ -120,7 +120,7 @@ pub struct DroppedCounts {
 }
 
 /// The same id declared with two different kinds.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CatalogConflict {
     /// Counts of the conflicting process's dropped `assert` line (zero if it sent none).
     pub dropped: DroppedCounts,
@@ -198,7 +198,7 @@ impl PropertyFailure {
 }
 
 /// One trial's properties, folded from its event lines.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TrialProps {
     /// Processes in first-seen order.
     pub procs: Vec<ProcReport>,

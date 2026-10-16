@@ -571,6 +571,9 @@ fn fold_digest(
     digest: &TrialDigest,
     catalog: &RunCatalog,
 ) -> FoldState {
+    if digest.flags.excluded {
+        return state;
+    }
     let FoldState {
         mut summary,
         mut ids,

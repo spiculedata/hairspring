@@ -34,11 +34,13 @@ const FLAG_DEGRADED: u8 = 1 << 1;
 const FLAG_PERTURBING: u8 = 1 << 2;
 const FLAG_REPORT_MISSING: u8 = 1 << 3;
 const FLAG_HAS_CONFLICTS: u8 = 1 << 4;
+const FLAG_EXCLUDED: u8 = 1 << 5;
 const FLAG_RESERVED: u8 = !(FLAG_INCONCLUSIVE
     | FLAG_DEGRADED
     | FLAG_PERTURBING
     | FLAG_REPORT_MISSING
-    | FLAG_HAS_CONFLICTS);
+    | FLAG_HAS_CONFLICTS
+    | FLAG_EXCLUDED);
 
 const KIND_MASK: u8 = 0b111;
 const ENTRY_CATALOGUED: u8 = 1 << 3;
@@ -60,6 +62,9 @@ pub struct DigestFlags {
     pub report_missing: bool,
     /// The trial had at least one catalog conflict.
     pub has_conflicts: bool,
+    /// The host could not collect this trial's events, so its data cannot be trusted: the trial is stored for the
+    /// record and left out of the run's statistics entirely.
+    pub excluded: bool,
 }
 
 impl DigestFlags {
@@ -70,6 +75,7 @@ impl DigestFlags {
             (self.perturbing, FLAG_PERTURBING),
             (self.report_missing, FLAG_REPORT_MISSING),
             (self.has_conflicts, FLAG_HAS_CONFLICTS),
+            (self.excluded, FLAG_EXCLUDED),
         ]
         .into_iter()
         .filter(|(on, _)| *on)
@@ -83,6 +89,7 @@ impl DigestFlags {
             perturbing: b & FLAG_PERTURBING != 0,
             report_missing: b & FLAG_REPORT_MISSING != 0,
             has_conflicts: b & FLAG_HAS_CONFLICTS != 0,
+            excluded: b & FLAG_EXCLUDED != 0,
         }
     }
 }

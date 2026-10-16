@@ -40,6 +40,7 @@ fn digest(entries: Vec<DigestEntry>) -> TrialDigest {
             perturbing: false,
             report_missing: true,
             has_conflicts: false,
+            ..DigestFlags::default()
         },
         ids_dropped: 2,
         entries,
@@ -284,4 +285,19 @@ fn a_fifty_id_catalog_costs_a_few_hundred_bytes() {
     let entries: Vec<_> = (0..50).map(passing).collect();
     let len = digest(entries).encode().len();
     assert!(len < 400, "{len} bytes");
+}
+
+#[test]
+fn the_excluded_flag_round_trips() {
+    let d = TrialDigest {
+        flags: DigestFlags {
+            excluded: true,
+            degraded: true,
+            ..DigestFlags::default()
+        },
+        ..TrialDigest::default()
+    };
+    let back = TrialDigest::decode(&d.encode()).unwrap();
+    assert!(back.flags.excluded && back.flags.degraded);
+    assert_eq!(back, d);
 }

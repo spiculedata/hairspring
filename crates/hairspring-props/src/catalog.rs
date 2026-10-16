@@ -231,6 +231,7 @@ impl RunCatalog {
                 perturbing: trial.perturbing,
                 report_missing: !trial.report_missing().is_empty(),
                 has_conflicts: !trial.conflicts.is_empty(),
+                excluded: false,
             },
             ids_dropped: dropped,
             entries,
