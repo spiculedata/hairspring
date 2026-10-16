@@ -4,6 +4,7 @@
 use hairspring_props::{AssertKind, TrialEvents, TrialProps};
 
 pub mod legacy_run;
+pub mod subtree_gen;
 
 pub fn ev(json: &str) -> String {
     format!("HAIRSPRING_EVENT {json}\n")

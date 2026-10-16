@@ -14,8 +14,11 @@ mod json;
 pub mod limits;
 pub mod line;
 pub mod record;
+pub mod remap;
 pub mod run;
 pub mod stats;
+pub mod subtree;
+pub mod tally;
 pub mod trial;
 pub mod valid;
 
@@ -27,10 +30,13 @@ pub use digest::{
 pub use event::*;
 pub use fold::TrialEvents;
 pub use line::{parse_line, IgnoreReason, LineOutcome, RejectReason};
+pub use remap::UNMAPPED_IDX;
 pub use run::{
     FirstFailure, KindMismatch, PropertyStat, PropertyStatus, Rate, RateBasis, RunProps,
     RunSummary, UnratedReason,
 };
+pub use subtree::{fold_subtree, FoldError, SubtreeFold, SubtreeStat, MAX_DIGESTS_PER_FOLD};
+pub use tally::{NodeTally, VerdictCounts, MAX_TALLY_FAILING_IDS};
 pub use trial::{
     failure_basis, CatalogConflict, DroppedCounts, EndReport, EventHealth, FailureReason,
     ProcReport, PropertyFailure, TrialProperty, TrialProps, Witness,
