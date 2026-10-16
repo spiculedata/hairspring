@@ -66,6 +66,23 @@ pub struct RunRecord {
     pub steps: u64,
     pub trials: u64,
     pub error: Option<String>,
+    /// Trials that timed out or could not be judged. Zero for runs stored before schema version 2.
+    pub inconclusive: u64,
+    /// Distinct schedules the trials ran; zero when unknown.
+    pub distinct_schedules: u64,
+    /// Work done across all trials; zero when unknown.
+    pub work: u64,
+    /// How the run chose its trials: `search` (stop at the first confirmed failure) is the only mode so far.
+    pub mode: String,
+    /// The run stopped at its first confirmed failure, so its trial count is not a fixed budget.
+    pub stopped_at_first_failure: bool,
+    /// The folded `RunSummary` as JSON, written by the server when the run finishes.
+    pub property_summary_json: Option<String>,
+    /// Ids in the run catalog.
+    pub catalog_size: u64,
+    /// The trial rows held do not match what the worker said it ran, so no must-hit claim is made from them.
+    pub ingest_incomplete: bool,
+    pub build_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,6 +139,8 @@ pub struct WorkerRecord {
     pub caps_json: String,
     pub registered_at: i64,
     pub last_seen: i64,
+    /// Set by an administrator. Claims need trusted workers; every other view shows untrusted data, labelled.
+    pub trusted: bool,
 }
 
 /// A job whose lease expired after its last permitted attempt; its run must be finalised.
@@ -142,6 +161,8 @@ pub struct JobResult {
     pub failure: Option<NewFailure>,
     /// Payload of the `finished` event.
     pub event_payload_json: String,
+    /// Run-level figures and property rows, written in the same transaction.
+    pub stats: crate::trials::RunStats,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

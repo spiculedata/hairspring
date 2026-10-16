@@ -3,6 +3,9 @@
 use hairspring_store::*;
 use std::sync::Arc;
 
+mod trials;
+pub mod v1_schema;
+
 fn new_run(s: &dyn Store, target: &str, now: i64) -> RunRecord {
     s.create_run(
         &NewRun {
@@ -34,6 +37,7 @@ pub fn run_all(make: &dyn Fn() -> Arc<dyn Store>) {
     counts_for_admission_control(&*make());
     stale_workers_can_be_pruned(&*make());
     concurrent_leases_never_duplicate(make());
+    trials::run_all_trials(make);
 }
 
 pub fn runs_lifecycle(s: &dyn Store) {
@@ -339,6 +343,7 @@ fn result(state: RunState, failure: Option<NewFailure>) -> JobResult {
         error: None,
         failure,
         event_payload_json: format!("{{\"state\":\"{}\"}}", state.as_str()),
+        stats: RunStats::default(),
     }
 }
 

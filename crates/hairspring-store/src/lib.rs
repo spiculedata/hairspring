@@ -5,12 +5,21 @@
 //! Unix epoch and are passed in explicitly so behaviour is testable.
 #[cfg(feature = "postgres")]
 mod pg;
+#[cfg(feature = "postgres")]
+mod pg_schema;
+#[cfg(feature = "postgres")]
+mod pg_trials;
 mod sqlite;
+mod sqlite_schema;
+mod sqlite_trials;
+#[macro_use]
 mod types;
+mod trials;
 
 #[cfg(feature = "postgres")]
 pub use pg::PgStore;
 pub use sqlite::SqliteStore;
+pub use trials::*;
 pub use types::*;
 
 use sha2::{Digest, Sha256};
@@ -115,7 +124,43 @@ pub trait Store: Send + Sync {
     fn add_event(&self, run_id: &str, kind: &str, payload_json: &str, now: i64) -> Result<i64>;
     fn list_events(&self, run_id: &str, after_id: i64, limit: u32) -> Result<Vec<EventRecord>>;
 
+    // trials, the run catalog and per-property statistics (schema version 2)
+    /// Stores one batch of catalog changes and trial rows for the job's run, all or nothing. Idempotent on `seq`: a
+    /// row already stored with identical content is counted as a duplicate; one that differs rejects the batch.
+    /// `worker_trusted` is recorded on every row as a snapshot.
+    fn ingest_trials(
+        &self,
+        job_id: &str,
+        worker_id: &str,
+        worker_trusted: bool,
+        batch: &TrialBatch,
+        now: i64,
+    ) -> Result<IngestOutcome>;
+    fn count_trials(&self, run_id: &str) -> Result<u64>;
+    fn get_trial(&self, run_id: &str, seq: u64) -> Result<Option<TrialRecord>>;
+    /// Trial rows in sequence order, after `after_seq` when given.
+    fn list_trials(
+        &self,
+        run_id: &str,
+        after_seq: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<TrialRecord>>;
+    /// Only what the run fold needs, in sequence order, after `after_seq` when given.
+    fn list_trial_digests(
+        &self,
+        run_id: &str,
+        after_seq: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<TrialDigestRow>>;
+    fn get_catalog(&self, run_id: &str) -> Result<Vec<CatalogRowRecord>>;
+    fn list_run_properties(&self, run_id: &str) -> Result<Vec<RunPropertyRow>>;
+    /// The workers that reported trials for the run, with whether all of their rows were from a trusted worker.
+    fn run_contributors(&self, run_id: &str) -> Result<Vec<Contributor>>;
+
     // workers
+    fn set_worker_trusted(&self, id: &str, trusted: bool) -> Result<()>;
+    /// `None` for an unknown worker.
+    fn worker_trusted(&self, id: &str) -> Result<Option<bool>>;
     fn register_worker(&self, name: &str, caps_json: &str, now: i64) -> Result<WorkerRecord>;
     fn touch_worker(&self, id: &str, now: i64) -> Result<()>;
     fn list_workers(&self) -> Result<Vec<WorkerRecord>>;

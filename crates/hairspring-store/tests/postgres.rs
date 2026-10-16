@@ -63,3 +63,95 @@ fn schema_names_are_validated_against_injection() {
     assert!(PgStore::connect_in_schema(&url, "x; DROP SCHEMA public CASCADE; --", 1).is_err());
     assert!(PgStore::connect_in_schema(&url, "", 1).is_err());
 }
+
+/// A genuine version 1 schema, created the way the first release created it, with data.
+fn make_v1_schema(url: &str, schema: &str) {
+    let mut c = postgres::Client::connect(url, postgres::NoTls).unwrap();
+    c.batch_execute(&format!(
+        "CREATE SCHEMA \"{schema}\"; SET search_path = \"{schema}\";"
+    ))
+    .unwrap();
+    c.batch_execute(common::v1_schema::POSTGRES_V1).unwrap();
+    c.batch_execute(
+        "CREATE TABLE schema_version (version INTEGER NOT NULL);
+         INSERT INTO schema_version(version) VALUES (1);
+         INSERT INTO runs(id,target,backend,state,seed,config_json,created_at,steps,trials)
+           VALUES ('run_old','legacy','hermit','passed',9,'{}',1000,50,12);
+         INSERT INTO failures(id,run_id,target,message,original_len,shrunk_len,bundle_hash,steps_json,created_at)
+           VALUES ('fail_old','run_old','legacy','m',4,2,'h','[]',1001);
+         INSERT INTO workers(id,name,caps_json,registered_at,last_seen) VALUES ('wrk_old','w','{}',1,2);",
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_version_one_schema_migrates_in_place_and_old_rows_read_back_with_zero_counts() {
+    let Some(url) = url() else { return };
+    let schema = new_id("v").replace('-', "_");
+    make_v1_schema(&url, &schema);
+    let s = PgStore::connect_in_schema(&url, &schema, 2).unwrap();
+    let run = s.get_run("run_old").unwrap().unwrap();
+    assert_eq!(
+        (run.target.as_str(), run.steps, run.trials),
+        ("legacy", 50, 12)
+    );
+    assert_eq!(
+        (
+            run.inconclusive,
+            run.distinct_schedules,
+            run.work,
+            run.catalog_size
+        ),
+        (0, 0, 0, 0)
+    );
+    assert_eq!(run.mode, "search");
+    assert!(!run.stopped_at_first_failure && !run.ingest_incomplete);
+    assert_eq!(s.get_failure("fail_old").unwrap().unwrap().shrunk_len, 2);
+    let workers = s.list_workers().unwrap();
+    assert_eq!(
+        (workers[0].id.as_str(), workers[0].trusted),
+        ("wrk_old", false)
+    );
+    assert_eq!(s.count_trials("run_old").unwrap(), 0);
+    assert!(s.list_run_properties("run_old").unwrap().is_empty());
+    // A second open finds version 2 and changes nothing.
+    let again = PgStore::connect_in_schema(&url, &schema, 2).unwrap();
+    assert_eq!(again.get_run("run_old").unwrap().unwrap().trials, 12);
+}
+
+#[test]
+fn concurrent_startup_on_a_version_one_schema_migrates_exactly_once() {
+    let Some(url) = url() else { return };
+    let schema = new_id("r").replace('-', "_");
+    make_v1_schema(&url, &schema);
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let (url, schema) = (url.clone(), schema.clone());
+            std::thread::spawn(move || PgStore::connect_in_schema(&url, &schema, 2).is_ok())
+        })
+        .collect();
+    assert!(handles.into_iter().all(|h| h.join().unwrap()));
+}
+
+#[test]
+fn a_schema_from_the_future_is_refused_untouched() {
+    let Some(url) = url() else { return };
+    let schema = new_id("f").replace('-', "_");
+    make_v1_schema(&url, &schema);
+    let mut c = postgres::Client::connect(&url, postgres::NoTls).unwrap();
+    c.batch_execute(&format!(
+        "UPDATE \"{schema}\".schema_version SET version = 99"
+    ))
+    .unwrap();
+    let err = PgStore::connect_in_schema(&url, &schema, 1)
+        .err()
+        .expect("must refuse");
+    assert!(err.to_string().contains("99"), "{err}");
+    let rows = c
+        .query(
+            "SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'trials'",
+            &[&schema],
+        )
+        .unwrap();
+    assert!(rows.is_empty(), "a refused schema is not modified");
+}
