@@ -35,11 +35,17 @@ void hs_events_fd_remember(void) {
   }
 }
 
+/* Checked before the report and before every eval line. Once it fails the descriptor is given up for good, so no
+** later line can follow it either. */
 static void verify_events_fd(void) {
-  if (hs_proc.fd < 0 || hs_proc.sink) return;
+  int fd = hs_proc.fd;
+  if (fd < 0 || hs_proc.sink) return;
+  int saved_errno = errno;
   struct stat st;
-  if (fstat(hs_proc.fd, &st) == 0 && st.st_dev == events_dev && st.st_ino == events_ino) return;
-  hs_proc.dropped++; /* nothing is written: the descriptor no longer leads where it did */
+  int same = fstat(fd, &st) == 0 && st.st_dev == events_dev && st.st_ino == events_ino;
+  errno = saved_errno;
+  if (same) return;
+  __atomic_fetch_add(&hs_proc.dropped, 1, __ATOMIC_RELAXED); /* nothing is written: the descriptor leads elsewhere */
   hs_proc.fd = -1;
 }
 
@@ -194,6 +200,7 @@ static void report_body(enum hs_end_reason reason, int64_t status) {
 
 void hs_report_now(enum hs_end_reason reason, int64_t status) {
   if (__atomic_exchange_n(&report_done, 1, __ATOMIC_ACQ_REL)) return;
+  int saved_errno = errno; /* the report is not the program's business: whatever it did, errno comes back */
   struct out_guard guard;
   out_begin(&guard);
   current_guard = &guard;
@@ -201,6 +208,7 @@ void hs_report_now(enum hs_end_reason reason, int64_t status) {
   current_guard = NULL;
   /* After a fatal signal the process is about to die: keep SIGPIPE blocked rather than risk dying of it first. */
   if (reason != HS_END_SIGNAL) out_end(&guard);
+  errno = saved_errno;
 }
 
 void hs_report_rearm(void) { __atomic_store_n(&report_done, 0, __ATOMIC_RELEASE); }
@@ -214,6 +222,13 @@ static void on_fatal_signal(int sig) {
   raise(sig); /* SA_RESETHAND restored the default action, so this ends the process as it would have ended */
 }
 
+/* True when `sig` still has the default action, so installing ours replaces nothing: an inherited SIG_IGN (from
+** `trap '' TERM`, nohup) or a handler another runtime or a sanitizer put there stays. */
+static int has_default_action(int sig) {
+  struct sigaction old;
+  return sigaction(sig, NULL, &old) == 0 && !(old.sa_flags & SA_SIGINFO) && old.sa_handler == SIG_DFL;
+}
+
 int hs_install_signal_handlers(void) {
   int failures = 0;
   stack_t ss;
@@ -223,6 +238,10 @@ int hs_install_signal_handlers(void) {
   if (sigaltstack(&ss, NULL) != 0) failures++;
   static const int signals[] = {SIGSEGV, SIGBUS, SIGABRT, SIGFPE, SIGILL, SIGTERM};
   for (size_t i = 0; i < sizeof signals / sizeof signals[0]; i++) {
+    if (!has_default_action(signals[i])) { /* counted like a failed install: the report cannot cover this signal */
+      failures++;
+      continue;
+    }
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_handler = on_fatal_signal;
@@ -248,6 +267,7 @@ int hs_eval_line(const char *id, const char *type, int ok) {
   for (; id[n]; n++)
     if (n >= HS_ID_MAX || !hs_ident_char((unsigned char)id[n])) return -1;
   hs_init();
+  verify_events_fd();
   struct hs_buf b;
   char local[HS_EVAL_LINE_MAX]; /* its own buffer: eval lines may come from several threads at once */
   hs_buf_init(&b, local, sizeof local);
