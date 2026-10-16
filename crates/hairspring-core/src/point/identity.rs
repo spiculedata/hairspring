@@ -69,6 +69,9 @@ pub struct HermitInputs {
 }
 
 /// What was recorded for a run, before the completeness check.
+// One short-lived value is built per run, so the size gap costs nothing; boxing would only
+// burden callers.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IdentityDraft {
     Sim(SimInputs),

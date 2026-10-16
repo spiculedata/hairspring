@@ -7,14 +7,20 @@
 //! - [`address`]: the strict address parser and formatter.
 //! - [`encoding`]: the shared text escaping and list encoding.
 //! - [`identity`]: the per-backend identity inputs and the canonical identity text.
+//! - [`hash`]: the point hash.
+//! - [`command`]: canonical command values and the command hash.
 
 pub mod address;
+pub mod command;
 pub mod encoding;
+pub mod hash;
 pub mod identity;
 mod identity_text;
 
 pub use address::{AddressError, BackendKind, Cut, PointAddress};
+pub use command::{command_hash, CommandError, CommandValue};
 pub use encoding::Recorded;
+pub use hash::{point_hash, HashError, Prefix};
 pub use identity::{
     CommonInputs, HermitInputs, Identity, IdentityDraft, IdentityError, SimInputs, TmpPolicy,
     WasmInputs,
