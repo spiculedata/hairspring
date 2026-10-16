@@ -1,6 +1,7 @@
 //! Running one trial: spawn hermit, capture bounded output, enforce a timeout.
 use crate::capture::{drain, Captured};
 use crate::events::{self, EventsFault};
+use crate::head_tail::Omitted;
 use crate::summary::{self, Summary};
 use crate::summary_dir::{PrivateDir, ScratchDir};
 use crate::{env::guest_env, HermitSettings};
@@ -38,6 +39,9 @@ pub struct Trial {
     pub signal: Option<i32>,
     pub stdout: String,
     pub stderr: String,
+    /// What the bounded capture left out of the middle of `stdout`, and of `stderr`. Zero bytes means kept whole.
+    pub stdout_omitted: Omitted,
+    pub stderr_omitted: Omitted,
     pub timed_out: bool,
     /// The schedule the trial ran, when Hermit's summary could be read.
     pub schedule: Option<Summary>,
@@ -350,6 +354,8 @@ fn run_trial_with_summary(
         signal: status.and_then(|s| s.signal()),
         stdout: out.text,
         stderr: err.text,
+        stdout_omitted: out.omitted,
+        stderr_omitted: err.omitted,
         timed_out,
         schedule: None,
         events,

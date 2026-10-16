@@ -76,15 +76,28 @@ fn tail(text: &str, max: usize) -> String {
     guest[start..].to_string()
 }
 
+/// The record for one trial: both tails, plus `<stream>_omitted_bytes` for a stream the capture had to cut.
+fn output_record(trial: &Trial, limit: usize) -> serde_json::Value {
+    let mut record = serde_json::json!({
+        "stdout": tail(&trial.stdout, limit),
+        "stderr": tail(&trial.stderr, limit),
+    });
+    for (stream, omitted) in [
+        ("stdout_omitted_bytes", trial.stdout_omitted),
+        ("stderr_omitted_bytes", trial.stderr_omitted),
+    ] {
+        if omitted.is_truncated() {
+            record[stream] = omitted.bytes.into();
+        }
+    }
+    record
+}
+
 /// `{"stdout": ..., "stderr": ...}`, with the tails halved until the serialised record fits.
 fn output_json(trial: &Trial) -> String {
     let mut limit = OUTPUT_TAIL_BYTES;
     loop {
-        let text = serde_json::json!({
-            "stdout": tail(&trial.stdout, limit),
-            "stderr": tail(&trial.stderr, limit),
-        })
-        .to_string();
+        let text = output_record(trial, limit).to_string();
         if text.len() <= MAX_OUTPUT_JSON_BYTES || limit == 0 {
             return text;
         }

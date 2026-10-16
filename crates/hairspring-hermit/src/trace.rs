@@ -40,6 +40,13 @@ pub fn behaviour_hash(t: &Trial) -> String {
     feed(&t.exit_code.unwrap_or(-1).to_le_bytes());
     feed(&t.signal.unwrap_or(-1).to_le_bytes());
     feed(t.stdout.as_bytes());
+    if t.stdout_omitted.is_truncated() {
+        // The kept text shows only how many bytes were left out; the hash of the lost bytes tells runs apart that
+        // differ only there. A stream kept whole hashes exactly as it always did.
+        feed(b"omitted");
+        feed(&t.stdout_omitted.bytes.to_le_bytes());
+        feed(&t.stdout_omitted.hash.to_le_bytes());
+    }
     if let Some(digest) = t.events_digest {
         // Only trials that reported events get this, so every other trial hashes exactly as it always did.
         feed(b"events");

@@ -15,12 +15,17 @@ fn a_report_printed_after_a_megabyte_of_chatter_survives() {
         vec![],
     );
     let t = r.run(1);
-    assert_eq!(
-        t.stdout.len(),
-        1024 * 1024,
-        "the ordinary tail is still capped at 1 MiB"
-    );
-    assert!(t.stdout.bytes().all(|b| b == b'x'));
+    // 2,000,001 plain bytes: 1 MiB of them are kept (head and tail), the rest are counted in a marker.
+    let omitted = 2_000_001 - 1024 * 1024;
+    assert_eq!(t.stdout_omitted.bytes, omitted as u64);
+    let marker = format!("\n[... {omitted} bytes omitted ...]\n");
+    assert_eq!(t.stdout.len(), 1024 * 1024 + marker.len());
+    assert!(t.stdout.contains(&marker));
+    assert!(t
+        .stdout
+        .replace(&marker, "")
+        .bytes()
+        .all(|b| b == b'x' || b == b'\n'));
     let props = t.events.expect("the report was captured");
     assert_eq!(props.health.accepted, 5);
     assert!(!props.is_degraded());

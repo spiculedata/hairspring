@@ -15,8 +15,10 @@ mod capture;
 mod env;
 mod events;
 mod exec;
+mod head_tail;
 mod property_verdict;
 mod safe_open;
+mod schedule_set;
 mod summary;
 mod summary_dir;
 mod tally;
@@ -31,6 +33,7 @@ pub use backend::HermitBackend;
 pub use env::guest_env;
 pub use events::{EventsFault, GUEST_EVENTS_FILE};
 pub use exec::Trial;
+pub use head_tail::Omitted;
 pub use tally::TrialObserver;
 
 use hairspring_props::limits::DEFAULT_MAX_EVENT_BYTES_PER_TRIAL;
@@ -52,7 +55,8 @@ pub struct HermitSettings {
     pub extra_env: Vec<(String, String)>,
     /// How many times a violating seed is re-run to confirm it reproduces.
     pub repro_runs: u32,
-    /// Output kept per stream; the rest is drained and discarded.
+    /// Ordinary output kept per stream: the first half and the last half of this many bytes. The middle is drained,
+    /// counted and hashed but not stored, and a marker with its size stands in for it. Event lines are separate.
     pub max_capture_bytes: usize,
     /// Where Hermit writes each trial's `--summary-json`. It must be outside `/tmp` (Hermit gives the guest its own).
     /// `None` turns schedule fingerprints off; defaults to `/dev/shm` when that exists.
