@@ -123,3 +123,27 @@ fn inconclusive_trials_are_not_counted_as_missing_an_end_report() {
     assert_eq!(summary.report_missing_trials, 1);
     assert_eq!(summary.inconclusive_trials, 2);
 }
+
+#[test]
+fn an_inconclusive_failure_is_kept_when_a_later_trial_agrees_on_the_kind() {
+    let failing = fold(&single(AssertKind::Always, 1, 1));
+    let clean = fold(&single(AssertKind::Always, 2, 0));
+    let stat = RunProps::new()
+        .add_inconclusive(1, &failing)
+        .add(2, &clean)
+        .finish()
+        .remove(0);
+    assert_eq!(stat.trials_inconclusive_with_failures, 1);
+}
+
+#[test]
+fn an_inconclusive_failure_under_a_kind_that_lost_is_forgotten() {
+    let failing = fold(&single(AssertKind::Always, 1, 1));
+    let clean = fold(&single(AssertKind::Sometimes, 2, 0));
+    let stat = RunProps::new()
+        .add_inconclusive(1, &failing)
+        .add(2, &clean)
+        .finish()
+        .remove(0);
+    assert_eq!(stat.trials_inconclusive_with_failures, 0);
+}

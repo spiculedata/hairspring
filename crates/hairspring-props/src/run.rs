@@ -229,14 +229,15 @@ impl IdAcc {
     }
 
     /// The first conclusive trial settles the kind, message and location. A failure counted from the inconclusive
-    /// trials before it was seen under a kind that was never decided, so it is forgotten.
+    /// trials before it was seen under a kind that was never decided, so it is forgotten when the kind changes.
     fn decide(self, p: &TrialProperty) -> Self {
+        let kept = self.kind == p.kind;
         IdAcc {
             kind: p.kind,
             msg: p.msg.clone(),
             loc: p.loc.clone(),
             decided: true,
-            inconclusive_failures: 0,
+            inconclusive_failures: if kept { self.inconclusive_failures } else { 0 },
             ..self
         }
     }
