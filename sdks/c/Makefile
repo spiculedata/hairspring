@@ -78,7 +78,7 @@ nosyscall-pic:
 CXXC := $(if $(findstring clang,$(CC)),clang++,$(if $(findstring gcc,$(CC)),g++,c++))
 
 $(BUILD)/cxx_sample: tests/fixtures/cxx_sample.cc $(LIB) $(SDK_HDR) | $(BUILD)
-	$(CXXC) -std=gnu++17 $(OPT) -g $(WARN) -pthread -o $@ $< $(LIB) $(LDFLAGS)
+	$(CXXC) -std=gnu++17 $(OPT) -g $(WARN) -pthread $(EXTRA) -o $@ $< $(LIB) $(LDFLAGS)
 
 cxx:
 	@if command -v $(CXXC) >/dev/null 2>&1; then $(MAKE) $(BUILD)/cxx_sample && \

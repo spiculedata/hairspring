@@ -226,7 +226,9 @@ static void on_fatal_signal(int sig) {
 ** `trap '' TERM`, nohup) or a handler another runtime or a sanitizer put there stays. */
 static int has_default_action(int sig) {
   struct sigaction old;
-  return sigaction(sig, NULL, &old) == 0 && !(old.sa_flags & SA_SIGINFO) && old.sa_handler == SIG_DFL;
+  /* sa_handler and sa_sigaction share storage, so this covers SA_SIGINFO handlers too. Flags alone mean nothing:
+  ** macOS keeps SA_SIGINFO on a SIG_DFL action across exec when the parent (a Rust runtime, say) had a handler. */
+  return sigaction(sig, NULL, &old) == 0 && old.sa_handler == SIG_DFL;
 }
 
 int hs_install_signal_handlers(void) {

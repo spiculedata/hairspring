@@ -286,13 +286,12 @@ static void test_threads_beyond_the_table_are_capped_and_counted(void) {
 }
 
 static void test_signal_report_is_opt_in(void) {
-  struct capture *c;
 #ifdef HS_T_ASAN
-  /* ASan owns SIGSEGV; the SDK leaves an existing handler alone, so the opt-in report cannot be observed. */
-  printf("skip: signal report for SIGSEGV under AddressSanitizer\n");
+  /* ASan owns SIGSEGV: the SDK leaves that handler alone, and without the opt-in ASan ends the run itself. */
+  printf("skip: SIGSEGV opt-in report under AddressSanitizer\n");
 #else
   const char *on[] = {"HAIRSPRING_SIGNAL_REPORT=1", NULL};
-  c = run_capture("crash", NULL, on);
+  struct capture *c = run_capture("crash", NULL, on);
   CHECK(WIFSIGNALED(c->status) && WTERMSIG(c->status) == SIGSEGV);
   check_all_lines_wellformed(c);
   CHECK(has(c->lines[0], "\"signal_handlers\":true"));
@@ -302,7 +301,6 @@ static void test_signal_report_is_opt_in(void) {
   CHECK_U64(field(find_line(c, "assert", "p1", "crash.before"), "hits"), 1);
   CHECK_U64(count(c, "end", "p1"), 1);
   free_capture(c);
-#endif
 
   c = run_capture("crash", NULL, NULL);
   CHECK(WIFSIGNALED(c->status) && WTERMSIG(c->status) == SIGSEGV);
@@ -311,6 +309,7 @@ static void test_signal_report_is_opt_in(void) {
   CHECK_U64(count(c, "end", "p1"), 0);     /* ...but nothing else: the engine reports report_missing */
   CHECK_U64(count(c, "assert", "p1"), 0);
   free_capture(c);
+#endif
 }
 
 static void test_exit_status_is_recorded_by_hs_exit(void) {
