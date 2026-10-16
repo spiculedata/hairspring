@@ -252,7 +252,7 @@ static void test_more_threads_than_slots_share_the_overflow_slot(void) {
 
 static int g_go;
 
-/* Start gate. Waiters yield so that they cannot keep the thread that is still creating threads off the CPU. */
+/* Start gate. Waiters yield so that they are less likely to keep the thread that is still creating threads off the CPU. */
 static void wait_for_go(void) {
   while (!__atomic_load_n(&g_go, __ATOMIC_ACQUIRE)) sched_yield();
 }
