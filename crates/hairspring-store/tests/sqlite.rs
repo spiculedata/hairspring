@@ -139,7 +139,7 @@ fn migrating_twice_changes_nothing() {
 }
 
 #[test]
-fn several_processes_opening_a_version_one_database_at_once_all_succeed() {
+fn several_threads_with_their_own_connections_opening_a_version_one_database_at_once_all_succeed() {
     let path = temp_db("race");
     make_v1_database(&path);
     let handles: Vec<_> = (0..4)
@@ -186,6 +186,83 @@ fn many_threads_opening_old_and_new_databases_repeatedly_all_succeed() {
             assert!(store.list_workers().is_ok());
         }
     }
+}
+
+const CHILD_PATH_ENV: &str = "HAIRSPRING_TEST_OPEN_CHILD_PATH";
+const CHILD_START_ENV: &str = "HAIRSPRING_TEST_OPEN_CHILD_START_MS";
+
+/// Not a test in its own right: when the parent test re-runs this binary with the env vars set, this is the child
+/// process that opens the shared database at the agreed instant. Without them it does nothing.
+#[test]
+fn child_process_opens_the_database_named_in_the_environment() {
+    let (Ok(path), Ok(start)) = (
+        std::env::var(CHILD_PATH_ENV),
+        std::env::var(CHILD_START_ENV),
+    ) else {
+        return;
+    };
+    let start: u128 = start.parse().unwrap();
+    while std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        < start
+    {
+        std::hint::spin_loop();
+    }
+    if let Err(e) = SqliteStore::open(std::path::Path::new(&path)) {
+        panic!("child open failed: {e}");
+    }
+}
+
+#[test]
+fn several_processes_opening_a_version_one_database_at_once_all_succeed() {
+    const CHILDREN: usize = 6;
+    let path = temp_db("multiprocess");
+    make_v1_database(&path);
+    let start = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        + 400;
+    let exe = std::env::current_exe().unwrap();
+    let children: Vec<_> = (0..CHILDREN)
+        .map(|_| {
+            std::process::Command::new(&exe)
+                .args([
+                    "--exact",
+                    "child_process_opens_the_database_named_in_the_environment",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD_PATH_ENV, &path)
+                .env(CHILD_START_ENV, start.to_string())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    let failures: Vec<String> = children
+        .into_iter()
+        .map(|c| c.wait_with_output().unwrap())
+        .filter(|o| !o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+        .collect();
+    assert!(failures.is_empty(), "child processes failed: {failures:?}");
+    let s = SqliteStore::open(&path).unwrap();
+    assert_eq!(s.get_run("run_old").unwrap().unwrap().trials, 12);
+}
+
+#[test]
+fn an_opened_file_database_is_in_wal_mode() {
+    let path = temp_db("walmode");
+    drop(SqliteStore::open(&path).unwrap());
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let mode: String = conn
+        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(mode, "wal");
 }
 
 #[test]

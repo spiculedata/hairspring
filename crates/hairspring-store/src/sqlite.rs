@@ -20,23 +20,39 @@ const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const WAL_RETRY_PAUSE: std::time::Duration = std::time::Duration::from_millis(5);
 
 /// Puts the database in WAL mode. Changing the journal mode takes locks for which SQLite does not always call the busy
-/// handler, so concurrent first opens can see `SQLITE_BUSY` even with a busy timeout set; retry for up to
-/// [`BUSY_TIMEOUT`]. A database already in WAL mode needs no change, which keeps later opens off the lock entirely.
+/// handler, so concurrent first opens can see `SQLITE_BUSY` even with a busy timeout set; retry until [`BUSY_TIMEOUT`]
+/// has passed in total (each attempt waits only for the time that remains). A database already in WAL mode needs no
+/// change, which keeps later opens off the lock entirely. A filesystem that cannot do WAL answers with another mode;
+/// that is an error rather than a silent downgrade.
 fn enable_wal(conn: &Connection) -> Result<()> {
     let deadline = std::time::Instant::now() + BUSY_TIMEOUT;
     loop {
-        let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0))?;
-        if mode.eq_ignore_ascii_case("wal") {
-            return Ok(());
-        }
-        match conn.pragma_update(None, "journal_mode", "WAL") {
-            Ok(()) => return Ok(()),
-            Err(e) if is_busy(&e) && std::time::Instant::now() < deadline => {
-                std::thread::sleep(WAL_RETRY_PAUSE)
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        conn.busy_timeout(remaining)?;
+        match switch_to_wal(conn) {
+            Ok(mode) if is_wal(&mode) => return Ok(()),
+            Ok(mode) => {
+                return Err(StoreError::Backend(format!(
+                    "could not enable WAL journal mode (the database reports `{mode}`); the filesystem may not support it"
+                )))
             }
+            Err(e) if is_busy(&e) && !remaining.is_zero() => std::thread::sleep(WAL_RETRY_PAUSE),
             Err(e) => return Err(e.into()),
         }
     }
+}
+
+/// Returns the journal mode in effect afterwards, changing it only when it is not already WAL.
+fn switch_to_wal(conn: &Connection) -> rusqlite::Result<String> {
+    let current: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0))?;
+    if is_wal(&current) {
+        return Ok(current);
+    }
+    conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))
+}
+
+fn is_wal(mode: &str) -> bool {
+    mode.eq_ignore_ascii_case("wal")
 }
 
 fn is_busy(e: &rusqlite::Error) -> bool {
