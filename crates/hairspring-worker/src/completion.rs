@@ -12,12 +12,11 @@ pub fn completion_body(worker_id: &str, outcome: RunOutcome) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hairspring_props::limits::MAX_IDS_PER_PROC;
     use hairspring_props::{PropertyStat, RunProps, TrialEvents};
 
     /// The server's request body limit (`MAX_BODY_BYTES` in `hairspring-server`).
     const SERVER_BODY_LIMIT: usize = 2 * 1024 * 1024;
-    /// Most ids one process may catalog (protocol limits).
-    const MAX_IDS: usize = 4096;
 
     fn outcome_with_many_properties() -> RunOutcome {
         let report = concat!(
@@ -29,7 +28,7 @@ mod tests {
         let run = RunProps::new().add(1, &TrialEvents::from_output(report.as_bytes()).fold());
         let summary = run.summary();
         let one = run.finish().remove(0);
-        let stats: Vec<PropertyStat> = (0..MAX_IDS)
+        let stats: Vec<PropertyStat> = (0..MAX_IDS_PER_PROC)
             .map(|i| PropertyStat {
                 id: format!("module.component.property_{i:04}"),
                 msg: "m".repeat(512),
