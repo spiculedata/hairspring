@@ -100,6 +100,16 @@ compiler instantiates that static once per instantiation, as a COMDAT (vague-lin
     reported (after a signal, a single missing evaluation is forgiven). In a program that has used many threads, a
     small loss can go unnoticed.
   * The audit is skipped once 255 or more threads have claimed a slot (the shared last slot's count is not exact).
+  * **Weakly ordered CPUs (for example aarch64).** The call site uses relaxed atomics, so on such a CPU the update of
+    `evals` and the update of the record are not guaranteed to be observed in program order by the reporting thread.
+    The "at most one evaluation in flight per thread" bound used above may then not hold, and a multi-threaded exit
+    could be reported as an incomplete catalog although nothing is missing. This is reasoning from the memory model,
+    not something that has been observed; on x86-64 the stores are not reordered this way.
+  * **A report that interrupted a call site.** A report started from a signal handler (the SDK's own handler after a
+    fatal signal, or a program's handler calling `hs_report` or `exit`), or a `longjmp` out of a handler, that
+    interrupted a thread between its two counter updates can be flagged falsely. After a fatal signal the SDK's own
+    handler allows for the interrupted thread (see above); a program's own handler that reports or exits, or a
+    `longjmp` out of a handler, is not covered.
   * With `HAIRSPRING_EVENTS=off` nothing is written, so there is no diagnostic line; `end.dropped` is still counted
     in the process but is not reported either, since the `end` line is not written.
   * The offline catalog (`hs_catalog_str_v1`) has no such check: a binary read without running it shows only the sites
