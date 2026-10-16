@@ -376,6 +376,11 @@ fn output_is_a_plain_text_attachment_with_a_server_built_file_name() {
     assert_eq!(r.body, OUTPUT);
     assert_eq!(r.header("content-type"), Some("text/plain; charset=utf-8"));
     assert_eq!(r.header("x-content-type-options"), Some("nosniff"));
+    assert_eq!(
+        r.header("content-security-policy"),
+        Some("sandbox"),
+        "program output must not run script if a browser renders it"
+    );
     let disposition = r.header("content-disposition").unwrap();
     assert_eq!(
         disposition,
