@@ -91,8 +91,12 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(v) if v == SCHEMA_VERSION => {
-            // Schemas created by an earlier build of version 2 have no `workers.secret_hash`.
-            tx.batch_execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS secret_hash TEXT")?;
+            // Schemas created by an earlier build of version 2 have no `workers.secret_hash`. Look first, as the
+            // SQLite store does, so a current schema is opened without DDL rights or an exclusive lock on `workers`.
+            // The caller's advisory lock serialises this check with the `ALTER`, which stays idempotent.
+            if !has_worker_secret_column(tx)? {
+                tx.batch_execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS secret_hash TEXT")?;
+            }
         }
         Some(v) => {
             return Err(StoreError::Backend(format!(
@@ -101,4 +105,14 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// True when `workers.secret_hash` exists in the schema this connection's `search_path` selects.
+fn has_worker_secret_column(tx: &mut Transaction<'_>) -> Result<bool> {
+    let row = tx.query_one(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = current_schema() AND table_name = 'workers' AND column_name = 'secret_hash')",
+        &[],
+    )?;
+    Ok(row.get(0))
 }

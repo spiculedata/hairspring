@@ -202,3 +202,34 @@ fn a_version_two_schema_from_before_worker_secrets_gains_the_column_when_connect
         .unwrap();
     assert_eq!(s.worker_secret_hash(&w.id).unwrap().as_deref(), Some("abc"));
 }
+
+/// The URL with its user replaced by `user` (no password), for the trust-authenticated test server.
+fn url_as(url: &str, user: &str) -> String {
+    let (scheme, rest) = url.split_once("://").expect("a postgres URL");
+    let (_, host) = rest.rsplit_once('@').expect("a URL with a user");
+    format!("{scheme}://{user}@{host}")
+}
+
+#[test]
+fn opening_a_current_schema_needs_no_ddl_rights_on_the_workers_table() {
+    let Some(url) = url() else { return };
+    let schema = new_id("d").replace('-', "_");
+    let role = format!("hs_nodll_{}", &new_id("u").replace('-', "_")[..12]);
+    drop(PgStore::connect_in_schema(&url, &schema, 1).unwrap());
+    let mut admin = postgres::Client::connect(&url, postgres::NoTls).unwrap();
+    admin
+        .batch_execute(&format!(
+            "CREATE ROLE \"{role}\" LOGIN;
+             GRANT CREATE ON DATABASE hairspring TO \"{role}\";
+             GRANT ALL ON SCHEMA \"{schema}\" TO \"{role}\";
+             GRANT ALL ON ALL TABLES IN SCHEMA \"{schema}\" TO \"{role}\";
+             GRANT ALL ON ALL SEQUENCES IN SCHEMA \"{schema}\" TO \"{role}\";"
+        ))
+        .unwrap();
+    // The role owns nothing, so any `ALTER TABLE workers` it issued would be refused.
+    let opened = PgStore::connect_in_schema(&url_as(&url, &role), &schema, 1).map(|_| ());
+    admin
+        .batch_execute(&format!("DROP OWNED BY \"{role}\"; DROP ROLE \"{role}\""))
+        .unwrap();
+    assert!(opened.is_ok(), "open as a non-owner failed: {opened:?}");
+}

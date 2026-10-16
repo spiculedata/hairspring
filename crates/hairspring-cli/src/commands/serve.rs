@@ -18,6 +18,9 @@ pub struct ServeArgs {
     /// Requests per minute per caller (0 disables the limit).
     #[arg(long, default_value_t = 1200)]
     pub rate_limit: u32,
+    /// Workers one token may register per hour (0 disables the limit). Counted in memory: a restart resets the count.
+    #[arg(long, default_value_t = 100)]
+    pub register_limit: u32,
     /// File with one `token:role` per line (alternative to the HAIRSPRING_TOKENS environment variable).
     #[arg(long)]
     pub tokens_file: Option<PathBuf>,
@@ -68,6 +71,7 @@ pub fn run(ctx: &Ctx, args: &ServeArgs, out: &mut dyn Write) -> CmdResult<i32> {
     let mut config = ServerConfig::new(addr, auth);
     config.embedded_workers = args.workers;
     config.rate_limit_per_min = args.rate_limit;
+    config.register_limit = args.register_limit;
     config.handle_ctrl_c = true;
     let server = start(config, ctx.service()?, ctx.engine.clone())
         .map_err(|e| format!("cannot start the server: {e}"))?;

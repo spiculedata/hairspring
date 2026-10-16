@@ -3,7 +3,7 @@
 //! to people and to AI agents, so every field is bounded and stripped of control characters.
 use crate::{ServiceError, MAX_BUNDLE_BYTES};
 use hairspring_core::bundle::Bundle;
-use hairspring_engine::report::{FailureReport, ReplayOutcome, RunOutcome, Step};
+use hairspring_engine::report::{FailureReport, ReplayOutcome, RunOutcome, RunStatus, Step};
 
 pub const MAX_STEPS: usize = 1000;
 pub const MAX_LABEL_CHARS: usize = 500;
@@ -130,6 +130,8 @@ pub fn outcome(outcome: &RunOutcome, run_target: &str) -> Result<RunOutcome, Ser
     Ok(RunOutcome {
         error: outcome.error.as_deref().map(single_line),
         failure,
+        // Derived from the status, as the stored flag is: a worker's own claim is not read.
+        stopped_at_first_failure: outcome.status == RunStatus::Failed,
         // A worker's own property statistics are never read: the server folds the per-trial digests it stored.
         // Trial records arrive through their own checked path, not inside an outcome.
         trial_log: Vec::new(),

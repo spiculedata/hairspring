@@ -50,6 +50,12 @@ pub async fn register(
     ApiJson(b): ApiJson<Register>,
 ) -> Result<Json<Value>, ApiError> {
     caller.need(Role::Run)?;
+    if !s.register_limiter.check(&caller.key) {
+        return Err(ApiError::too_many_requests(
+            "worker registration limit reached for this token",
+            s.register_retry_after_secs,
+        ));
+    }
     let caps = b
         .caps
         .map(|c| c.to_string())

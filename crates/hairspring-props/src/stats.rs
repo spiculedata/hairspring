@@ -36,3 +36,12 @@ pub fn rule_of_three(n: u64) -> Option<f64> {
     }
     Some(3.0 / n as f64)
 }
+
+/// The exact one-sided 95% upper bound on a rate after `n` trials with no events: `1 - 0.05^(1/n)`, the rate at which
+/// seeing none in `n` trials has probability 5%. `None` when `n == 0`. The rule of three is its approximation.
+pub fn zero_event_upper_bound(n: u64) -> Option<f64> {
+    if n == 0 {
+        return None;
+    }
+    Some(1.0 - 0.05f64.powf(1.0 / n as f64))
+}

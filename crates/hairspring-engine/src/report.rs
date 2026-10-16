@@ -58,6 +58,10 @@ pub struct RunOutcome {
     pub elapsed_ms: u64,
     pub failure: Option<FailureReport>,
     pub error: Option<String>,
+    /// True when the run ended because its first failure stopped it, so its trial count was decided by the outcome and
+    /// no property of it has a rate. Absent in older stored runs.
+    #[serde(default)]
+    pub stopped_at_first_failure: bool,
     /// Per-property statistics from the guest event protocol, sorted by id. Empty when the guest reported no
     /// properties, and absent in older stored runs. Not yet persisted by the store (issues #7 and #11).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -135,6 +139,7 @@ impl RunOutcome {
             elapsed_ms,
             failure: None,
             error: None,
+            stopped_at_first_failure: false,
             properties: Vec::new(),
             property_run: None,
             trial_log: Vec::new(),
@@ -157,6 +162,7 @@ impl RunOutcome {
             elapsed_ms,
             failure: Some(failure),
             error: None,
+            stopped_at_first_failure: true,
             properties: Vec::new(),
             property_run: None,
             trial_log: Vec::new(),
@@ -174,6 +180,7 @@ impl RunOutcome {
             elapsed_ms: 0,
             failure: None,
             error: Some(message.into()),
+            stopped_at_first_failure: false,
             properties: Vec::new(),
             property_run: None,
             trial_log: Vec::new(),

@@ -32,6 +32,9 @@ use std::time::{Duration, Instant};
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 /// Default cap on concurrent event streams.
 const DEFAULT_MAX_SSE_STREAMS: usize = 64;
+/// Default registrations per token per window: far above a fleet restarting, far below the worker cap.
+const DEFAULT_REGISTER_LIMIT: u32 = 100;
+const DEFAULT_REGISTER_WINDOW: Duration = Duration::from_secs(3600);
 /// Cap on threads used for blocking storage and engine work.
 const MAX_BLOCKING_THREADS: usize = 128;
 const WORKER_IDLE: Duration = Duration::from_millis(200);
@@ -47,6 +50,13 @@ pub struct ServerConfig {
     pub rate_limit_per_min: u32,
     /// Concurrent server-sent-event streams allowed in total.
     pub max_sse_streams: usize,
+    /// Workers one token may register per [`ServerConfig::register_window`]; 0 disables the limit. A token that
+    /// can register without bound could fill the server's worker cap. Refused registrations get a 429 with
+    /// `Retry-After` set to the window.
+    pub register_limit: u32,
+    /// The span `register_limit` is counted over. Counts are held in memory, so they start again when the server
+    /// restarts.
+    pub register_window: Duration,
     /// Shut down on Ctrl-C (for the CLI).
     pub handle_ctrl_c: bool,
 }
@@ -59,6 +69,8 @@ impl ServerConfig {
             embedded_workers: 1,
             rate_limit_per_min: 1200,
             max_sse_streams: DEFAULT_MAX_SSE_STREAMS,
+            register_limit: DEFAULT_REGISTER_LIMIT,
+            register_window: DEFAULT_REGISTER_WINDOW,
             handle_ctrl_c: false,
         }
     }
@@ -82,6 +94,10 @@ pub struct AppState {
     pub auth: Arc<Auth>,
     pub stopping: Arc<AtomicBool>,
     limiter: Arc<RateLimiter>,
+    /// Counts worker registrations per token.
+    pub register_limiter: Arc<RateLimiter>,
+    /// What a refused registration is told to wait: the whole window, the longest it can take to clear.
+    pub register_retry_after_secs: u64,
     pub sse_slots: Arc<tokio::sync::Semaphore>,
 }
 
@@ -142,9 +158,9 @@ fn digest_prefix(s: &str) -> String {
 /// Who a request counts against. A valid token gets its own bucket; everything else (no token, a wrong
 /// token, a made-up token) shares one bucket per client address, so guessing cannot dodge the limit.
 fn limit_key(state: &AppState, peer: SocketAddr, authorization: Option<&str>) -> String {
-    if !state.auth.is_open() && state.auth.authenticate(authorization).is_some() {
-        if let Some(h) = authorization {
-            return format!("t:{}", digest_prefix(h));
+    if !state.auth.is_open() {
+        if let Some((_, key)) = state.auth.identify(authorization) {
+            return key;
         }
     }
     format!("ip:{}", peer.ip())
@@ -338,6 +354,11 @@ pub fn start(config: ServerConfig, svc: Service, engine: Engine) -> io::Result<R
         auth: Arc::new(config.auth.clone()),
         stopping: stopping.clone(),
         limiter: Arc::new(RateLimiter::new(config.rate_limit_per_min)),
+        register_limiter: Arc::new(RateLimiter::with_window(
+            config.register_limit,
+            config.register_window,
+        )),
+        register_retry_after_secs: config.register_window.as_secs().max(1),
         sse_slots: Arc::new(tokio::sync::Semaphore::new(config.max_sse_streams)),
     };
     let workers = spawn_workers(config.embedded_workers, &svc, &engine, &stopping);
