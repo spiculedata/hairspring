@@ -35,6 +35,9 @@ pub struct EventHealth {
     pub sites_mismatch: u64,
     /// Processes whose `end.threads` differs from the number of `thread` lines they sent.
     pub thread_count_mismatch: u64,
+    /// Faults the host saw while collecting this trial's events (an unreadable or oversized events file, an output
+    /// stream that never closed). Set by the backend, never by the parser.
+    pub host_faults: u64,
 }
 
 impl EventHealth {
@@ -52,12 +55,13 @@ impl EventHealth {
             + self.unreported_ids
             + self.sites_mismatch
             + self.thread_count_mismatch
+            + self.host_faults
             > 0
     }
 }
 
 /// A witness located in a process.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Witness {
     pub proc: String,
     pub thread: String,
@@ -108,7 +112,7 @@ pub struct ProcReport {
 }
 
 /// Counts of an `assert` line that was dropped because of a kind conflict, kept for diagnosis.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DroppedCounts {
     pub hits: u64,
     pub trues: u64,
@@ -127,7 +131,7 @@ pub struct CatalogConflict {
 }
 
 /// A failure of a trial-level rule (a finding that gets a bundle).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FailureReason {
     /// An `always` or `always_or_unreachable` evaluated false.
     AlwaysFalse,
@@ -137,7 +141,7 @@ pub enum FailureReason {
     CatalogConflict,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PropertyFailure {
     pub id: String,
     pub kind: AssertKind,
@@ -205,6 +209,18 @@ pub struct TrialProps {
 }
 
 impl TrialProps {
+    /// A copy that records one host-side fault, so the trial counts as degraded and is not rated.
+    #[must_use]
+    pub fn with_host_fault(self) -> TrialProps {
+        TrialProps {
+            health: EventHealth {
+                host_faults: self.health.host_faults.saturating_add(1),
+                ..self.health
+            },
+            ..self
+        }
+    }
+
     pub fn is_degraded(&self) -> bool {
         self.health.degraded()
     }

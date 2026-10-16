@@ -14,17 +14,20 @@ use std::collections::{BTreeMap, HashSet};
 pub const MAX_KIND_MISMATCH_DETAILS: usize = 64;
 
 /// Run-level verdict for one property.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PropertyStatus {
     Pass,
     /// A trial-level rule failed in at least one trial (a finding), or the id has conflicting declarations.
     Violation,
-    /// A must-hit property was never satisfied in any trial (a coverage gap, not a finding).
+    /// A must-hit property was never satisfied in any claimable trial (a coverage gap, not a finding).
     Unmet,
+    /// No trial reported cleanly and unperturbed, so neither a pass nor an UNMET can be claimed. A failure seen in
+    /// an unclean trial is still a [`PropertyStatus::Violation`].
+    Unrated,
 }
 
 /// Which count the reported rate is of.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RateBasis {
     /// Trials with a false evaluation (`always`, `always_or_unreachable`).
     TrialsFalse,
@@ -34,7 +37,7 @@ pub enum RateBasis {
     TrialsHit,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Rate {
     pub basis: RateBasis,
     pub k: u64,
@@ -49,20 +52,20 @@ pub struct Rate {
 }
 
 /// Why a property has no rate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum UnratedReason {
     /// No trial that catalogued the id reported cleanly. This is not a rate of 0%.
     NoRatedTrials,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FirstFailure {
     /// The lowest seed among the failing trials, whatever order trials were added in.
     pub seed: u64,
     pub witness: Option<Witness>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PropertyStat {
     pub id: String,
     pub kind: AssertKind,
@@ -81,6 +84,9 @@ pub struct PropertyStat {
     pub trials_perturbing: u64,
     /// Trials in which the id had conflicting declarations.
     pub trials_conflicted: u64,
+    /// Trials that may back a must-hit claim: rated and not perturbing. UNMET is decided over these only.
+    #[serde(default)]
+    pub trials_claimable: u64,
     pub trials_hit: u64,
     pub trials_true: u64,
     pub trials_false: u64,
@@ -95,7 +101,7 @@ pub struct PropertyStat {
 }
 
 /// A trial whose declared kind for an id disagreed with the kind first seen in the run.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct KindMismatch {
     pub id: String,
     pub seed: u64,
@@ -106,7 +112,7 @@ pub struct KindMismatch {
 }
 
 /// Counts across the whole run, separate from any one property.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RunSummary {
     pub trials: u64,
     /// Trials containing `eval` lines; exclude them from tier claims.
@@ -164,6 +170,9 @@ struct IdAcc {
     rated_hit: u64,
     rated_true: u64,
     rated_false: u64,
+    claimable: u64,
+    claim_hit: u64,
+    claim_true: u64,
     evals: u64,
     evals_true: u64,
     evals_false: u64,
@@ -188,6 +197,9 @@ impl IdAcc {
             rated_hit: 0,
             rated_true: 0,
             rated_false: 0,
+            claimable: 0,
+            claim_hit: 0,
+            claim_true: 0,
             evals: 0,
             evals_true: 0,
             evals_false: 0,
@@ -220,6 +232,11 @@ impl IdAcc {
             self.rated_hit += hit;
             self.rated_true += tru;
             self.rated_false += fal;
+            if !class.perturbing {
+                self.claimable += 1;
+                self.claim_hit += hit;
+                self.claim_true += tru;
+            }
         }
         self.evals = self.evals.saturating_add(p.hits);
         self.evals_true = self.evals_true.saturating_add(p.trues);
@@ -236,17 +253,27 @@ impl IdAcc {
         self
     }
 
+    /// Failures count whatever trial they came from (a false is a false). Must-hit claims, and the passes that
+    /// depend on them, are made over claimable trials only, so a degraded or perturbing trial can neither supply the
+    /// hit that satisfies a property nor stand in for a clean trial.
     fn status(&self) -> PropertyStatus {
         use AssertKind::*;
         if self.conflicted > 0 {
             return PropertyStatus::Violation;
         }
         match self.kind {
-            Always | AlwaysOrUnreachable if self.trials_false > 0 => PropertyStatus::Violation,
-            Always if self.trials_hit == 0 => PropertyStatus::Unmet,
-            Sometimes if self.trials_true == 0 => PropertyStatus::Unmet,
-            Reachable if self.trials_hit == 0 => PropertyStatus::Unmet,
-            Unreachable if self.trials_hit > 0 => PropertyStatus::Violation,
+            Always | AlwaysOrUnreachable if self.trials_false > 0 => {
+                return PropertyStatus::Violation
+            }
+            Unreachable if self.trials_hit > 0 => return PropertyStatus::Violation,
+            _ => {}
+        }
+        if self.claimable == 0 {
+            return PropertyStatus::Unrated;
+        }
+        match self.kind {
+            Always | Reachable if self.claim_hit == 0 => PropertyStatus::Unmet,
+            Sometimes if self.claim_true == 0 => PropertyStatus::Unmet,
             _ => PropertyStatus::Pass,
         }
     }
@@ -289,6 +316,7 @@ impl IdAcc {
             trials_degraded: self.degraded,
             trials_perturbing: self.perturbing,
             trials_conflicted: self.conflicted,
+            trials_claimable: self.claimable,
             trials_hit: self.trials_hit,
             trials_true: self.trials_true,
             trials_false: self.trials_false,
