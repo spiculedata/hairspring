@@ -801,6 +801,7 @@ version = "0.1.0"
 dependencies = [
  "hairspring-core",
  "hairspring-engine",
+ "serde_json",
 ]
 
 [[package]]
