@@ -103,6 +103,15 @@ impl HermitBackend {
         }
     }
 
+    /// Runs one trial of a process target at `seed` and returns everything captured, without judging it. This is what
+    /// the engine's run loop does per seed, exposed for tooling and tests that need the raw outcome (output, exit
+    /// status, schedule, guest events).
+    pub fn run_one(&self, spec: &TargetSpec, seed: u64) -> Result<Trial, EngineError> {
+        let p = self.process(spec)?;
+        self.trial(&p, seed, self.trial_timeout(&p))
+            .map_err(|e| EngineError::Backend(e.to_string()))
+    }
+
     fn trial(&self, p: &ProcessSpec, seed: u64, timeout: Duration) -> Result<Trial, SpawnError> {
         run_trial(&self.settings, p, seed, timeout, self.summaries.as_ref())
     }

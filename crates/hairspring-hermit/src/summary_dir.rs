@@ -41,6 +41,13 @@ impl PrivateDir {
         self.path.join(format!("{seed}-{:016x}.json", random_u64()))
     }
 
+    /// A fresh private directory (mode 0700, unpredictable name) for one trial's scratch files, removed on drop.
+    pub fn scratch_for(&self, seed: u64) -> io::Result<ScratchDir> {
+        let path = self.path.join(format!("{seed}-{:016x}.d", random_u64()));
+        DirBuilder::new().mode(0o700).create(&path)?;
+        Ok(ScratchDir { path })
+    }
+
     #[cfg(test)]
     pub fn path(&self) -> &Path {
         &self.path
@@ -48,6 +55,24 @@ impl PrivateDir {
 }
 
 impl Drop for PrivateDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// One trial's scratch directory inside a [`PrivateDir`].
+#[derive(Debug)]
+pub struct ScratchDir {
+    path: PathBuf,
+}
+
+impl ScratchDir {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for ScratchDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
     }
@@ -156,6 +181,18 @@ mod tests {
             .create(expected(&b))
             .unwrap();
         assert!(PrivateDir::create(&b).is_ok());
+    }
+
+    #[test]
+    fn scratch_directories_are_private_distinct_and_removed_on_drop() {
+        let b = base("scratch");
+        let d = PrivateDir::create(&b).unwrap();
+        let (a, c) = (d.scratch_for(7).unwrap(), d.scratch_for(7).unwrap());
+        assert_ne!(a.path(), c.path());
+        assert_eq!(std::fs::metadata(a.path()).unwrap().mode() & 0o777, 0o700);
+        let gone = a.path().to_path_buf();
+        drop(a);
+        assert!(!gone.exists());
     }
 
     #[test]

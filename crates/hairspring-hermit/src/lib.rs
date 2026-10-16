@@ -8,9 +8,12 @@
 //! Verdicts: the guest violates a property if it exits non-zero or prints a line starting with
 //! `HAIRSPRING_VIOLATION:`. A trial that hits its time limit is inconclusive (counted separately, never a pass) unless the
 //! target sets `hang_is_violation`; a run where every trial timed out is an error. Trials run in batches of `parallelism`
-//! seeds, so a cancel takes effect at the next batch boundary. Linux x86-64 only; experimental.
+//! seeds, so a cancel takes effect at the next batch boundary. Lines starting with `HAIRSPRING_EVENT ` (the guest event
+//! protocol) are captured separately from the capped output and folded into the trial's `events`. Linux x86-64 only; experimental.
 mod backend;
+mod capture;
 mod env;
+mod events;
 mod exec;
 mod summary;
 mod summary_dir;
@@ -18,6 +21,8 @@ mod trace;
 
 pub use backend::HermitBackend;
 pub use env::guest_env;
+pub use events::{EVENTS_FILE_ENV, GUEST_EVENTS_FILE};
+pub use exec::Trial;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -42,6 +47,9 @@ pub struct HermitSettings {
     /// Where Hermit writes each trial's `--summary-json`. It must be outside `/tmp` (Hermit gives the guest its own).
     /// `None` turns schedule fingerprints off; defaults to `/dev/shm` when that exists.
     pub summary_dir: Option<PathBuf>,
+    /// Offer the guest an events file (`HAIRSPRING_EVENTS_FILE`) in addition to stdout and stderr. Needs `summary_dir`,
+    /// and uses Hermit's `--tmp` for the guest's `/tmp`. Off by default: it changes what the guest's `/tmp` is.
+    pub events_file: bool,
 }
 
 /// Memory-backed and not `/tmp`, so Hermit accepts it and the files cost nothing.
@@ -61,6 +69,7 @@ impl Default for HermitSettings {
             summary_dir: std::path::Path::new(DEFAULT_SUMMARY_DIR)
                 .is_dir()
                 .then(|| PathBuf::from(DEFAULT_SUMMARY_DIR)),
+            events_file: false,
         }
     }
 }

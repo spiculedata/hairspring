@@ -1,10 +1,12 @@
 //! Running one trial: spawn hermit, capture bounded output, enforce a timeout.
+use crate::capture::{drain, Captured};
+use crate::events;
 use crate::summary::{self, Summary};
-use crate::summary_dir::PrivateDir;
+use crate::summary_dir::{PrivateDir, ScratchDir};
 use crate::{env::guest_env, HermitSettings};
 use hairspring_engine::scheduler::{Heuristic, SchedulerSpec};
+use hairspring_props::TrialProps;
 use std::collections::BTreeMap;
-use std::io::Read;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -34,6 +36,11 @@ pub struct Trial {
     pub timed_out: bool,
     /// The schedule the trial ran, when Hermit's summary could be read.
     pub schedule: Option<Summary>,
+    /// What the guest reported through the event protocol, from stdout, stderr and the events file. `None` when it
+    /// sent nothing. Event lines are not part of `stdout`/`stderr`.
+    pub events: Option<TrialProps>,
+    /// Why the events file could not be used, when it was asked for and something went wrong.
+    pub events_error: Option<String>,
 }
 
 #[derive(Debug)]
@@ -84,6 +91,7 @@ pub fn hermit_args(
     spec: &ProcessSpec,
     seed: u64,
     summary: Option<&std::path::Path>,
+    events: Option<&ScratchDir>,
 ) -> Vec<String> {
     let mut args = vec!["run".to_string(), format!("--epoch={}", settings.epoch)];
     args.extend(scheduler_flags(spec.scheduler));
@@ -91,28 +99,13 @@ pub fn hermit_args(
     if let Some(path) = summary {
         args.push(format!("--summary-json={}", path.display()));
     }
+    if let Some(dir) = events {
+        args.push(events::tmp_arg(dir));
+    }
     args.extend(spec.hermit_args.iter().cloned());
     args.push("--".to_string());
     args.extend(spec.command.iter().cloned());
     args
-}
-
-/// Reads a stream fully, keeping at most `cap` bytes, and sends what it kept when the stream ends.
-fn drain(mut stream: impl Read + Send + 'static, cap: usize, tx: mpsc::Sender<String>) {
-    std::thread::spawn(move || {
-        let mut kept = Vec::new();
-        let mut buf = [0u8; 8192];
-        loop {
-            match stream.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    let room = cap.saturating_sub(kept.len());
-                    kept.extend_from_slice(&buf[..n.min(room)]);
-                }
-            }
-        }
-        let _ = tx.send(String::from_utf8_lossy(&kept).into_owned());
-    });
 }
 
 extern "C" {
@@ -165,6 +158,34 @@ fn spawn_with_retry(cmd: &mut Command) -> std::io::Result<std::process::Child> {
     }
 }
 
+/// Where the guest's events file lives for one trial, or why it cannot be offered.
+fn events_scratch(
+    settings: &HermitSettings,
+    spec: &ProcessSpec,
+    seed: u64,
+    scratch: Option<&PrivateDir>,
+) -> (Option<ScratchDir>, Option<String>) {
+    if !settings.events_file {
+        return (None, None);
+    }
+    if events::claims_tmp(spec.hermit_args) {
+        let why =
+            "the events file needs hermit's `--tmp`, which this target's hermit_args already sets";
+        return (None, Some(why.to_string()));
+    }
+    let Some(base) = scratch else {
+        let why = "the events file needs a private scratch directory (`summary_dir`), and none is available";
+        return (None, Some(why.to_string()));
+    };
+    match base.scratch_for(seed) {
+        Ok(dir) => (Some(dir), None),
+        Err(e) => (
+            None,
+            Some(format!("cannot create the events directory: {e}")),
+        ),
+    }
+}
+
 pub fn run_trial(
     settings: &HermitSettings,
     spec: &ProcessSpec,
@@ -173,14 +194,41 @@ pub fn run_trial(
     summaries: Option<&PrivateDir>,
 ) -> Result<Trial, SpawnError> {
     let summary_path = summaries.map(|dir| dir.file_for(seed));
-    let trial = run_trial_with_summary(settings, spec, seed, timeout, summary_path.as_deref());
+    let (events_dir, events_error) = events_scratch(settings, spec, seed, summaries);
+    let trial = run_trial_with_summary(
+        settings,
+        spec,
+        seed,
+        timeout,
+        summary_path.as_deref(),
+        events_dir.as_ref(),
+    );
     // Always remove the file, including when the trial failed to start or timed out.
     let schedule = summary_path.as_deref().and_then(|p| {
         let read = summary::read(p);
         let _ = std::fs::remove_file(p);
         read
     });
-    trial.map(|t| Trial { schedule, ..t })
+    trial.map(|t| Trial {
+        schedule,
+        events_error: t.events_error.or(events_error),
+        ..t
+    })
+}
+
+/// Reads the events file (when there is one) and folds it with the lines captured from the output.
+fn collect_events(
+    dir: Option<&ScratchDir>,
+    out: &Captured,
+    err: &Captured,
+) -> (Option<TrialProps>, Option<String>) {
+    let (file, error) = match dir.map(|d| events::read_events_file(d.path())) {
+        Some(Ok(file)) => (file, None),
+        Some(Err(e)) => (None, Some(e)),
+        None => (None, None),
+    };
+    let folded = events::fold_sources(file.as_ref(), &out.events, &err.events);
+    (folded, error)
 }
 
 fn run_trial_with_summary(
@@ -189,14 +237,16 @@ fn run_trial_with_summary(
     seed: u64,
     timeout: Duration,
     summary: Option<&std::path::Path>,
+    events_dir: Option<&ScratchDir>,
 ) -> Result<Trial, SpawnError> {
     let mut cmd = Command::new(resolve_bin(&settings.bin));
-    cmd.args(hermit_args(settings, spec, seed, summary))
+    cmd.args(hermit_args(settings, spec, seed, summary, events_dir))
         .env_clear()
         .envs(guest_env(spec.command, spec.env))
         // The trial seed is an input like any other; tools such as hairspring-dapr-sim derive their faults from it.
         .env("HAIRSPRING_SEED", seed.to_string())
         .envs(settings.extra_env.iter().map(|(k, v)| (k, v)))
+        .envs(events_dir.map(|_| (events::EVENTS_FILE_ENV, events::GUEST_EVENTS_FILE)))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -239,14 +289,17 @@ fn run_trial_with_summary(
         }
     };
     // After a kill a surviving grandchild could hold the pipes open; do not wait for it forever.
-    let stdout = out_rx.recv_timeout(READER_GRACE).unwrap_or_default();
-    let stderr = err_rx.recv_timeout(READER_GRACE).unwrap_or_default();
+    let out = out_rx.recv_timeout(READER_GRACE).unwrap_or_default();
+    let err = err_rx.recv_timeout(READER_GRACE).unwrap_or_default();
+    let (events, events_error) = collect_events(events_dir, &out, &err);
     Ok(Trial {
         exit_code: status.and_then(|s| s.code()),
         signal: status.and_then(|s| s.signal()),
-        stdout,
-        stderr,
+        stdout: out.text,
+        stderr: err.text,
         timed_out,
         schedule: None,
+        events,
+        events_error,
     })
 }
