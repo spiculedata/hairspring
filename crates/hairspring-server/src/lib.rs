@@ -163,7 +163,7 @@ fn limit_key(state: &AppState, peer: SocketAddr, authorization: Option<&str>) ->
             return key;
         }
     }
-    format!("ip:{}", peer.ip())
+    ratelimit::anonymous_key(peer.ip())
 }
 
 async fn limit_requests(

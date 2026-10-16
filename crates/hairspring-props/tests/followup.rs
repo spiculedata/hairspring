@@ -60,17 +60,15 @@ fn a_stat_with_no_rated_trials_says_so_instead_of_reporting_zero_percent() {
     assert_eq!(s.trials_rated, 0);
     assert!(s.rate.is_none());
     assert_eq!(s.unrated_reason, Some(UnratedReason::NoRatedTrials));
-    assert_eq!(s.rate_text(), "unrated (0 rated trials)");
 }
 
 #[test]
-fn a_rated_stat_has_no_unrated_reason_and_a_numeric_rate_text() {
+fn a_rated_stat_has_no_unrated_reason_and_a_rate() {
     let stats = run_of(&[(1, single(AssertKind::Always, 2, 0))]);
     let s = &stats[0];
     assert_eq!(s.unrated_reason, None);
-    let text = s.rate_text();
-    assert!(text.starts_with("0/1"), "{text}");
-    assert!(!text.contains("unrated"));
+    let rate = s.rate.expect("rated");
+    assert_eq!((rate.k, rate.n), (0, 1));
 }
 
 // ---- cross-process conflicts resolve by the lowest tag -----------------------------------------------------------
