@@ -1,4 +1,5 @@
 /* hairspring.c -- thread slots, startup and exit wiring for the Hairspring C SDK. */
+#define _GNU_SOURCE /* secure_getenv on glibc */
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -115,9 +116,25 @@ static int private_copy(int fd) {
   return fd;
 }
 
+/* The events file is a path the SDK opens for writing, so a set-uid or set-gid program must not take it from the
+** environment: secure_getenv (glibc) and issetugid (macOS, BSD) refuse it there. Elsewhere it is plain getenv. */
+static const char *events_file_setting(void) {
+#if defined(__GLIBC__) && defined(__GLIBC_PREREQ)
+#if __GLIBC_PREREQ(2, 17)
+  return secure_getenv("HAIRSPRING_EVENTS_FILE");
+#else
+  return getenv("HAIRSPRING_EVENTS_FILE");
+#endif
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+  return issetugid() ? NULL : getenv("HAIRSPRING_EVENTS_FILE");
+#else
+  return getenv("HAIRSPRING_EVENTS_FILE");
+#endif
+}
+
 static void open_events(void) {
   const char *mode = getenv("HAIRSPRING_EVENTS");
-  const char *path = getenv("HAIRSPRING_EVENTS_FILE");
+  const char *path = events_file_setting();
   hs_proc.fd = -1;
   if (mode && strcmp(mode, "off") == 0) return;
   if (path && path[0]) {
