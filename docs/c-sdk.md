@@ -632,7 +632,7 @@ On aarch64 Linux, gcc 13.3 and clang 18 produce the same structure with `bl __aa
   member, an inline function; no ordinary-function site) with its harness `cxx_templates_main.cc`, and checks that each
   id is catalogued (clang: required) or announced as missing, with the right count (other compilers).
   `make audit-control` builds the same fixture against a copy of the header whose records go to a section nobody
-  reads and checks that all 7 evaluations are announced. `make cxx-mixed` is the compiler-specific check described
+  reads and checks that all 7 evaluations are announced; it is part of `make test`. `make cxx-mixed` is the compiler-specific check described
   above; it is not part of `make test`.
 * `tests/test_proc.c` with the programs in `tests/fixtures/hs_sample.c` (one binary per scenario, because a binary's
   catalog holds every assertion compiled into it): report shape, the same id at two call sites, fork tags and fresh
