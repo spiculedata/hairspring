@@ -246,6 +246,8 @@ impl Service {
             None | Some("failing") => "failing",
             Some("hit") => "hit",
             Some("never") => "never",
+            // The property alone, with no seed list: a label for a link costs no scan.
+            Some("none") => "none",
             Some(_) => {
                 return Err(ServiceError::InvalidRequest("`seeds` is not valid".into()));
             }
@@ -263,6 +265,18 @@ impl Service {
         else {
             return Ok(None);
         };
+        if seeds_kind == "none" {
+            return Ok(Some(PropertyDetail {
+                run_id: run.id.clone(),
+                property: property_row(idx, &stat, &run, &completion),
+                seeds_kind,
+                seeds: Vec::new(),
+                next_cursor: None,
+                scanned_trials: 0,
+                completion_label: completion.label(),
+                guest_note: GUEST_NOTE,
+            }));
+        }
         let mut seeds: Vec<SeedRef> = Vec::new();
         let mut more = false;
         let end = self.scan_trials(run_id, after, |t| {

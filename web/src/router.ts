@@ -3,22 +3,37 @@ import { useEffect, useState } from 'react';
 const NAV_EVENT = 'hairspring:navigate';
 
 export function navigate(path: string): void {
-  if (window.location.pathname !== path) window.history.pushState({}, '', path);
+  if (window.location.pathname + window.location.search !== path) window.history.pushState({}, '', path);
   window.dispatchEvent(new Event(NAV_EVENT));
 }
 
-export function usePath(): string {
-  const [path, setPath] = useState(window.location.pathname);
+/** Rewrites the address without adding a history entry or remounting the page: for state the address mirrors, like filters. */
+export function replaceAddress(path: string): void {
+  if (window.location.pathname + window.location.search !== path) window.history.replaceState({}, '', path);
+}
+
+function useLocationPart(read: () => string): string {
+  const [value, setValue] = useState(read);
   useEffect(() => {
-    const update = () => setPath(window.location.pathname);
+    const update = () => setValue(read());
     window.addEventListener('popstate', update);
     window.addEventListener(NAV_EVENT, update);
     return () => {
       window.removeEventListener('popstate', update);
       window.removeEventListener(NAV_EVENT, update);
     };
+    // `read` only reads `window.location`, so it is the same for every render.
   }, []);
-  return path;
+  return value;
+}
+
+export function usePath(): string {
+  return useLocationPart(() => window.location.pathname);
+}
+
+/** The address's query string (with its leading `?`), which changes when the reader follows a link or goes back. */
+export function useSearch(): string {
+  return useLocationPart(() => window.location.search);
 }
 
 const MAX_SEED_DIGITS = 20;
@@ -45,6 +60,7 @@ export function trialPath(runId: string, seq: number): string | undefined {
 export type Route =
   | { name: 'runs' }
   | { name: 'run'; id: string }
+  | { name: 'seeds'; id: string }
   | { name: 'trial'; id: string; seq: string }
   | { name: 'seed'; id: string; seed: string }
   | { name: 'failure'; id: string }
@@ -56,6 +72,7 @@ export function matchRoute(path: string): Route {
   const parts = path.split('/').filter(Boolean);
   if (parts.length === 0 || (parts.length === 1 && parts[0] === 'runs')) return { name: 'runs' };
   if (parts.length === 2 && parts[0] === 'runs') return { name: 'run', id: parts[1] };
+  if (parts.length === 3 && parts[0] === 'runs' && parts[2] === 'seeds' && RUN_ID.test(parts[1])) return { name: 'seeds', id: parts[1] };
   if (parts.length === 4 && parts[0] === 'runs' && !RUN_ID.test(parts[1])) return { name: 'notfound' };
   if (parts.length === 4 && parts[0] === 'runs' && parts[2] === 'trials' && isDigits(parts[3], MAX_SEQ_DIGITS)) {
     return { name: 'trial', id: parts[1], seq: parts[3] };

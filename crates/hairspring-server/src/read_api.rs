@@ -13,7 +13,7 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use hairspring_mcp::validate;
-use hairspring_service::{PropertyQuery, Role, SeedQuery, TrialQuery};
+use hairspring_service::{PropertyQuery, Role, SeedQuery, StripQuery, TrialQuery};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -153,6 +153,21 @@ pub async fn trial_output(
         text,
     )
         .into_response())
+}
+
+/// The seed strip: a code per judged trial, in pages. See `hairspring_service::view::StripPage`.
+pub async fn strip(
+    State(s): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Query(p): Query<Params>,
+) -> Result<Json<Value>, ApiError> {
+    read_run_id(&caller, &id)?;
+    let q = StripQuery {
+        cursor: param(&p, "cursor"),
+        limit: limit(&p)?,
+    };
+    json(blocking(move || s.svc.strip(&id, &q)).await?)
 }
 
 pub async fn coverage(

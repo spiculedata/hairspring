@@ -261,6 +261,7 @@ fn router(state: AppState) -> Router {
             "/api/runs/{id}/trials/{seq}/output/{stream}",
             get(read_api::trial_output),
         )
+        .route("/api/runs/{id}/strip", get(read_api::strip))
         .route("/api/runs/{id}/coverage", get(read_api::coverage))
         .route("/api/failures", get(api::list_failures))
         .route("/api/failures/{id}", get(api::get_failure))

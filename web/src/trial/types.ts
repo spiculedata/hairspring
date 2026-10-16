@@ -7,11 +7,21 @@ import type { AssertKind, GuestLoc } from '../types';
 
 export type TrialVerdict = 'pass' | 'violation' | 'inconclusive' | 'unusable' | 'infra';
 
+/**
+ * How the server classes a trial for display. `pass` is only a rated, clean pass: a pass the engine judged but that was
+ * degraded or reported nothing is `excluded`, and is never shown as a pass.
+ */
+export type TrialClass = 'pass' | 'violation' | 'inconclusive' | 'unusable' | 'infra' | 'excluded';
+
 export interface TrialRow {
   seq: number;
   /** A decimal string: a seed can exceed 2^53. */
   seed: string;
   verdict: TrialVerdict;
+  class: TrialClass;
+  /** How many properties failed in this trial; `failing_idx` and `guest.failing_ids` hold the first few. */
+  failing_count: number;
+  failing_idx: readonly number[];
   timed_out: boolean;
   degraded: boolean;
   perturbing: boolean;
@@ -30,7 +40,7 @@ export interface TrialRow {
   kept: string;
   has_detail: boolean;
   has_output: boolean;
-  guest: { reason: string };
+  guest: { reason: string; failing_ids: readonly string[] };
 }
 
 export interface Witness {

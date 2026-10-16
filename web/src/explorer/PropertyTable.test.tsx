@@ -39,12 +39,23 @@ describe('PropertyTable', () => {
     const linked = renderToString(<PropertyTable runId="run_0123" properties={[row()]} />);
     expect(linked).toContain('<a href="/runs/run_0123/seeds/1016">seed 1016</a>');
     expect(renderToString(<PropertyTable properties={[row()]} />)).not.toContain('<a ');
-    expect(renderToString(<PropertyTable runId="run_0123" properties={[row({ first_failing_seed: null })]} />)).not.toContain('<a ');
+    expect(renderToString(<PropertyTable runId="run_0123" properties={[row({ first_failing_seed: null })]} />)).not.toContain('/seeds/');
+  });
+
+  it('links a failing property to the list of seeds that failed it, and any other to the seeds that reached it', () => {
+    const failing = renderToString(<PropertyTable runId="run_0123" properties={[row({ idx: 7 })]} />);
+    expect(failing).toContain('<a href="/runs/run_0123/seeds?fails=7">failing seeds</a>');
+    const pass = renderToString(<PropertyTable runId="run_0123" properties={[row({ idx: 8, status: 'pass', first_failing_seed: null })]} />);
+    expect(pass).toContain('<a href="/runs/run_0123/seeds?hits=8">seeds that reached it</a>');
+    const unmet = renderToString(<PropertyTable runId="run_0123" properties={[row({ idx: 9, status: 'unmet', first_failing_seed: null })]} />);
+    expect(unmet).toContain('seeds?misses=9');
+    expect(renderToString(<PropertyTable properties={[row()]} />)).not.toContain('/seeds?');
   });
 
   it('only links a seed that is plain digits, so nothing else can reach a path', () => {
     const html = renderToString(<PropertyTable runId="run_0123" properties={[row({ first_failing_seed: '../x?y' })]} />);
-    expect(html).not.toContain('<a ');
+    expect(html).not.toContain('/seeds/');
+    expect(html).not.toContain('href="../');
   });
 
   it('shows UNMET as a coverage gap in its own tone, never as a failure', () => {

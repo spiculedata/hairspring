@@ -36,8 +36,11 @@ export const UNSAFE_IN_MARKUP = new RegExp(
   '[\\u0000-\\u0008\\u000b-\\u001f\\u007f\\u0080-\\u009f\\u061c\\u115f\\u1160\\u17b4\\u17b5\\u200b-\\u200f\\u2028-\\u202e\\u2060-\\u206f\\u2800\\u3164\\ufeff\\uffa0\\ufffe\\uffff\\ud800-\\udfff]',
 );
 
-/** The only anchors a page may render are the app's own paths, built from ids the server validated. */
-const OWN_LINK = /^<a href="\/[A-Za-z0-9_/-]*"( class="[A-Za-z0-9 _-]*")?>$/;
+/**
+ * The only anchors a page may render are the app's own paths, built from ids the server validated, optionally with a
+ * query of plain names, digits and hex (the seed explorer's filters).
+ */
+const OWN_LINK = /^<a href="\/[A-Za-z0-9_/-]*(\?[A-Za-z0-9_=&;-]*)?"( class="[A-Za-z0-9 _-]*")?>$/;
 
 /** Every tag in the output, so guest text can be checked for never having reached markup. */
 export const tagsOf = (html: string): string[] => html.match(/<[^>]*>/g) ?? [];

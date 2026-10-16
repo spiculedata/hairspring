@@ -45,7 +45,7 @@ pub(crate) fn property_schema() -> Value {
         json!({
             "run_id": { "type": "string" },
             "idx": { "type": "integer", "minimum": 0, "description": "Property index from get_properties" },
-            "seeds": { "type": "string", "enum": ["failing", "hit", "never"], "description": "Which seeds to list (default failing)" },
+            "seeds": { "type": "string", "enum": ["failing", "hit", "never", "none"], "description": "Which seeds to list (default failing); none returns the property alone, with no seed list" },
             "cursor": { "type": "string" },
             "limit": limit_schema(MAX_SEED_LIMIT)
         }),
@@ -63,7 +63,8 @@ pub(crate) fn trials_schema() -> Value {
             "misses": { "type": "integer", "minimum": 0, "description": "Only usable trials that did not reach this property index" },
             "degraded": { "type": "boolean" },
             "perturbing": { "type": "boolean" },
-            "fp": { "type": "string", "description": "Schedule fingerprint" },
+            "fp": { "type": "string", "pattern": "^[0-9a-fA-F]{16,64}$", "description": "Schedule fingerprint: 16 to 64 hex digits" },
+            "seed": { "type": "string", "pattern": "^[0-9]{1,20}$", "description": "Only the trial that ran this exact seed, as a decimal string (a seed can exceed 2^53)" },
             "cursor": { "type": "string" },
             "limit": limit_schema(MAX_LIMIT)
         }),
@@ -177,13 +178,13 @@ fn property(server: &McpServer, args: &Value) -> Result<Value, Failed> {
 
 fn trials(server: &McpServer, args: &Value) -> Result<Value, Failed> {
     let id = run_arg(args)?;
-    let strings = ["verdict", "fp", "cursor"].map(|k| text(args, k));
+    let strings = ["verdict", "fp", "seed", "cursor"].map(|k| text(args, k));
     let numbers = ["fails", "hits", "misses"].map(|k| opt_number(args, k));
     let flags = ["degraded", "perturbing"].map(|k| opt_flag(args, k));
-    let [verdict, fp, cursor] = strings;
+    let [verdict, fp, seed, cursor] = strings;
     let [fails, hits, misses] = numbers;
     let [degraded, perturbing] = flags;
-    let (verdict, fp, cursor) = (verdict?, fp?, cursor?);
+    let (verdict, fp, seed, cursor) = (verdict?, fp?, seed?, cursor?);
     let (fails, hits, misses) = (fails?, hits?, misses?);
     let (degraded, perturbing) = (degraded?, perturbing?);
     let limit = page_limit(args, MAX_LIMIT)?;
@@ -196,7 +197,7 @@ fn trials(server: &McpServer, args: &Value) -> Result<Value, Failed> {
             degraded: degraded.clone(),
             perturbing: perturbing.clone(),
             fp: fp.clone(),
-            seed: None,
+            seed: seed.clone(),
             cursor: cursor.clone(),
             limit: Some(l),
         };

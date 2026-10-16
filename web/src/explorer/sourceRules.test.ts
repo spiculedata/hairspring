@@ -29,8 +29,9 @@ describe('source rules (plan 7.2 item 1 and 5.7 rule 5)', () => {
   });
 
   it('never generates the words found, discovered, unassisted or flaky in the explorer or the run page', () => {
-    const checked = ALL.filter(([p]) => /\/(explorer|guest|trial)\/|\/wording\.ts$|GuestText|RateCell|TierChips|RunPage/.test(p));
+    const checked = ALL.filter(([p]) => /\/(explorer|guest|trial|seeds)\/|\/wording\.ts$|GuestText|RateCell|TierChips|RunPage/.test(p));
     expect(checked.length).toBeGreaterThan(6);
+    expect(checked.some(([p]) => p.includes('/seeds/'))).toBe(true);
     for (const [path, src] of checked) expect(code(src), path).not.toMatch(/\b(found|discovered|unassisted|flaky)\b/i);
   });
 
@@ -46,6 +47,15 @@ describe('source rules (plan 7.2 item 1 and 5.7 rule 5)', () => {
       expect(code(src), path).not.toMatch(
         /(?<![=$])\{\s*[\w.?]+\.(msg|tag|sdk|sdk_version|catalog_hash|thread|proc|reason|virttime_elapsed|timeslice_stats|per_thread_timeslice|propertyIds|error)\s*\}/,
       );
+    }
+  });
+
+  it('never reads a guest string outside GuestText in the seed explorer: failing ids are only ever passed to it', () => {
+    const seedFiles = ALL.filter(([p]) => /\/seeds\/[A-Za-z]+\.tsx$/.test(p));
+    expect(seedFiles.length).toBeGreaterThan(5);
+    for (const [path, src] of seedFiles) {
+      expect(code(src), path).not.toMatch(/(?<![=$])\{\s*[\w.?]*(failing_ids|propertyLabel|guest\.id)[\w.\[\]?]*\s*\}/);
+      expect(code(src), path).not.toMatch(/(title|aria-label|placeholder|alt)=\{[^}]*(guest|propertyLabel|failing_ids)/);
     }
   });
 
