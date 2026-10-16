@@ -191,7 +191,7 @@ fn every_hermit_input_matters() {
         (
             "events_transport",
             h(HermitInputs {
-                events_transport: v("pipe".to_string()),
+                events_transport: v("stream".to_string()),
                 ..b.clone()
             }),
         ),
@@ -220,6 +220,27 @@ fn every_hermit_input_matters() {
             "hang_is_violation",
             h(HermitInputs {
                 hang_is_violation: v(true),
+                ..b.clone()
+            }),
+        ),
+        (
+            "trial_timeout_secs",
+            h(HermitInputs {
+                trial_timeout_secs: v(Some(61)),
+                ..b.clone()
+            }),
+        ),
+        (
+            "trial_timeout_secs unset",
+            h(HermitInputs {
+                trial_timeout_secs: v(None),
+                ..b.clone()
+            }),
+        ),
+        (
+            "parallelism",
+            h(HermitInputs {
+                parallelism: v(5),
                 ..b.clone()
             }),
         ),

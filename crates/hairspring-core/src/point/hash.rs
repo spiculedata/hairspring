@@ -1,4 +1,7 @@
-//! The point hash: SHA-256 over the run identity, the seed and the cut's prefix.
+//! The point hash: SHA-256 over the run identity, the seed, the cut and the cut's prefix.
+//!
+//! The cut is hashed as its own `cut=` line, so `end` never hashes like `s<len>` or `c<len>`
+//! over the same trace (for WASM they are different VM states).
 use super::address::{BackendKind, Cut};
 use super::encoding::sha256_hex;
 use super::identity::Identity;
@@ -20,8 +23,6 @@ pub enum Prefix<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HashError {
-    /// The prefix kind does not belong to the identity's backend.
-    BackendMismatch,
     /// The cut kind is not valid for the backend.
     CutNotValidForBackend,
     /// The cut is further along than the recorded trace.
@@ -31,9 +32,6 @@ pub enum HashError {
 impl std::fmt::Display for HashError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            HashError::BackendMismatch => {
-                f.write_str("prefix kind does not match the run's backend")
-            }
             HashError::CutNotValidForBackend => {
                 f.write_str("this cut kind is not valid for the run's backend")
             }
@@ -64,15 +62,8 @@ impl<'a> Prefix<'a> {
         }
     }
 
-    fn backend(&self) -> BackendKind {
-        match self {
-            Prefix::Sim(_) => BackendKind::Sim,
-            Prefix::Wasm(_) => BackendKind::Wasm,
-            Prefix::HermitEnd => BackendKind::Hermit,
-        }
-    }
-
-    /// The last line of the hash input. It has no line ending.
+    /// The last line of the hash input, after the `cut=` line. It has no line ending, and is
+    /// empty for Hermit, whose point is the whole trial.
     fn line(&self) -> String {
         match self {
             Prefix::Sim(path) => {
@@ -83,7 +74,7 @@ impl<'a> Prefix<'a> {
                 let values: Vec<String> = choices.iter().map(u64::to_string).collect();
                 format!("choices={}", values.join(","))
             }
-            Prefix::HermitEnd => "cut=end".to_string(),
+            Prefix::HermitEnd => String::new(),
         }
     }
 }
@@ -98,6 +89,12 @@ fn take(trace: &[u64], k: u64) -> Result<&[u64], HashError> {
         })
 }
 
+/// Converts a seed as stored (an `i64` column holding the `u64` bit pattern) to the `u64` that is
+/// hashed. This is the only place the conversion is defined.
+pub fn seed_from_stored(stored: i64) -> u64 {
+    stored as u64
+}
+
 /// The point hash, as lowercase hex.
 ///
 /// The run id is deliberately not an input: the same identity, seed and prefix hash the same in
@@ -106,13 +103,12 @@ fn take(trace: &[u64], k: u64) -> Result<&[u64], HashError> {
 pub fn point_hash(
     identity: &Identity,
     seed: u64,
-    prefix: &Prefix<'_>,
+    cut: Cut,
+    trace: &[u64],
 ) -> Result<String, HashError> {
-    if identity.backend() != prefix.backend() {
-        return Err(HashError::BackendMismatch);
-    }
+    let prefix = Prefix::for_cut(identity.backend(), cut, trace)?;
     let input = format!(
-        "{POINT_HASH_HEADER}{}seed={seed}\n{}",
+        "{POINT_HASH_HEADER}{}seed={seed}\ncut={cut}\n{}",
         identity.text(),
         prefix.line()
     );

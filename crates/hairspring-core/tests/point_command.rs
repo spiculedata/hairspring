@@ -192,6 +192,21 @@ fn the_point_hash_must_be_a_lowercase_sha256() {
 }
 
 #[test]
+fn integers_outside_the_i64_and_u64_range_are_rejected() {
+    let max: i128 = u64::MAX.into();
+    let min: i128 = i64::MIN.into();
+    assert!(ints(&[min, max]).canonical_json().is_ok());
+    for bad in [max + 1, min - 1, i128::MAX, i128::MIN] {
+        let value = object(vec![("n", CommandValue::Int(bad))]);
+        assert_eq!(value.canonical_json(), Err(CommandError::IntOutOfRange));
+        assert_eq!(
+            command_hash(POINT, &value),
+            Err(CommandError::IntOutOfRange)
+        );
+    }
+}
+
+#[test]
 fn errors_have_readable_messages() {
     assert_eq!(
         CommandError::DuplicateKey("a".to_string()).to_string(),

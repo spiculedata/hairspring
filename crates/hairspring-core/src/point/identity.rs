@@ -66,6 +66,10 @@ pub struct HermitInputs {
     pub loader_libc_sha: Recorded<String>,
     pub loader_ld_linux_sha: Recorded<String>,
     pub hang_is_violation: Recorded<bool>,
+    /// The resolved per-trial timeout in seconds (`None` for no timeout). It decides hang or pass.
+    pub trial_timeout_secs: Recorded<Option<u64>>,
+    /// How many trials run at once; it can change timing under load, so it is an input.
+    pub parallelism: Recorded<u64>,
 }
 
 /// What was recorded for a run, before the completeness check.
