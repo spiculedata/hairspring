@@ -263,7 +263,9 @@ impl Service {
     /// Stores a batch of trial records from the worker holding the job's lease, all or nothing. Sending a batch
     /// again changes nothing.
     ///
-    /// This form is for the process's own workers, which need no secret. A remote worker uses
+    /// This form is for code running inside the process (the embedded workers and the in-process path of
+    /// [`Service::complete`]), which holds the job's lease directly and has no network caller to authenticate. It
+    /// skips the credential check, so no network handler may call it: a remote worker uses
     /// [`Service::ingest_trials_with_secret`].
     pub fn ingest_trials(
         &self,
@@ -271,22 +273,15 @@ impl Service {
         worker_id: &str,
         reports: &[TrialReport],
     ) -> Result<IngestReceipt> {
-        self.ingest_trials_with_secret(job_id, worker_id, None, reports)
+        self.ingest_authenticated(job_id, worker_id, reports)
     }
 
     /// Checks that the caller really is the worker it names. A worker id is not a credential (anyone with a `run`
-    /// token can see ids), so a remote worker proves itself with the secret it was given at registration. Trust is
-    /// only ever read for an authenticated worker.
+    /// token can see ids), so a remote worker proves itself with the secret it was given at registration. There is
+    /// no exemption by id: the process's own workers never come through here. Trust is only ever read for an
+    /// authenticated worker.
     pub fn authenticate_worker(&self, worker_id: &str, secret: Option<&str>) -> Result<()> {
         let denied = || invalid("invalid worker credential");
-        if worker_id.starts_with(LOCAL_WORKER_PREFIX) {
-            // The process's own workers are never reachable over the network and carry no secret.
-            return if secret.is_none() {
-                Ok(())
-            } else {
-                Err(denied())
-            };
-        }
         let given = secret.filter(|s| !s.is_empty()).ok_or_else(denied)?;
         let stored = self
             .store
@@ -309,6 +304,16 @@ impl Service {
         reports: &[TrialReport],
     ) -> Result<IngestReceipt> {
         self.authenticate_worker(worker_id, secret)?;
+        self.ingest_authenticated(job_id, worker_id, reports)
+    }
+
+    /// Everything after authentication: the caller has already shown it is `worker_id`.
+    fn ingest_authenticated(
+        &self,
+        job_id: &str,
+        worker_id: &str,
+        reports: &[TrialReport],
+    ) -> Result<IngestReceipt> {
         if reports.len() > MAX_TRIALS_PER_BATCH {
             return Err(invalid(format!(
                 "a batch may hold at most {MAX_TRIALS_PER_BATCH} trials"

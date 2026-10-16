@@ -104,8 +104,11 @@ fn stored_run(db: &Path, remote: bool, trials: &[(u64, TrialProps)]) -> String {
         )
         .unwrap();
     let job = svc.lease(&worker).unwrap().unwrap();
-    svc.ingest_trials_with_secret(&job.job_id, &worker, secret.as_deref(), &reports(trials))
-        .unwrap();
+    match secret.as_deref() {
+        Some(s) => svc.ingest_trials_with_secret(&job.job_id, &worker, Some(s), &reports(trials)),
+        None => svc.ingest_trials(&job.job_id, &worker, &reports(trials)),
+    }
+    .unwrap();
     let n = trials.len() as u64;
     let outcome = RunOutcome {
         trials_reported: Some(n),
