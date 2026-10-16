@@ -61,7 +61,7 @@ export function ThreadLanes({ rows }: { rows: readonly LaneRow[] }) {
       <p className="muted">{PER_THREAD_NOTE}</p>
       <p className="muted">{LANE_SCALE_NOTE}</p>
       <div className="table-scroll" role="region" aria-label="Threads, scrollable" tabIndex={0}>
-        <table className="lanes" aria-label="Threads" aria-rowcount={rows.length + 1}>
+        <table className="lanes" aria-label="Threads" aria-rowcount={visible.length + 1}>
           <thead>
             <tr>
               <th scope="col">Process</th>

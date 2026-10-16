@@ -180,7 +180,8 @@ pub struct GuestDetail {
     pub schedule: Option<ScheduleView>,
 }
 
-/// Bytes the capture had to cut from the front of each kept output stream (zero when nothing was cut).
+/// Bytes the capture had to cut from the middle of each kept output stream, whose head and tail halves are kept (zero
+/// when nothing was cut).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct OmittedBytes {
     pub stdout: u64,

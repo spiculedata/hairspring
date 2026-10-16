@@ -56,6 +56,7 @@ export function matchRoute(path: string): Route {
   const parts = path.split('/').filter(Boolean);
   if (parts.length === 0 || (parts.length === 1 && parts[0] === 'runs')) return { name: 'runs' };
   if (parts.length === 2 && parts[0] === 'runs') return { name: 'run', id: parts[1] };
+  if (parts.length === 4 && parts[0] === 'runs' && !RUN_ID.test(parts[1])) return { name: 'notfound' };
   if (parts.length === 4 && parts[0] === 'runs' && parts[2] === 'trials' && isDigits(parts[3], MAX_SEQ_DIGITS)) {
     return { name: 'trial', id: parts[1], seq: parts[3] };
   }

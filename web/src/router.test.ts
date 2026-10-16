@@ -20,6 +20,14 @@ describe('trial routes', () => {
   });
 });
 
+describe('run ids on trial routes', () => {
+  it('are checked like the paths builders check them', () => {
+    for (const p of ['/runs/a%20b/trials/1', '/runs/a.b/seeds/1', `/runs/${'a'.repeat(65)}/trials/1`]) {
+      expect(matchRoute(p).name, p).toBe('notfound');
+    }
+  });
+});
+
 describe('paths', () => {
   it('builds paths from validated pieces and refuses anything else', () => {
     expect(seedPath('run_0123', '1016')).toBe('/runs/run_0123/seeds/1016');

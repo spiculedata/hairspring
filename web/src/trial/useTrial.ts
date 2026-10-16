@@ -8,6 +8,7 @@ import type { StreamName, TrialDetailResponse } from './types';
 
 /** A kept trial never changes, so it is loaded once; this interval only keeps a failed load from retrying at once. */
 const RETRY_MS = 30_000;
+const REVOKE_DELAY_MS = 10_000;
 
 export function useTrialDetail(runId: string, seq: number): Polled<TrialDetailResponse> {
   return usePolling(() => trialApi.detail(runId, seq), RETRY_MS, () => true);
@@ -69,5 +70,6 @@ export async function downloadOutput(runId: string, seq: number, stream: StreamN
   a.href = url;
   a.download = `${runId}-${seq}-${stream}.txt`;
   a.click();
-  URL.revokeObjectURL(url);
+  // Revoking at once can cancel the download in some browsers.
+  setTimeout(() => URL.revokeObjectURL(url), REVOKE_DELAY_MS);
 }

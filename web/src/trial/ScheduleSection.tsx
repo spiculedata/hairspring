@@ -17,7 +17,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 /**
  * The scheduler summary's deterministic fields (turns, syscalls, virtual time, timeslices), the schedule fingerprint and
- * the row's own figures. The fields are as Hermit wrote them; none is wall-clock time.
+ * the row's own figures. The fields are as the worker reported them, not checked against Hermit; none is wall-clock time.
  */
 export function ScheduleSection({ trial, schedule }: { trial: TrialRow; schedule: ScheduleData | null }) {
   return (

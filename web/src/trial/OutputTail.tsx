@@ -14,7 +14,7 @@ export type TailState =
 interface Props {
   stream: StreamName;
   state: TailState;
-  /** Bytes the capture cut from the start before the tail was kept. */
+  /** Bytes the capture cut from the middle of the stream (its head and tail halves were kept). */
   omittedBytes: number;
   onDownload: (stream: StreamName) => void;
 }

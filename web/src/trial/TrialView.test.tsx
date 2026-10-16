@@ -169,7 +169,7 @@ describe('TrialView output', () => {
 
   it('says how many bytes the capture cut before it was kept', () => {
     const d = detail({ output_omitted_bytes: { stdout: 1234, stderr: 0 } });
-    expect(text(view({ detail: d }))).toContain('1,234 bytes cut from the start before it was kept');
+    expect(text(view({ detail: d }))).toContain('1,234 bytes cut from the middle of the stream; its start and end were kept');
   });
 
   it('bounds a 10 MB tail and says how much it left out', () => {

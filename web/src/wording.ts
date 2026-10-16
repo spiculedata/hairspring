@@ -240,7 +240,7 @@ export const NO_SCHEDULE_NOTE = 'No scheduler summary was kept for this trial; t
 export const NO_FAILING_PROPERTY = 'No kept property failed in this trial.';
 
 export function outputOmitted(bytes: number): string {
-  return `${formatCount(bytes)} ${bytes === 1 ? 'byte' : 'bytes'} cut from the start before it was kept`;
+  return `${formatCount(bytes)} ${bytes === 1 ? 'byte' : 'bytes'} cut from the middle of the stream; its start and end were kept`;
 }
 
 export function outputTrimmed(chars: number, lines: number): string {

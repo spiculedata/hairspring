@@ -1,5 +1,6 @@
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { CH } from '../guest/chars';
 import { assertTextOnly, CORPUS } from '../guest/hostile';
 import { detail, proc, property, record, schedule, trialRow, witness } from './fixtures';
 import { TrialView } from './TrialView';
@@ -49,7 +50,7 @@ describe('failure page: escaped output is visible', () => {
       <TrialView
         detail={detail()}
         context={undefined}
-        tails={{ stdout: { status: 'ready', text: '\u001b[31m<b>red</b>‮\n' }, stderr: { status: 'absent' } }}
+        tails={{ stdout: { status: 'ready', text: `${CH.ESC}[31m<b>red</b>${CH.RLO}\n` }, stderr: { status: 'absent' } }}
         onDownload={() => undefined}
       />,
     );
