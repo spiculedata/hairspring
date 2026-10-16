@@ -34,7 +34,7 @@ table.seeds button.fp-filter { font-family: ui-monospace, 'SF Mono', Menlo, mono
   table.seeds { min-width: 0 !important; width: 31rem; }
   table.seeds col:nth-child(1) { width: 3.5rem !important; }
   table.seeds col:nth-child(2) { width: 9.5rem !important; }
-  table.seeds col:nth-child(3) { width: 9rem !important; }
+  table.seeds col:nth-child(3) { width: 7rem !important; }
   table.seeds col:nth-child(4) { width: 9rem !important; }
   table.seeds col:nth-child(n+5),
   table.seeds th:nth-child(n+5), table.seeds td:nth-child(n+5) { display: none; }

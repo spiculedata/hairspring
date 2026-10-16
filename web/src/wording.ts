@@ -357,7 +357,7 @@ export function stripTruncated(n: number): string {
 
 export function stoppedRunNote(lastSeq: number | undefined): string {
   const after = lastSeq === undefined ? 'after the failure' : `after trial ${formatCount(lastSeq)}`;
-  return `This run stopped at its first failure. Trials that were running beside the failing one ${after} were not judged, so this list is not a sample of the seed space and its counts are not a rate (${NOT_A_RATE_TEXT}).`;
+  return `This run stopped at its first failure. Trials that were running beside the failing one ${after} were not judged, so this list is not a sample of the seed space and its counts are not a rate.`;
 }
 
 /** The link text from a property to its seed list: what the list holds depends on the property's status. */
@@ -379,7 +379,7 @@ export const FP_FILTER_HINT = '16 to 64 hex digits';
 export const FP_FILTER_INVALID = 'A fingerprint is 16 to 64 hex digits.';
 export const PROPERTY_SEARCH_LABEL = 'Property id starts with';
 export const PROPERTY_PICK_NONE = 'No property id starts with that.';
-export const START_AT_NOTE = 'The list starts at a chosen trial; earlier trials are not shown.';
+export const START_AT_NOTE = 'Earlier trials are not shown.';
 export const BACK_TO_START = 'Show from the first trial';
 export const LOADING_TRIALS = 'Loading trials…';
 export const SCROLL_HINT_SEEDS = 'Scroll sideways to see every column.';
