@@ -1,5 +1,6 @@
 //! The property sections of the human-readable run report.
 use crate::report::{RunOutcome, RunStatus};
+use hairspring_props::honesty::rate_cell;
 use hairspring_props::{limits, PropertyStat, PropertyStatus};
 
 fn label(status: PropertyStatus) -> &'static str {
@@ -31,13 +32,14 @@ fn inconclusive_text(stat: &PropertyStat) -> String {
     }
 }
 
-fn row(stat: &PropertyStat) -> String {
+/// `stopped` is true for a run that stopped at its first failure: no property of such a run has a rate.
+fn row(stat: &PropertyStat, stopped: bool) -> String {
     format!(
         "    {:<9} {} '{}'  {}{}{}\n",
         label(stat.status),
         stat.kind.as_str(),
         stat.id,
-        stat.rate_text(),
+        rate_cell(stat, stopped).text(),
         first_failure_text(stat),
         inconclusive_text(stat)
     )
@@ -46,6 +48,7 @@ fn row(stat: &PropertyStat) -> String {
 fn table(outcome: &RunOutcome) -> String {
     let mut out = String::new();
     let run = outcome.property_run.clone().unwrap_or_default();
+    let stopped = outcome.status == RunStatus::Failed;
     out.push_str(&format!(
         "  properties ({} trials with events: {} degraded, {} perturbing, {} without an end report, {} timed out):\n",
         run.trials,
@@ -66,7 +69,7 @@ fn table(outcome: &RunOutcome) -> String {
         ));
     }
     for stat in &outcome.properties {
-        out.push_str(&row(stat));
+        out.push_str(&row(stat, stopped));
     }
     out
 }
