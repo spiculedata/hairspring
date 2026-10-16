@@ -107,7 +107,8 @@ fn apply_updates(mut catalog: RunCatalog, updates: &[CatalogUpdate]) -> Result<R
     Ok(catalog)
 }
 
-/// A digest that says a property failed cannot belong to a pass, and a pass cannot have timed out.
+/// A digest that says a property failed cannot belong to a pass, and a pass cannot have timed out. A trial that
+/// sent no events (an excluded digest) can be a pass: there is nothing in it to contradict.
 fn consistent(v: ReportedVerdict, d: &TrialDigest) -> bool {
     if v != ReportedVerdict::Pass {
         return true;
@@ -116,7 +117,7 @@ fn consistent(v: ReportedVerdict, d: &TrialDigest) -> bool {
         .entries
         .iter()
         .any(|e| e.catalogued && failure_basis(e.kind, e.hits, e.falses).is_some());
-    !d.flags.inconclusive && !d.flags.excluded && !failed
+    !d.flags.inconclusive && !failed
 }
 
 struct Checked {

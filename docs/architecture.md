@@ -57,6 +57,37 @@ queued --lease--> running --finish_job--> done            (run: passed | failed 
   worker cannot overwrite a finished or cancelled run.
 - Jobs that exhaust their attempts through expiry are reported by `fail_expired_jobs` so their runs never hang.
 
+## Trial storage (schema version 2)
+
+Besides the run, job, failure and event tables, the store keeps one row per judged trial and the property
+statistics of each run.
+
+- `trials`: one row per judged trial (sequence number, seed, verdict, exit status, behaviour hash, schedule
+  fingerprint, timing, the worker that reported it and whether that worker was trusted at the time, and a compact
+  binary digest). Passing trials have rows too. The seed is stored as its bit pattern and served as a decimal
+  string, because a scheduling seed can exceed 2^53.
+- `run_catalog`: every property id a run has seen, with a small index that digests refer to.
+- `run_properties`: the per-property counts for the run. Rates are not stored; `k` and `n` are, and the interval is
+  computed when it is read.
+- Kept detail (a versioned JSON record of one trial's folded events) and output tails go to the blob table, for
+  findings, degraded trials, the first few trials and a sample, under a per-run allowance. A trial that did not fit
+  is marked as dropped, never silently.
+
+A worker sends its trials to `POST /api/worker/jobs/{job}/trials` in batches of at most 256 records and about
+1.5 MiB. The server decodes every digest, checks each field against the protocol limits, applies the catalog
+changes, and stores the batch all or nothing. Sending a batch again changes nothing. The server then folds the
+digests itself when the job finishes and stores only its own figures; a worker's statistics are never read.
+
+Trust: a worker has an administrator-set `trusted` flag (default off for remote workers, on for the process's own).
+Folding on the server stops forged run-level figures but not invented per-trial results, so a figure may back a
+claim only if every trial behind it came from a trusted worker and each failure it rests on was reproduced on a
+trusted worker (`hairspring_service::claims`). Everything else is shown, labelled "unverified worker data". A run
+whose stored rows do not match the count the worker reports is marked `ingest_incomplete`, and a run that was
+incomplete or stopped at its first failure makes no must-hit (UNMET) claim.
+
+Opening a version 1 database migrates it in place under one transaction (SQLite) or an advisory lock (PostgreSQL);
+old runs read back with zero counts.
+
 ## Bundles
 
 A bundle is a small text file: `seed`, `build`, `target`, `backend`, `param.*` and `path` (hex action ids or

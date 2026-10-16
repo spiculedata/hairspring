@@ -508,3 +508,18 @@ pub(crate) fn worker_trusted(c: &mut Client, id: &str) -> Result<Option<bool>> {
             .map(|r| r.get(0)),
     )
 }
+
+/// Finishing a job makes the finishing attempt's rows the run's rows: anything an earlier attempt left is removed.
+pub(crate) fn discard_earlier_attempts(
+    tx: &mut Transaction,
+    run_id: &str,
+    attempt: i64,
+) -> Result<()> {
+    let held: i64 = tx
+        .query_one("SELECT ingest_attempt FROM runs WHERE id=$1", &[&run_id])?
+        .get(0);
+    if held != 0 && held < attempt {
+        start_attempt(tx, run_id, attempt)?;
+    }
+    Ok(())
+}

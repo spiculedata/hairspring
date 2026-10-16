@@ -95,6 +95,7 @@ pub fn run_all_trials(make: &dyn Fn() -> std::sync::Arc<dyn Store>) {
     trial_digests_page_in_sequence_order(&*make());
     hostile_text_in_trials_and_catalog_is_stored_verbatim(&*make());
     runs_do_not_see_each_others_rows(&*make());
+    finishing_a_later_attempt_removes_the_earlier_attempts_rows(&*make());
 }
 
 fn new_runs_have_zero_statistics_and_the_search_mode(s: &dyn Store) {
@@ -637,4 +638,36 @@ fn runs_do_not_see_each_others_rows(s: &dyn Store) {
     assert!(s.get_catalog(&b.id).unwrap().is_empty());
     assert!(s.get_trial(&b.id, 0).unwrap().is_none());
     assert!(s.list_run_properties(&b.id).unwrap().is_empty());
+}
+
+fn finishing_a_later_attempt_removes_the_earlier_attempts_rows(s: &dyn Store) {
+    let r = new_run(s, "t", 1);
+    let j = s.enqueue_job(&r.id, "run", "{}", 2).unwrap();
+    s.lease_job("w1", 10, 1_000).unwrap().unwrap();
+    s.ingest_trials(
+        &j.id,
+        "w1",
+        true,
+        &batch(vec![row(0, "a.b", true)], vec![trial(0)]),
+        1_100,
+    )
+    .unwrap();
+    // The lease expires; the next attempt sends nothing and finishes.
+    s.lease_job("w2", 10, 100_000).unwrap().unwrap();
+    let result = JobResult {
+        state: RunState::Error,
+        steps: 0,
+        trials: 0,
+        error: Some("could not start".to_string()),
+        failure: None,
+        event_payload_json: "{}".to_string(),
+        stats: RunStats::default(),
+    };
+    assert_eq!(
+        s.finish_job(&j.id, "w2", &result, 100_100).unwrap(),
+        FinishOutcome::Applied
+    );
+    assert_eq!(s.count_trials(&r.id).unwrap(), 0);
+    assert!(s.get_catalog(&r.id).unwrap().is_empty());
+    assert_eq!(s.get_run(&r.id).unwrap().unwrap().catalog_size, 0);
 }

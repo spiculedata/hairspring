@@ -199,6 +199,11 @@ fn a_leased_worker_posts_trials_and_the_run_shows_its_properties_as_unverified()
     assert_eq!(run["properties"]["unverified_worker_data"], true);
     assert_eq!(run["properties"]["ingest_incomplete"], false);
     assert_eq!(run["properties"]["guest"]["violation_ids"], json!([]));
+    let raw = c.get(&format!("/api/runs/{}", l.run_id)).body;
+    assert!(
+        !raw.contains("property_summary_json"),
+        "the program's own text appears only under `guest`: {raw}"
+    );
     assert_eq!(store.count_trials(&l.run_id).unwrap(), 3);
 }
 

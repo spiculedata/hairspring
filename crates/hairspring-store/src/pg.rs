@@ -368,14 +368,14 @@ impl Store for PgStore {
         let mut c = self.client()?;
         let mut tx = c.transaction()?;
         let Some(job) = tx.query_opt(
-            "SELECT run_id, status, lease_owner FROM jobs WHERE id=$1 FOR UPDATE",
+            "SELECT run_id, status, lease_owner, attempts FROM jobs WHERE id=$1 FOR UPDATE",
             &[&id],
         )?
         else {
             return Ok(FinishOutcome::NotLeased);
         };
-        let (run_id, status, owner): (String, String, Option<String>) =
-            (job.get(0), job.get(1), job.get(2));
+        let (run_id, status, owner, attempts): (String, String, Option<String>, i32) =
+            (job.get(0), job.get(1), job.get(2), job.get(3));
         if status != JobStatus::Running.as_str() || owner.as_deref() != Some(worker_id) {
             return Ok(FinishOutcome::NotLeased);
         }
@@ -397,6 +397,7 @@ impl Store for PgStore {
                 "UPDATE runs SET state=$1, steps=$2, trials=$3, error=$4, finished_at=$5 WHERE id=$6",
                 &[&result.state.as_str(), &(result.steps as i64), &(result.trials as i64), &result.error, &now, &run_id],
             )?;
+            trials::discard_earlier_attempts(&mut tx, &run_id, i64::from(attempts))?;
             trials::write_run_stats(&mut tx, &run_id, &result.stats)?;
             tx.execute(
                 "INSERT INTO events(run_id,ts,kind,payload_json) VALUES ($1,$2,'finished',$3)",

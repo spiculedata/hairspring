@@ -76,7 +76,9 @@ pub struct RunRecord {
     pub mode: String,
     /// The run stopped at its first confirmed failure, so its trial count is not a fixed budget.
     pub stopped_at_first_failure: bool,
-    /// The folded `RunSummary` as JSON, written by the server when the run finishes.
+    /// The folded `RunSummary` as JSON, written by the server when the run finishes. Never serialised with the run: it
+    /// holds text from the program under test, which APIs hand out only under a clearly marked `guest` object.
+    #[serde(skip)]
     pub property_summary_json: Option<String>,
     /// Ids in the run catalog.
     pub catalog_size: u64,

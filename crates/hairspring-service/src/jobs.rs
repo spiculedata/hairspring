@@ -187,7 +187,7 @@ impl Service {
             }
             None => None,
         };
-        let stats = self.run_stats(&job.run_id, &clean, reported)?;
+        let stats = self.run_stats(&job.run_id, job.attempts, &clean, reported)?;
         let event_payload_json = finished_payload(state, Some(&clean));
         let result = JobResult {
             state,
@@ -235,10 +235,20 @@ impl Service {
     fn run_stats(
         &self,
         run_id: &str,
+        attempt: u32,
         clean: &RunOutcome,
         reported: Option<u64>,
     ) -> Result<RunStats> {
-        let held = self.store.count_trials(run_id)?;
+        // Rows an earlier attempt left belong to a run that is over; they are removed when this job finishes.
+        let stale = self
+            .store
+            .get_run(run_id)?
+            .is_some_and(|r| r.ingest_attempt != 0 && r.ingest_attempt < u64::from(attempt));
+        let held = if stale {
+            0
+        } else {
+            self.store.count_trials(run_id)?
+        };
         let counts_match = match reported {
             None => held == 0,
             Some(n) => n == held && (clean.status == RunStatus::Error || clean.trials == held),

@@ -336,14 +336,14 @@ impl Store for SqliteStore {
     ) -> Result<FinishOutcome> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        let job: Option<(String, String, Option<String>)> = tx
+        let job: Option<(String, String, Option<String>, i64)> = tx
             .query_row(
-                "SELECT run_id, status, lease_owner FROM jobs WHERE id=?",
+                "SELECT run_id, status, lease_owner, attempts FROM jobs WHERE id=?",
                 [id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .optional()?;
-        let Some((run_id, status, owner)) = job else {
+        let Some((run_id, status, owner, attempts)) = job else {
             return Ok(FinishOutcome::NotLeased);
         };
         if status != JobStatus::Running.as_str() || owner.as_deref() != Some(worker_id) {
@@ -374,6 +374,7 @@ impl Store for SqliteStore {
                     run_id
                 ],
             )?;
+            trials::discard_earlier_attempts(&tx, &run_id, attempts)?;
             trials::write_run_stats(&tx, &run_id, &result.stats)?;
             tx.execute(
                 "INSERT INTO events(run_id,ts,kind,payload_json) VALUES (?,?,?,?)",
