@@ -221,6 +221,45 @@ fn hostile_detail_and_output_are_refused() {
 }
 
 #[test]
+fn a_kept_output_may_carry_omitted_byte_counts_and_is_stored() {
+    let (svc, store, engine) = setup();
+    let job = lease(&svc, &engine, &local());
+    let mut report = one(1);
+    report.output = Some(
+        serde_json::json!({
+            "stdout": "head\n[... 1951459 bytes omitted ...]\ntail\n",
+            "stderr": "",
+            "stdout_omitted_bytes": 1_951_459u64,
+            "stderr_omitted_bytes": 0u64,
+        })
+        .to_string(),
+    );
+    svc.ingest_trials(&job.job_id, &local(), &[report]).unwrap();
+    assert_eq!(store.count_trials(&job.run_id).unwrap(), 1);
+}
+
+#[test]
+fn omitted_byte_counts_must_be_non_negative_integers_and_nothing_else_is_allowed() {
+    let (svc, store, engine) = setup();
+    let job = lease(&svc, &engine, &local());
+    let output = |extra: &str| {
+        let mut r = one(1);
+        r.output = Some(format!("{{\"stdout\":\"a\",\"stderr\":\"b\",{extra}}}"));
+        r
+    };
+    for extra in [
+        "\"stdout_omitted_bytes\":-1",
+        "\"stdout_omitted_bytes\":1.5",
+        "\"stderr_omitted_bytes\":\"7\"",
+        "\"stdout_omitted_bytes\":null",
+        "\"stdout_omitted_bytes\":[1]",
+        "\"other_omitted_bytes\":1",
+    ] {
+        refused(&svc, &store, &job, &[output(extra)]);
+    }
+}
+
+#[test]
 fn an_oversized_batch_is_refused() {
     let (svc, store, engine) = setup();
     let job = lease(&svc, &engine, &local());

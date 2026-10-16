@@ -60,7 +60,8 @@ fn hash_field(value: &Option<String>, what: &str) -> Result<()> {
     }
 }
 
-/// The kept output must be `{"stdout": text, "stderr": text}` and nothing else.
+/// The kept output must be `{"stdout": text, "stderr": text}`, plus, for a stream the worker had to cut, the number of
+/// bytes it left out (`stdout_omitted_bytes`, `stderr_omitted_bytes`: non-negative integers). Nothing else.
 fn check_output(text: &str) -> Result<()> {
     if text.len() > MAX_KEPT_OUTPUT_BYTES {
         return Err(invalid("kept output is too large"));
@@ -70,13 +71,17 @@ fn check_output(text: &str) -> Result<()> {
     let Some(object) = value.as_object() else {
         return Err(invalid("kept output must be a JSON object"));
     };
-    let shaped = object
-        .iter()
-        .all(|(k, v)| matches!(k.as_str(), "stdout" | "stderr") && v.is_string());
+    let shaped = object.iter().all(|(k, v)| match k.as_str() {
+        "stdout" | "stderr" => v.is_string(),
+        "stdout_omitted_bytes" | "stderr_omitted_bytes" => v.is_u64(),
+        _ => false,
+    });
     if shaped {
         Ok(())
     } else {
-        Err(invalid("kept output may hold only stdout and stderr text"))
+        Err(invalid(
+            "kept output may hold only stdout and stderr text and their omitted byte counts",
+        ))
     }
 }
 

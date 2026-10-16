@@ -1,6 +1,7 @@
 //! Running totals for one run, and the hook that lets a search loop watch trials as they finish.
 use crate::exec::Trial;
 use crate::property_verdict;
+use crate::schedule_set::ScheduleSet;
 use crate::trace::Verdict;
 use crate::trial_log::{self, Counted};
 use hairspring_engine::report::RunOutcome;
@@ -9,7 +10,6 @@ use hairspring_props::limits::MAX_IDS_PER_RUN;
 use hairspring_props::{
     PropertyStat, PropertyStatus, RunCatalog, RunProps, RunSummary, TrialProps,
 };
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -30,7 +30,7 @@ pub struct Tally {
     /// Trials that were neither a pass nor a finding: timeouts, and trials whose events could not be used.
     pub inconclusive: u64,
     /// Fingerprints of the schedules the trials ran, and the total work they did.
-    schedules: HashSet<String>,
+    schedules: ScheduleSet,
     work: u64,
     /// The wall-clock budget, not the target's own limit, cut the last trial short.
     pub budget_cut: bool,
@@ -74,7 +74,7 @@ impl Tally {
             }
         });
         if let Some(schedule) = &trial.schedule {
-            self.schedules.insert(schedule.fingerprint.clone());
+            self.schedules.insert(&schedule.fingerprint);
             self.work = self.work.saturating_add(schedule.syscalls);
         }
         self.log
@@ -96,8 +96,19 @@ impl Tally {
         self.trials += 1;
     }
 
+    /// The distinct schedules seen and the work done. Once the run has seen more schedules than it remembers, the
+    /// first figure is a lower bound ("more than" it): [`Tally::progress_message`] says so.
     pub fn schedule_stats(&self) -> (u64, u64) {
-        (self.schedules.len() as u64, self.work)
+        (self.schedules.distinct(), self.work)
+    }
+
+    /// Remembers at most `cap` distinct schedules instead of the default.
+    #[cfg(test)]
+    fn with_schedule_cap(self, cap: usize) -> Tally {
+        Tally {
+            schedules: ScheduleSet::with_cap(cap),
+            ..self
+        }
     }
 
     /// The property statistics so far, and the run-wide counts behind them.
@@ -123,6 +134,19 @@ impl Tally {
     }
 
     pub fn progress_message(&self, of: u64) -> String {
+        let base = self.trial_progress(of);
+        match self.schedules.is_capped() {
+            true => format!(
+                "{base}; {} (the run remembers at most {}, and {} trials ran others, so the true number is higher)",
+                self.schedules.describe(),
+                self.schedules.distinct(),
+                self.schedules.unremembered()
+            ),
+            false => base,
+        }
+    }
+
+    fn trial_progress(&self, of: u64) -> String {
         match self.inconclusive {
             0 => format!("{} of {of} seeds explored", self.trials),
             n if n == self.timed_out => {
@@ -223,6 +247,55 @@ mod tests {
             events: Some(props),
             ..Trial::default()
         }
+    }
+
+    fn scheduled(fingerprint: &str, syscalls: u64) -> Trial {
+        Trial {
+            schedule: Some(crate::summary::Summary {
+                fingerprint: fingerprint.to_string(),
+                syscalls,
+            }),
+            ..Trial::default()
+        }
+    }
+
+    fn run_of(tally: &mut Tally, fingerprints: &[&str]) {
+        for (i, fp) in fingerprints.iter().enumerate() {
+            tally.on_trial(i as u64, i as u64, &scheduled(fp, 10), &Verdict::Pass);
+            tally.pass();
+        }
+    }
+
+    #[test]
+    fn below_the_schedule_cap_the_stats_and_message_are_unchanged() {
+        let mut tally = Tally::new(None).with_schedule_cap(4);
+        run_of(&mut tally, &["a", "b", "a"]);
+        assert_eq!(tally.schedule_stats(), (2, 30));
+        assert_eq!(tally.progress_message(10), "3 of 10 seeds explored");
+    }
+
+    #[test]
+    fn past_the_schedule_cap_the_count_is_a_lower_bound_and_the_message_says_so() {
+        let mut tally = Tally::new(None).with_schedule_cap(3);
+        run_of(&mut tally, &["a", "b", "c", "d", "e", "d"]);
+        let (distinct, work) = tally.schedule_stats();
+        assert_eq!(distinct, 3, "no more than the cap is remembered");
+        assert_eq!(work, 60, "work keeps adding up past the cap");
+        let message = tally.progress_message(10);
+        assert!(message.starts_with("6 of 10 seeds explored; more than 3 distinct schedules"));
+        assert!(
+            message.contains("remembers at most 3, and 3 trials ran others"),
+            "{message}"
+        );
+        assert!(!message.contains("at least"), "{message}");
+    }
+
+    #[test]
+    fn repeats_of_remembered_schedules_never_trigger_the_at_least_wording() {
+        let mut tally = Tally::new(None).with_schedule_cap(2);
+        run_of(&mut tally, &["a", "b", "a", "b", "b"]);
+        assert_eq!(tally.schedule_stats().0, 2);
+        assert!(!tally.progress_message(5).contains("more than"));
     }
 
     #[test]

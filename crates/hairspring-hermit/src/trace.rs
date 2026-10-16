@@ -4,17 +4,10 @@ use crate::exec::Trial;
 use crate::property_verdict;
 use hairspring_engine::report::Step;
 
-const MARKER: &str = "HAIRSPRING_VIOLATION";
-/// Programs written under the project's former name (Anthill) still report violations this way.
-const LEGACY_MARKER: &str = "ANTHILL_VIOLATION";
-const INTERNAL_FAILURE: &str = "HERMIT_INTERNAL_FAILURE";
+use crate::line_scan::{Findings, LEGACY_VIOLATION_MARKER, VIOLATION_MARKER};
+
 const MAX_EXCERPT_LINES: usize = 40;
 const MAX_LINE_CHARS: usize = 300;
-
-fn is_marker_line(line: &str) -> bool {
-    let l = line.trim_start();
-    l.starts_with(MARKER) || l.starts_with(LEGACY_MARKER)
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
@@ -29,6 +22,10 @@ pub enum Verdict {
     Inconclusive(String),
 }
 
+/// Names how `behaviour_hash` treats a stream over the capture cap (head, tail and a hash of the omitted middle).
+/// Bundles record it; one without it was hashed from the first 1 MiB alone, and cannot be compared on cut output.
+pub const HASH_SCHEME: &str = "2";
+
 /// FNV-1a over the guest's observable behaviour (exit status and stdout).
 pub fn behaviour_hash(t: &Trial) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -40,6 +37,13 @@ pub fn behaviour_hash(t: &Trial) -> String {
     feed(&t.exit_code.unwrap_or(-1).to_le_bytes());
     feed(&t.signal.unwrap_or(-1).to_le_bytes());
     feed(t.stdout.as_bytes());
+    if t.stdout_omitted.is_truncated() {
+        // The kept text shows only how many bytes were left out; the hash of the lost bytes tells runs apart that
+        // differ only there. A stream kept whole hashes exactly as it always did.
+        feed(b"omitted");
+        feed(&t.stdout_omitted.bytes.to_le_bytes());
+        feed(&t.stdout_omitted.hash.to_le_bytes());
+    }
     if let Some(digest) = t.events_digest {
         // Only trials that reported events get this, so every other trial hashes exactly as it always did.
         feed(b"events");
@@ -48,24 +52,19 @@ pub fn behaviour_hash(t: &Trial) -> String {
     format!("{h:016x}")
 }
 
-fn first_line(text: &str, containing: &str) -> Option<String> {
-    text.lines()
-        .find(|l| l.contains(containing))
-        .map(|l| l.trim().to_string())
-}
-
 /// Failures of Hermit itself that are not about the guest: a command-line usage error, or the PMU skid overshoot
 /// panic. Either would otherwise look like the guest exiting non-zero and be reported as a finding.
-fn hermit_own_failure(stderr: &str) -> Option<String> {
-    if stderr.contains("Usage: hermit") {
-        let detail = first_line(stderr, "error:").unwrap_or_else(|| "bad command line".to_string());
+fn hermit_own_failure(stderr: &Findings) -> Option<String> {
+    if stderr.usage {
+        let detail = stderr
+            .lower_error_line
+            .clone()
+            .unwrap_or_else(|| "bad command line".to_string());
         return Some(format!(
             "hermit rejected its command line (usage error): {detail}"
         ));
     }
-    if stderr.contains("SKID_OVERSHOOT")
-        || (stderr.contains("panicked") && stderr.contains("overshoot"))
-    {
+    if stderr.skid_overshoot || (stderr.panicked && stderr.overshoot) {
         return Some(
             "hermit panicked on a PMU skid overshoot: the preemption landed late, so this schedule is not reproducible; raise `skid_margin`"
                 .to_string(),
@@ -79,12 +78,16 @@ fn hermit_own_failure(stderr: &str) -> Option<String> {
 /// even when the rest of the report is damaged), then the legacy violation line, then the exit status. A trial that
 /// exits cleanly but whose events are unusable is inconclusive, not a pass.
 pub fn classify(t: &Trial, timeout_secs: u64) -> Verdict {
-    if t.stderr.contains(INTERNAL_FAILURE) {
-        let detail = first_line(&t.stderr, "Error:")
+    // Read from the lines as they arrived, not from the kept text: a long stream keeps only its two ends.
+    let (out, err) = (t.stdout_findings(), t.stderr_findings());
+    if err.internal_failure {
+        let detail = err
+            .error_line
+            .clone()
             .unwrap_or_else(|| "hermit reported an internal failure".to_string());
         return Verdict::Infra(format!("hermit failed to run the program: {detail}"));
     }
-    if let Some(reason) = hermit_own_failure(&t.stderr) {
+    if let Some(reason) = hermit_own_failure(&err) {
         return Verdict::Infra(reason);
     }
     if let Some(EventsFault::Config(problem)) = &t.events_error {
@@ -104,16 +107,11 @@ pub fn classify(t: &Trial, timeout_secs: u64) -> Verdict {
     if !failed.is_empty() {
         return Verdict::Violation(property_verdict::describe(&failed));
     }
-    if let Some(line) = t
-        .stdout
-        .lines()
-        .chain(t.stderr.lines())
-        .find(|l| is_marker_line(l))
-    {
+    if let Some(line) = out.violation_line.or(err.violation_line) {
         let reason = line
             .trim_start()
-            .trim_start_matches(MARKER)
-            .trim_start_matches(LEGACY_MARKER)
+            .trim_start_matches(VIOLATION_MARKER)
+            .trim_start_matches(LEGACY_VIOLATION_MARKER)
             .trim_start_matches(':')
             .trim();
         return Verdict::Violation(if reason.is_empty() {

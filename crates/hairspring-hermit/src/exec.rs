@@ -1,6 +1,8 @@
 //! Running one trial: spawn hermit, capture bounded output, enforce a timeout.
 use crate::capture::{drain, Captured};
 use crate::events::{self, EventsFault};
+use crate::head_tail::Omitted;
+use crate::line_scan::Findings;
 use crate::summary::{self, Summary};
 use crate::summary_dir::{PrivateDir, ScratchDir};
 use crate::{env::guest_env, HermitSettings};
@@ -38,6 +40,13 @@ pub struct Trial {
     pub signal: Option<i32>,
     pub stdout: String,
     pub stderr: String,
+    /// What the bounded capture left out of the middle of `stdout`, and of `stderr`. Zero bytes means kept whole.
+    pub stdout_omitted: Omitted,
+    pub stderr_omitted: Omitted,
+    /// What the lines of each stream said, read as they arrived. `None` for a trial built from text alone, whose
+    /// lines are read from the text.
+    pub(crate) stdout_scan: Option<Findings>,
+    pub(crate) stderr_scan: Option<Findings>,
     pub timed_out: bool,
     /// The schedule the trial ran, when Hermit's summary could be read.
     pub schedule: Option<Summary>,
@@ -51,6 +60,21 @@ pub struct Trial {
     /// Wall-clock milliseconds from starting the guest to collecting its output. Informational: it differs between
     /// identical schedules and never enters a hash.
     pub elapsed_ms: u64,
+}
+
+impl Trial {
+    /// The verdict-relevant lines of stdout, from the stream as read, or from the text when there is none.
+    pub(crate) fn stdout_findings(&self) -> Findings {
+        self.stdout_scan
+            .clone()
+            .unwrap_or_else(|| Findings::of_text(&self.stdout))
+    }
+
+    pub(crate) fn stderr_findings(&self) -> Findings {
+        self.stderr_scan
+            .clone()
+            .unwrap_or_else(|| Findings::of_text(&self.stderr))
+    }
 }
 
 /// The private directories a backend gives its trials.
@@ -350,6 +374,10 @@ fn run_trial_with_summary(
         signal: status.and_then(|s| s.signal()),
         stdout: out.text,
         stderr: err.text,
+        stdout_omitted: out.omitted,
+        stderr_omitted: err.omitted,
+        stdout_scan: Some(out.findings),
+        stderr_scan: Some(err.findings),
         timed_out,
         schedule: None,
         events,

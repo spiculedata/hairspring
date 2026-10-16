@@ -1,9 +1,13 @@
 //! Splitting one output stream into ordinary output and guest event lines.
 //!
-//! Ordinary output is kept exactly as before: the first `cap` bytes, the rest read and discarded. Lines that start
-//! with `HAIRSPRING_EVENT` go to a separate buffer with its own budget, so an end-of-run report printed after a
-//! megabyte of chatter is not lost. The splitter works on the byte stream, one line at a time, and never holds more
-//! than one bounded line (plus the two buffers); it does not parse events, that is `hairspring-props`' job.
+//! Ordinary output keeps at most `cap` bytes: the first half and the last half, with the middle read and counted but
+//! not stored (see `head_tail`), so a report printed last survives a megabyte of chatter. Lines that start with
+//! `HAIRSPRING_EVENT` go to a separate buffer with their own budget, which the plain-output cap never touches, so
+//! the guest's protocol lines all reach the parser however much ordinary output surrounds them. The splitter works
+//! on the byte stream, one line at a time, and never holds more than one bounded line (plus the two buffers); it
+//! does not parse events, that is `hairspring-props`' job.
+use crate::head_tail::{HeadTail, Omitted};
+use crate::line_scan::{Findings, LineScan};
 use hairspring_props::limits::{EVENT_PREFIX_BARE, MAX_LINE_BYTES};
 use std::io::Read;
 use std::sync::mpsc;
@@ -37,6 +41,10 @@ impl EventLines {
 #[derive(Debug, Clone, Default)]
 pub struct Captured {
     pub text: String,
+    /// What the cap left out of the middle of the ordinary output.
+    pub omitted: Omitted,
+    /// What the lines of the ordinary output said, read at their true line starts whatever the cap kept.
+    pub findings: Findings,
     pub events: EventLines,
 }
 
@@ -52,10 +60,10 @@ enum Line {
 }
 
 pub struct Splitter {
-    cap: usize,
     /// Most event-line bytes this stream may store (the trial's budget; the fold applies it to all streams together).
     event_budget: usize,
-    kept: Vec<u8>,
+    kept: HeadTail,
+    scan: LineScan,
     events: EventLines,
     event_bytes: usize,
     line: Line,
@@ -106,9 +114,9 @@ impl Splitter {
 
     pub fn with_event_budget(cap: usize, event_budget: usize) -> Splitter {
         Splitter {
-            cap,
             event_budget,
-            kept: Vec::new(),
+            kept: HeadTail::new(cap),
+            scan: LineScan::default(),
             events: EventLines::default(),
             event_bytes: 0,
             line: Line::Undecided(Vec::new()),
@@ -134,8 +142,11 @@ impl Splitter {
             Line::Event { stored, len } => self.finish_event(&stored, len),
             Line::Plain => {}
         }
+        let (text, omitted) = self.kept.finish();
         Captured {
-            text: String::from_utf8_lossy(&self.kept).into_owned(),
+            text,
+            omitted,
+            findings: self.scan.finish(),
             events: self.events,
         }
     }
@@ -186,8 +197,8 @@ impl Splitter {
     }
 
     fn push_plain(&mut self, bytes: &[u8]) {
-        let room = self.cap.saturating_sub(self.kept.len());
-        self.kept.extend_from_slice(&bytes[..bytes.len().min(room)]);
+        self.kept.push(bytes);
+        self.scan.feed(bytes);
     }
 
     /// Stores a finished event line if this stream's budget allows. The cost is computed exactly as the fold computes
@@ -241,9 +252,29 @@ mod tests {
 
     #[test]
     fn plain_output_is_kept_exactly_up_to_the_cap() {
-        let c = capture(10, &[b"hello\nworld\nmore\n"]);
+        let c = capture(10, &[b"hello\nworl"]);
         assert_eq!(c.text, "hello\nworl");
+        assert!(!c.omitted.is_truncated());
         assert!(c.events.is_empty());
+    }
+
+    #[test]
+    fn plain_output_over_the_cap_keeps_its_head_and_its_last_line() {
+        let c = capture(10, &[b"hello\nworld\nmore\n"]);
+        assert_eq!(c.text, "hello\n[... 7 bytes omitted ...]\nmore\n");
+        assert_eq!(c.omitted.bytes, 7);
+        assert!(c.events.is_empty());
+    }
+
+    #[test]
+    fn event_lines_do_not_count_against_the_plain_output_cap() {
+        let c = capture(
+            10,
+            &[b"HAIRSPRING_EVENT {\"v\":1}\nhello\nHAIRSPRING_EVENT {\"v\":2}\n"],
+        );
+        assert_eq!(c.text, "hello\n");
+        assert!(!c.omitted.is_truncated());
+        assert_eq!(c.events.lines().count(), 2);
     }
 
     #[test]
