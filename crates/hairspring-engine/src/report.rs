@@ -1,3 +1,4 @@
+use crate::trial_log::TrialReport;
 use hairspring_props::{PropertyStat, RunSummary};
 use serde::{Deserialize, Serialize};
 
@@ -64,6 +65,13 @@ pub struct RunOutcome {
     /// Run-wide counts behind `properties` (degraded, perturbing and report-missing trials). `None` without events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub property_run: Option<RunSummary>,
+    /// One record per judged trial, for the store. Never serialised with the outcome: a worker sends these in batches
+    /// of their own, and the server checks them against its own fold, not against anything in the outcome.
+    #[serde(skip)]
+    pub trial_log: Vec<TrialReport>,
+    /// How many trial records the worker says it sent. The server compares it with the rows it holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trials_reported: Option<u64>,
 }
 
 impl RunOutcome {
@@ -76,9 +84,14 @@ impl RunOutcome {
         }
     }
 
-    /// The outcome without its property statistics. Used where the statistics must not travel: a worker posting a
-    /// result (thousands of ids would exceed the server's body limit) and the service receiving one (worker data is
-    /// untrusted until the property checks of E6 exist). Remove its callers when E4 and E6 land.
+    /// Attaches the per-trial records the store keeps.
+    pub fn with_trial_log(self, trial_log: Vec<TrialReport>) -> Self {
+        RunOutcome { trial_log, ..self }
+    }
+
+    /// The outcome without its property statistics. A result never carries them: the server folds the per-trial
+    /// digests itself and stores only its own figures, so a worker's statistics are not read, and thousands of ids
+    /// would exceed the request body limit.
     pub fn without_properties(self) -> Self {
         RunOutcome {
             properties: Vec::new(),
@@ -124,6 +137,8 @@ impl RunOutcome {
             error: None,
             properties: Vec::new(),
             property_run: None,
+            trial_log: Vec::new(),
+            trials_reported: None,
         }
     }
     pub fn failed(
@@ -144,6 +159,8 @@ impl RunOutcome {
             error: None,
             properties: Vec::new(),
             property_run: None,
+            trial_log: Vec::new(),
+            trials_reported: None,
         }
     }
     pub fn error(message: impl Into<String>) -> Self {
@@ -159,6 +176,8 @@ impl RunOutcome {
             error: Some(message.into()),
             properties: Vec::new(),
             property_run: None,
+            trial_log: Vec::new(),
+            trials_reported: None,
         }
     }
 }

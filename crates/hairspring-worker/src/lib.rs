@@ -2,6 +2,7 @@
 //! (which may have backends the server lacks, such as Hermit on a Linux box) and
 //! reports progress and results back.
 mod completion;
+mod trials;
 
 use completion::completion_body;
 use hairspring_engine::backend::Progress;
@@ -14,6 +15,7 @@ use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use trials::request_batches;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_BACKOFF: Duration = Duration::from_secs(10);
@@ -90,8 +92,11 @@ impl CallError {
         }
     }
 
+    /// The server does not know this worker, or no longer accepts its credential (it was pruned, or the server's
+    /// database was replaced). Registering again gets a new id and secret. Note that a new id starts untrusted.
     fn is_unknown_worker(&self) -> bool {
-        matches!(self, CallError::Status(400, body) if body.contains("unknown worker"))
+        matches!(self, CallError::Status(400, body)
+            if body.contains("unknown worker") || body.contains("invalid worker credential"))
     }
 }
 
@@ -188,7 +193,13 @@ fn sleep_unless_stopped(stop: &AtomicBool, total: Duration) {
     }
 }
 
-fn register(api: &Api, cfg: &WorkerConfig, stop: &AtomicBool) -> Result<String, WorkerError> {
+/// Registers and returns the worker id with the secret the server issued for it. The secret proves later requests
+/// that carry trial records come from this worker and not from someone who read its id.
+fn register(
+    api: &Api,
+    cfg: &WorkerConfig,
+    stop: &AtomicBool,
+) -> Result<(String, String), WorkerError> {
     let mut backoff = Duration::from_millis(200);
     loop {
         match api.post(
@@ -196,11 +207,15 @@ fn register(api: &Api, cfg: &WorkerConfig, stop: &AtomicBool) -> Result<String, 
             &json!({ "name": cfg.name, "caps": { "backends": ["sim"] } }),
         ) {
             Ok((_, body)) => {
-                if let Some(id) = serde_json::from_str::<Value>(&body)
-                    .ok()
-                    .and_then(|v| v["worker_id"].as_str().map(str::to_string))
-                {
-                    return Ok(id);
+                let parsed = serde_json::from_str::<Value>(&body).ok();
+                let text = |key: &str| {
+                    parsed
+                        .as_ref()
+                        .and_then(|v| v[key].as_str().map(str::to_string))
+                };
+                if let Some(id) = text("worker_id") {
+                    // A server that predates worker secrets issues none; its workers send no trial records.
+                    return Ok((id, text("worker_secret").unwrap_or_default()));
                 }
             }
             Err(e) => {
@@ -222,6 +237,7 @@ fn execute(
     api: &Api,
     engine: &Engine,
     worker_id: &str,
+    secret: &str,
     job: &LeasedJob,
     heartbeat: Duration,
     stop: &AtomicBool,
@@ -240,7 +256,10 @@ fn execute(
             while !done.load(Ordering::SeqCst) {
                 std::thread::sleep(TICK);
                 if last.elapsed() >= heartbeat {
-                    let _ = api.post(&job_path("heartbeat"), &json!({ "worker_id": worker_id }));
+                    let _ = api.post(
+                        &job_path("heartbeat"),
+                        &json!({ "worker_id": worker_id, "worker_secret": secret }),
+                    );
                     last = Instant::now();
                 }
             }
@@ -251,7 +270,7 @@ fn execute(
                     interrupted.set(true);
                     return false;
                 }
-                let body = json!({ "worker_id": worker_id, "steps": p.steps, "trials": p.trials, "message": p.message });
+                let body = json!({ "worker_id": worker_id, "worker_secret": secret, "steps": p.steps, "trials": p.trials, "message": p.message });
                 // Best effort; the reply tells us if the run was cancelled meanwhile.
                 match api.post(&job_path("progress"), &body) {
                     Ok((_, text)) => serde_json::from_str::<Value>(&text).ok().and_then(|v| v["continue"].as_bool()).unwrap_or(true),
@@ -265,16 +284,22 @@ fn execute(
     let (path, body) = match result {
         Ok(Ok(_)) if interrupted.get() => (
             job_path("fail"),
-            json!({ "worker_id": worker_id, "error": "interrupted by worker shutdown" }),
+            json!({ "worker_id": worker_id, "worker_secret": secret, "error": "interrupted by worker shutdown" }),
         ),
-        Ok(Ok(outcome)) => (job_path("complete"), completion_body(worker_id, outcome)),
+        Ok(Ok(outcome)) => {
+            let outcome = deliver_trials(api, worker_id, secret, job, outcome);
+            (
+                job_path("complete"),
+                completion_body(worker_id, secret, outcome),
+            )
+        }
         Ok(Err(e)) => (
             job_path("complete"),
-            completion_body(worker_id, RunOutcome::error(e.to_string())),
+            completion_body(worker_id, secret, RunOutcome::error(e.to_string())),
         ),
         Err(_) => (
             job_path("fail"),
-            json!({ "worker_id": worker_id, "error": "worker panicked while running the target" }),
+            json!({ "worker_id": worker_id, "worker_secret": secret, "error": "worker panicked while running the target" }),
         ),
     };
     if let Err(e) = api.post_reliably(&path, &body, &AtomicBool::new(false)) {
@@ -288,20 +313,53 @@ fn execute(
     Ok(())
 }
 
+/// Sends the run's per-trial records, batch by batch, and says in the outcome how many there were. A batch that cannot
+/// be delivered is reported and skipped: the count in the outcome then disagrees with the rows the server holds, and
+/// the server marks the run incomplete rather than treating the missing trials as passes.
+fn deliver_trials(
+    api: &Api,
+    worker_id: &str,
+    secret: &str,
+    job: &LeasedJob,
+    outcome: RunOutcome,
+) -> RunOutcome {
+    if outcome.trial_log.is_empty() {
+        return outcome;
+    }
+    let path = format!("/api/worker/jobs/{}/trials", job.job_id);
+    for batch in request_batches(&outcome.trial_log) {
+        let body = json!({ "worker_id": worker_id, "worker_secret": secret, "trials": batch });
+        if let Err(e) = api.post_reliably(&path, &body, &AtomicBool::new(false)) {
+            eprintln!(
+                "hairspring-worker: could not deliver {} trial records of job {}: {e}",
+                batch.len(),
+                job.job_id
+            );
+        }
+    }
+    RunOutcome {
+        trials_reported: Some(outcome.trial_log.len() as u64),
+        ..outcome
+    }
+}
+
 /// Registers with the server and processes jobs until `stop` is set.
 /// Transient network errors are retried, a forgotten worker re-registers,
 /// and rejected credentials end the loop.
 pub fn run_loop(engine: &Engine, cfg: &WorkerConfig, stop: &AtomicBool) -> Result<(), WorkerError> {
     let api = Api::new(cfg)?;
-    let mut worker_id = register(&api, cfg, stop)?;
+    let (mut worker_id, mut secret) = register(&api, cfg, stop)?;
     let mut backoff = Duration::from_millis(200);
     while !stop.load(Ordering::SeqCst) {
-        match api.post("/api/worker/lease", &json!({ "worker_id": worker_id })) {
+        match api.post(
+            "/api/worker/lease",
+            &json!({ "worker_id": worker_id, "worker_secret": secret }),
+        ) {
             Ok((204, _)) => sleep_unless_stopped(stop, cfg.poll),
             Ok((_, body)) => match serde_json::from_str::<LeasedJob>(&body) {
                 Ok(job) => {
                     backoff = Duration::from_millis(200);
-                    execute(&api, engine, &worker_id, &job, cfg.heartbeat, stop)?;
+                    execute(&api, engine, &worker_id, &secret, &job, cfg.heartbeat, stop)?;
                 }
                 Err(e) => {
                     eprintln!("hairspring-worker: ignoring an unreadable job from the server: {e}");
@@ -312,7 +370,7 @@ pub fn run_loop(engine: &Engine, cfg: &WorkerConfig, stop: &AtomicBool) -> Resul
                 eprintln!(
                     "hairspring-worker: the server no longer knows this worker; registering again"
                 );
-                worker_id = register(&api, cfg, stop)?;
+                (worker_id, secret) = register(&api, cfg, stop)?;
             }
             Err(e) => {
                 check_auth(&e)?;
@@ -323,4 +381,19 @@ pub fn run_loop(engine: &Engine, cfg: &WorkerConfig, stop: &AtomicBool) -> Resul
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_rejected_credential_or_an_unknown_worker_means_register_again() {
+        let status = |body: &str| CallError::Status(400, body.to_string());
+        assert!(status("invalid request: unknown worker").is_unknown_worker());
+        assert!(status("invalid request: invalid worker credential").is_unknown_worker());
+        assert!(!status("invalid request: job is not leased by this worker").is_unknown_worker());
+        assert!(!CallError::Status(403, "invalid worker credential".into()).is_unknown_worker());
+        assert!(!CallError::Transport("down".into()).is_unknown_worker());
+    }
 }

@@ -105,7 +105,7 @@ pub struct Work {
     pub ops: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum EndReason {
     Exit,
     Signal,
@@ -124,7 +124,7 @@ impl EndReason {
 }
 
 /// Per-thread totals carried by one `thread` line.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ThreadReport {
     pub thread: String,
     pub evals: u64,

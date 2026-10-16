@@ -5,11 +5,13 @@
 //! failure. Rate counts (`trials_rated` and the interval) use only trials that reported cleanly, so a trial that died
 //! before reporting is not mistaken for a trial in which nothing went wrong.
 
+use crate::catalog::RunCatalog;
+use crate::digest::{DigestEntry, TrialDigest};
 use crate::event::{AssertKind, Loc};
 use crate::limits::MAX_IDS_PER_RUN;
 use crate::stats::{rule_of_three, wilson, Z_95};
-use crate::trial::{PropertyFailure, TrialProperty, TrialProps, Witness};
-use std::collections::{BTreeMap, HashSet};
+use crate::trial::{failure_basis, FailureReason, PropertyFailure, TrialProps, Witness};
+use std::collections::BTreeMap;
 
 /// Most kind-mismatch details kept in a [`RunSummary`].
 pub const MAX_KIND_MISMATCH_DETAILS: usize = 64;
@@ -156,18 +158,54 @@ struct TrialClass {
 }
 
 impl TrialClass {
-    fn of(seed: u64, t: &TrialProps, inconclusive: bool) -> Self {
+    fn of(seed: u64, d: &TrialDigest) -> Self {
         TrialClass {
             seed,
-            unreported: inconclusive || !t.report_missing().is_empty(),
-            degraded: t.is_degraded(),
-            perturbing: t.perturbing,
-            inconclusive,
+            unreported: d.flags.inconclusive || d.flags.report_missing,
+            degraded: d.flags.degraded,
+            perturbing: d.flags.perturbing,
+            inconclusive: d.flags.inconclusive,
         }
     }
 
     fn is_clean(&self) -> bool {
         !self.unreported && !self.degraded
+    }
+}
+
+/// One id in one trial, as the fold sees it: the digest entry joined with the catalog row it refers to.
+struct Obs<'a> {
+    id: &'a str,
+    kind: AssertKind,
+    msg: &'a str,
+    loc: &'a Option<Loc>,
+    hits: u64,
+    trues: u64,
+    falses: u64,
+    /// Why the id failed in this trial and how often, when it did.
+    failure: Option<(FailureReason, u64)>,
+    /// The failure witness the digest carried.
+    witness: Option<Witness>,
+}
+
+impl Obs<'_> {
+    fn failed(&self) -> bool {
+        self.failure.is_some()
+    }
+
+    /// The failure as a [`PropertyFailure`], using the message and location this trial declared.
+    fn property_failure(&self, msg: &str, loc: &Option<Loc>) -> Option<PropertyFailure> {
+        let (reason, count) = self.failure?;
+        Some(PropertyFailure {
+            id: self.id.to_owned(),
+            kind: self.kind,
+            reason,
+            msg: msg.to_owned(),
+            loc: loc.clone(),
+            count,
+            witness: self.witness.clone(),
+            dropped: None,
+        })
     }
 }
 
@@ -202,10 +240,10 @@ struct IdAcc {
 }
 
 impl IdAcc {
-    fn start(p: &TrialProperty, decided: bool) -> Self {
+    fn start(p: &Obs, decided: bool) -> Self {
         IdAcc {
             kind: p.kind,
-            msg: p.msg.clone(),
+            msg: p.msg.to_owned(),
             loc: p.loc.clone(),
             decided,
             trials: 0,
@@ -233,11 +271,11 @@ impl IdAcc {
 
     /// The first conclusive trial settles the kind, message and location. A failure counted from the inconclusive
     /// trials before it was seen under a kind that was never decided, so it is forgotten when the kind changes.
-    fn decide(self, p: &TrialProperty) -> Self {
+    fn decide(self, p: &Obs) -> Self {
         let kept = self.kind == p.kind;
         IdAcc {
             kind: p.kind,
-            msg: p.msg.clone(),
+            msg: p.msg.to_owned(),
             loc: p.loc.clone(),
             decided: true,
             inconclusive_failures: if kept { self.inconclusive_failures } else { 0 },
@@ -252,12 +290,12 @@ impl IdAcc {
         }
     }
 
-    fn with_trial(mut self, class: TrialClass, p: &TrialProperty) -> Self {
+    fn with_trial(mut self, class: TrialClass, p: &Obs) -> Self {
         if class.inconclusive {
             self.trials += 1;
             self.unreported += 1;
             self.perturbing += u64::from(class.perturbing);
-            self.inconclusive_failures += u64::from(p.failure().is_some());
+            self.inconclusive_failures += u64::from(p.failed());
             return self;
         }
         let (hit, tru, fal) = (
@@ -286,8 +324,8 @@ impl IdAcc {
         self.evals = self.evals.saturating_add(p.hits);
         self.evals_true = self.evals_true.saturating_add(p.trues);
         self.evals_false = self.evals_false.saturating_add(p.falses);
-        if let Some(f) = p.failure() {
-            self.note_failure(class.seed, f.witness);
+        if p.failed() {
+            self.note_failure(class.seed, p.witness.clone());
         }
         self
     }
@@ -409,12 +447,23 @@ impl PropertyStat {
     }
 }
 
-/// Accumulator over trials. Consumed and returned by value, so no accumulator is ever shared or mutated in place.
+/// The counts the fold keeps, apart from the catalog that gives ids their indexes.
 #[derive(Debug, Clone)]
-pub struct RunProps {
+struct FoldState {
     summary: RunSummary,
     ids: BTreeMap<String, IdAcc>,
+}
+
+/// Accumulator over trials. Consumed and returned by value, so no accumulator is ever shared or mutated in place.
+///
+/// Trials are folded as [`TrialDigest`]s. [`RunProps::add`] is a convenience that builds the digest (and keeps the
+/// catalog it refers to) itself; a receiver that got digests and catalog updates from elsewhere uses
+/// [`RunProps::add_digest`] with its own [`RunCatalog`].
+#[derive(Debug, Clone)]
+pub struct RunProps {
+    state: FoldState,
     id_cap: usize,
+    catalog: RunCatalog,
 }
 
 impl Default for RunProps {
@@ -435,12 +484,15 @@ impl RunProps {
     /// out ids that later trials report.
     pub fn with_id_cap(id_cap: usize) -> Self {
         RunProps {
-            summary: RunSummary {
-                id_cap,
-                ..RunSummary::default()
+            state: FoldState {
+                summary: RunSummary {
+                    id_cap,
+                    ..RunSummary::default()
+                },
+                ids: BTreeMap::new(),
             },
-            ids: BTreeMap::new(),
             id_cap,
+            catalog: RunCatalog::new(),
         }
     }
 
@@ -460,81 +512,128 @@ impl RunProps {
 
     fn add_classified(self, seed: u64, trial: &TrialProps, inconclusive: bool) -> RunProps {
         let RunProps {
-            mut summary,
-            mut ids,
+            state,
             id_cap,
+            catalog,
         } = self;
-        let class = TrialClass::of(seed, trial, inconclusive);
-        let mut dropped = 0u64;
-        for p in &trial.properties {
-            let acc = match ids.remove(&p.id) {
-                Some(acc) => acc,
-                None if ids.len() >= id_cap => {
-                    dropped += 1;
-                    continue;
-                }
-                None => IdAcc::start(p, !inconclusive),
-            };
-            let acc = match (acc.decided, inconclusive) {
-                (false, false) => acc.decide(p),
-                _ => acc,
-            };
-            let acc = if acc.kind == p.kind {
-                acc.with_trial(class, p)
-            } else if inconclusive {
-                // A timed-out trial's kind is not trusted: it decides nothing and is no mismatch. It still counts as
-                // an unreported trial of the id, but its failure is not attributed to a kind it may not have.
-                acc.with_unjudged_trial(class)
-            } else {
-                summary.kind_mismatches += 1;
-                if summary.kind_mismatch_details.len() < MAX_KIND_MISMATCH_DETAILS {
-                    summary.kind_mismatch_details.push(KindMismatch {
-                        id: p.id.clone(),
-                        seed,
-                        kept: acc.kind,
-                        seen: p.kind,
-                        failure: p.failure(),
-                    });
-                }
-                acc
-            };
-            ids.insert(p.id.clone(), acc);
-        }
-        let conflicted: HashSet<&str> = trial
-            .conflicts
-            .iter()
-            .filter(|_| !inconclusive)
-            .map(|c| c.id.as_str())
-            .collect();
-        for id in conflicted {
-            if let Some(acc) = ids.remove(id) {
-                ids.insert(id.to_owned(), acc.with_conflict(seed));
-            }
-        }
-        let lost_ids = dropped > 0;
-        summary.trials += 1;
-        summary.perturbing_trials += u64::from(class.perturbing);
-        summary.degraded_trials += u64::from(class.degraded || lost_ids);
-        summary.inconclusive_trials += u64::from(inconclusive);
-        summary.report_missing_trials += u64::from(class.unreported && !inconclusive);
-        summary.conflict_trials += u64::from(!inconclusive && !trial.conflicts.is_empty());
-        summary.ids_dropped = summary.ids_dropped.saturating_add(dropped);
+        let recorded = catalog.record(trial, inconclusive, id_cap);
+        let state = fold_digest(state, seed, &recorded.digest, &recorded.catalog);
         RunProps {
-            summary,
-            ids,
+            state,
             id_cap,
+            catalog: recorded.catalog,
+        }
+    }
+
+    /// Fold in a trial that arrived as a digest, against the catalog its indexes refer to. The catalog must already
+    /// hold every row the digest uses; entries with an index outside it are ignored. Use this or [`RunProps::add`]
+    /// on one accumulator, not both.
+    #[must_use]
+    pub fn add_digest(self, seed: u64, digest: &TrialDigest, catalog: &RunCatalog) -> RunProps {
+        RunProps {
+            state: fold_digest(self.state, seed, digest, catalog),
+            ..self
         }
     }
 
     pub fn summary(&self) -> RunSummary {
-        self.summary.clone()
+        self.state.summary.clone()
     }
 
     /// Per-id statistics sorted by id.
     pub fn finish(self) -> Vec<PropertyStat> {
-        self.ids
+        self.state
+            .ids
             .into_iter()
             .map(|(id, acc)| acc.into_stat(id))
             .collect()
     }
+}
+
+fn observe<'a>(e: &DigestEntry, id: &'a str, msg: &'a str, loc: &'a Option<Loc>) -> Obs<'a> {
+    let failure = failure_basis(e.kind, e.hits, e.falses);
+    Obs {
+        id,
+        kind: e.kind,
+        msg,
+        loc,
+        hits: e.hits,
+        trues: e.trues,
+        falses: e.falses,
+        failure,
+        witness: failure.and(e.witness.clone()),
+    }
+}
+
+fn fold_digest(
+    state: FoldState,
+    seed: u64,
+    digest: &TrialDigest,
+    catalog: &RunCatalog,
+) -> FoldState {
+    if digest.flags.excluded {
+        return state;
+    }
+    let FoldState {
+        mut summary,
+        mut ids,
+    } = state;
+    let class = TrialClass::of(seed, digest);
+    let inconclusive = class.inconclusive;
+    for e in digest.entries.iter().filter(|e| e.catalogued) {
+        let Some(row) = catalog.get(e.idx) else {
+            continue;
+        };
+        let p = observe(e, &row.id, &row.msg, &row.loc);
+        let acc = match ids.remove(&row.id) {
+            Some(acc) => acc,
+            None => IdAcc::start(&p, !inconclusive),
+        };
+        let acc = match (acc.decided, inconclusive) {
+            (false, false) => acc.decide(&p),
+            _ => acc,
+        };
+        let acc = if acc.kind == p.kind {
+            acc.with_trial(class, &p)
+        } else if inconclusive {
+            // A timed-out trial's kind is not trusted: it decides nothing and is no mismatch. It still counts as
+            // an unreported trial of the id, but its failure is not attributed to a kind it may not have.
+            acc.with_unjudged_trial(class)
+        } else {
+            summary.kind_mismatches += 1;
+            if summary.kind_mismatch_details.len() < MAX_KIND_MISMATCH_DETAILS {
+                let (msg, loc) = e
+                    .decl
+                    .as_ref()
+                    .map_or(("", &None), |d| (d.msg.as_str(), &d.loc));
+                summary.kind_mismatch_details.push(KindMismatch {
+                    id: row.id.clone(),
+                    seed,
+                    kept: acc.kind,
+                    seen: p.kind,
+                    failure: p.property_failure(msg, loc),
+                });
+            }
+            acc
+        };
+        ids.insert(row.id.clone(), acc);
+    }
+    if !inconclusive {
+        for e in digest.entries.iter().filter(|e| e.conflicted) {
+            let Some(row) = catalog.get(e.idx) else {
+                continue;
+            };
+            if let Some(acc) = ids.remove(&row.id) {
+                ids.insert(row.id.clone(), acc.with_conflict(seed));
+            }
+        }
+    }
+    summary.trials += 1;
+    summary.perturbing_trials += u64::from(class.perturbing);
+    summary.degraded_trials += u64::from(class.degraded || digest.ids_dropped > 0);
+    summary.inconclusive_trials += u64::from(inconclusive);
+    summary.report_missing_trials += u64::from(class.unreported && !inconclusive);
+    summary.conflict_trials += u64::from(!inconclusive && digest.flags.has_conflicts);
+    summary.ids_dropped = summary.ids_dropped.saturating_add(digest.ids_dropped);
+    FoldState { summary, ids }
 }

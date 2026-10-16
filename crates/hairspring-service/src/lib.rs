@@ -1,8 +1,11 @@
 //! Service layer: the single place that turns "start a run / lease a job /
 //! record an outcome / replay a bundle" into store and engine calls. The CLI,
 //! the REST server, remote workers and the MCP server all go through it.
+pub mod claims;
 mod error;
+mod ingest;
 mod jobs;
+mod properties;
 pub mod sanitize;
 mod types;
 
@@ -10,7 +13,7 @@ pub use error::ServiceError;
 pub use types::*;
 
 use hairspring_core::bundle::Bundle;
-use hairspring_engine::config::{Budget, TargetKind};
+use hairspring_engine::config::TargetKind;
 use hairspring_engine::engine::Engine;
 use hairspring_engine::report::{FailureReport, ReplayOutcome, RunOutcome, RunStatus, Step};
 use hairspring_store::{
@@ -43,6 +46,8 @@ pub struct ServiceConfig {
     pub max_workers: u64,
     /// Minimum spacing of stored progress events per run.
     pub progress_event_interval: Duration,
+    /// How many bytes of kept trial detail and output one run may hold.
+    pub kept_bytes_per_run: u64,
 }
 
 impl Default for ServiceConfig {
@@ -52,6 +57,7 @@ impl Default for ServiceConfig {
             max_queued: 1000,
             max_workers: 1000,
             progress_event_interval: Duration::from_millis(500),
+            kept_bytes_per_run: hairspring_store::MAX_KEPT_BYTES_PER_RUN,
         }
     }
 }
@@ -61,6 +67,16 @@ pub struct Service {
     store: Arc<dyn Store>,
     cfg: Arc<ServiceConfig>,
     progress_seen: Arc<Mutex<HashMap<String, Instant>>>,
+}
+
+/// 256 random bits from the operating system, as hex.
+fn new_secret() -> Result<String> {
+    use std::io::Read;
+    let mut bytes = [0u8; 32];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut bytes))
+        .map_err(|e| ServiceError::Internal(format!("cannot read random bytes: {e}")))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 fn backend_name(kind: &TargetKind) -> &'static str {
@@ -141,7 +157,8 @@ impl Service {
         let payload = JobPayload {
             target: req.target.clone(),
             seed: req.seed.unwrap_or_else(random_seed),
-            budget: req.budget.map(Budget::clamp),
+            // The budget the run is held to is recorded in full, so it does not depend on the target's default later.
+            budget: Some(req.budget.unwrap_or(spec.budget).clamp()),
         };
         let json = serde_json::to_string(&payload)
             .map_err(|e| ServiceError::InvalidRequest(e.to_string()))?;
@@ -164,7 +181,12 @@ impl Service {
             return Ok(None);
         };
         let failures = self.store.list_failures(id)?.iter().map(summary).collect();
-        Ok(Some(RunDetail { run, failures }))
+        let properties = self.property_summary(&run)?;
+        Ok(Some(RunDetail {
+            run,
+            failures,
+            properties,
+        }))
     }
 
     pub fn list_runs(&self, limit: u32) -> Result<Vec<RunRecord>> {
@@ -234,20 +256,25 @@ impl Service {
             (status == RunStatus::Error)
                 .then(|| format!("run ended in state `{}`", run.state.as_str()))
         });
+        let properties = self.property_stats(run_id)?;
+        let property_run = run
+            .property_summary_json
+            .as_deref()
+            .and_then(|j| serde_json::from_str(j).ok());
         Ok(Some(RunOutcome {
             status,
             steps_executed: run.steps,
             trials: run.trials,
-            // Not persisted yet: stored runs report 0 (see the follow-up issue on the run store).
-            inconclusive: 0,
-            distinct_schedules: 0,
-            work: 0,
+            inconclusive: run.inconclusive,
+            distinct_schedules: run.distinct_schedules,
+            work: run.work,
             elapsed_ms,
             failure,
             error,
-            // Not persisted yet either (issues #7 and #11).
-            properties: Vec::new(),
-            property_run: None,
+            properties,
+            property_run,
+            trial_log: Vec::new(),
+            trials_reported: None,
         }))
     }
 
@@ -266,7 +293,8 @@ impl Service {
         Ok(cancelled)
     }
 
-    pub fn register_worker(&self, name: &str, caps_json: &str) -> Result<WorkerRecord> {
+    /// Checks the name and that there is room for another worker; returns the time to register at.
+    fn admit_worker(&self, name: &str) -> Result<i64> {
         if name.is_empty() || name.len() > MAX_TARGET_LEN {
             return Err(ServiceError::InvalidRequest(
                 "worker name must be 1-64 characters".to_string(),
@@ -281,7 +309,52 @@ impl Service {
                 ));
             }
         }
+        Ok(now)
+    }
+
+    /// Registers a worker without a secret. It cannot reach the worker endpoints over HTTP; use
+    /// [`Service::register_remote_worker`] for a worker that does.
+    pub fn register_worker(&self, name: &str, caps_json: &str) -> Result<WorkerRecord> {
+        let now = self.admit_worker(name)?;
         Ok(self.store.register_worker(name, caps_json, now)?)
+    }
+
+    /// Registers a remote worker and issues it a secret. The secret is returned once and only its hash is stored;
+    /// the worker must present it to send trial records, so that trust attaches to the worker and not to a worker id
+    /// that other callers can read.
+    pub fn register_remote_worker(
+        &self,
+        name: &str,
+        caps_json: &str,
+    ) -> Result<(WorkerRecord, String)> {
+        let secret = new_secret()?;
+        let now = self.admit_worker(name)?;
+        let hash = hairspring_store::sha256_hex(secret.as_bytes());
+        let worker = self
+            .store
+            .register_worker_with_secret(name, caps_json, &hash, now)?;
+        Ok((worker, secret))
+    }
+
+    /// Registers one of this process's own workers, which is trusted from the start. A remote worker never is: its
+    /// trust is set by an administrator with [`Service::set_worker_trust`].
+    pub fn register_local_worker(&self, name: &str, caps_json: &str) -> Result<WorkerRecord> {
+        let worker = self.register_worker(name, caps_json)?;
+        self.store.set_worker_trusted(&worker.id, true)?;
+        Ok(WorkerRecord {
+            trusted: true,
+            ..worker
+        })
+    }
+
+    /// Sets whether a worker's data may back a claim.
+    pub fn set_worker_trust(&self, worker_id: &str, trusted: bool) -> Result<()> {
+        match self.store.set_worker_trusted(worker_id, trusted) {
+            Err(hairspring_store::StoreError::NotFound(_)) => {
+                Err(ServiceError::NotFound(format!("worker {worker_id}")))
+            }
+            other => Ok(other?),
+        }
     }
 
     pub fn list_workers(&self) -> Result<Vec<WorkerRecord>> {

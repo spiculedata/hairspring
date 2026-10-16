@@ -3,7 +3,7 @@
 use crate::event::{AssertKind, EndReason, Loc, ThreadReport};
 
 /// Counters for everything the parser or folder dropped, ignored or merged.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EventHealth {
     /// Event lines accepted into the fold.
     pub accepted: u64,
@@ -71,7 +71,7 @@ pub struct Witness {
 }
 
 /// One id folded across the processes of a trial.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TrialProperty {
     pub id: String,
     pub kind: AssertKind,
@@ -86,7 +86,7 @@ pub struct TrialProperty {
 }
 
 /// What `end` said about one process.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EndReport {
     pub reason: EndReason,
     pub status: i64,
@@ -98,7 +98,7 @@ pub struct EndReport {
 }
 
 /// Everything one process reported.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ProcReport {
     pub tag: String,
     pub sdk: Option<String>,
@@ -120,7 +120,7 @@ pub struct DroppedCounts {
 }
 
 /// The same id declared with two different kinds.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CatalogConflict {
     /// Counts of the conflicting process's dropped `assert` line (zero if it sent none).
     pub dropped: DroppedCounts,
@@ -198,7 +198,7 @@ impl PropertyFailure {
 }
 
 /// One trial's properties, folded from its event lines.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TrialProps {
     /// Processes in first-seen order.
     pub procs: Vec<ProcReport>,
@@ -282,20 +282,26 @@ impl TrialProps {
     }
 }
 
+/// Whether a property counts as failed in one trial, and why, from its kind and counts alone. `reason` and `count`
+/// are those of the matching [`PropertyFailure`].
+pub fn failure_basis(kind: AssertKind, hits: u64, falses: u64) -> Option<(FailureReason, u64)> {
+    match kind {
+        AssertKind::Always | AssertKind::AlwaysOrUnreachable if falses > 0 => {
+            Some((FailureReason::AlwaysFalse, falses))
+        }
+        AssertKind::Unreachable if hits > 0 => Some((FailureReason::UnreachableHit, hits)),
+        _ => None,
+    }
+}
+
 impl TrialProperty {
     /// The trial-level failure of this property, if any.
     pub fn failure(&self) -> Option<PropertyFailure> {
         let p = self;
-        let (reason, count, witness) = match p.kind {
-            AssertKind::Always | AssertKind::AlwaysOrUnreachable if p.falses > 0 => {
-                (FailureReason::AlwaysFalse, p.falses, p.first_false.clone())
-            }
-            AssertKind::Unreachable if p.hits > 0 => (
-                FailureReason::UnreachableHit,
-                p.hits,
-                p.first_true.clone().or_else(|| p.first_false.clone()),
-            ),
-            _ => return None,
+        let (reason, count) = failure_basis(p.kind, p.hits, p.falses)?;
+        let witness = match reason {
+            FailureReason::AlwaysFalse => p.first_false.clone(),
+            _ => p.first_true.clone().or_else(|| p.first_false.clone()),
         };
         Some(PropertyFailure {
             id: p.id.clone(),

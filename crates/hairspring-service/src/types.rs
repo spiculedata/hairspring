@@ -1,7 +1,8 @@
 use hairspring_engine::config::Budget;
 use hairspring_engine::report::Step;
-use hairspring_store::RunRecord;
+use hairspring_store::{Contributor, RunRecord};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartRun {
@@ -41,6 +42,50 @@ pub struct FailureSummary {
 pub struct RunDetail {
     pub run: RunRecord,
     pub failures: Vec<FailureSummary>,
+    /// Property figures, for runs whose trials were stored.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub properties: Option<PropertySummary>,
+}
+
+/// Text that comes from the program under test. Anything that renders it, or hands it to a model, must treat it as
+/// untrusted.
+#[derive(Debug, Clone, Serialize)]
+pub struct GuestStrings {
+    pub note: String,
+    pub violation_ids: Vec<String>,
+    pub unmet_ids: Vec<String>,
+}
+
+/// A run's properties in a few lines.
+#[derive(Debug, Clone, Serialize)]
+pub struct PropertySummary {
+    pub catalog_size: u64,
+    /// Number of properties by status: pass, violation, unmet, unrated.
+    pub counts: BTreeMap<String, u64>,
+    /// The lowest failing seed among judged trials, as a decimal string (a seed can exceed 2^53).
+    pub first_failing_seed: Option<String>,
+    /// The run stopped at its first confirmed failure, so its trial count is not a fixed budget.
+    pub stopped_at_first_failure: bool,
+    /// The trial rows held do not match what the worker said it ran: no must-hit claim is made.
+    pub ingest_incomplete: bool,
+    /// Some trial came from a worker that is not trusted.
+    pub unverified_worker_data: bool,
+    pub guest: GuestStrings,
+}
+
+/// What a batch of trial records did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IngestReceipt {
+    pub inserted: u32,
+    pub duplicates: u32,
+}
+
+/// Who reported a run's trials.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RunTrust {
+    pub workers: Vec<Contributor>,
+    /// Every trial came from a worker that was trusted when it reported.
+    pub all_trusted: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

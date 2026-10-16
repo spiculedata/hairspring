@@ -1,37 +1,11 @@
+use crate::sqlite_schema;
+use crate::sqlite_trials as trials;
+use crate::trials::*;
 use crate::types::*;
 use crate::{new_id, sha256_hex, Store, MAX_JOB_ATTEMPTS};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
-
-const SCHEMA_VERSION: i64 = 1;
-
-const SCHEMA: &str = "
-CREATE TABLE runs (
-  id TEXT PRIMARY KEY, target TEXT NOT NULL, backend TEXT NOT NULL, state TEXT NOT NULL,
-  seed INTEGER NOT NULL, config_json TEXT NOT NULL, created_at INTEGER NOT NULL,
-  started_at INTEGER, finished_at INTEGER, steps INTEGER NOT NULL DEFAULT 0,
-  trials INTEGER NOT NULL DEFAULT 0, error TEXT);
-CREATE INDEX runs_created ON runs(created_at);
-CREATE TABLE failures (
-  id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), target TEXT NOT NULL, message TEXT NOT NULL,
-  original_len INTEGER NOT NULL, shrunk_len INTEGER NOT NULL, bundle_hash TEXT NOT NULL,
-  steps_json TEXT NOT NULL, created_at INTEGER NOT NULL);
-CREATE INDEX failures_run ON failures(run_id);
-CREATE TABLE blobs (hash TEXT PRIMARY KEY, data BLOB NOT NULL);
-CREATE TABLE jobs (
-  id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), kind TEXT NOT NULL, payload_json TEXT NOT NULL,
-  status TEXT NOT NULL, lease_owner TEXT, lease_until INTEGER, attempts INTEGER NOT NULL DEFAULT 0,
-  last_error TEXT, created_at INTEGER NOT NULL);
-CREATE INDEX jobs_runnable ON jobs(status, created_at);
-CREATE TABLE events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, ts INTEGER NOT NULL,
-  kind TEXT NOT NULL, payload_json TEXT NOT NULL);
-CREATE INDEX events_run ON events(run_id, id);
-CREATE TABLE workers (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, caps_json TEXT NOT NULL,
-  registered_at INTEGER NOT NULL, last_seen INTEGER NOT NULL);
-";
 
 impl From<rusqlite::Error> for StoreError {
     fn from(e: rusqlite::Error) -> Self {
@@ -58,6 +32,16 @@ fn run_from_row(r: &Row<'_>) -> rusqlite::Result<RunRecord> {
         steps: r.get::<_, i64>("steps")? as u64,
         trials: r.get::<_, i64>("trials")? as u64,
         error: r.get("error")?,
+        inconclusive: r.get::<_, i64>("inconclusive")? as u64,
+        distinct_schedules: r.get::<_, i64>("distinct_schedules")? as u64,
+        work: r.get::<_, i64>("work")? as u64,
+        mode: r.get("mode")?,
+        stopped_at_first_failure: r.get("stopped_at_first_failure")?,
+        property_summary_json: r.get("property_summary_json")?,
+        catalog_size: r.get::<_, i64>("catalog_size")? as u64,
+        ingest_incomplete: r.get("ingest_incomplete")?,
+        ingest_attempt: r.get::<_, i64>("ingest_attempt")? as u64,
+        build_id: r.get("build_id")?,
     })
 }
 
@@ -105,15 +89,7 @@ impl SqliteStore {
     fn init(conn: Connection) -> Result<SqliteStore> {
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version == 0 {
-            conn.execute_batch(SCHEMA)?;
-            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-        } else if version != SCHEMA_VERSION {
-            return Err(StoreError::Backend(format!(
-                "database schema version {version} is not supported (expected {SCHEMA_VERSION})"
-            )));
-        }
+        sqlite_schema::migrate(&conn)?;
         Ok(SqliteStore {
             conn: Mutex::new(conn),
         })
@@ -360,14 +336,14 @@ impl Store for SqliteStore {
     ) -> Result<FinishOutcome> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
-        let job: Option<(String, String, Option<String>)> = tx
+        let job: Option<(String, String, Option<String>, i64)> = tx
             .query_row(
-                "SELECT run_id, status, lease_owner FROM jobs WHERE id=?",
+                "SELECT run_id, status, lease_owner, attempts FROM jobs WHERE id=?",
                 [id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .optional()?;
-        let Some((run_id, status, owner)) = job else {
+        let Some((run_id, status, owner, attempts)) = job else {
             return Ok(FinishOutcome::NotLeased);
         };
         if status != JobStatus::Running.as_str() || owner.as_deref() != Some(worker_id) {
@@ -398,6 +374,8 @@ impl Store for SqliteStore {
                     run_id
                 ],
             )?;
+            trials::discard_earlier_attempts(&tx, &run_id, attempts)?;
+            trials::write_run_stats(&tx, &run_id, &result.stats)?;
             tx.execute(
                 "INSERT INTO events(run_id,ts,kind,payload_json) VALUES (?,?,?,?)",
                 params![run_id, now, "finished", result.event_payload_json],
@@ -449,6 +427,93 @@ impl Store for SqliteStore {
         Ok(rows)
     }
 
+    fn ingest_trials(
+        &self,
+        job_id: &str,
+        worker_id: &str,
+        worker_trusted: bool,
+        batch: &TrialBatch,
+        _now: i64,
+    ) -> Result<IngestOutcome> {
+        trials::ingest(&mut self.conn(), job_id, worker_id, worker_trusted, batch)
+    }
+
+    fn count_trials(&self, run_id: &str) -> Result<u64> {
+        trials::count_trials(&self.conn(), run_id)
+    }
+
+    fn get_trial(&self, run_id: &str, seq: u64) -> Result<Option<TrialRecord>> {
+        trials::get_trial(&self.conn(), run_id, seq)
+    }
+
+    fn list_trials(
+        &self,
+        run_id: &str,
+        after_seq: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<TrialRecord>> {
+        trials::list_trials(&self.conn(), run_id, after_seq, limit)
+    }
+
+    fn list_trial_digests(
+        &self,
+        run_id: &str,
+        after_seq: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<TrialDigestRow>> {
+        trials::list_trial_digests(&self.conn(), run_id, after_seq, limit)
+    }
+
+    fn get_catalog(&self, run_id: &str) -> Result<Vec<CatalogRowRecord>> {
+        trials::get_catalog(&self.conn(), run_id)
+    }
+
+    fn list_run_properties(&self, run_id: &str) -> Result<Vec<RunPropertyRow>> {
+        trials::list_run_properties(&self.conn(), run_id)
+    }
+
+    fn run_contributors(&self, run_id: &str) -> Result<Vec<Contributor>> {
+        trials::run_contributors(&self.conn(), run_id)
+    }
+
+    fn set_worker_trusted(&self, id: &str, trusted: bool) -> Result<()> {
+        trials::set_worker_trusted(&self.conn(), id, trusted)
+    }
+
+    fn worker_trusted(&self, id: &str) -> Result<Option<bool>> {
+        trials::worker_trusted(&self.conn(), id)
+    }
+
+    fn register_worker_with_secret(
+        &self,
+        name: &str,
+        caps_json: &str,
+        secret_hash: &str,
+        now: i64,
+    ) -> Result<WorkerRecord> {
+        let id = new_id("wrk");
+        self.conn().execute(
+            "INSERT INTO workers(id,name,caps_json,registered_at,last_seen,secret_hash) VALUES (?,?,?,?,?,?)",
+            params![id, name, caps_json, now, now, secret_hash],
+        )?;
+        Ok(WorkerRecord {
+            id,
+            name: name.to_string(),
+            caps_json: caps_json.to_string(),
+            registered_at: now,
+            last_seen: now,
+            trusted: false,
+        })
+    }
+
+    fn set_worker_secret_hash(&self, id: &str, hash: &str) -> Result<()> {
+        trials::set_worker_secret_hash(&self.conn(), id, hash)
+    }
+
+    fn worker_secret_hash(&self, id: &str) -> Result<Option<String>> {
+        trials::worker_secret_hash(&self.conn(), id)
+    }
+
     fn register_worker(&self, name: &str, caps_json: &str, now: i64) -> Result<WorkerRecord> {
         let id = new_id("wrk");
         self.conn().execute(
@@ -461,6 +526,7 @@ impl Store for SqliteStore {
             caps_json: caps_json.to_string(),
             registered_at: now,
             last_seen: now,
+            trusted: false,
         })
     }
 
@@ -487,7 +553,7 @@ impl Store for SqliteStore {
 
     fn list_workers(&self) -> Result<Vec<WorkerRecord>> {
         let conn = self.conn();
-        let mut stmt = conn.prepare("SELECT id,name,caps_json,registered_at,last_seen FROM workers ORDER BY registered_at, rowid")?;
+        let mut stmt = conn.prepare("SELECT id,name,caps_json,registered_at,last_seen,trusted FROM workers ORDER BY registered_at, rowid")?;
         let rows = stmt
             .query_map([], |r| {
                 Ok(WorkerRecord {
@@ -496,6 +562,7 @@ impl Store for SqliteStore {
                     caps_json: r.get(2)?,
                     registered_at: r.get(3)?,
                     last_seen: r.get(4)?,
+                    trusted: r.get(5)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;

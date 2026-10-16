@@ -1,8 +1,14 @@
 //! Running totals for one run, and the hook that lets a search loop watch trials as they finish.
 use crate::exec::Trial;
 use crate::property_verdict;
+use crate::trace::Verdict;
+use crate::trial_log::{self, Counted};
 use hairspring_engine::report::RunOutcome;
-use hairspring_props::{PropertyStat, PropertyStatus, RunProps, RunSummary, TrialProps};
+use hairspring_engine::trial_log::TrialReport;
+use hairspring_props::limits::MAX_IDS_PER_RUN;
+use hairspring_props::{
+    PropertyStat, PropertyStatus, RunCatalog, RunProps, RunSummary, TrialProps,
+};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
@@ -30,6 +36,10 @@ pub struct Tally {
     pub budget_cut: bool,
     timed_out: u64,
     props: RunProps,
+    /// The ids the run has seen, which the trials' digests refer to.
+    catalog: RunCatalog,
+    /// One record per judged trial, in judging order.
+    log: Vec<TrialReport>,
     observer: Option<Arc<dyn TrialObserver>>,
 }
 
@@ -41,26 +51,45 @@ impl Tally {
         }
     }
 
-    /// Records a finished trial: tells the observer and folds its properties into the run. Called once per trial, in
-    /// seed order. Trials whose events the host could not collect are not folded in (their data cannot be trusted),
-    /// but the observer still sees them.
-    pub fn on_trial(&mut self, seed: u64, trial: &Trial) {
+    /// Records a finished trial: tells the observer, folds its properties into the run and logs a record of it for the
+    /// store. Called once per trial, in seed order, with the verdict the run reached for it. Trials whose events the
+    /// host could not collect are logged but not folded in (their data cannot be trusted); the observer still sees
+    /// them.
+    pub fn on_trial(&mut self, seq: u64, seed: u64, trial: &Trial, verdict: &Verdict) {
         let counted = property_verdict::for_run(trial);
         if let Some(observer) = &self.observer {
             observer.on_trial(seed, trial, &counted.clone().unwrap_or_default());
         }
-        if let Some(props) = counted {
-            let run = std::mem::take(&mut self.props);
+        let record = counted.as_ref().map(|props| {
             // The report of a killed trial decides nothing: its failures are kept visible but are not findings.
-            self.props = match trial.timed_out {
-                true => run.add_inconclusive(seed, &props),
-                false => run.add(seed, &props),
-            };
-        }
+            let recorded =
+                std::mem::take(&mut self.catalog).record(props, trial.timed_out, MAX_IDS_PER_RUN);
+            self.catalog = recorded.catalog;
+            self.props =
+                std::mem::take(&mut self.props).add_digest(seed, &recorded.digest, &self.catalog);
+            Counted {
+                props,
+                digest: recorded.digest,
+                updates: recorded.updates,
+            }
+        });
         if let Some(schedule) = &trial.schedule {
             self.schedules.insert(schedule.fingerprint.clone());
             self.work = self.work.saturating_add(schedule.syscalls);
         }
+        self.log
+            .push(trial_log::build(seq, seed, trial, verdict, record));
+    }
+
+    /// The records of the trials judged so far.
+    #[cfg(test)]
+    pub fn trial_log(&self) -> &[TrialReport] {
+        &self.log
+    }
+
+    /// Attaches the trial records to an outcome that ends the run without going through the property methods.
+    pub fn with_log(&self, outcome: RunOutcome) -> RunOutcome {
+        outcome.with_trial_log(self.log.clone())
     }
 
     pub fn pass(&mut self) {
@@ -153,19 +182,19 @@ impl Tally {
                 _ => s,
             })
             .collect();
-        match summary.trials {
+        self.with_log(match summary.trials {
             0 => outcome,
             _ => outcome.with_properties(stats, summary),
-        }
+        })
     }
 
     /// Adds the run's property statistics to an outcome, when the guest reported any.
     pub fn with_properties(&self, outcome: RunOutcome) -> RunOutcome {
         let (stats, summary) = self.properties();
-        match summary.trials {
+        self.with_log(match summary.trials {
             0 => outcome,
             _ => outcome.with_properties(stats, summary),
-        }
+        })
     }
 }
 
@@ -203,8 +232,8 @@ mod tests {
             events_error: Some(EventsFault::Infra("disk".into())),
             ..trial(report("a.id", "always", 0, 2))
         };
-        tally.on_trial(1, &faulty);
-        tally.on_trial(2, &trial(report("a.id", "always", 3, 0)));
+        tally.on_trial(0, 1, &faulty, &Verdict::Inconclusive("x".into()));
+        tally.on_trial(1, 2, &trial(report("a.id", "always", 3, 0)), &Verdict::Pass);
         let (stats, summary) = tally.properties();
         assert_eq!(summary.trials, 1);
         assert_eq!(stats[0].status, PropertyStatus::Pass);
@@ -225,7 +254,12 @@ mod tests {
     #[test]
     fn a_run_that_tested_nothing_still_carries_its_property_counts_without_unmet() {
         let mut tally = Tally::new(None);
-        tally.on_trial(1, &trial(report("s.id", "sometimes", 0, 2)));
+        tally.on_trial(
+            0,
+            1,
+            &trial(report("s.id", "sometimes", 0, 2)),
+            &Verdict::Pass,
+        );
         tally.unusable();
         let out = tally.finish(Instant::now());
         assert_eq!(out.status, RunStatus::Error);

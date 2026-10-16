@@ -2,11 +2,12 @@
 use hairspring_engine::report::RunOutcome;
 use serde_json::{json, Value};
 
-/// The `complete` request body. Property statistics are left out until the store and the service can take them
-/// (E4 and E6): a run with thousands of properties would otherwise exceed the server's request body limit and the
-/// result would be lost.
-pub fn completion_body(worker_id: &str, outcome: RunOutcome) -> Value {
-    json!({ "worker_id": worker_id, "outcome": outcome.without_properties() })
+/// The `complete` request body. Property statistics are left out: the server folds the per-trial records it was sent
+/// itself and does not read a worker's figures, and a run with thousands of properties would otherwise exceed the
+/// server's request body limit and the result would be lost. The per-trial records travel in their own requests; the
+/// outcome carries only how many there were.
+pub fn completion_body(worker_id: &str, secret: &str, outcome: RunOutcome) -> Value {
+    json!({ "worker_id": worker_id, "worker_secret": secret, "outcome": outcome.without_properties() })
 }
 
 #[cfg(test)]
@@ -39,6 +40,37 @@ mod tests {
     }
 
     #[test]
+    fn the_completion_body_names_the_trial_count_and_carries_no_records() {
+        let report = hairspring_engine::trial_log::TrialReport {
+            seq: 0,
+            seed: 1,
+            verdict: hairspring_engine::trial_log::ReportedVerdict::Pass,
+            reason: String::new(),
+            exit_code: Some(0),
+            signal: None,
+            behaviour_hash: None,
+            schedule_fp: None,
+            syscalls: 0,
+            work_ops: 0,
+            elapsed_ms: 0,
+            catalog: Vec::new(),
+            digest: vec![1, 0, 0, 0],
+            detail: None,
+            output: Some("{}".to_string()),
+        };
+        let outcome = RunOutcome {
+            trials_reported: Some(1),
+            ..RunOutcome::passed(1, 1, 1).with_trial_log(vec![report])
+        };
+        let text = completion_body("w", "s", outcome).to_string();
+        assert!(text.contains("\"trials_reported\":1"), "{text}");
+        assert!(
+            !text.contains("trial_log") && !text.contains("digest"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn the_completion_body_of_a_run_with_the_most_properties_fits_the_server_limit() {
         let outcome = outcome_with_many_properties();
         let unstripped =
@@ -48,7 +80,7 @@ mod tests {
             "the fixture must be big enough to matter: {} bytes",
             unstripped.len()
         );
-        let body = serde_json::to_vec(&completion_body("w", outcome)).unwrap();
+        let body = serde_json::to_vec(&completion_body("w", "s", outcome)).unwrap();
         assert!(body.len() < SERVER_BODY_LIMIT, "{} bytes", body.len());
         assert!(!String::from_utf8(body).unwrap().contains("properties"));
     }

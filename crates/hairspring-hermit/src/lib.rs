@@ -20,7 +20,10 @@ mod safe_open;
 mod summary;
 mod summary_dir;
 mod tally;
+#[cfg(test)]
+mod tally_log_tests;
 mod trace;
+mod trial_log;
 #[cfg(test)]
 mod verdict_tests;
 

@@ -48,6 +48,9 @@ pub struct Trial {
     pub events_digest: Option<u64>,
     /// Why the events file could not be used, when it was asked for and something went wrong.
     pub events_error: Option<EventsFault>,
+    /// Wall-clock milliseconds from starting the guest to collecting its output. Informational: it differs between
+    /// identical schedules and never enters a hash.
+    pub elapsed_ms: u64,
 }
 
 /// The private directories a backend gives its trials.
@@ -284,6 +287,7 @@ fn run_trial_with_summary(
     if let Some(dir) = spec.cwd {
         cmd.current_dir(dir);
     }
+    let started = Instant::now();
     let mut child = spawn_with_retry(&mut cmd).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => SpawnError::NotFound(settings.bin.display().to_string()),
         _ => SpawnError::Other(e.to_string()),
@@ -351,5 +355,6 @@ fn run_trial_with_summary(
         events,
         events_digest,
         events_error,
+        elapsed_ms: started.elapsed().as_millis() as u64,
     })
 }

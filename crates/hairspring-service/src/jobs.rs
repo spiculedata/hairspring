@@ -5,7 +5,9 @@ use crate::{Result, Service, ServiceError};
 use hairspring_engine::backend::Progress;
 use hairspring_engine::engine::{Engine, RunRequest};
 use hairspring_engine::report::{RunOutcome, RunStatus};
-use hairspring_store::{now_ms, FinishOutcome, JobResult, JobStatus, NewFailure, RunState};
+use hairspring_store::{
+    now_ms, FinishOutcome, JobResult, JobStatus, NewFailure, RunState, RunStats,
+};
 use std::cell::Cell;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -121,7 +123,11 @@ impl Service {
         Ok(())
     }
 
-    fn owned_running_job(&self, job_id: &str, worker_id: &str) -> Result<hairspring_store::Job> {
+    pub(crate) fn owned_running_job(
+        &self,
+        job_id: &str,
+        worker_id: &str,
+    ) -> Result<hairspring_store::Job> {
         let job = self
             .store
             .get_job(job_id)?
@@ -156,6 +162,9 @@ impl Service {
             .get_run(&job.run_id)?
             .ok_or_else(|| ServiceError::NotFound(format!("run {}", job.run_id)))?;
         let clean = sanitize::outcome(outcome, &run.target)?;
+        let reported = self
+            .ingest_local_log(job_id, worker_id, outcome)?
+            .or(clean.trials_reported);
         let state = match clean.status {
             RunStatus::Passed => RunState::Passed,
             RunStatus::Failed => RunState::Failed,
@@ -178,6 +187,11 @@ impl Service {
             }
             None => None,
         };
+        let budget_trials = serde_json::from_str::<JobPayload>(&job.payload_json)
+            .ok()
+            .and_then(|p| p.budget)
+            .map(|b| b.max_trials);
+        let stats = self.run_stats(&job.run_id, job.attempts, &clean, reported, budget_trials)?;
         let event_payload_json = finished_payload(state, Some(&clean));
         let result = JobResult {
             state,
@@ -186,6 +200,7 @@ impl Service {
             error: clean.error,
             failure,
             event_payload_json,
+            stats,
         };
         match self
             .store
@@ -199,6 +214,82 @@ impl Service {
                 Ok(())
             }
         }
+    }
+
+    /// Stores the trial records an in-process worker handed over inside its outcome, batch by batch, and returns how
+    /// many it handed over. A remote worker sends its records through the ingest endpoint instead.
+    fn ingest_local_log(
+        &self,
+        job_id: &str,
+        worker_id: &str,
+        outcome: &RunOutcome,
+    ) -> Result<Option<u64>> {
+        if outcome.trial_log.is_empty() {
+            return Ok(None);
+        }
+        for batch in crate::ingest::batches(&outcome.trial_log) {
+            self.ingest_trials(job_id, worker_id, batch)?;
+        }
+        Ok(Some(outcome.trial_log.len() as u64))
+    }
+
+    /// The figures to store with a finished run. The statistics are folded here from the stored digests; whatever the
+    /// worker put in its outcome is not read. A run whose rows do not match what the worker says it ran, or that did
+    /// not run to the end of its budget, makes no must-hit claim.
+    fn run_stats(
+        &self,
+        run_id: &str,
+        attempt: u32,
+        clean: &RunOutcome,
+        reported: Option<u64>,
+        budget_trials: Option<u64>,
+    ) -> Result<RunStats> {
+        // Rows an earlier attempt left belong to a run that is over; they are removed when this job finishes.
+        let stale = self
+            .store
+            .get_run(run_id)?
+            .is_some_and(|r| r.ingest_attempt != 0 && r.ingest_attempt < u64::from(attempt));
+        let held = if stale {
+            0
+        } else {
+            self.store.count_trials(run_id)?
+        };
+        let counts_match = match reported {
+            None => held == 0,
+            Some(n) => n == held && (clean.status == RunStatus::Error || clean.trials == held),
+        };
+        // A run that passed without holding as many trials as it was asked for was ended early, by the worker or
+        // by whoever called `complete`, and cannot back a claim about the trials it never ran. (A run limited by
+        // wall-clock time is treated the same way: it did not complete its budget.)
+        let uses_rows = held > 0 || reported.is_some();
+        let short = clean.status == RunStatus::Passed
+            && uses_rows
+            && budget_trials.is_some_and(|b| held < b);
+        let mut incomplete = !counts_match || short;
+        let (properties, property_summary_json) = if held == 0 {
+            (Vec::new(), None)
+        } else {
+            match self.fold_run(run_id) {
+                Ok(folded) => {
+                    let withhold = incomplete || clean.status != RunStatus::Passed;
+                    self.property_rows(&folded, withhold)
+                }
+                Err(e) => {
+                    eprintln!("hairspring: cannot fold the trials of {run_id}: {e}");
+                    incomplete = true;
+                    (Vec::new(), None)
+                }
+            }
+        };
+        Ok(RunStats {
+            inconclusive: clean.inconclusive,
+            distinct_schedules: clean.distinct_schedules,
+            work: clean.work,
+            stopped_at_first_failure: clean.status == RunStatus::Failed,
+            ingest_incomplete: incomplete,
+            property_summary_json,
+            properties,
+        })
     }
 
     fn forget_progress(&self, run_id: &str) {

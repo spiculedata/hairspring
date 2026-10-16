@@ -260,16 +260,21 @@ impl HermitBackend {
 
     /// Decides what one finished trial means. Returns the run's outcome when the run should end here.
     fn judge(&self, j: &Judged, tally: &mut Tally) -> Option<RunOutcome> {
-        tally.on_trial(j.seed, j.trial);
-        match self.verdict(j.p, j.trial, j.timeout) {
-            Verdict::Infra(msg) => Some(infra(msg)),
+        let cut_by_budget = j.trial.timed_out && j.clipped;
+        let verdict = match self.verdict(j.p, j.trial, j.timeout) {
+            // Out of budget, not out of patience: inconclusive, never a finding. The rest of the batch is still
+            // judged first, because a violation among trials that already ran must not be thrown away.
+            Verdict::Hang(r) | Verdict::Violation(r) if cut_by_budget => Verdict::Hang(r),
+            other => other,
+        };
+        tally.on_trial(j.index, j.seed, j.trial, &verdict);
+        match verdict {
+            Verdict::Infra(msg) => Some(tally.with_log(infra(msg))),
             Verdict::Inconclusive(_) => {
                 tally.unusable();
                 None
             }
-            Verdict::Hang(_) | Verdict::Violation(_) if j.trial.timed_out && j.clipped => {
-                // Out of budget, not out of patience: inconclusive, never a finding. The rest of the batch is still
-                // judged first, because a violation among trials that already ran must not be thrown away.
+            Verdict::Hang(_) if cut_by_budget => {
                 tally.cut_by_budget();
                 None
             }
@@ -526,7 +531,7 @@ impl Backend for HermitBackend {
                 let seed = req.seed.wrapping_add(i);
                 let trial = match result {
                     Ok(t) => t,
-                    Err(e) => return Ok(infra(e.to_string())),
+                    Err(e) => return Ok(tally.with_log(infra(e.to_string()))),
                 };
                 let judged = Judged {
                     spec,

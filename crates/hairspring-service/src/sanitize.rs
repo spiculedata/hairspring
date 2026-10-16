@@ -130,8 +130,9 @@ pub fn outcome(outcome: &RunOutcome, run_target: &str) -> Result<RunOutcome, Ser
     Ok(RunOutcome {
         error: outcome.error.as_deref().map(single_line),
         failure,
-        // Worker-reported property data is untrusted and has no limits or consistency checks yet (E6). It is dropped
-        // here rather than passed through unchecked.
+        // A worker's own property statistics are never read: the server folds the per-trial digests it stored.
+        // Trial records arrive through their own checked path, not inside an outcome.
+        trial_log: Vec::new(),
         ..outcome.clone().without_properties()
     })
 }

@@ -3,6 +3,8 @@
 
 use hairspring_props::{AssertKind, TrialEvents, TrialProps};
 
+pub mod legacy_run;
+
 pub fn ev(json: &str) -> String {
     format!("HAIRSPRING_EVENT {json}\n")
 }

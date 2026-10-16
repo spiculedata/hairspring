@@ -241,6 +241,7 @@ fn router(state: AppState) -> Router {
         .route("/api/bundles/{hash}", get(api::get_bundle))
         .route("/api/replay", post(api::replay))
         .route("/api/workers", get(api::workers))
+        .route("/api/workers/{id}/trust", post(api::set_worker_trust))
         .route("/api/worker/register", post(worker_api::register))
         .route("/api/worker/lease", post(worker_api::lease))
         .route(
@@ -252,6 +253,7 @@ fn router(state: AppState) -> Router {
             post(worker_api::complete),
         )
         .route("/api/worker/jobs/{job}/fail", post(worker_api::fail))
+        .route("/api/worker/jobs/{job}/trials", post(worker_api::trials))
         .route(
             "/api/worker/jobs/{job}/heartbeat",
             post(worker_api::heartbeat),
@@ -280,7 +282,7 @@ fn spawn_workers(
     (0..n)
         .filter_map(|i| {
             let caps = "{\"backends\":[\"embedded\"]}";
-            let worker = match svc.register_worker(&format!("embedded-{i}"), caps) {
+            let worker = match svc.register_local_worker(&format!("embedded-{i}"), caps) {
                 Ok(w) => w,
                 Err(e) => {
                     eprintln!("hairspring-server: cannot register embedded worker {i}: {e}");

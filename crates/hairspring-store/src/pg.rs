@@ -2,6 +2,9 @@
 //!
 //! Connections are plain TCP (`NoTls`): run Postgres on a private network or behind a TLS proxy.
 //! Leasing uses `FOR UPDATE SKIP LOCKED`, so any number of workers can pull jobs concurrently.
+use crate::pg_schema;
+use crate::pg_trials as trials;
+use crate::trials::*;
 use crate::types::*;
 use crate::{new_id, sha256_hex, Store, MAX_JOB_ATTEMPTS};
 use postgres::{Client, Config, NoTls, Row};
@@ -9,32 +12,9 @@ use r2d2_postgres::{r2d2, PostgresConnectionManager};
 
 type Pool = r2d2::Pool<PostgresConnectionManager<NoTls>>;
 
-const SCHEMA_VERSION: i32 = 1;
 /// Serialises migrations across processes starting at the same time.
 const MIGRATION_LOCK: i64 = 727_274;
 const MAX_SCHEMA_NAME: usize = 63;
-
-const SCHEMA: &str = "
-CREATE TABLE runs (
-  id TEXT PRIMARY KEY, seq BIGSERIAL, target TEXT NOT NULL, backend TEXT NOT NULL, state TEXT NOT NULL,
-  seed BIGINT NOT NULL, config_json TEXT NOT NULL, created_at BIGINT NOT NULL,
-  started_at BIGINT, finished_at BIGINT, steps BIGINT NOT NULL DEFAULT 0, trials BIGINT NOT NULL DEFAULT 0, error TEXT);
-CREATE INDEX runs_created ON runs(created_at, seq);
-CREATE TABLE failures (
-  id TEXT PRIMARY KEY, seq BIGSERIAL, run_id TEXT NOT NULL REFERENCES runs(id), target TEXT NOT NULL, message TEXT NOT NULL,
-  original_len BIGINT NOT NULL, shrunk_len BIGINT NOT NULL, bundle_hash TEXT NOT NULL, steps_json TEXT NOT NULL, created_at BIGINT NOT NULL);
-CREATE INDEX failures_run ON failures(run_id);
-CREATE TABLE blobs (hash TEXT PRIMARY KEY, data BYTEA NOT NULL);
-CREATE TABLE jobs (
-  id TEXT PRIMARY KEY, seq BIGSERIAL, run_id TEXT NOT NULL REFERENCES runs(id), kind TEXT NOT NULL, payload_json TEXT NOT NULL,
-  status TEXT NOT NULL, lease_owner TEXT, lease_until BIGINT, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, created_at BIGINT NOT NULL);
-CREATE INDEX jobs_runnable ON jobs(status, created_at, seq);
-CREATE TABLE events (
-  id BIGSERIAL PRIMARY KEY, run_id TEXT NOT NULL, ts BIGINT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL);
-CREATE INDEX events_run ON events(run_id, id);
-CREATE TABLE workers (
-  id TEXT PRIMARY KEY, seq BIGSERIAL, name TEXT NOT NULL, caps_json TEXT NOT NULL, registered_at BIGINT NOT NULL, last_seen BIGINT NOT NULL);
-";
 
 impl From<postgres::Error> for StoreError {
     fn from(e: postgres::Error) -> Self {
@@ -73,6 +53,16 @@ fn run_from_row(r: &Row) -> RunRecord {
         steps: r.get::<_, i64>("steps") as u64,
         trials: r.get::<_, i64>("trials") as u64,
         error: r.get("error"),
+        inconclusive: r.get::<_, i64>("inconclusive") as u64,
+        distinct_schedules: r.get::<_, i64>("distinct_schedules") as u64,
+        work: r.get::<_, i64>("work") as u64,
+        mode: r.get("mode"),
+        stopped_at_first_failure: r.get("stopped_at_first_failure"),
+        property_summary_json: r.get("property_summary_json"),
+        catalog_size: r.get::<_, i64>("catalog_size") as u64,
+        ingest_incomplete: r.get("ingest_incomplete"),
+        ingest_attempt: r.get::<_, i64>("ingest_attempt") as u64,
+        build_id: r.get("build_id"),
     }
 }
 
@@ -143,25 +133,7 @@ impl PgStore {
         let mut tx = c.transaction()?;
         // Transaction-scoped: released on commit or rollback, even if this connection dies mid-way.
         tx.execute("SELECT pg_advisory_xact_lock($1)", &[&MIGRATION_LOCK])?;
-        tx.batch_execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")?;
-        let current: Option<i32> = tx
-            .query_opt("SELECT version FROM schema_version LIMIT 1", &[])?
-            .map(|r| r.get(0));
-        match current {
-            None => {
-                tx.batch_execute(SCHEMA)?;
-                tx.execute(
-                    "INSERT INTO schema_version(version) VALUES ($1)",
-                    &[&SCHEMA_VERSION],
-                )?;
-            }
-            Some(v) if v == SCHEMA_VERSION => {}
-            Some(v) => {
-                return Err(StoreError::Backend(format!(
-                    "database schema version {v} is not supported (expected {SCHEMA_VERSION})"
-                )))
-            }
-        }
+        pg_schema::migrate(&mut tx)?;
         tx.commit()?;
         Ok(())
     }
@@ -396,14 +368,14 @@ impl Store for PgStore {
         let mut c = self.client()?;
         let mut tx = c.transaction()?;
         let Some(job) = tx.query_opt(
-            "SELECT run_id, status, lease_owner FROM jobs WHERE id=$1 FOR UPDATE",
+            "SELECT run_id, status, lease_owner, attempts FROM jobs WHERE id=$1 FOR UPDATE",
             &[&id],
         )?
         else {
             return Ok(FinishOutcome::NotLeased);
         };
-        let (run_id, status, owner): (String, String, Option<String>) =
-            (job.get(0), job.get(1), job.get(2));
+        let (run_id, status, owner, attempts): (String, String, Option<String>, i32) =
+            (job.get(0), job.get(1), job.get(2), job.get(3));
         if status != JobStatus::Running.as_str() || owner.as_deref() != Some(worker_id) {
             return Ok(FinishOutcome::NotLeased);
         }
@@ -425,6 +397,8 @@ impl Store for PgStore {
                 "UPDATE runs SET state=$1, steps=$2, trials=$3, error=$4, finished_at=$5 WHERE id=$6",
                 &[&result.state.as_str(), &(result.steps as i64), &(result.trials as i64), &result.error, &now, &run_id],
             )?;
+            trials::discard_earlier_attempts(&mut tx, &run_id, i64::from(attempts))?;
+            trials::write_run_stats(&mut tx, &run_id, &result.stats)?;
             tx.execute(
                 "INSERT INTO events(run_id,ts,kind,payload_json) VALUES ($1,$2,'finished',$3)",
                 &[&run_id, &now, &result.event_payload_json],
@@ -482,6 +456,99 @@ impl Store for PgStore {
             .collect())
     }
 
+    fn ingest_trials(
+        &self,
+        job_id: &str,
+        worker_id: &str,
+        worker_trusted: bool,
+        batch: &TrialBatch,
+        _now: i64,
+    ) -> Result<IngestOutcome> {
+        trials::ingest(
+            &mut *self.client()?,
+            job_id,
+            worker_id,
+            worker_trusted,
+            batch,
+        )
+    }
+
+    fn count_trials(&self, run_id: &str) -> Result<u64> {
+        trials::count_trials(&mut *self.client()?, run_id)
+    }
+
+    fn get_trial(&self, run_id: &str, seq: u64) -> Result<Option<TrialRecord>> {
+        trials::get_trial(&mut *self.client()?, run_id, seq)
+    }
+
+    fn list_trials(
+        &self,
+        run_id: &str,
+        after_seq: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<TrialRecord>> {
+        trials::list_trials(&mut *self.client()?, run_id, after_seq, limit)
+    }
+
+    fn list_trial_digests(
+        &self,
+        run_id: &str,
+        after_seq: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<TrialDigestRow>> {
+        trials::list_trial_digests(&mut *self.client()?, run_id, after_seq, limit)
+    }
+
+    fn get_catalog(&self, run_id: &str) -> Result<Vec<CatalogRowRecord>> {
+        trials::get_catalog(&mut *self.client()?, run_id)
+    }
+
+    fn list_run_properties(&self, run_id: &str) -> Result<Vec<RunPropertyRow>> {
+        trials::list_run_properties(&mut *self.client()?, run_id)
+    }
+
+    fn run_contributors(&self, run_id: &str) -> Result<Vec<Contributor>> {
+        trials::run_contributors(&mut *self.client()?, run_id)
+    }
+
+    fn set_worker_trusted(&self, id: &str, trusted: bool) -> Result<()> {
+        trials::set_worker_trusted(&mut *self.client()?, id, trusted)
+    }
+
+    fn register_worker_with_secret(
+        &self,
+        name: &str,
+        caps_json: &str,
+        secret_hash: &str,
+        now: i64,
+    ) -> Result<WorkerRecord> {
+        let id = new_id("wrk");
+        self.client()?.execute(
+            "INSERT INTO workers(id,name,caps_json,registered_at,last_seen,secret_hash) VALUES ($1,$2,$3,$4,$4,$5)",
+            &[&id, &name, &caps_json, &now, &secret_hash],
+        )?;
+        Ok(WorkerRecord {
+            id,
+            name: name.to_string(),
+            caps_json: caps_json.to_string(),
+            registered_at: now,
+            last_seen: now,
+            trusted: false,
+        })
+    }
+
+    fn set_worker_secret_hash(&self, id: &str, hash: &str) -> Result<()> {
+        trials::set_worker_secret_hash(&mut *self.client()?, id, hash)
+    }
+
+    fn worker_secret_hash(&self, id: &str) -> Result<Option<String>> {
+        trials::worker_secret_hash(&mut *self.client()?, id)
+    }
+
+    fn worker_trusted(&self, id: &str) -> Result<Option<bool>> {
+        trials::worker_trusted(&mut *self.client()?, id)
+    }
+
     fn register_worker(&self, name: &str, caps_json: &str, now: i64) -> Result<WorkerRecord> {
         let id = new_id("wrk");
         self.client()?.execute("INSERT INTO workers(id,name,caps_json,registered_at,last_seen) VALUES ($1,$2,$3,$4,$4)", &[&id, &name, &caps_json, &now])?;
@@ -491,6 +558,7 @@ impl Store for PgStore {
             caps_json: caps_json.to_string(),
             registered_at: now,
             last_seen: now,
+            trusted: false,
         })
     }
 
@@ -502,7 +570,7 @@ impl Store for PgStore {
     }
 
     fn list_workers(&self) -> Result<Vec<WorkerRecord>> {
-        let rows = self.client()?.query("SELECT id,name,caps_json,registered_at,last_seen FROM workers ORDER BY registered_at, seq", &[])?;
+        let rows = self.client()?.query("SELECT id,name,caps_json,registered_at,last_seen,trusted FROM workers ORDER BY registered_at, seq", &[])?;
         Ok(rows
             .iter()
             .map(|r| WorkerRecord {
@@ -511,6 +579,7 @@ impl Store for PgStore {
                 caps_json: r.get(2),
                 registered_at: r.get(3),
                 last_seen: r.get(4),
+                trusted: r.get(5),
             })
             .collect())
     }

@@ -401,20 +401,22 @@ fn worker_endpoints_enforce_lease_ownership() {
         .as_str()
         .unwrap()
         .to_string();
-    let w1 = c
-        .post("/api/worker/register", &json!({"name": "w1"}))
-        .json()["worker_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    let w2 = c
-        .post("/api/worker/register", &json!({"name": "w2"}))
-        .json()["worker_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let register = |name: &str| {
+        let r = c
+            .post("/api/worker/register", &json!({ "name": name }))
+            .json();
+        (
+            r["worker_id"].as_str().unwrap().to_string(),
+            r["worker_secret"].as_str().unwrap().to_string(),
+        )
+    };
+    let (w1, s1) = register("w1");
+    let (w2, s2) = register("w2");
     let job_id = c
-        .post("/api/worker/lease", &json!({"worker_id": w1}))
+        .post(
+            "/api/worker/lease",
+            &json!({"worker_id": w1, "worker_secret": s1}),
+        )
         .json()["job_id"]
         .as_str()
         .expect("job leased")
@@ -423,10 +425,12 @@ fn worker_endpoints_enforce_lease_ownership() {
     // w2 is a REAL registered worker with a valid id: it must still be refused because w1 holds the lease.
     for action in ["complete", "fail", "progress", "heartbeat"] {
         let body = match action {
-            "complete" => json!({"worker_id": w2, "outcome": outcome}),
-            "fail" => json!({"worker_id": w2, "error": "x"}),
-            "progress" => json!({"worker_id": w2, "steps": 1, "trials": 1}),
-            _ => json!({"worker_id": w2}),
+            "complete" => json!({"worker_id": w2, "worker_secret": s2, "outcome": outcome}),
+            "fail" => json!({"worker_id": w2, "worker_secret": s2, "error": "x"}),
+            "progress" => {
+                json!({"worker_id": w2, "worker_secret": s2, "steps": 1, "trials": 1})
+            }
+            _ => json!({"worker_id": w2, "worker_secret": s2}),
         };
         let r = c.post(&format!("/api/worker/jobs/{job_id}/{action}"), &body);
         let rejected = r.status == 400
@@ -444,14 +448,17 @@ fn worker_endpoints_enforce_lease_ownership() {
         "the non-owner changed nothing"
     );
     assert_eq!(
-        c.post("/api/worker/lease", &json!({"worker_id": w2}))
-            .status,
+        c.post(
+            "/api/worker/lease",
+            &json!({"worker_id": w2, "worker_secret": s2})
+        )
+        .status,
         204,
         "queue empty: the job is still leased by w1"
     );
     let ok = c.post(
         &format!("/api/worker/jobs/{job_id}/complete"),
-        &json!({"worker_id": w1, "outcome": outcome}),
+        &json!({"worker_id": w1, "worker_secret": s1, "outcome": outcome}),
     );
     assert_eq!(ok.status, 200, "{}", ok.body);
     assert_eq!(
