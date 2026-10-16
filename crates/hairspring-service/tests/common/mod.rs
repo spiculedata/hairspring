@@ -7,15 +7,26 @@ use hairspring_engine::report::RunOutcome;
 use hairspring_engine::trial_log::{ReportedVerdict, TrialReport};
 use hairspring_props::{AssertKind, RunCatalog, TrialEvents, TrialProps};
 use hairspring_service::{LeasedJob, Service, StartRun};
-use hairspring_store::{SqliteStore, Store};
+use hairspring_store::{new_id, PgStore, SqliteStore, Store};
 use std::sync::Arc;
 
 pub mod fixture;
 
+/// An in-memory SQLite store, or, when `HAIRSPRING_TEST_PG_URL` is set, a PostgreSQL store in its own schema.
+fn new_store() -> Arc<dyn Store> {
+    match std::env::var("HAIRSPRING_TEST_PG_URL") {
+        Ok(url) => {
+            let schema = new_id("t").replace('-', "_");
+            Arc::new(PgStore::connect_in_schema(&url, &schema, 8).expect("connect to PostgreSQL"))
+        }
+        Err(_) => Arc::new(SqliteStore::open_in_memory().unwrap()),
+    }
+}
+
 pub fn setup() -> (Service, Arc<dyn Store>, Engine) {
     let registry = Arc::new(default_registry());
     let engine = Engine::new(registry.clone(), Config::from_registry(&registry));
-    let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store = new_store();
     (Service::new(store.clone()), store, engine)
 }
 

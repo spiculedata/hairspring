@@ -141,8 +141,14 @@ fn outcome_with_one_rated_trial(status: hairspring_engine::report::RunStatus) ->
 fn a_run_that_stopped_at_its_first_failure_prints_no_rate_for_any_property() {
     let outcome = outcome_with_one_rated_trial(hairspring_engine::report::RunStatus::Failed);
     let text = hairspring_engine::format::to_text("svc", &outcome);
-    assert!(text.contains("not a rate (stopped at first failure)"), "{text}");
-    assert!(!text.contains("upper bound") && !text.contains("3/N"), "{text}");
+    assert!(
+        text.contains("not a rate (stopped at first failure)"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("upper bound") && !text.contains("3/N"),
+        "{text}"
+    );
 }
 
 #[test]
