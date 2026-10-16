@@ -145,10 +145,14 @@ fn several_processes_opening_a_version_one_database_at_once_all_succeed() {
     let handles: Vec<_> = (0..4)
         .map(|_| {
             let p = path.clone();
-            std::thread::spawn(move || SqliteStore::open(&p).is_ok())
+            std::thread::spawn(move || SqliteStore::open(&p).err().map(|e| e.to_string()))
         })
         .collect();
-    assert!(handles.into_iter().all(|h| h.join().unwrap()));
+    let errors: Vec<String> = handles
+        .into_iter()
+        .filter_map(|h| h.join().unwrap())
+        .collect();
+    assert!(errors.is_empty(), "concurrent opens failed: {errors:?}");
 }
 
 #[test]
