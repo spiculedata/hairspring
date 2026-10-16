@@ -6,5 +6,7 @@ HAIRSPRING_EVENT {"v":1,"kind":"assert","proc":"p1","id":"wal.ckpt.nbackfill_le_
 HAIRSPRING_EVENT {"v":1,"kind":"assert","proc":"p1","id":"wal.reset.reached","hits":2,"trues":2,"falses":0,"first_false":null,"first_true":{"thread":"t#1","ord":1,"vals":[-1,0,0,9223372036854775807]}}
 HAIRSPRING_EVENT {"v":1,"kind":"assert","proc":"p1","id":"wal.never","hits":0,"trues":0,"falses":0}
 HAIRSPRING_EVENT {"v":1,"kind":"work","proc":"p1","ops":                 300,"future_field":{"nested":[1,2]}}
-HAIRSPRING_EVENT {"v":1,"kind":"end","proc":"p1","reason":"exit","status":0,"sites":3,"evals":                 414,"dropped":0,"threads":[{"thread":"writer-0","evals":400,"tape_consumed":312},{"thread":"t#1","evals":14,"tape_consumed":57,"key_stable":false}]}
+HAIRSPRING_EVENT {"v":1,"kind":"thread","proc":"p1","thread":"writer-0","evals":                 400,"tape_consumed":                 312,"key_stable":true}
+HAIRSPRING_EVENT {"v":1,"kind":"thread","proc":"p1","thread":"t#1","evals":                  14,"tape_consumed":                  57,"key_stable":false}
+HAIRSPRING_EVENT {"v":1,"kind":"end","proc":"p1","reason":"exit","status":0,"sites":3,"evals":                 414,"dropped":0,"threads":2}
 HAIRSPRING_EVENT {"v":1,"kind":"eval","id":"script.check","type":"sometimes","ok":true}

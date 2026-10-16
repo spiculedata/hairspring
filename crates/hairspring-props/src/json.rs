@@ -1,7 +1,12 @@
 //! A strict JSON value: duplicate object keys and over-deep nesting are errors, never silently resolved.
+//!
+//! Both checks happen inside a `DeserializeSeed`, which records the reason in a side channel. Nothing depends on the
+//! wording of `serde_json` error messages, and nesting is cut off at `MAX_JSON_DEPTH` long before the library's own
+//! recursion limit.
 
 use crate::limits::MAX_JSON_DEPTH;
-use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
+use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
+use std::cell::Cell;
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -30,43 +35,54 @@ pub enum JsonError {
     TooDeep,
 }
 
-const DUPLICATE_KEY_MARK: &str = "hairspring:duplicate-key";
-
-impl Json {
-    /// Nesting depth: a scalar is 0, an object or array containing scalars is 1.
-    fn depth(&self) -> usize {
-        match self {
-            Json::Arr(items) => 1 + items.iter().map(Json::depth).max().unwrap_or(0),
-            Json::Obj(entries) => 1 + entries.iter().map(|(_, v)| v.depth()).max().unwrap_or(0),
-            _ => 0,
-        }
-    }
-}
-
 /// Parse one JSON document from UTF-8 text. Trailing non-whitespace is an error.
 pub fn parse_strict(text: &str) -> Result<Json, JsonError> {
-    let value: Json = serde_json::from_str(text).map_err(|e| {
-        if e.to_string().contains(DUPLICATE_KEY_MARK) {
-            JsonError::DuplicateKey
-        } else {
-            JsonError::Malformed
+    let failure = Cell::new(None);
+    let seed = Seed {
+        depth: 0,
+        failure: &failure,
+    };
+    let mut de = serde_json::Deserializer::from_str(text);
+    let value = seed.deserialize(&mut de).and_then(|v| de.end().map(|()| v));
+    match value {
+        Ok(v) => Ok(v),
+        Err(_) => Err(failure.get().unwrap_or(JsonError::Malformed)),
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Seed<'a> {
+    /// Containers entered so far on the path to this value.
+    depth: usize,
+    failure: &'a Cell<Option<JsonError>>,
+}
+
+impl Seed<'_> {
+    fn fail<E: de::Error>(&self, why: JsonError) -> E {
+        self.failure.set(Some(why));
+        E::custom("strict json")
+    }
+
+    fn enter<E: de::Error>(&self) -> Result<Seed<'_>, E> {
+        if self.depth + 1 > MAX_JSON_DEPTH {
+            return Err(self.fail(JsonError::TooDeep));
         }
-    })?;
-    if value.depth() > MAX_JSON_DEPTH {
-        return Err(JsonError::TooDeep);
-    }
-    Ok(value)
-}
-
-impl<'de> Deserialize<'de> for Json {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Json, D::Error> {
-        deserializer.deserialize_any(JsonVisitor)
+        Ok(Seed {
+            depth: self.depth + 1,
+            failure: self.failure,
+        })
     }
 }
 
-struct JsonVisitor;
+impl<'de> DeserializeSeed<'de> for Seed<'_> {
+    type Value = Json;
 
-impl<'de> Visitor<'de> for JsonVisitor {
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Json, D::Error> {
+        deserializer.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for Seed<'_> {
     type Value = Json;
 
     fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -96,20 +112,22 @@ impl<'de> Visitor<'de> for JsonVisitor {
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Json, A::Error> {
+        let inner = self.enter()?;
         let mut items = Vec::new();
-        while let Some(item) = seq.next_element::<Json>()? {
+        while let Some(item) = seq.next_element_seed(inner)? {
             items.push(item);
         }
         Ok(Json::Arr(items))
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Json, A::Error> {
+        let inner = self.enter()?;
         let mut entries: Vec<(String, Json)> = Vec::new();
         while let Some(key) = map.next_key::<String>()? {
             if entries.iter().any(|(k, _)| *k == key) {
-                return Err(de::Error::custom(DUPLICATE_KEY_MARK));
+                return Err(self.fail(JsonError::DuplicateKey));
             }
-            entries.push((key, map.next_value::<Json>()?));
+            entries.push((key, map.next_value_seed(inner)?));
         }
         Ok(Json::Obj(entries))
     }

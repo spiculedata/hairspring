@@ -29,7 +29,7 @@ pub const MAX_LOC_FUNC_BYTES: usize = 128;
 pub const VALS_LEN: usize = 4;
 /// Most catalogued ids one process may declare.
 pub const MAX_IDS_PER_PROC: usize = 4096;
-/// Most thread entries one `end` line may carry.
+/// Most `thread` lines (and so the largest `end.threads` count) one process may send.
 pub const MAX_THREADS_PER_PROC: usize = 256;
 /// Most processes one trial may report.
 pub const MAX_PROCS_PER_TRIAL: usize = 64;

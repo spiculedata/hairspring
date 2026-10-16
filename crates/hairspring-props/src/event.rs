@@ -35,6 +35,11 @@ impl AssertKind {
         AssertKind::ALL.into_iter().find(|k| k.as_str() == name)
     }
 
+    /// False for `reachable` and `unreachable`: they carry no condition, so only `hits` is significant.
+    pub fn has_condition(self) -> bool {
+        !matches!(self, AssertKind::Reachable | AssertKind::Unreachable)
+    }
+
     /// Whether the run fails (UNMET) when the id is never satisfied.
     pub fn must_hit(self) -> bool {
         matches!(
@@ -115,7 +120,7 @@ impl EndReason {
     }
 }
 
-/// Per-thread totals carried by `end`.
+/// Per-thread totals carried by one `thread` line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadReport {
     pub thread: String,
@@ -123,6 +128,13 @@ pub struct ThreadReport {
     pub tape_consumed: u64,
     /// False when the thread key was assigned by claim order and so may differ between schedules.
     pub key_stable: bool,
+}
+
+/// One `thread` line: the totals of one thread of one process.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadLine {
+    pub proc: String,
+    pub thread: ThreadReport,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,7 +145,8 @@ pub struct End {
     pub sites: u64,
     pub evals: u64,
     pub dropped: u64,
-    pub threads: Vec<ThreadReport>,
+    /// How many `thread` lines this process sends. The lines themselves are separate events.
+    pub threads: u64,
 }
 
 /// A per-evaluation event from a script or a language without an SDK. Marks the trial perturbing.
@@ -151,9 +164,10 @@ pub enum Event {
     Catalog(CatalogEntry),
     Assert(AssertReport),
     Work(Work),
+    Thread(ThreadLine),
     End(End),
     Eval(Eval),
 }
 
-/// Process tag used for `eval` lines that omit `proc`.
-pub const DEFAULT_EVAL_PROC: &str = "p0";
+/// Process tag used for `eval` lines that omit `proc`. Reserved: real processes may not use it.
+pub const DEFAULT_EVAL_PROC: &str = "_eval";

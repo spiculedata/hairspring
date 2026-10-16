@@ -1,37 +1,63 @@
 //! Folding a trial's output lines into [`TrialProps`].
+//!
+//! Declarations (`hello`, `catalog`, `thread`, `work`, `end`) are applied as they stream past; `assert` and `eval`
+//! lines are held until the stream ends and applied after them, so the result does not depend on the order of lines
+//! between those two groups. Held events are bounded by the per-trial event byte budget.
 
 use crate::event::*;
 use crate::limits::*;
-use crate::line::{parse_line, IgnoreReason, LineOutcome, RejectReason};
+use crate::line::{is_event_candidate, parse_line, IgnoreReason, LineOutcome, RejectReason};
 use crate::trial::{
     CatalogConflict, EndReport, EventHealth, ProcReport, TrialProperty, TrialProps, Witness,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-/// The lines of one trial's output (stdout and stderr, in any order the caller chooses).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
+enum Source<'a> {
+    Output(&'a [u8]),
+    Lines(Vec<&'a [u8]>),
+}
+
+/// The output of one trial (stdout and stderr, in any order the caller chooses).
+#[derive(Debug, Clone)]
 pub struct TrialEvents<'a> {
-    lines: Vec<&'a [u8]>,
+    source: Source<'a>,
+}
+
+impl Default for TrialEvents<'_> {
+    fn default() -> Self {
+        TrialEvents {
+            source: Source::Output(&[]),
+        }
+    }
 }
 
 impl<'a> TrialEvents<'a> {
-    /// Split raw output on `\n`.
+    /// Wrap raw output; lines are found lazily when folding, so nothing is allocated per line.
     pub fn from_output(output: &'a [u8]) -> Self {
         TrialEvents {
-            lines: output.split(|b| *b == b'\n').collect(),
+            source: Source::Output(output),
         }
     }
 
     pub fn from_lines<I: IntoIterator<Item = &'a [u8]>>(lines: I) -> Self {
         TrialEvents {
-            lines: lines.into_iter().collect(),
+            source: Source::Lines(lines.into_iter().collect()),
         }
     }
 
     /// Fold every line; never panics, never fails. Anything dropped is counted in `health`.
     pub fn fold(&self) -> TrialProps {
+        match &self.source {
+            Source::Output(out) => Self::fold_stream(out.split(|b| *b == b'\n')),
+            Source::Lines(lines) => Self::fold_stream(lines.iter().copied()),
+        }
+    }
+
+    /// Fold lines as they are produced, without collecting them first.
+    pub fn fold_stream<'l, I: IntoIterator<Item = &'l [u8]>>(lines: I) -> TrialProps {
         let mut acc = Accumulator::default();
-        for line in &self.lines {
+        for line in lines {
             acc.feed(line);
         }
         acc.finish()
@@ -49,12 +75,22 @@ struct Accumulator {
     asserted: HashSet<ProcId>,
     conflicted: HashSet<ProcId>,
     conflicts: Vec<CatalogConflict>,
+    /// `assert` and `eval` events, applied after all declarations.
+    deferred: Vec<Event>,
     perturbing: bool,
     health: EventHealth,
 }
 
 impl Accumulator {
-    fn finish(self) -> TrialProps {
+    fn finish(mut self) -> TrialProps {
+        for event in std::mem::take(&mut self.deferred) {
+            match event {
+                Event::Assert(a) => self.apply_assert(a),
+                Event::Eval(e) => self.apply_eval(e),
+                _ => {}
+            }
+        }
+        self.check_reports();
         TrialProps {
             procs: self.procs,
             properties: self.props.into_values().collect(),
@@ -64,37 +100,47 @@ impl Accumulator {
         }
     }
 
+    /// Cross-checks between what `end` promised and what arrived.
+    fn check_reports(&mut self) {
+        for p in &self.procs {
+            let Some(end) = &p.end else { continue };
+            let declared = self.declared_per_proc.get(&p.tag).copied().unwrap_or(0);
+            if end.sites != declared as u64 {
+                self.health.sites_mismatch += 1;
+            }
+            if end.threads != p.threads.len() as u64 {
+                self.health.thread_count_mismatch += 1;
+            }
+            let unreported = self
+                .declared
+                .iter()
+                .filter(|key| key.0 == p.tag && !self.asserted.contains(*key))
+                .count();
+            self.health.unreported_ids += unreported as u64;
+        }
+    }
+
     fn feed(&mut self, line: &[u8]) {
-        let is_candidate = line.starts_with(EVENT_PREFIX_BARE.as_bytes());
-        let cost = if is_candidate {
-            (line.len().min(MAX_LINE_BYTES) + 1) as u64
-        } else {
-            0
-        };
-        if cost > 0
-            && self.health.event_bytes.saturating_add(cost) > MAX_EVENT_BYTES_PER_TRIAL as u64
-        {
+        if !is_event_candidate(line) {
+            return;
+        }
+        let cost = (line.len().min(MAX_LINE_BYTES) + 1) as u64;
+        if self.health.event_bytes.saturating_add(cost) > MAX_EVENT_BYTES_PER_TRIAL as u64 {
             self.health.over_limit += 1;
             return;
         }
+        self.health.event_bytes += cost;
         match parse_line(line) {
             LineOutcome::NotEvent => {}
-            LineOutcome::Rejected(reason) => {
-                self.health.event_bytes += cost;
-                self.count_rejection(reason);
-            }
-            LineOutcome::Ignored(reason) => {
-                self.health.event_bytes += cost;
-                match reason {
-                    IgnoreReason::UnknownKind => self.health.unknown_kind += 1,
-                    IgnoreReason::UnsupportedVersion => self.health.unsupported_version += 1,
-                }
+            LineOutcome::Rejected(reason) => self.count_rejection(reason),
+            LineOutcome::Ignored(IgnoreReason::UnknownKind) => self.health.unknown_kind += 1,
+            LineOutcome::Ignored(IgnoreReason::UnsupportedVersion) => {
+                self.health.unsupported_version += 1
             }
             LineOutcome::Event {
                 event,
                 unknown_fields,
             } => {
-                self.health.event_bytes += cost;
                 self.health.accepted += 1;
                 self.health.unknown_fields += u64::from(unknown_fields);
                 self.apply(event);
@@ -128,6 +174,7 @@ impl Accumulator {
             signal_handlers: None,
             work_ops: None,
             end: None,
+            threads: Vec::new(),
         });
         Some(self.procs.len() - 1)
     }
@@ -136,14 +183,19 @@ impl Accumulator {
         match event {
             Event::Hello(h) => self.apply_hello(h),
             Event::Work(w) => self.apply_work(w),
+            Event::Thread(t) => self.apply_thread(t),
             Event::End(e) => self.apply_end(e),
             Event::Catalog(c) => {
                 if self.proc_slot(&c.proc).is_some() {
                     self.declare(&c.proc, &c.id, c.kind, &c.msg, c.loc.as_ref());
                 }
             }
-            Event::Assert(a) => self.apply_assert(a),
-            Event::Eval(e) => self.apply_eval(e),
+            Event::Assert(_) | Event::Eval(_) => {
+                if matches!(event, Event::Eval(_)) {
+                    self.perturbing = true;
+                }
+                self.deferred.push(event);
+            }
         }
     }
 
@@ -171,6 +223,20 @@ impl Accumulator {
             return;
         }
         self.procs[i].work_ops = Some(w.ops);
+    }
+
+    fn apply_thread(&mut self, t: ThreadLine) {
+        let Some(i) = self.proc_slot(&t.proc) else {
+            return;
+        };
+        let threads = &mut self.procs[i].threads;
+        if threads.iter().any(|x| x.thread == t.thread.thread) {
+            self.health.duplicates += 1;
+        } else if threads.len() >= MAX_THREADS_PER_PROC {
+            self.health.over_limit += 1;
+        } else {
+            threads.push(t.thread);
+        }
     }
 
     fn apply_end(&mut self, e: End) {
@@ -235,6 +301,7 @@ impl Accumulator {
 
     fn record_conflict(&mut self, key: &ProcId, kept: AssertKind, rejected: AssertKind) {
         if self.conflicted.insert(key.clone()) {
+            self.health.conflicts += 1;
             self.conflicts.push(CatalogConflict {
                 id: key.1.clone(),
                 kept,
@@ -245,11 +312,9 @@ impl Accumulator {
     }
 
     fn apply_assert(&mut self, a: AssertReport) {
-        if self.proc_slot(&a.proc).is_none() {
-            return;
-        }
         let key = (a.proc.clone(), a.id.clone());
         if self.conflicted.contains(&key) {
+            self.health.dropped_asserts += 1;
             return;
         }
         if !self.declared.contains(&key) {
@@ -257,8 +322,8 @@ impl Accumulator {
             return;
         }
         if !self.asserted.insert(key) {
+            // A second report for the same (proc, id): its counts are still evidence, so they are added.
             self.health.duplicates += 1;
-            return;
         }
         let Some(p) = self.props.get_mut(&a.id) else {
             return;
@@ -274,16 +339,17 @@ impl Accumulator {
         }
     }
 
+    /// Eval lines come from scripts that never send hello or end, so they do not create a process entry (which
+    /// would then read as a lost report).
     fn apply_eval(&mut self, e: Eval) {
-        // Eval lines come from scripts that never send hello or end, so they do not create a process entry (which
-        // would then read as a lost report).
-        self.perturbing = true;
         if !self.declare(&e.proc, &e.id, e.kind, "", None) {
             return;
         }
+        // Reachable and unreachable sites carry no condition: any evaluation is a hit.
+        let ok = e.ok || !e.kind.has_condition();
         if let Some(p) = self.props.get_mut(&e.id) {
             p.hits = p.hits.saturating_add(1);
-            if e.ok {
+            if ok {
                 p.trues = p.trues.saturating_add(1);
             } else {
                 p.falses = p.falses.saturating_add(1);

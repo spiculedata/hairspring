@@ -16,7 +16,9 @@ pub mod trial;
 pub use event::*;
 pub use fold::TrialEvents;
 pub use line::{parse_line, IgnoreReason, LineOutcome, RejectReason};
-pub use run::{FirstFailure, PropertyStat, PropertyStatus, Rate, RateBasis, RunProps, RunSummary};
+pub use run::{
+    FirstFailure, KindMismatch, PropertyStat, PropertyStatus, Rate, RateBasis, RunProps, RunSummary,
+};
 pub use trial::{
     CatalogConflict, EndReport, EventHealth, FailureReason, ProcReport, PropertyFailure,
     TrialProperty, TrialProps, Witness,

@@ -161,7 +161,10 @@ fn summary_counts_perturbing_degraded_and_conflicting_trials() {
     ]);
     assert_eq!(summary.trials, 4);
     assert_eq!(summary.perturbing_trials, 1);
-    assert_eq!(summary.degraded_trials, 1);
+    assert_eq!(
+        summary.degraded_trials, 2,
+        "the malformed trial and the conflicting one"
+    );
     assert_eq!(summary.conflict_trials, 1);
     let ids: Vec<_> = stats.iter().map(|s| s.id.as_str()).collect();
     assert_eq!(ids, ["c", "e.id", "x.id"]);

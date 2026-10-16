@@ -57,9 +57,21 @@ pub fn work(proc: &str, ops: u64) -> String {
     ))
 }
 
+/// An `end` line declaring zero thread lines.
 pub fn end(proc: &str) -> String {
+    end_n(proc, 0)
+}
+
+/// An `end` line declaring `threads` thread lines.
+pub fn end_n(proc: &str, threads: u64) -> String {
     ev(&format!(
-        r#"{{"v":1,"kind":"end","proc":"{proc}","reason":"exit","status":0,"sites":1,"evals":3,"dropped":0,"threads":[{{"thread":"w-0","evals":2,"tape_consumed":10}},{{"thread":"t#1","evals":1,"tape_consumed":4,"key_stable":false}}]}}"#
+        r#"{{"v":1,"kind":"end","proc":"{proc}","reason":"exit","status":0,"sites":1,"evals":3,"dropped":0,"threads":{threads}}}"#
+    ))
+}
+
+pub fn thread_line(proc: &str, thread: &str, evals: u64, tape: u64, stable: bool) -> String {
+    ev(&format!(
+        r#"{{"v":1,"kind":"thread","proc":"{proc}","thread":"{thread}","evals":{evals},"tape_consumed":{tape},"key_stable":{stable}}}"#
     ))
 }
 
@@ -76,7 +88,9 @@ pub fn single(kind: AssertKind, trues: u64, falses: u64) -> String {
         catalog("p1", "x.id", kind),
         assert_line("p1", "x.id", trues, falses, first_false, first_true),
         work("p1", 9),
-        end("p1"),
+        thread_line("p1", "w-0", 2, 10, true),
+        thread_line("p1", "t#1", 1, 4, false),
+        end_n("p1", 2),
     ]
     .concat()
 }

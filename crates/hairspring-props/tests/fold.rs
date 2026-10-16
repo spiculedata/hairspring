@@ -178,7 +178,7 @@ fn the_same_declaration_twice_merges_silently() {
 }
 
 #[test]
-fn duplicate_assert_for_one_process_is_dropped_and_counted() {
+fn duplicate_assert_for_one_process_is_summed_and_counted() {
     let out = [
         hello("p1"),
         catalog("p1", "a", AssertKind::Always),
@@ -188,7 +188,7 @@ fn duplicate_assert_for_one_process_is_dropped_and_counted() {
     ]
     .concat();
     let t = fold(&out);
-    assert_eq!(t.properties[0].hits, 3);
+    assert_eq!(t.properties[0].hits, 103);
     assert_eq!(t.health.duplicates, 1);
     assert!(t.is_degraded());
 }

@@ -30,7 +30,8 @@ const HELLO: &str = r#"{"v":1,"kind":"hello","sdk":"c","sdk_version":"0.1.0","pr
 const CATALOG: &str = r#"{"v":1,"kind":"catalog","proc":"p1","id":"wal.ckpt.nbackfill_le_mxframe","type":"always","must_hit":true,"msg":"nBackfill <= live mxFrame","loc":{"file":"sqlite3.c","line":66123,"func":"walCheckpoint"}}"#;
 const ASSERT: &str = r#"{"v":1,"kind":"assert","proc":"p1","id":"a.b","hits":                 412,"trues":                 411,"falses":                   1,"first_false":{"thread":"writer-0","ord":                 675,"vals":[71,8,0,0]},"first_true":{"thread":"ckpt","ord":                   3,"vals":[0,5,0,0]}}"#;
 const WORK: &str = r#"{"v":1,"kind":"work","proc":"p1","ops":                 300}"#;
-const END: &str = r#"{"v":1,"kind":"end","proc":"p1","reason":"exit","status":0,"sites":5,"evals":                9123,"dropped":0,"threads":[{"thread":"writer-0","evals":4100,"tape_consumed":312},{"thread":"ckpt","evals":980,"tape_consumed":57,"key_stable":false}]}"#;
+const END: &str = r#"{"v":1,"kind":"end","proc":"p1","reason":"exit","status":0,"sites":5,"evals":                9123,"dropped":0,"threads":2}"#;
+const THREAD: &str = r#"{"v":1,"kind":"thread","proc":"p1","thread":"ckpt","evals":                 980,"tape_consumed":                  57,"key_stable":false}"#;
 
 #[test]
 fn ordinary_output_is_not_an_event() {
@@ -167,20 +168,20 @@ fn work_and_end_goldens() {
             sites: 5,
             evals: 9123,
             dropped: 0,
-            threads: vec![
-                ThreadReport {
-                    thread: "writer-0".into(),
-                    evals: 4100,
-                    tape_consumed: 312,
-                    key_stable: true
-                },
-                ThreadReport {
-                    thread: "ckpt".into(),
-                    evals: 980,
-                    tape_consumed: 57,
-                    key_stable: false
-                },
-            ],
+            threads: 2,
+        })
+    );
+    let (ev, _) = event_of(THREAD);
+    assert_eq!(
+        ev,
+        Event::Thread(ThreadLine {
+            proc: "p1".into(),
+            thread: ThreadReport {
+                thread: "ckpt".into(),
+                evals: 980,
+                tape_consumed: 57,
+                key_stable: false
+            }
         })
     );
 }
@@ -290,7 +291,7 @@ fn missing_and_mistyped_fields_are_rejected() {
     );
     assert_eq!(
         rejected(
-            r#"{"v":1,"kind":"end","proc":"p","reason":"boom","status":0,"sites":0,"evals":0,"dropped":0,"threads":[]}"#
+            r#"{"v":1,"kind":"end","proc":"p","reason":"boom","status":0,"sites":0,"evals":0,"dropped":0,"threads":0}"#
         ),
         RejectReason::InvalidField("reason")
     );
@@ -549,65 +550,13 @@ fn deep_nesting_is_rejected_without_overflowing_the_stack() {
         "[".repeat(1500),
         "]".repeat(1500)
     );
-    assert!(matches!(parse(&huge), LineOutcome::Rejected(_)));
-}
-
-fn end_with_threads(n: usize) -> String {
-    let entries = (0..n)
-        .map(|i| format!(r#"{{"thread":"t{i}","evals":1,"tape_consumed":0}}"#))
-        .collect::<Vec<_>>()
-        .join(",");
-    format!(
-        r#"{{"v":1,"kind":"end","proc":"p","reason":"exit","status":0,"sites":0,"evals":0,"dropped":0,"threads":[{entries}]}}"#
-    )
-}
-
-#[test]
-fn end_line_with_many_threads_fits_until_the_line_limit() {
-    match parse(&end_with_threads(60)) {
-        LineOutcome::Event {
-            event: Event::End(e),
-            ..
-        } => assert_eq!(e.threads.len(), 60),
-        other => panic!("{other:?}"),
-    }
-    // MAX_THREADS_PER_PROC + 1 entries cannot fit in one line, so the line-length limit drops it first.
-    assert_eq!(
-        parse(&end_with_threads(MAX_THREADS_PER_PROC + 1)),
-        LineOutcome::Rejected(RejectReason::TooLong)
-    );
-}
-
-#[test]
-fn duplicate_thread_keys_in_end_are_rejected() {
-    assert_eq!(
-        rejected(
-            r#"{"v":1,"kind":"end","proc":"p","reason":"exit","status":0,"sites":0,"evals":0,"dropped":0,"threads":[{"thread":"t","evals":1,"tape_consumed":0},{"thread":"t","evals":1,"tape_consumed":0}]}"#
-        ),
-        RejectReason::Inconsistent("threads")
-    );
-}
-
-#[test]
-fn end_with_bad_thread_entry_is_rejected() {
-    assert_eq!(
-        rejected(
-            r#"{"v":1,"kind":"end","proc":"p","reason":"exit","status":0,"sites":0,"evals":0,"dropped":0,"threads":[{"thread":"t","evals":1}]}"#
-        ),
-        RejectReason::MissingField("tape_consumed")
-    );
-    assert_eq!(
-        rejected(
-            r#"{"v":1,"kind":"end","proc":"p","reason":"exit","status":0,"sites":0,"evals":0,"dropped":0,"threads":"x"}"#
-        ),
-        RejectReason::InvalidField("threads")
-    );
+    assert_eq!(rejected(&huge), RejectReason::TooDeep);
 }
 
 #[test]
 fn signed_end_status_is_accepted() {
     let (ev, _) = event_of(
-        r#"{"v":1,"kind":"end","proc":"p","reason":"signal","status":-11,"sites":0,"evals":0,"dropped":0,"threads":[]}"#,
+        r#"{"v":1,"kind":"end","proc":"p","reason":"signal","status":-11,"sites":0,"evals":0,"dropped":0,"threads":0}"#,
     );
     match ev {
         Event::End(e) => {

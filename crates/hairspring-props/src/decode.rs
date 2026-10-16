@@ -36,6 +36,7 @@ pub(crate) fn decode_event(root: &Json) -> Res<Decoded> {
         "catalog" => (decode_catalog(obj)?, &CATALOG_KEYS),
         "assert" => (decode_assert(obj)?, &ASSERT_KEYS),
         "work" => (decode_work(obj)?, &WORK_KEYS),
+        "thread" => (decode_thread(obj)?, &THREAD_KEYS),
         "end" => (decode_end(obj)?, &END_KEYS),
         "eval" => (decode_eval(obj)?, &EVAL_KEYS),
         _ => return Ok(Decoded::Ignored(IgnoreReason::UnknownKind)),
@@ -75,7 +76,15 @@ const END_KEYS: [&str; 9] = [
 const EVAL_KEYS: [&str; 6] = ["v", "kind", "proc", "id", "type", "ok"];
 const LOC_KEYS: [&str; 3] = ["file", "line", "func"];
 const WITNESS_KEYS: [&str; 3] = ["thread", "ord", "vals"];
-const THREAD_KEYS: [&str; 4] = ["thread", "evals", "tape_consumed", "key_stable"];
+const THREAD_KEYS: [&str; 7] = [
+    "v",
+    "kind",
+    "proc",
+    "thread",
+    "evals",
+    "tape_consumed",
+    "key_stable",
+];
 
 fn unknown_count(obj: &Obj, known: &[&str]) -> u32 {
     let n = obj
@@ -85,7 +94,7 @@ fn unknown_count(obj: &Obj, known: &[&str]) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
 }
 
-/// Unknown fields inside `loc`, witnesses and thread entries (already validated as well-formed objects).
+/// Unknown fields inside `loc` and witnesses (already validated as well-formed objects).
 fn nested_unknown(obj: &Obj) -> u32 {
     let mut total = 0u32;
     let mut add = |n: u32| total = total.saturating_add(n);
@@ -95,13 +104,6 @@ fn nested_unknown(obj: &Obj) -> u32 {
     for key in ["first_false", "first_true"] {
         if let Some(Json::Obj(w)) = lookup(obj, key) {
             add(unknown_count(w, &WITNESS_KEYS));
-        }
-    }
-    if let Some(Json::Arr(threads)) = lookup(obj, "threads") {
-        for t in threads {
-            if let Json::Obj(t) = t {
-                add(unknown_count(t, &THREAD_KEYS));
-            }
         }
     }
     total
@@ -157,16 +159,50 @@ fn text(v: &Json, name: &'static str, max: usize) -> Res<String> {
     if s.len() > max {
         return Err(RejectReason::OverLimit(name));
     }
-    if s.chars().any(char::is_control) {
+    if s.chars().any(|c| c.is_control() || is_invisible(c)) {
         return Err(RejectReason::InvalidField(name));
     }
     Ok(s.clone())
+}
+
+/// Format (Cf) and line/paragraph separator (Zl, Zp) characters, which can reorder or hide text in a terminal or UI.
+fn is_invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{0600}'..='\u{0605}'
+            | '\u{061C}'
+            | '\u{06DD}'
+            | '\u{070F}'
+            | '\u{08E2}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{2028}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{110BD}'
+            | '\u{110CD}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0001}'
+            | '\u{E0020}'..='\u{E007F}'
+    )
 }
 
 fn uint(v: &Json, name: &'static str) -> Res<u64> {
     match v {
         Json::Num(Num::Unsigned(n)) => Ok(*n),
         _ => Err(RejectReason::InvalidField(name)),
+    }
+}
+
+/// Ordinals start at 1.
+fn ordinal(v: &Json) -> Res<u64> {
+    match uint(v, "ord")? {
+        0 => Err(RejectReason::InvalidField("ord")),
+        n => Ok(n),
     }
 }
 
@@ -194,8 +230,13 @@ fn kind_of(v: &Json) -> Res<AssertKind> {
     }
 }
 
+/// The process tag of a real process. The eval tag is reserved so scripts cannot merge into one.
 fn proc_of(obj: &Obj) -> Res<String> {
-    ident(field(obj, "proc")?, "proc", MAX_PROC_BYTES)
+    let tag = ident(field(obj, "proc")?, "proc", MAX_PROC_BYTES)?;
+    if tag == DEFAULT_EVAL_PROC {
+        return Err(RejectReason::InvalidField("proc"));
+    }
+    Ok(tag)
 }
 
 fn decode_hello(obj: &Obj) -> Res<Event> {
@@ -260,7 +301,7 @@ fn decode_witness(v: &Json) -> Res<WireWitness> {
     };
     Ok(WireWitness {
         thread: thread_key(field(o, "thread")?)?,
-        ord: uint(field(o, "ord")?, "ord")?,
+        ord: ordinal(field(o, "ord")?)?,
         vals: decode_vals(field(o, "vals")?)?,
     })
 }
@@ -302,35 +343,27 @@ fn decode_work(obj: &Obj) -> Res<Event> {
     }))
 }
 
-fn decode_thread(v: &Json) -> Res<ThreadReport> {
-    let Json::Obj(o) = v else {
-        return Err(RejectReason::InvalidField("threads"));
-    };
-    Ok(ThreadReport {
-        thread: thread_key(field(o, "thread")?)?,
-        evals: uint(field(o, "evals")?, "evals")?,
-        tape_consumed: uint(field(o, "tape_consumed")?, "tape_consumed")?,
-        key_stable: optional(o, "key_stable")
-            .map(|b| boolean(b, "key_stable"))
-            .transpose()?
-            .unwrap_or(true),
-    })
+fn decode_thread(obj: &Obj) -> Res<Event> {
+    Ok(Event::Thread(ThreadLine {
+        proc: proc_of(obj)?,
+        thread: ThreadReport {
+            thread: thread_key(field(obj, "thread")?)?,
+            evals: uint(field(obj, "evals")?, "evals")?,
+            tape_consumed: uint(field(obj, "tape_consumed")?, "tape_consumed")?,
+            key_stable: optional(obj, "key_stable")
+                .map(|b| boolean(b, "key_stable"))
+                .transpose()?
+                .unwrap_or(true),
+        },
+    }))
 }
 
-fn decode_threads(v: &Json) -> Res<Vec<ThreadReport>> {
-    let Json::Arr(items) = v else {
-        return Err(RejectReason::InvalidField("threads"));
-    };
-    if items.len() > MAX_THREADS_PER_PROC {
+fn thread_count(v: &Json) -> Res<u64> {
+    let n = uint(v, "threads")?;
+    if n > MAX_THREADS_PER_PROC as u64 {
         return Err(RejectReason::OverLimit("threads"));
     }
-    let threads = items.iter().map(decode_thread).collect::<Res<Vec<_>>>()?;
-    let mut keys: Vec<&str> = threads.iter().map(|t| t.thread.as_str()).collect();
-    keys.sort_unstable();
-    if keys.windows(2).any(|w| w[0] == w[1]) {
-        return Err(RejectReason::Inconsistent("threads"));
-    }
-    Ok(threads)
+    Ok(n)
 }
 
 fn decode_end(obj: &Obj) -> Res<Event> {
@@ -344,7 +377,7 @@ fn decode_end(obj: &Obj) -> Res<Event> {
         sites: uint(field(obj, "sites")?, "sites")?,
         evals: uint(field(obj, "evals")?, "evals")?,
         dropped: uint(field(obj, "dropped")?, "dropped")?,
-        threads: decode_threads(field(obj, "threads")?)?,
+        threads: thread_count(field(obj, "threads")?)?,
     }))
 }
 

@@ -29,6 +29,7 @@ fn seed_lines() -> Vec<Vec<u8>> {
         catalog("p1", "c", AssertKind::Unreachable),
         assert_line("p1", "a.b", 3, 2, Some(("w-0", 4)), Some(("w-1", 1))),
         work("p1", 12),
+        thread_line("p1", "w-0", 4, 9, true),
         end("p1"),
         ev(r#"{"v":1,"kind":"eval","id":"e","type":"sometimes","ok":false}"#),
     ]
@@ -86,9 +87,10 @@ fn assert_event_within_limits(event: &Event) {
             assert!(a.id.len() <= MAX_ID_BYTES);
         }
         Event::End(e) => {
-            assert!(e.threads.len() <= MAX_THREADS_PER_PROC);
+            assert!(e.threads <= MAX_THREADS_PER_PROC as u64);
             assert!(e.proc.len() <= MAX_PROC_BYTES);
         }
+        Event::Thread(t) => assert!(t.thread.thread.len() <= MAX_THREAD_KEY_BYTES),
         Event::Hello(h) => assert!(h.proc.len() <= MAX_PROC_BYTES),
         Event::Work(w) => assert!(w.proc.len() <= MAX_PROC_BYTES),
         Event::Eval(e) => assert!(e.id.len() <= MAX_ID_BYTES),

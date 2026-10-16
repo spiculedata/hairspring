@@ -25,6 +25,16 @@ pub struct EventHealth {
     pub unsupported_version: u64,
     /// Unrecognised fields on accepted lines (ignored).
     pub unknown_fields: u64,
+    /// Ids declared with two different kinds (also reported as failures by [`TrialProps::verdict`]).
+    pub conflicts: u64,
+    /// `assert` lines dropped because their id has a kind conflict in the same process.
+    pub dropped_asserts: u64,
+    /// Ids a process catalogued but never reported although it sent `end`.
+    pub unreported_ids: u64,
+    /// Processes whose `end.sites` differs from the number of ids they catalogued.
+    pub sites_mismatch: u64,
+    /// Processes whose `end.threads` differs from the number of `thread` lines they sent.
+    pub thread_count_mismatch: u64,
 }
 
 impl EventHealth {
@@ -37,6 +47,11 @@ impl EventHealth {
             + self.over_limit
             + self.duplicates
             + self.uncatalogued
+            + self.conflicts
+            + self.dropped_asserts
+            + self.unreported_ids
+            + self.sites_mismatch
+            + self.thread_count_mismatch
             > 0
     }
 }
@@ -74,7 +89,8 @@ pub struct EndReport {
     pub sites: u64,
     pub evals: u64,
     pub dropped: u64,
-    pub threads: Vec<ThreadReport>,
+    /// The number of `thread` lines the process said it sent.
+    pub threads: u64,
 }
 
 /// Everything one process reported.
@@ -87,6 +103,8 @@ pub struct ProcReport {
     pub signal_handlers: Option<bool>,
     pub work_ops: Option<u64>,
     pub end: Option<EndReport>,
+    /// `thread` lines in arrival order, unique by thread key.
+    pub threads: Vec<ThreadReport>,
 }
 
 /// The same id declared with two different kinds.
@@ -105,6 +123,8 @@ pub enum FailureReason {
     AlwaysFalse,
     /// An `unreachable` site was hit.
     UnreachableHit,
+    /// The same id was declared with two different kinds. A trial-level error: counts for the id are unreliable.
+    CatalogConflict,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,6 +145,7 @@ impl PropertyFailure {
         let what = match self.reason {
             FailureReason::AlwaysFalse => "was false",
             FailureReason::UnreachableHit => "was reached",
+            FailureReason::CatalogConflict => "has conflicting declarations",
         };
         let place = self
             .witness
@@ -183,21 +204,40 @@ impl TrialProps {
             .fold(0u64, u64::saturating_add)
     }
 
-    /// Per-thread reports (`proc`, report) from every process that sent `end`.
+    /// Per-thread reports (`proc`, report) from every process.
     pub fn thread_reports(&self) -> Vec<(&str, &ThreadReport)> {
         self.procs
             .iter()
-            .filter_map(|p| p.end.as_ref().map(|e| (p.tag.as_str(), e)))
-            .flat_map(|(tag, e)| e.threads.iter().map(move |t| (tag, t)))
+            .flat_map(|p| p.threads.iter().map(move |t| (p.tag.as_str(), t)))
             .collect()
     }
 
-    /// Trial-level failures, in id order. Run-level UNMET is decided by [`crate::RunProps`].
+    /// Trial-level failures, in id order, followed by catalog conflicts. Run-level UNMET is decided by
+    /// [`crate::RunProps`].
     pub fn verdict(&self) -> Vec<PropertyFailure> {
+        let conflicts = self.conflicts.iter().map(|c| self.conflict_failure(c));
         self.properties
             .iter()
             .filter_map(TrialProperty::failure)
+            .chain(conflicts)
             .collect()
+    }
+
+    fn conflict_failure(&self, c: &CatalogConflict) -> PropertyFailure {
+        let known = self.properties.iter().find(|p| p.id == c.id);
+        PropertyFailure {
+            id: c.id.clone(),
+            kind: c.kept,
+            reason: FailureReason::CatalogConflict,
+            msg: format!(
+                "also declared as {} by proc {}",
+                c.rejected.as_str(),
+                c.proc
+            ),
+            loc: known.and_then(|p| p.loc.clone()),
+            count: 1,
+            witness: None,
+        }
     }
 }
 

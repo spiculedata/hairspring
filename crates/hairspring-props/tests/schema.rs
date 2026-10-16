@@ -7,6 +7,7 @@ use serde_json::Value;
 const SCHEMA: &str = include_str!("../../../sdks/conformance/schema/v1.json");
 const VALID: &str = include_str!("../../../sdks/conformance/goldens/valid.events");
 const INVALID: &str = include_str!("../../../sdks/conformance/goldens/invalid.events");
+const MANY_THREADS: &str = include_str!("../../../sdks/conformance/goldens/many_threads.events");
 const IGNORED: &str = include_str!("../../../sdks/conformance/goldens/ignored.events");
 
 fn schema() -> Value {
@@ -71,9 +72,10 @@ fn schema_definitions_use_the_same_limits() {
     assert_eq!(d["vals"]["minItems"], VALS_LEN);
     assert_eq!(d["vals"]["maxItems"], VALS_LEN);
     assert_eq!(
-        d["end"]["properties"]["threads"]["maxItems"],
+        d["end"]["properties"]["threads"]["maximum"],
         MAX_THREADS_PER_PROC
     );
+    assert_eq!(d["witness"]["properties"]["ord"]["minimum"], 1);
     assert_eq!(s["properties"]["v"]["const"], PROTOCOL_VERSION);
 }
 
@@ -99,9 +101,17 @@ fn schema_declares_every_message_kind_with_its_required_fields() {
         .iter()
         .map(|c| c["if"]["properties"]["kind"]["const"].as_str().unwrap())
         .collect();
-    assert_eq!(kinds, ["hello", "catalog", "assert", "work", "end", "eval"]);
+    assert_eq!(
+        kinds,
+        ["hello", "catalog", "assert", "work", "thread", "end", "eval"]
+    );
     for kind in kinds {
-        assert!(s["$defs"][kind]["required"].is_array(), "{kind}");
+        let def = if kind == "thread" {
+            "thread_line"
+        } else {
+            kind
+        };
+        assert!(s["$defs"][def]["required"].is_array(), "{kind}");
     }
 }
 
@@ -150,4 +160,31 @@ fn the_valid_golden_trial_folds_to_the_expected_verdict() {
     assert_eq!((w.thread.as_str(), w.ord), ("writer-0", 675));
     assert_eq!(t.thread_reports().len(), 2);
     assert!(t.report_missing().is_empty());
+}
+
+#[test]
+fn byte_limited_strings_state_their_byte_limit_in_the_schema() {
+    let s = schema();
+    let d = &s["$defs"];
+    let fields = [
+        (&d["catalog"]["properties"]["msg"], MAX_MSG_BYTES),
+        (&d["hello"]["properties"]["sdk"], MAX_SDK_STR_BYTES),
+        (&d["hello"]["properties"]["sdk_version"], MAX_SDK_STR_BYTES),
+        (&d["hello"]["properties"]["catalog_hash"], MAX_HASH_BYTES),
+        (&d["loc"]["properties"]["file"], MAX_LOC_FILE_BYTES),
+        (&d["loc"]["properties"]["func"], MAX_LOC_FUNC_BYTES),
+    ];
+    for (field, bytes) in fields {
+        assert_eq!(field["x-max-bytes"], bytes, "{field}");
+    }
+}
+
+#[test]
+fn a_realistic_trial_with_more_threads_than_one_line_could_hold_parses() {
+    assert!(MANY_THREADS.lines().all(|l| l.len() <= MAX_LINE_BYTES));
+    let t = TrialEvents::from_output(MANY_THREADS.as_bytes()).fold();
+    assert!(!t.is_degraded(), "{:?}", t.health);
+    assert_eq!(t.thread_reports().len(), 100);
+    assert!(t.report_missing().is_empty());
+    assert!(t.verdict().is_empty());
 }
