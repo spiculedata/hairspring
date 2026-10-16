@@ -478,6 +478,14 @@ pub(crate) fn add_branch(
     if !run_finished(&mut tx, &tree.id)? || !run_finished(&mut tx, &source.run_id)? {
         return Ok(Rejected(TreeRejection::RunNotFinished));
     }
+    // Read the node again now that both run locks are held. Interleaving this closes: `finish_job` holds the source
+    // run FOR UPDATE and, in that transaction, deletes the run's nodes (`start_attempt`); we had read the node before
+    // that, blocked on the share lock, and under READ COMMITTED see the run as finished once it commits, but the node
+    // is gone, and `tree_branches.source_node` has no foreign key. The new statement sees the committed delete.
+    match get_node(&mut tx, &new.tree_id, new.source_node)? {
+        Some(again) if again.run_id == source.run_id => {}
+        _ => return Ok(Rejected(TreeRejection::SourceNotFound)),
+    }
     let branches: i64 = tx
         .query_one(
             "SELECT COUNT(*) FROM tree_branches WHERE tree_id=$1",

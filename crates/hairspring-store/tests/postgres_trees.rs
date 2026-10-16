@@ -260,6 +260,74 @@ fn the_store_rule_switches_to_the_path_form_at_the_tree_size_threshold() {
     assert_eq!(s.tree_query_rule(), TreeQueryRule::StoreDefault);
 }
 
+/// The interleaving: `finish_job` holds the source run's row FOR UPDATE and, in the same transaction, deletes that
+/// run's nodes (the finishing attempt never ingested; an earlier attempt left nodes). `add_branch` has already read the
+/// source node and blocks on the run's FOR SHARE lock. When the first transaction commits, the run reads as finished,
+/// but the node is gone: the branch must be refused, not stored against a node that no longer exists.
+#[test]
+fn a_branch_is_refused_when_its_source_node_is_deleted_while_it_waits_for_the_run() {
+    let Some(url) = url() else { return };
+    let schema = new_schema("rc");
+    let s = std::sync::Arc::new(PgStore::connect_in_schema(&url, &schema, 4).unwrap());
+    let root_run = run_with_identity(&*s, "a\n");
+    ingest_verdicts(&*s, &root_run.id, &passes(1));
+    let tree = make_tree(&*s, &root_run, Some(sha256_hex(b"a\n")));
+    add(&*s, &tree.id, &root(&root_run.id, 0));
+    finish(&*s, &root_run.id);
+    // The source run is a running branch run with one node.
+    let source_run = run_with_identity(&*s, "a\n");
+    assert!(matches!(
+        s.add_tree_branch(&branch_for(&tree.id, &source_run.id, 0, &"1".repeat(64)), 9)
+            .unwrap(),
+        BranchOutcome::Added(_)
+    ));
+    ingest_verdicts(&*s, &source_run.id, &passes(1));
+    let node = add(&*s, &tree.id, &child(&source_run.id, 0, 0, 1));
+    let new_branch = run_with_identity(&*s, "a\n");
+
+    // Transaction A plays finish_job: lock the run, delete its nodes, finish it, but do not commit yet.
+    let mut a = raw(&url, &schema);
+    a.batch_execute("BEGIN").unwrap();
+    a.execute(
+        "SELECT 1 FROM runs WHERE id = $1 FOR UPDATE",
+        &[&source_run.id],
+    )
+    .unwrap();
+    a.execute(
+        "DELETE FROM trial_lineage WHERE run_id = $1",
+        &[&source_run.id],
+    )
+    .unwrap();
+    a.execute(
+        "UPDATE runs SET state = 'passed' WHERE id = $1",
+        &[&source_run.id],
+    )
+    .unwrap();
+
+    let waiting = {
+        let (s, tree_id, run_id, source) =
+            (s.clone(), tree.id.clone(), new_branch.id.clone(), node.node);
+        std::thread::spawn(move || {
+            s.add_tree_branch(&branch_for(&tree_id, &run_id, source, &"2".repeat(64)), 9)
+                .unwrap()
+        })
+    };
+    // Let add_branch read the node and block on the run lock, then commit the deletion.
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    assert!(
+        !waiting.is_finished(),
+        "add_branch must be waiting on the run lock"
+    );
+    a.batch_execute("COMMIT").unwrap();
+
+    assert_eq!(
+        waiting.join().unwrap(),
+        BranchOutcome::Rejected(TreeRejection::SourceNotFound)
+    );
+    assert_eq!(s.get_tree_branch(&new_branch.id).unwrap(), None);
+    assert_eq!(s.get_tree(&tree.id).unwrap().unwrap().run_count, 2);
+}
+
 #[test]
 fn a_run_with_dependants_cannot_start_a_new_attempt_even_if_a_branch_row_exists() {
     let Some(url) = url() else { return };
