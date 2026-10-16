@@ -3,6 +3,7 @@
 //! engine work on the blocking pool.
 use crate::auth::Caller;
 use crate::error::ApiError;
+use crate::ndjson::list_response;
 use crate::AppState;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{FromRequest, Path, Query, Request, State};
@@ -58,9 +59,14 @@ pub async fn health() -> Json<Value> {
     Json(json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }))
 }
 
-pub async fn targets(State(s): State<AppState>, caller: Caller) -> Result<Json<Value>, ApiError> {
+pub async fn targets(
+    State(s): State<AppState>,
+    caller: Caller,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
     caller.need(Role::Read)?;
-    Ok(Json(json!({ "targets": s.svc.list_targets(&s.engine) })))
+    let value = json!({ "targets": s.svc.list_targets(&s.engine) });
+    list_response(&headers, value, "targets")
 }
 
 #[derive(Deserialize)]
@@ -71,12 +77,13 @@ pub struct ListQuery {
 pub async fn list_runs(
     State(s): State<AppState>,
     caller: Caller,
+    headers: HeaderMap,
     Query(q): Query<ListQuery>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
     caller.need(Role::Read)?;
     let limit = q.limit.unwrap_or(50);
     let runs = blocking(move || s.svc.list_runs(limit)).await?;
-    Ok(Json(json!({ "runs": runs })))
+    list_response(&headers, json!({ "runs": runs }), "runs")
 }
 
 #[derive(Deserialize)]
@@ -137,12 +144,13 @@ pub async fn cancel_run(
 pub async fn list_failures(
     State(s): State<AppState>,
     caller: Caller,
+    headers: HeaderMap,
     Query(q): Query<ListQuery>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
     caller.need(Role::Read)?;
     let limit = q.limit.unwrap_or(50);
     let failures = blocking(move || s.svc.recent_failures(limit)).await?;
-    Ok(Json(json!({ "failures": failures })))
+    list_response(&headers, json!({ "failures": failures }), "failures")
 }
 
 pub async fn get_failure(
@@ -191,7 +199,11 @@ pub async fn replay(
 }
 
 /// Worker ids act as lease credentials for the worker endpoints, so only `run`+ callers may see them.
-pub async fn workers(State(s): State<AppState>, caller: Caller) -> Result<Json<Value>, ApiError> {
+pub async fn workers(
+    State(s): State<AppState>,
+    caller: Caller,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
     caller.need(Role::Read)?;
     let reveal_ids = caller.role.allows(Role::Run);
     let workers = blocking(move || s.svc.list_workers()).await?;
@@ -207,7 +219,7 @@ pub async fn workers(State(s): State<AppState>, caller: Caller) -> Result<Json<V
             v
         })
         .collect();
-    Ok(Json(json!({ "workers": items })))
+    list_response(&headers, json!({ "workers": items }), "workers")
 }
 
 /// MCP over HTTP: one JSON-RPC message (or batch) per POST.

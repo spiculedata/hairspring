@@ -97,12 +97,18 @@ pub struct DoctorArgs {
 pub struct ResultsArgs {
     #[arg(long, default_value_t = 20)]
     pub limit: u32,
+    /// Print NDJSON: one line per run, then `{"_next":null}`.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args)]
 pub struct ShowArgs {
     /// A run id (run_...).
     pub id: String,
+    /// Print NDJSON: the run, one line per property, then `{"_next":null}`.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Subcommand)]

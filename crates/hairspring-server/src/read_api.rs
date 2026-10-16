@@ -7,9 +7,10 @@
 use crate::api::blocking;
 use crate::auth::Caller;
 use crate::error::ApiError;
+use crate::ndjson::list_response;
 use crate::AppState;
 use axum::extract::{Path, Query, State};
-use axum::http::header;
+use axum::http::{header, HeaderMap};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use hairspring_mcp::validate;
@@ -59,12 +60,27 @@ fn json<T: Serialize>(v: Option<T>) -> Result<Json<Value>, ApiError> {
     Ok(Json(serde_json::to_value(v).unwrap_or_default()))
 }
 
+/// A list in the form the caller asked for (`Accept`); a missing run is a 404 either way.
+fn listing<T: Serialize>(
+    headers: &HeaderMap,
+    v: Option<T>,
+    items_key: &str,
+) -> Result<Response, ApiError> {
+    let v = v.ok_or_else(ApiError::not_found)?;
+    list_response(
+        headers,
+        serde_json::to_value(v).unwrap_or_default(),
+        items_key,
+    )
+}
+
 pub async fn properties(
     State(s): State<AppState>,
     caller: Caller,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Query(p): Query<Params>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
     read_run_id(&caller, &id)?;
     let q = PropertyQuery {
         status: param(&p, "status"),
@@ -75,7 +91,8 @@ pub async fn properties(
         limit: limit(&p)?,
     };
     // A run's label is not something a caller can supply: until runs record one, none is declared.
-    json(blocking(move || s.svc.property_page(&id, &q, None)).await?)
+    let page = blocking(move || s.svc.property_page(&id, &q, None)).await?;
+    listing(&headers, page, "properties")
 }
 
 pub async fn property(
@@ -97,9 +114,10 @@ pub async fn property(
 pub async fn trials(
     State(s): State<AppState>,
     caller: Caller,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Query(p): Query<Params>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
     read_run_id(&caller, &id)?;
     let q = TrialQuery {
         verdict: param(&p, "verdict"),
@@ -113,7 +131,8 @@ pub async fn trials(
         cursor: param(&p, "cursor"),
         limit: limit(&p)?,
     };
-    json(blocking(move || s.svc.trial_page(&id, &q)).await?)
+    let page = blocking(move || s.svc.trial_page(&id, &q)).await?;
+    listing(&headers, page, "trials")
 }
 
 pub async fn trial(
@@ -173,8 +192,10 @@ pub async fn strip(
 pub async fn coverage(
     State(s): State<AppState>,
     caller: Caller,
+    headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
     read_run_id(&caller, &id)?;
-    json(blocking(move || s.svc.coverage(&id)).await?)
+    let coverage = blocking(move || s.svc.coverage(&id)).await?;
+    listing(&headers, coverage, "points")
 }
