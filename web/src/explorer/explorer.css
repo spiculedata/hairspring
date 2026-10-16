@@ -1,0 +1,47 @@
+/* Results explorer: run overview. Meaning is always in the text; colour and marks only add emphasis. */
+.run-summary p { margin: .35rem 0; }
+.run-summary .headline { font-size: 1.05rem; }
+.run-summary .claim { font-weight: 600; }
+.notes { margin: .35rem 0 0; padding-left: 1.2rem; color: var(--muted); }
+.excluded { color: var(--fg); }
+
+.chips { display: flex; flex-wrap: wrap; gap: .4rem; list-style: none; padding: 0; margin: .5rem 0; }
+.chip { font-size: .78rem; padding: .1rem .55rem; border-radius: 999px; border: 1px solid currentColor; }
+.chip-muted { color: var(--muted); border-style: dashed; }
+.chip-warn { color: var(--busy); }
+.chip-info { color: var(--fg); }
+
+.filters label { min-width: 9rem; }
+.table-scroll { overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
+.table-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+table.props { margin-top: 0; table-layout: fixed; min-width: 56rem; }
+table.props caption { text-align: left; padding: .4rem .5rem; color: var(--muted); font-size: .8rem; }
+table.props thead th { position: sticky; top: 0; background: var(--card); z-index: 1; }
+table.props tbody tr { height: 56px; }
+table.props td, table.props tbody th { overflow: hidden; vertical-align: top; font-weight: 400; }
+table.props th:nth-child(1) { width: 9.5rem; }
+table.props th:nth-child(2) { width: 7rem; }
+table.props th:nth-child(3) { width: 20rem; }
+table.props th:nth-child(5) { width: 8rem; }
+table.props th:nth-child(6) { width: 6rem; }
+.prop-id { word-break: break-all; }
+.prop-msg, .prop-loc { display: block; color: var(--muted); font-size: .8rem; max-height: 1.3em; overflow: hidden; }
+.guest-text { unicode-bidi: isolate; white-space: pre-wrap; word-break: break-word; }
+.guest-esc { font-family: ui-monospace, monospace; font-size: .85em; background: var(--line); border-radius: 3px; padding: 0 .15em; }
+.guest-trunc { color: var(--muted); font-style: italic; }
+.guest-more { text-decoration: underline; color: var(--accent); }
+
+.status { font-weight: 600; white-space: nowrap; }
+.status-violation { color: var(--bad); }
+.status-unmet { color: var(--busy); }
+.status-pass { color: var(--good); }
+.status-unrated { color: var(--muted); }
+
+.rate-cell { display: block; }
+.rate-bar { display: block; position: relative; height: 6px; margin-top: 4px; background: var(--line); border-radius: 3px; }
+.rate-bar-fill { position: absolute; top: 0; bottom: 0; min-width: 3px; background: var(--fg); border-radius: 3px; }
+.unmet-note, .inconclusive-note { display: block; color: var(--muted); font-size: .8rem; }
+
+.unmet { border-left: 4px solid var(--busy); padding-left: .75rem; margin-top: 1.5rem; }
+.unmet ul { padding-left: 1.2rem; }
+.unmet .kind { color: var(--muted); }

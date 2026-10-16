@@ -1,5 +1,5 @@
 import { parseSse, type SseEvent } from './sse';
-import type { FailureDetail, ReplayResult, Run, RunDetail, Target, Worker, FailureSummary } from './types';
+import type { FailureDetail, FailureSummary, PropertyPage, PropertyQuery, ReplayResult, Run, RunDetail, Target, Worker } from './types';
 
 const TOKEN_KEY = 'hairspring.token';
 
@@ -64,7 +64,21 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** The properties URL for a run: each filter is encoded, so a prefix cannot add or override a parameter. */
+export function propertiesUrl(runId: string, query: PropertyQuery): string {
+  const params = new URLSearchParams();
+  if (query.status) params.set('status', query.status);
+  if (query.kind) params.set('kind', query.kind);
+  if (query.q) params.set('q', query.q);
+  if (query.sort) params.set('sort', query.sort);
+  if (query.cursor) params.set('cursor', query.cursor);
+  if (query.limit !== undefined) params.set('limit', String(query.limit));
+  const qs = params.toString();
+  return `/api/runs/${encodeURIComponent(runId)}/properties${qs ? `?${qs}` : ''}`;
+}
+
 export const api = {
+  properties: (runId: string, query: PropertyQuery = {}) => request<PropertyPage>(propertiesUrl(runId, query)),
   health: () => request<{ status: string; version: string }>('/api/health'),
   targets: async () => (await request<{ targets: Target[] }>('/api/targets')).targets,
   runs: async (limit = 50) => (await request<{ runs: Run[] }>(`/api/runs?limit=${limit}`)).runs,
