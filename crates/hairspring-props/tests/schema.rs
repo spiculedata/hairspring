@@ -11,6 +11,22 @@ const MANY_THREADS: &str = include_str!("../../../sdks/conformance/goldens/many_
 const MERGED_SITES: &str = include_str!("../../../sdks/conformance/goldens/merged_sites.events");
 const IGNORED: &str = include_str!("../../../sdks/conformance/goldens/ignored.events");
 
+const UNSTABLE_TAG: &str = include_str!("../../../sdks/conformance/goldens/unstable_tag.events");
+
+#[test]
+fn an_unstable_process_tag_is_documented_and_an_ignored_additive_field() {
+    let s = schema();
+    assert_eq!(
+        s["$defs"]["hello"]["properties"]["tag_stable"]["type"],
+        "boolean"
+    );
+    let t = TrialEvents::from_output(UNSTABLE_TAG.as_bytes()).fold();
+    assert!(!t.is_degraded(), "{:?}", t.health);
+    assert!(t.report_missing().is_empty());
+    assert_eq!(t.procs[0].tag, "p1.s4242");
+    assert_eq!(t.health.unknown_fields, 1); // `tag_stable`: counted, never degrading
+}
+
 fn schema() -> Value {
     serde_json::from_str(SCHEMA).expect("the schema is valid JSON")
 }
