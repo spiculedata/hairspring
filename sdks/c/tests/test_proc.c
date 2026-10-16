@@ -338,32 +338,55 @@ static void test_eval_forms_write_one_line_each(void) {
   free_capture(c);
 }
 
-/* POSIX promises atomic pipe writes only up to PIPE_BUF: 4096 on Linux, 512 on macOS. The report's longest lines
-** run to about 600 bytes (two padded witnesses), so on macOS this test uses a scenario whose lines stay under 512. */
-#if defined(__linux__)
-#define PIPE_SCENARIO "big"
-#else
-#define PIPE_SCENARIO "small"
-#endif
+/* POSIX promises atomic pipe writes only up to PIPE_BUF: 4096 on Linux, 512 on macOS. The report's longest lines run
+** to about 600 bytes (two padded witnesses), so on macOS two processes share an O_APPEND events file instead; the
+** lines are not shortened. */
 #define PIPE_SITES 64
 
-static void test_two_processes_sharing_a_pipe_never_interleave_inside_a_line(void) {
+static void read_file_into(struct capture *c, const char *path) {
+  int rd = open(path, O_RDONLY);
+  c->len = read_all(rd, c->buf, MAX_OUT - 1);
+  close(rd);
+  c->buf[c->len] = 0;
+  split_lines(c);
+}
+
+static void test_two_processes_sharing_one_output_never_interleave_inside_a_line(void) {
   for (int round = 0; round < 20; round++) {
+    struct capture *c = calloc(1, sizeof *c);
+    c->buf = malloc(MAX_OUT);
+#if defined(__linux__)
     int fds[2];
     CHECK(pipe(fds) == 0);
     const char *env_a[] = {"HAIRSPRING_PROC=pA", NULL};
     const char *env_b[] = {"HAIRSPRING_PROC=pB", NULL};
-    pid_t a = spawn(PIPE_SCENARIO, NULL, env_a, fds[1]);
-    pid_t b = spawn(PIPE_SCENARIO, NULL, env_b, fds[1]);
+    pid_t a = spawn("big", NULL, env_a, fds[1]);
+    pid_t b = spawn("big", NULL, env_b, fds[1]);
     close(fds[1]);
-    struct capture *c = calloc(1, sizeof *c);
-    c->buf = malloc(MAX_OUT);
     c->len = read_all(fds[0], c->buf, MAX_OUT - 1);
     close(fds[0]);
     c->buf[c->len] = 0;
+    split_lines(c);
     waitpid(a, NULL, 0);
     waitpid(b, NULL, 0);
-    split_lines(c);
+#else
+    char path[] = "/tmp/hs_shared_XXXXXX";
+    int tmp = mkstemp(path);
+    CHECK(tmp >= 0);
+    close(tmp);
+    char file_env[128];
+    snprintf(file_env, sizeof file_env, "HAIRSPRING_EVENTS_FILE=%s", path);
+    const char *env_a[] = {"HAIRSPRING_PROC=pA", file_env, NULL};
+    const char *env_b[] = {"HAIRSPRING_PROC=pB", file_env, NULL};
+    int devnull = open("/dev/null", O_WRONLY);
+    pid_t a = spawn("big", NULL, env_a, devnull);
+    pid_t b = spawn("big", NULL, env_b, devnull);
+    close(devnull);
+    waitpid(a, NULL, 0);
+    waitpid(b, NULL, 0);
+    read_file_into(c, path);
+    unlink(path);
+#endif
     check_all_lines_wellformed(c);
     const char *procs[] = {"pA", "pB"};
     for (int i = 0; i < 2; i++) {
@@ -375,6 +398,145 @@ static void test_two_processes_sharing_a_pipe_never_interleave_inside_a_line(voi
     CHECK_U64(c->n_lines, 2 * (1 + PIPE_SITES + PIPE_SITES + 1 + 1 + 1));
     free_capture(c);
   }
+}
+
+/* ---- review findings ------------------------------------------------------------------------------------------ */
+
+static void test_events_survive_stderr_being_closed_and_reused(void) {
+  char path[] = "/tmp/hs_data_XXXXXX";
+  int tmp = mkstemp(path);
+  CHECK(tmp >= 0);
+  close(tmp);
+  struct capture *c = run_capture("closefd", path, NULL);
+  CHECK(WIFEXITED(c->status) && WEXITSTATUS(c->status) == 0);
+  CHECK_U64(count(c, "end", "p1"), 1); /* the report still reached the original stderr... */
+  struct capture data = {0};
+  data.buf = malloc(MAX_OUT);
+  read_file_into(&data, path);
+  CHECK_U64(data.len, 17); /* ...and the program's own file received only its own bytes */
+  CHECK(!any_line_has(&data, "HAIRSPRING_EVENT"));
+  free(data.buf);
+  unlink(path);
+  free_capture(c);
+}
+
+static void test_events_survive_stderr_being_closed_without_reuse(void) {
+  struct capture *c = run_capture("closefd", NULL, NULL);
+  check_all_lines_wellformed(c);
+  CHECK_U64(count(c, "end", "p1"), 1);
+  free_capture(c);
+}
+
+static void test_unwritable_events_file_falls_back_to_stderr_and_is_counted(void) {
+  const char *env[] = {"HAIRSPRING_EVENTS_FILE=/nonexistent-dir/events", NULL};
+  struct capture *c = run_capture("basic", NULL, env);
+  check_all_lines_wellformed(c);
+  CHECK_U64(count(c, "end", "p1"), 1);
+  CHECK(field(find_line(c, "end", "p1", NULL), "dropped") >= 1);
+  free_capture(c);
+}
+
+static void test_events_file_symlink_is_not_followed(void) {
+  char target[] = "/tmp/hs_target_XXXXXX";
+  int tmp = mkstemp(target);
+  CHECK(tmp >= 0);
+  close(tmp);
+  char link_path[64];
+  snprintf(link_path, sizeof link_path, "%s.link", target);
+  CHECK(symlink(target, link_path) == 0);
+  char setting[128];
+  snprintf(setting, sizeof setting, "HAIRSPRING_EVENTS_FILE=%s", link_path);
+  const char *env[] = {setting, NULL};
+  struct capture *c = run_capture("basic", NULL, env);
+  struct capture file = {0};
+  file.buf = malloc(MAX_OUT);
+  read_file_into(&file, target);
+  CHECK_U64(file.n_lines, 0);          /* nothing went through the link... */
+  CHECK_U64(count(c, "end", "p1"), 1); /* ...and the events fell back to stderr */
+  free(file.buf);
+  unlink(link_path);
+  unlink(target);
+  free_capture(c);
+}
+
+static void test_plain_return_reports_the_real_status_where_glibc_allows(void) {
+  struct capture *c = run_capture("plain_exit", NULL, NULL);
+  CHECK(WIFEXITED(c->status) && WEXITSTATUS(c->status) == 7);
+#if defined(__GLIBC__)
+  CHECK_U64(field(find_line(c, "end", "p1", NULL), "status"), 7);
+#else
+  CHECK_U64(field(find_line(c, "end", "p1", NULL), "status"), 0); /* advisory: the wait status is authoritative */
+#endif
+  free_capture(c);
+}
+
+static void crash_reports(const char *scenario, int expected_signal, const char *id) {
+  const char *on[] = {"HAIRSPRING_SIGNAL_REPORT=1", NULL};
+  struct capture *c = run_capture(scenario, NULL, on);
+  CHECK(WIFSIGNALED(c->status) && WTERMSIG(c->status) == expected_signal);
+  check_all_lines_wellformed(c);
+  CHECK(any_line_has(c, "\"reason\":\"signal\""));
+  CHECK_U64(count(c, "end", "p1"), 1);
+  CHECK_U64(field(find_line(c, "assert", "p1", id), "hits"), 1);
+  free_capture(c);
+}
+
+static void test_real_faults_are_reported_when_handlers_are_on(void) {
+  crash_reports("segv", SIGSEGV, "segv.before");
+  crash_reports("abort", SIGABRT, "abort.before");
+  crash_reports("threadsegv", SIGSEGV, "threadsegv.worker");
+}
+
+static void test_report_survives_a_timer_signal_during_the_write(void) {
+  struct capture *c = run_capture("alarm", NULL, NULL);
+  check_all_lines_wellformed(c);
+  CHECK_U64(count(c, "assert", "p1"), 64);
+  CHECK_U64(count(c, "end", "p1"), 1);
+  free_capture(c);
+}
+
+static void test_empty_catalog_reports_work_and_end(void) {
+  struct capture *c = run_capture("empty", NULL, NULL);
+  check_all_lines_wellformed(c);
+  CHECK_U64(count(c, "catalog", "p1"), 0);
+  CHECK_U64(field(find_line(c, "end", "p1", NULL), "sites"), 0);
+  CHECK_U64(field(find_line(c, "work", "p1", NULL), "ops"), 1);
+  free_capture(c);
+}
+
+static void test_reserved_and_malformed_root_tags_are_refused_not_shortened(void) {
+  const char *bad_tags[] = {"HAIRSPRING_PROC=_eval", "HAIRSPRING_PROC=has space",
+                            "HAIRSPRING_PROC=0123456789012345678901234567890123456789012345678901234567890123456789"};
+  for (size_t i = 0; i < sizeof bad_tags / sizeof bad_tags[0]; i++) {
+    const char *env[] = {bad_tags[i], NULL};
+    struct capture *c = run_capture("basic", NULL, env);
+    CHECK_U64(count(c, "end", "p1"), 1);
+    CHECK(field(find_line(c, "end", "p1", NULL), "dropped") >= 1);
+    free_capture(c);
+  }
+}
+
+static void test_a_long_root_tag_gets_a_readable_hashed_child_tag(void) {
+  /* 62 bytes: "<tag>.f1" would be 65, so the child gets the first 40 bytes, ".h" and a hash. */
+  const char *env[] = {"HAIRSPRING_PROC=abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghij", NULL};
+  struct capture *c = run_capture("fork", NULL, env);
+  check_all_lines_wellformed(c);
+  CHECK_U64(count(c, "end", "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghij"), 1);
+  CHECK(any_line_has(c, "\"proc\":\"abcdefghijklmnopqrstuvwxyzabcdefghijklmn.h"));
+  free_capture(c);
+}
+
+static void test_thread_lines_have_one_length_whatever_the_key(void) {
+  struct capture *c = run_capture("threads", "12", NULL);
+  size_t len = 0;
+  for (size_t i = 0; i < c->n_lines; i++) {
+    if (!is_kind(c->lines[i], "thread")) continue;
+    if (len == 0) len = strlen(c->lines[i]);
+    /* w-0..w-4 and t#1 differ in key length and stable/unstable in the flag; the line length must not. */
+    CHECK_U64(strlen(c->lines[i]), len);
+  }
+  CHECK(len > 0);
+  free_capture(c);
 }
 
 int main(int argc, char **argv) {
@@ -393,6 +555,17 @@ int main(int argc, char **argv) {
   RUN(test_events_file_receives_the_report_instead_of_stderr);
   RUN(test_events_off_writes_nothing);
   RUN(test_eval_forms_write_one_line_each);
-  RUN(test_two_processes_sharing_a_pipe_never_interleave_inside_a_line);
+  RUN(test_two_processes_sharing_one_output_never_interleave_inside_a_line);
+  RUN(test_events_survive_stderr_being_closed_and_reused);
+  RUN(test_events_survive_stderr_being_closed_without_reuse);
+  RUN(test_unwritable_events_file_falls_back_to_stderr_and_is_counted);
+  RUN(test_events_file_symlink_is_not_followed);
+  RUN(test_plain_return_reports_the_real_status_where_glibc_allows);
+  RUN(test_real_faults_are_reported_when_handlers_are_on);
+  RUN(test_report_survives_a_timer_signal_during_the_write);
+  RUN(test_empty_catalog_reports_work_and_end);
+  RUN(test_reserved_and_malformed_root_tags_are_refused_not_shortened);
+  RUN(test_a_long_root_tag_gets_a_readable_hashed_child_tag);
+  RUN(test_thread_lines_have_one_length_whatever_the_key);
   return hs_t_summary();
 }

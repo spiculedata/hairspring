@@ -125,17 +125,205 @@ int main(void) {
   return 0;
 }
 
-#elif defined(HS_SCENARIO_small)
+#elif defined(HS_SCENARIO_forkexec)
 
-/* Same shape as "big" but every line stays under 512 bytes (macOS PIPE_BUF). */
-#define ROW(X, p) X(p##0) X(p##1) X(p##2) X(p##3) X(p##4) X(p##5) X(p##6) X(p##7)
-#define SITES(X) ROW(X, a) ROW(X, b) ROW(X, c) ROW(X, d) ROW(X, e) ROW(X, f) ROW(X, g) ROW(X, h)
-#define SMALL_SITE(n) HS_REACHABLE("small.site." #n, "short");
+/* Usage: hs_sample_forkexec <image-to-exec>. The child execs the image: an instrumented one starts life under the
+** child's tag; an uninstrumented one must leave nothing behind. */
+int main(int argc, char **argv) {
+  if (argc < 2) return 2;
+  HS_REACHABLE("forkexec.parent", "parent reaches this");
+  pid_t pid = fork();
+  if (pid == 0) {
+    execl(argv[1], argv[1], (char *)NULL);
+    _exit(127);
+  }
+  int status = 0;
+  waitpid(pid, &status, 0);
+  return 0;
+}
+
+#elif defined(HS_SCENARIO_spawn)
+
+#include <spawn.h>
+extern char **environ;
+
+/* Usage: hs_sample_spawn <image>. posix_spawn runs no fork handlers, so the child must tell itself apart. */
+int main(int argc, char **argv) {
+  if (argc < 2) return 2;
+  HS_REACHABLE("spawn.parent", "parent reaches this");
+  pid_t pid = 0;
+  char *args[] = {argv[1], NULL};
+  if (posix_spawn(&pid, argv[1], NULL, NULL, args, environ) != 0) return 3;
+  int status = 0;
+  waitpid(pid, &status, 0);
+  return 0;
+}
+
+#elif defined(HS_SCENARIO_closefd)
+
+#include <fcntl.h>
+
+/* Usage: hs_sample_closefd [data-file]. Closes stderr; with a file, reuses descriptor 2 for it. */
+int main(int argc, char **argv) {
+  HS_REACHABLE("closefd.reach", "reached");
+  close(2);
+  if (argc > 1) {
+    int fd = open(argv[1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0 && write(fd, "application data\n", 17) != 17) return 3;
+  }
+  return 0;
+}
+
+#elif defined(HS_SCENARIO_manyids)
+
+#define L1(M, P) M(P##0) M(P##1) M(P##2) M(P##3) M(P##4) M(P##5) M(P##6) M(P##7)
+#define L2(M, P) L1(M, P##0) L1(M, P##1) L1(M, P##2) L1(M, P##3) L1(M, P##4) L1(M, P##5) L1(M, P##6) L1(M, P##7)
+#define L3(M, P) L2(M, P##0) L2(M, P##1) L2(M, P##2) L2(M, P##3) L2(M, P##4) L2(M, P##5) L2(M, P##6) L2(M, P##7)
+#define L4(M, P) L3(M, P##0) L3(M, P##1) L3(M, P##2) L3(M, P##3) L3(M, P##4) L3(M, P##5) L3(M, P##6) L3(M, P##7)
+#define MANY_SITE(n) HS_REACHABLE("many." #n, "m");
+
+/* One function per 64 sites: gcc compiles thousands of static locals in a single function very slowly. */
+#define I1(M, P) M(P##0) M(P##1) M(P##2) M(P##3) M(P##4) M(P##5) M(P##6) M(P##7)
+#define I2(M, P) I1(M, P##0) I1(M, P##1) I1(M, P##2) I1(M, P##3) I1(M, P##4) I1(M, P##5) I1(M, P##6) I1(M, P##7)
+#define CHUNK(P) static void chunk_##P(void) { I2(MANY_SITE, P) }
+#define CALL(P) chunk_##P();
+
+L2(CHUNK, a)
+L1(CHUNK, b)
+
+/* 4608 distinct ids: over the per-process limit of 4096. */
+int main(void) {
+  L2(CALL, a)
+  L1(CALL, b)
+  return 0;
+}
+
+#elif defined(HS_SCENARIO_conflict)
 
 int main(void) {
-  for (int rnd = 0; rnd < 3; rnd++) {
-    SITES(SMALL_SITE)
+  HS_ALWAYS(1, "conflict.id", "declared as always");
+  HS_SOMETIMES(1, "conflict.id", "declared as sometimes");
+  return 0;
+}
+
+#elif defined(HS_SCENARIO_empty)
+
+int main(void) {
+  HS_WORK(1); /* links the SDK in, with no assertion at all */
+  return 0;
+}
+
+#elif defined(HS_SCENARIO_limits)
+
+#define X10 "xxxxxxxxxx"
+#define X100 X10 X10 X10 X10 X10 X10 X10 X10 X10 X10
+#define M512 X100 X100 X100 X100 X100 X10 "xx"
+
+/* An id and a message exactly at their limits, and an id with characters the protocol does not allow. */
+int main(void) {
+  HS_REACHABLE(X100 X10 X10 "xxxxxxxx", M512);
+  HS_REACHABLE("bad id$with:odd/chars", "quote \" and backslash \\ in the message");
+  return 0;
+}
+
+#elif defined(HS_SCENARIO_plain_exit)
+
+int main(void) {
+  HS_REACHABLE("plain.reach", "reached");
+  return 7;
+}
+
+#elif defined(HS_SCENARIO_segv)
+
+int main(void) {
+  HS_REACHABLE("segv.before", "reached before the fault");
+  *(volatile int *)0 = 1;
+  return 0;
+}
+
+#elif defined(HS_SCENARIO_abort)
+
+int main(void) {
+  HS_REACHABLE("abort.before", "reached before abort");
+  abort();
+}
+
+#elif defined(HS_SCENARIO_threadsegv)
+
+static void *faulting(void *arg) {
+  (void)arg;
+  hs_thread("faulty", 0);
+  HS_REACHABLE("threadsegv.worker", "reached in the worker");
+  *(volatile int *)0 = 1;
+  return NULL;
+}
+
+int main(void) {
+  HS_REACHABLE("threadsegv.main", "reached in main");
+  pthread_t t;
+  pthread_create(&t, NULL, faulting, NULL);
+  pthread_join(t, NULL);
+  return 0;
+}
+
+#elif defined(HS_SCENARIO_alive)
+
+#include <time.h>
+
+static volatile int g_stop;
+
+static void *spinner(void *arg) {
+  (void)arg;
+  while (!g_stop) HS_SOMETIMES(1, "alive.spin", "spinning");
+  return NULL;
+}
+
+static void *short_lived(void *arg) {
+  (void)arg;
+  HS_WORK(1);
+  return NULL;
+}
+
+static void *spawner(void *arg) {
+  (void)arg;
+  while (!g_stop) {
+    pthread_t t;
+    if (pthread_create(&t, NULL, short_lived, NULL) == 0) pthread_detach(t);
+    struct timespec ts = {0, 20000};
+    nanosleep(&ts, NULL);
   }
+  return NULL;
+}
+
+/* Threads are still evaluating, and new ones still starting, when the process exits. */
+int main(void) {
+  pthread_t t;
+  for (int i = 0; i < 4; i++) pthread_create(&t, NULL, spinner, NULL);
+  pthread_create(&t, NULL, spawner, NULL);
+  struct timespec ts = {0, 3000000};
+  nanosleep(&ts, NULL);
+  return 0;
+}
+
+#elif defined(HS_SCENARIO_alarm)
+
+#include <sys/time.h>
+
+static void tick(int sig) { (void)sig; }
+
+#define ROW(X, p) X(p##0) X(p##1) X(p##2) X(p##3) X(p##4) X(p##5) X(p##6) X(p##7)
+#define SITES(X) ROW(X, a) ROW(X, b) ROW(X, c) ROW(X, d) ROW(X, e) ROW(X, f) ROW(X, g) ROW(X, h)
+#define ALARM_SITE(n) HS_SOMETIMES(1, "alarm.site." #n, "short");
+
+/* A timer signal (no SA_RESTART) keeps arriving while the report is written. */
+int main(void) {
+  struct sigaction sa;
+  memset(&sa, 0, sizeof sa);
+  sa.sa_handler = tick;
+  sigaction(SIGALRM, &sa, NULL);
+  struct itimerval it = {{0, 50}, {0, 50}};
+  setitimer(ITIMER_REAL, &it, NULL);
+  SITES(ALARM_SITE)
   return 0;
 }
 

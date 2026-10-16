@@ -229,22 +229,33 @@ fn eval_lines_mark_the_trial_perturbing() {
 
 #[test]
 fn two_processes_on_one_pipe_fold_cleanly() {
-    // macOS pipes are only atomic up to 512 bytes; the report's long lines are exercised on Linux.
-    let scenario = if cfg!(target_os = "linux") {
-        "big"
-    } else {
-        "small"
-    };
-    for _ in 0..10 {
+    // macOS pipes are only atomic up to 512 bytes, so there the two processes share an O_APPEND events file.
+    for round in 0..10 {
         build_samples();
-        let bin = build_dir().join(format!("hs_sample_{scenario}"));
+        let bin = build_dir().join("hs_sample_big");
+        let events = std::env::temp_dir().join(format!("hs_c_sdk_{}_{round}.events", std::process::id()));
+        let _ = std::fs::remove_file(&events);
+        let use_file = !cfg!(target_os = "linux");
+        let file_env = if use_file {
+            format!("HAIRSPRING_EVENTS_FILE={} ", events.display())
+        } else {
+            String::new()
+        };
         let script = format!(
-            "HAIRSPRING_PROC=pA {bin} & HAIRSPRING_PROC=pB {bin} & wait",
+            "{file_env}HAIRSPRING_PROC=pA {bin} & {file_env}HAIRSPRING_PROC=pB {bin} & wait",
             bin = bin.display()
         );
         let mut cmd = Command::new("sh");
         cmd.arg("-c").arg(script);
-        let trial = fold(&stderr_of(cmd).0);
+        let (piped, _) = stderr_of(cmd);
+        let bytes = if use_file {
+            let read = std::fs::read(&events).expect("events file written");
+            let _ = std::fs::remove_file(&events);
+            read
+        } else {
+            piped
+        };
+        let trial = fold(&bytes);
         assert!(!trial.is_degraded(), "{:?}", trial.health);
         assert_eq!(trial.health.malformed, 0);
         assert!(trial.report_missing().is_empty());
@@ -254,4 +265,117 @@ fn two_processes_on_one_pipe_fold_cleanly() {
         assert_eq!(trial.properties.len(), 64);
         assert!(trial.properties.iter().all(|p| p.hits == 6));
     }
+}
+
+// ---- review findings -----------------------------------------------------------------------------------------
+
+fn tags(trial: &TrialProps) -> Vec<String> {
+    let mut tags: Vec<String> = trial.procs.iter().map(|p| p.tag.clone()).collect();
+    tags.sort();
+    tags
+}
+
+fn sample_path(scenario: &str) -> String {
+    build_samples();
+    build_dir()
+        .join(format!("hs_sample_{scenario}"))
+        .display()
+        .to_string()
+}
+
+#[test]
+fn fork_then_exec_of_an_instrumented_image_reports_once_under_the_child_tag() {
+    let trial = run_trial("forkexec", &[&sample_path("merge")]);
+    assert!(!trial.is_degraded(), "{:?}", trial.health);
+    assert!(
+        trial.report_missing().is_empty(),
+        "{:?}",
+        trial.report_missing()
+    );
+    assert_eq!(tags(&trial), ["p1", "p1.f1"]);
+    assert_eq!(trial.health.duplicates, 0);
+}
+
+#[test]
+fn fork_then_exec_of_an_uninstrumented_image_leaves_nothing_behind() {
+    let trial = run_trial("forkexec", &["/usr/bin/true"]);
+    assert!(!trial.is_degraded(), "{:?}", trial.health);
+    assert!(
+        trial.report_missing().is_empty(),
+        "{:?}",
+        trial.report_missing()
+    );
+    assert_eq!(tags(&trial), ["p1"]);
+}
+
+#[test]
+fn a_spawned_instrumented_child_does_not_reuse_its_parents_tag() {
+    let trial = run_trial("spawn", &[&sample_path("merge")]);
+    assert!(!trial.is_degraded(), "{:?}", trial.health);
+    assert!(trial.report_missing().is_empty());
+    let found = tags(&trial);
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert_eq!(found[0], "p1");
+    assert!(found[1].starts_with("p1.s"), "{found:?}");
+}
+
+#[test]
+fn more_ids_than_the_limit_degrade_the_trial() {
+    let trial = run_trial("manyids", &[]);
+    assert!(trial.is_degraded());
+    assert!(trial.health.over_limit > 0, "{:?}", trial.health);
+}
+
+#[test]
+fn one_id_declared_with_two_kinds_is_a_catalog_conflict() {
+    let trial = run_trial("conflict", &[]);
+    assert_eq!(trial.conflicts.len(), 1, "{:?}", trial.health);
+    assert!(trial
+        .verdict()
+        .iter()
+        .any(|f| f.reason == FailureReason::CatalogConflict));
+}
+
+#[test]
+fn a_program_with_no_assertions_still_reports_work() {
+    let trial = run_trial("empty", &[]);
+    assert!(!trial.is_degraded(), "{:?}", trial.health);
+    assert!(trial.properties.is_empty());
+    assert_eq!(trial.total_work(), 1);
+    assert_eq!(trial.procs[0].end.as_ref().unwrap().sites, 0);
+}
+
+#[test]
+fn ids_and_messages_at_their_limits_and_odd_characters_fold_cleanly() {
+    let trial = run_trial("limits", &[]);
+    assert!(!trial.is_degraded(), "{:?}", trial.health);
+    assert!(trial.properties.iter().any(|p| p.id.len() == 128));
+    assert!(trial.properties.iter().any(|p| p.msg.len() == 512));
+    assert!(trial
+        .properties
+        .iter()
+        .any(|p| p.id == "bad_id_with:odd/chars"));
+}
+
+#[test]
+fn threads_still_running_at_exit_give_a_consistent_report() {
+    for _ in 0..10 {
+        let trial = run_trial("alive", &[]);
+        assert!(!trial.is_degraded(), "{:?}", trial.health);
+        let end = trial.procs[0].end.as_ref().expect("end line");
+        assert_eq!(end.threads as usize, trial.thread_reports().len());
+        let per_thread: u64 = trial.thread_reports().iter().map(|(_, t)| t.evals).sum();
+        assert_eq!(end.evals, per_thread);
+    }
+}
+
+#[test]
+fn a_fault_in_a_worker_thread_with_handlers_on_folds_cleanly() {
+    let mut cmd = sample("threadsegv");
+    cmd.env("HAIRSPRING_SIGNAL_REPORT", "1");
+    let (bytes, status) = stderr_of(cmd);
+    assert!(!status.success());
+    let trial = fold(&bytes);
+    assert!(!trial.is_degraded(), "{:?}", trial.health);
+    assert!(trial.report_missing().is_empty());
 }

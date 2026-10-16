@@ -243,6 +243,144 @@ static void test_more_threads_than_slots_share_the_overflow_slot(void) {
   CHECK_U64(hs_slots[HS_OVERFLOW_SLOT].is_stable, 0);
 }
 
+/* ---- concurrency ---------------------------------------------------------------------------------------------- */
+
+#define STRESS_THREADS 8
+#define STRESS_ROUNDS 100000
+
+static int g_go;
+
+static void stress_hit(int ok) {
+  struct hs_slot *sl = hs__slot();
+  HS_SOMETIMES(ok, "unit.stress", "stress", (int64_t)sl->index, (int64_t)sl->evals + 1);
+}
+
+static void *stress_main(void *arg) {
+  (void)arg;
+  while (!__atomic_load_n(&g_go, __ATOMIC_ACQUIRE)) {
+  }
+  for (int i = 0; i < STRESS_ROUNDS; i++) stress_hit(i & 1);
+  return NULL;
+}
+
+static void test_contended_counters_are_exact_and_one_thread_owns_each_witness(void) {
+  pthread_t t[STRESS_THREADS];
+  for (int i = 0; i < STRESS_THREADS; i++) CHECK(pthread_create(&t[i], NULL, stress_main, NULL) == 0);
+  __atomic_store_n(&g_go, 1, __ATOMIC_RELEASE);
+  for (int i = 0; i < STRESS_THREADS; i++) pthread_join(t[i], NULL);
+  const struct hs_site *s = find_site("unit.stress");
+  CHECK_U64(s->trues, (uint64_t)STRESS_THREADS * STRESS_ROUNDS / 2);
+  CHECK_U64(s->falses, (uint64_t)STRESS_THREADS * STRESS_ROUNDS / 2);
+  /* A torn witness would mix one thread's slot with another's ordinal. */
+  CHECK_U64(s->first_true.slot, (uint64_t)s->first_true.vals[0]);
+  CHECK_U64(s->first_true.ord, (uint64_t)s->first_true.vals[1]);
+  CHECK_U64(s->first_false.slot, (uint64_t)s->first_false.vals[0]);
+  CHECK_U64(s->first_false.ord, (uint64_t)s->first_false.vals[1]);
+  CHECK(s->first_true.ord >= 1 && s->first_false.ord >= 1);
+}
+
+#define CLAIMERS 48
+static uint64_t g_claimed[CLAIMERS];
+
+static void *claim_main(void *arg) {
+  uint64_t i = (uint64_t)(uintptr_t)arg;
+  while (!__atomic_load_n(&g_go, __ATOMIC_ACQUIRE)) {
+  }
+  g_claimed[i] = hs__slot()->index;
+  return NULL;
+}
+
+static void test_simultaneous_first_calls_get_distinct_slots(void) {
+  __atomic_store_n(&g_go, 0, __ATOMIC_RELEASE);
+  pthread_t t[CLAIMERS];
+  for (uint64_t i = 0; i < CLAIMERS; i++) CHECK(pthread_create(&t[i], NULL, claim_main, (void *)(uintptr_t)i) == 0);
+  __atomic_store_n(&g_go, 1, __ATOMIC_RELEASE);
+  for (int i = 0; i < CLAIMERS; i++) pthread_join(t[i], NULL);
+  for (int i = 0; i < CLAIMERS; i++)
+    for (int j = i + 1; j < CLAIMERS; j++) CHECK(g_claimed[i] != g_claimed[j]);
+}
+
+/* ---- merging details ------------------------------------------------------------------------------------------ */
+
+static void __attribute__((noinline)) order_site_a(int ok) { HS_SOMETIMES(ok, "unit.order", "ordering", 1); }
+static void __attribute__((noinline)) order_site_b(int ok) { HS_SOMETIMES(ok, "unit.order", "ordering", 2); }
+
+static void test_merged_witness_is_the_earliest_on_the_same_thread(void) {
+  order_site_b(1); /* earlier ordinal, whichever record happens to be canonical */
+  order_site_a(1);
+  hs_catalog_sum();
+  const struct hs_site *canon = NULL;
+  uint64_t earliest = UINT64_MAX;
+  for (const struct hs_site *s = hs_sites_begin(); s < hs_sites_end(); s++) {
+    if (!hs_site_live(s) || strcmp(s->id, "unit.order") != 0) continue;
+    if (s->canon == s) canon = s;
+    if (s->first_true.ord && s->first_true.ord < earliest) earliest = s->first_true.ord;
+  }
+  CHECK(canon && canon->pick_true);
+  CHECK_U64(canon->pick_true->ord, earliest);
+}
+
+static void conflict_always(void) { HS_ALWAYS(1, "unit.conflict", "as always"); }
+static void conflict_sometimes(void) { HS_SOMETIMES(1, "unit.conflict", "as sometimes"); }
+
+static size_t g_conflict_lines;
+
+static void count_conflict_lines(const char *line, size_t len) {
+  (void)len;
+  if (strstr(line, "\"kind\":\"catalog\"") && strstr(line, "\"id\":\"unit.conflict\"")) g_conflict_lines++;
+}
+
+static void test_conflicting_kinds_keep_their_own_counts_and_both_get_a_catalog_line(void) {
+  conflict_always();
+  conflict_sometimes();
+  conflict_sometimes();
+  hs_catalog_sum();
+  const struct hs_site *canon = NULL;
+  for (const struct hs_site *s = hs_sites_begin(); s < hs_sites_end(); s++)
+    if (hs_site_live(s) && strcmp(s->id, "unit.conflict") == 0 && s->canon == s) canon = s;
+  CHECK(canon != NULL);
+  CHECK_U64(canon->sum_trues, canon->trues); /* the other kind's hits are not folded in */
+  g_conflict_lines = 0;
+  hs_test_set_sink(count_conflict_lines);
+  hs_emit_startup();
+  hs_test_set_sink(NULL);
+  CHECK_U64(g_conflict_lines, 2);
+}
+
+/* ---- the write path ------------------------------------------------------------------------------------------- */
+
+#include <errno.h>
+
+static void test_a_failed_write_keeps_errno_and_is_counted(void) {
+  int saved_fd = hs_proc.fd;
+  uint64_t dropped = hs_proc.dropped;
+  hs_proc.fd = 9999; /* not an open descriptor */
+  char store[64];
+  struct hs_buf b;
+  hs_buf_init(&b, store, sizeof store);
+  hs_put_str(&b, "HAIRSPRING_EVENT {}\n");
+  errno = 1234;
+  hs_emit_line(&b);
+  CHECK_U64(errno, 1234);
+  CHECK_U64(hs_proc.dropped, dropped + 1);
+  hs_proc.fd = saved_fd;
+  hs_proc.dropped = dropped;
+}
+
+static void test_ids_and_keys_are_cut_at_their_limits(void) {
+  char longid[300];
+  memset(longid, 'a', sizeof longid - 1);
+  longid[sizeof longid - 1] = 0;
+  char store[400];
+  struct hs_buf b;
+  hs_buf_init(&b, store, sizeof store);
+  hs_put_ident(&b, longid, HS_ID_MAX);
+  CHECK_U64(b.len, HS_ID_MAX + 2); /* the quotes */
+  hs_buf_init(&b, store, sizeof store);
+  hs_put_thread_key(&b, longid, HS_THREAD_KEY_MAX);
+  CHECK_U64(b.len, HS_THREAD_KEY_MAX + 2);
+}
+
 /* ---- lines ---------------------------------------------------------------------------------------------------- */
 
 static void test_catalog_line_matches_offline_twin(void) {
@@ -358,10 +496,17 @@ int main(void) {
   RUN(test_point_kinds_count_hits_as_trues);
   RUN(test_sometimes_and_always_or_unreachable_kinds);
   RUN(test_work_accumulates_per_thread);
+  /* Before the overflow test: these need threads that own their slots. */
+  RUN(test_contended_counters_are_exact_and_one_thread_owns_each_witness);
+  RUN(test_simultaneous_first_calls_get_distinct_slots);
   RUN(test_same_id_at_two_sites_merges);
   RUN(test_distinct_id_count_matches_catalog);
   RUN(test_thread_keys);
   RUN(test_more_threads_than_slots_share_the_overflow_slot);
+  RUN(test_merged_witness_is_the_earliest_on_the_same_thread);
+  RUN(test_conflicting_kinds_keep_their_own_counts_and_both_get_a_catalog_line);
+  RUN(test_a_failed_write_keeps_errno_and_is_counted);
+  RUN(test_ids_and_keys_are_cut_at_their_limits);
   RUN(test_catalog_line_matches_offline_twin);
   RUN(test_assert_line_length_ignores_counter_values);
   RUN(test_report_has_one_assert_per_id_and_bounded_lines);
