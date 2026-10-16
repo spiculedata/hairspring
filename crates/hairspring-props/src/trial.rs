@@ -282,20 +282,26 @@ impl TrialProps {
     }
 }
 
+/// Whether a property counts as failed in one trial, and why, from its kind and counts alone. `reason` and `count`
+/// are those of the matching [`PropertyFailure`].
+pub fn failure_basis(kind: AssertKind, hits: u64, falses: u64) -> Option<(FailureReason, u64)> {
+    match kind {
+        AssertKind::Always | AssertKind::AlwaysOrUnreachable if falses > 0 => {
+            Some((FailureReason::AlwaysFalse, falses))
+        }
+        AssertKind::Unreachable if hits > 0 => Some((FailureReason::UnreachableHit, hits)),
+        _ => None,
+    }
+}
+
 impl TrialProperty {
     /// The trial-level failure of this property, if any.
     pub fn failure(&self) -> Option<PropertyFailure> {
         let p = self;
-        let (reason, count, witness) = match p.kind {
-            AssertKind::Always | AssertKind::AlwaysOrUnreachable if p.falses > 0 => {
-                (FailureReason::AlwaysFalse, p.falses, p.first_false.clone())
-            }
-            AssertKind::Unreachable if p.hits > 0 => (
-                FailureReason::UnreachableHit,
-                p.hits,
-                p.first_true.clone().or_else(|| p.first_false.clone()),
-            ),
-            _ => return None,
+        let (reason, count) = failure_basis(p.kind, p.hits, p.falses)?;
+        let witness = match reason {
+            FailureReason::AlwaysFalse => p.first_false.clone(),
+            _ => p.first_true.clone().or_else(|| p.first_false.clone()),
         };
         Some(PropertyFailure {
             id: p.id.clone(),

@@ -4,6 +4,7 @@ use crate::event::*;
 use crate::json::{Json, Num};
 use crate::limits::*;
 use crate::line::{IgnoreReason, RejectReason};
+use crate::valid::{is_ident_byte, is_invisible, is_thread_byte};
 
 pub(crate) enum Decoded {
     Event {
@@ -122,15 +123,6 @@ fn optional<'a>(obj: &'a Obj, key: &str) -> Option<&'a Json> {
     lookup(obj, key).filter(|v| !matches!(v, Json::Null))
 }
 
-fn is_ident_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b':' | b'/' | b'-')
-}
-
-/// Thread keys additionally allow `#`, because unlabelled threads are named `t#<claim order>`.
-fn is_thread_byte(b: u8) -> bool {
-    is_ident_byte(b) || b == b'#'
-}
-
 fn ident(v: &Json, name: &'static str, max: usize) -> Res<String> {
     keyed(v, name, max, is_ident_byte)
 }
@@ -163,34 +155,6 @@ fn text(v: &Json, name: &'static str, max: usize) -> Res<String> {
         return Err(RejectReason::InvalidField(name));
     }
     Ok(s.clone())
-}
-
-/// Format (Cf) and line/paragraph separator (Zl, Zp) characters. The list follows the Unicode 15.1 general
-/// categories (Cf, Zl, Zp); characters added to those categories in later versions are not covered.
-/// which can reorder or hide text in a terminal or UI.
-fn is_invisible(c: char) -> bool {
-    matches!(
-        c,
-        '\u{00AD}'
-            | '\u{0600}'..='\u{0605}'
-            | '\u{061C}'
-            | '\u{06DD}'
-            | '\u{070F}'
-            | '\u{08E2}'
-            | '\u{180E}'
-            | '\u{200B}'..='\u{200F}'
-            | '\u{2028}'..='\u{202E}'
-            | '\u{2060}'..='\u{2064}'
-            | '\u{2066}'..='\u{206F}'
-            | '\u{FEFF}'
-            | '\u{FFF9}'..='\u{FFFB}'
-            | '\u{110BD}'
-            | '\u{110CD}'
-            | '\u{1BCA0}'..='\u{1BCA3}'
-            | '\u{1D173}'..='\u{1D17A}'
-            | '\u{E0001}'
-            | '\u{E0020}'..='\u{E007F}'
-    )
 }
 
 fn uint(v: &Json, name: &'static str) -> Res<u64> {
