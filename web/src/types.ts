@@ -45,9 +45,17 @@ export interface Step {
   state: string;
 }
 
+/** The few property figures `GET /api/runs/{id}` carries for a run whose trials were stored. */
+export interface RunPropertySummary {
+  /** The lowest failing seed among judged trials, as a decimal string. */
+  first_failing_seed: string | null;
+  stopped_at_first_failure: boolean;
+}
+
 export interface RunDetail {
   run: Run;
   failures: FailureSummary[];
+  properties?: RunPropertySummary;
 }
 
 export interface FailureDetail {

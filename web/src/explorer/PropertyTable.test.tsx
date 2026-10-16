@@ -35,6 +35,18 @@ describe('PropertyTable', () => {
     expect(html).toContain('seed 18446744073709551615');
   });
 
+  it('links the first failing seed to its failure page when the run is known, and shows plain text when it is not', () => {
+    const linked = renderToString(<PropertyTable runId="run_0123" properties={[row()]} />);
+    expect(linked).toContain('<a href="/runs/run_0123/seeds/1016">seed 1016</a>');
+    expect(renderToString(<PropertyTable properties={[row()]} />)).not.toContain('<a ');
+    expect(renderToString(<PropertyTable runId="run_0123" properties={[row({ first_failing_seed: null })]} />)).not.toContain('<a ');
+  });
+
+  it('only links a seed that is plain digits, so nothing else can reach a path', () => {
+    const html = renderToString(<PropertyTable runId="run_0123" properties={[row({ first_failing_seed: '../x?y' })]} />);
+    expect(html).not.toContain('<a ');
+  });
+
   it('shows UNMET as a coverage gap in its own tone, never as a failure', () => {
     const unmet = row({
       status: 'unmet',

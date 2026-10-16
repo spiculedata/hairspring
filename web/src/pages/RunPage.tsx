@@ -3,6 +3,7 @@ import { api, streamRunEvents } from '../api';
 import { Link } from '../components/Layout';
 import { StateBadge } from '../components/Badge';
 import { ErrorBoundary } from '../components/ErrorBoundary';
+import { FirstFailingSeed } from '../explorer/FirstFailingSeed';
 import { PropertyOverviewPanel } from '../explorer/PropertyOverviewPanel';
 import { usePropertyOverview } from '../explorer/usePropertyOverview';
 import { formatDuration, relativeTime } from '../format';
@@ -86,6 +87,7 @@ export function RunPage({ id }: { id: string }) {
       </ErrorBoundary>
       <h2>Failures</h2>
       {detail.data?.failures.length === 0 && <p className="muted">{noFailuresText({ live, headline: properties.page?.headline })}</p>}
+      <FirstFailingSeed runId={run.id} seed={detail.data?.properties?.first_failing_seed} />
       <ul>
         {detail.data?.failures.map((f) => (
           <li key={f.id}>

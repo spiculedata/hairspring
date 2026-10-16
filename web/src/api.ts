@@ -83,10 +83,17 @@ async function failure(res: Response): Promise<ApiError> {
   return new ApiError(res.status, message, parseRetryAfter(res.headers.get('Retry-After'), Date.now()));
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, { ...init, headers: { ...headers(init.body !== undefined), ...(init.headers as Record<string, string>) } });
   if (!res.ok) throw await failure(res);
   return (await res.json()) as T;
+}
+
+/** A plain-text response (kept output), with the same token and error handling as `request`. */
+export async function requestText(path: string, init: RequestInit = {}): Promise<string> {
+  const res = await fetch(path, { ...init, headers: { ...headers(false), ...(init.headers as Record<string, string>) } });
+  if (!res.ok) throw await failure(res);
+  return res.text();
 }
 
 /** The properties URL for a run: each filter is encoded, so a prefix cannot add or override a parameter. */

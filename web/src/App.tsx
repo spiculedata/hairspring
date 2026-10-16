@@ -7,6 +7,7 @@ import { Targets, Workers } from './pages/Lists';
 import { RunPage } from './pages/RunPage';
 import { Runs } from './pages/Runs';
 import { matchRoute, usePath } from './router';
+import { SeedPage, TrialPage } from './trial/TrialPage';
 
 export function App() {
   const path = usePath();
@@ -34,6 +35,9 @@ export function App() {
         {route.name === 'runs' && <Runs />}
         {route.name === 'run' && <RunPage id={route.id} />}
         {route.name === 'failure' && <FailurePage id={route.id} />}
+        {route.name === 'trial' &&
+          (Number.isSafeInteger(Number(route.seq)) ? <TrialPage runId={route.id} seq={Number(route.seq)} /> : <p className="muted">Page not found.</p>)}
+        {route.name === 'seed' && <SeedPage runId={route.id} seed={route.seed} />}
         {route.name === 'targets' && <Targets />}
         {route.name === 'workers' && <Workers />}
         {route.name === 'notfound' && <p className="muted">Page not found.</p>}

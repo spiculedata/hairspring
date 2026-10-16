@@ -197,6 +197,60 @@ export function excludedText(e: { degraded: number; perturbing: number; inconclu
   return parts.length === 0 ? undefined : `Excluded from every rate: ${parts.join(', ')}.`;
 }
 
+// ---- Failure page (one trial) ----
+
+const VERDICT_LABELS: Record<string, string> = {
+  pass: 'passed',
+  violation: 'failed',
+  inconclusive: 'was inconclusive',
+  unusable: 'was unusable',
+  infra: 'hit an infrastructure error',
+};
+
+/** "Failed in seed S" is an observation about one seed; it is not a rate and it does not say "reproduced". */
+export function trialTitle(verdict: string, seed: string): string {
+  const label = VERDICT_LABELS[verdict];
+  return label === undefined ? `Seed ${seed}: ${verdict}` : `Seed ${seed} ${label}`;
+}
+
+export function failedInSeed(seed: string): string {
+  return `failed in seed ${seed}`;
+}
+
+export const PER_THREAD_NOTE =
+  "Ordinals are per thread: each is a count of that thread's own evaluations. No order across threads is recorded, and lanes are not aligned in time.";
+export const LANE_SCALE_NOTE = "Each lane is drawn to its own thread's evaluation count; a longer lane does not mean more time.";
+export const PERTURBING_NOTE = 'eval lines perturb the schedule; this trial is excluded from tier claims';
+
+export function witnessText(ord: number, ordinal: string, evals: number | undefined): string {
+  const of = evals === undefined ? '' : ` of the ${formatCount(evals)} that thread made`;
+  return `evaluation number ${formatCount(ord)} (its ${ordinal})${of}`;
+}
+
+export const WITNESS_VALUES_NOTE = 'as the program recorded them with that evaluation';
+
+export const STOPPED_TRIAL_NOTE =
+  'This run stopped at its first failure. One failing seed says that seed failed; it is not a rate and does not say how often this property fails.';
+export const NOT_REPLAYED_NOTE =
+  'This page does not re-run anything. It shows what the worker recorded for this one seed. Replay on the run page re-runs a stored bundle and reports only whether that bundle still fails.';
+export const NO_DETAIL_NOTE = 'No detail was kept for this trial, so only its row is shown. Detail is kept for failing, degraded, early and sampled trials.';
+export const DETAIL_TRUNCATED_NOTE = 'The property list was too large to keep and is left out; processes, threads and health are shown.';
+export const RAW_EVENTS_NOTE = 'Raw event lines are not stored. The counts and witnesses above are what the worker folded from them.';
+export const NO_SCHEDULE_NOTE = 'No scheduler summary was kept for this trial; the figures below come from its row.';
+export const NO_FAILING_PROPERTY = 'No kept property failed in this trial.';
+
+export function outputOmitted(bytes: number): string {
+  return `${formatCount(bytes)} ${bytes === 1 ? 'byte' : 'bytes'} cut from the start before it was kept`;
+}
+
+export function outputTrimmed(chars: number, lines: number): string {
+  const parts = [
+    chars > 0 ? `${formatCount(chars)} earlier ${chars === 1 ? 'character' : 'characters'}` : undefined,
+    lines > 0 ? `${formatCount(lines)} earlier ${lines === 1 ? 'line' : 'lines'}` : undefined,
+  ].filter((p): p is string => p !== undefined);
+  return `… ${parts.join(' and ')} not shown here; download the stream for the whole kept tail`;
+}
+
 export function seenInInconclusive(n: number): string {
   return `failure seen in ${plural(n, 'inconclusive trial', 'inconclusive trials')}`;
 }
