@@ -10,6 +10,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use hairspring_engine::backend::Progress;
 use hairspring_engine::report::RunOutcome;
+use hairspring_engine::trial_log::TrialReport;
 use hairspring_service::{Role, ServiceError};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -21,7 +22,7 @@ fn hex_id(prefix: &str, s: &str) -> bool {
         .is_some_and(|t| t.len() == 16 && t.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
-fn check_worker(id: &str) -> Result<(), ApiError> {
+pub(crate) fn check_worker(id: &str) -> Result<(), ApiError> {
     if hex_id("wrk_", id) {
         Ok(())
     } else {
@@ -168,4 +169,28 @@ pub async fn heartbeat(
     check_worker(&b.worker_id)?;
     let alive = blocking(move || s.svc.heartbeat(&job, &b.worker_id)).await?;
     Ok(Json(json!({ "ok": alive })))
+}
+
+#[derive(Deserialize)]
+pub struct TrialsBody {
+    worker_id: String,
+    trials: Vec<TrialReport>,
+}
+
+/// Per-trial records for the job's run. Everything in them is checked by the service before anything is stored.
+pub async fn trials(
+    State(s): State<AppState>,
+    caller: Caller,
+    Path(job): Path<String>,
+    ApiJson(b): ApiJson<TrialsBody>,
+) -> Result<Json<Value>, ApiError> {
+    caller.need(Role::Run)?;
+    check_job(&job)?;
+    check_worker(&b.worker_id)?;
+    let receipt = blocking(move || s.svc.ingest_trials(&job, &b.worker_id, &b.trials)).await?;
+    Ok(Json(json!({
+        "ok": true,
+        "inserted": receipt.inserted,
+        "duplicates": receipt.duplicates,
+    })))
 }

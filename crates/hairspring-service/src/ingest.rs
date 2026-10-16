@@ -1,0 +1,320 @@
+//! Taking per-trial records from a worker.
+//!
+//! A worker is a separate process, possibly remote and possibly compromised, and the text in its records is later shown
+//! to people and to AI agents. Every field is therefore re-checked here against the protocol's own limits, the digest
+//! is decoded and checked against the catalog the server holds, and a batch is stored all or nothing.
+use crate::types::IngestReceipt;
+use crate::{Result, Service, ServiceError};
+use hairspring_engine::config::MAX_TRIALS_CAP;
+use hairspring_engine::trial_log::{ReportedVerdict, TrialReport};
+use hairspring_props::limits::MAX_IDS_PER_RUN;
+use hairspring_props::record::{TrialRecord, MAX_DETAIL_BYTES};
+use hairspring_props::trial::failure_basis;
+use hairspring_props::valid::is_plain_text;
+use hairspring_props::{CatalogRow, CatalogUpdate, RunCatalog, TrialDigest};
+use hairspring_store::{
+    CatalogRowRecord, IngestOutcome, Job, NewTrial, RunRecord, TrialBatch, TrialVerdict,
+    MAX_BATCH_BYTES, MAX_KEPT_OUTPUT_BYTES, MAX_TRIALS_PER_BATCH, MAX_TRIAL_REASON_CHARS,
+};
+
+/// Longest behaviour hash or schedule fingerprint a worker may send, in characters.
+const MAX_HASH_CHARS: usize = 64;
+/// Prefix of the worker ids the process itself uses; remote workers get `wrk_` ids from the server.
+const LOCAL_WORKER_PREFIX: &str = "local-";
+
+fn invalid(why: impl Into<String>) -> ServiceError {
+    ServiceError::InvalidRequest(why.into())
+}
+
+fn verdict(v: ReportedVerdict) -> TrialVerdict {
+    match v {
+        ReportedVerdict::Pass => TrialVerdict::Pass,
+        ReportedVerdict::Violation => TrialVerdict::Violation,
+        ReportedVerdict::Inconclusive => TrialVerdict::Inconclusive,
+        ReportedVerdict::Unusable => TrialVerdict::Unusable,
+        ReportedVerdict::Infra => TrialVerdict::Infra,
+    }
+}
+
+fn hash_field(value: &Option<String>, what: &str) -> Result<()> {
+    match value {
+        Some(h)
+            if h.is_empty()
+                || h.len() > MAX_HASH_CHARS
+                || !h.bytes().all(|b| b.is_ascii_alphanumeric()) =>
+        {
+            Err(invalid(format!(
+                "{what} must be 1-{MAX_HASH_CHARS} letters and digits"
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The kept output must be `{"stdout": text, "stderr": text}` and nothing else.
+fn check_output(text: &str) -> Result<()> {
+    if text.len() > MAX_KEPT_OUTPUT_BYTES {
+        return Err(invalid("kept output is too large"));
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|_| invalid("kept output is not valid JSON"))?;
+    let Some(object) = value.as_object() else {
+        return Err(invalid("kept output must be a JSON object"));
+    };
+    let shaped = object
+        .iter()
+        .all(|(k, v)| matches!(k.as_str(), "stdout" | "stderr") && v.is_string());
+    if shaped {
+        Ok(())
+    } else {
+        Err(invalid("kept output may hold only stdout and stderr text"))
+    }
+}
+
+fn check_detail(text: &str) -> Result<()> {
+    if text.len() > MAX_DETAIL_BYTES {
+        return Err(invalid("kept detail is too large"));
+    }
+    TrialRecord::decode(text.as_bytes()).map_err(|e| invalid(e.to_string()))?;
+    Ok(())
+}
+
+fn row_record(u: &CatalogUpdate) -> CatalogRowRecord {
+    CatalogRowRecord {
+        idx: u.idx,
+        prop_id: u.row.id.clone(),
+        kind: u.row.kind.as_str().to_owned(),
+        must_hit: u.row.kind.must_hit(),
+        msg: u.row.msg.clone(),
+        loc_file: u.row.loc.as_ref().map(|l| l.file.clone()),
+        loc_line: u.row.loc.as_ref().map(|l| l.line),
+        loc_func: u.row.loc.as_ref().and_then(|l| l.func.clone()),
+        decided: u.row.decided,
+    }
+}
+
+/// Applies a report's catalog updates to `catalog`. An update that repeats a row the server already holds is a
+/// resend, not a change.
+fn apply_updates(mut catalog: RunCatalog, updates: &[CatalogUpdate]) -> Result<RunCatalog> {
+    for u in updates {
+        if catalog.get(u.idx) == Some(&u.row) {
+            continue;
+        }
+        catalog = catalog
+            .apply(u, MAX_IDS_PER_RUN)
+            .map_err(|e| invalid(e.to_string()))?;
+    }
+    Ok(catalog)
+}
+
+/// A digest that says a property failed cannot belong to a pass, and a pass cannot have timed out.
+fn consistent(v: ReportedVerdict, d: &TrialDigest) -> bool {
+    if v != ReportedVerdict::Pass {
+        return true;
+    }
+    let failed = d
+        .entries
+        .iter()
+        .any(|e| e.catalogued && failure_basis(e.kind, e.hits, e.falses).is_some());
+    !d.flags.inconclusive && !d.flags.excluded && !failed
+}
+
+struct Checked {
+    trial: NewTrial,
+    rows: Vec<CatalogRowRecord>,
+}
+
+fn check_report(r: &TrialReport, catalog: RunCatalog) -> Result<(Checked, RunCatalog)> {
+    let label = |what: &str| invalid(format!("trial {}: {what}", r.seq));
+    if r.seq >= MAX_TRIALS_CAP {
+        return Err(label(
+            "sequence number is past the most trials a run may have",
+        ));
+    }
+    if r.reason.chars().count() > MAX_TRIAL_REASON_CHARS || !is_plain_text(&r.reason, usize::MAX) {
+        return Err(label(
+            "reason is too long or has control or format characters",
+        ));
+    }
+    hash_field(&r.behaviour_hash, "behaviour hash").map_err(|e| label(&e.to_string()))?;
+    hash_field(&r.schedule_fp, "schedule fingerprint").map_err(|e| label(&e.to_string()))?;
+    let limit = i64::MAX as u64;
+    if r.syscalls > limit || r.work_ops > limit || r.elapsed_ms > limit {
+        return Err(label("a counter is out of range"));
+    }
+    let digest = TrialDigest::decode(&r.digest).map_err(|e| label(&e.to_string()))?;
+    if digest.flags.excluded && (!digest.entries.is_empty() || !r.catalog.is_empty()) {
+        return Err(label("an excluded trial carries no ids"));
+    }
+    if !consistent(r.verdict, &digest) {
+        return Err(label("the verdict contradicts the digest"));
+    }
+    let catalog = apply_updates(catalog, &r.catalog).map_err(|e| label(&e.to_string()))?;
+    let max_idx = digest.entries.iter().map(|e| e.idx).max();
+    if max_idx.is_some_and(|m| m as usize >= catalog.len()) {
+        return Err(label(
+            "the digest refers to an id the catalog does not hold",
+        ));
+    }
+    r.detail
+        .as_deref()
+        .map(check_detail)
+        .transpose()
+        .map_err(|e| label(&e.to_string()))?;
+    r.output
+        .as_deref()
+        .map(check_output)
+        .transpose()
+        .map_err(|e| label(&e.to_string()))?;
+    let f = digest.flags;
+    let rated = !f.excluded && !f.inconclusive && !f.degraded && !f.report_missing;
+    let trial = NewTrial {
+        seq: r.seq,
+        seed: r.seed,
+        verdict: verdict(r.verdict),
+        reason: r.reason.clone(),
+        exit_code: r.exit_code,
+        signal: r.signal,
+        timed_out: f.inconclusive,
+        degraded: f.degraded,
+        perturbing: f.perturbing,
+        report_missing: f.report_missing,
+        rated,
+        claimable: rated && !f.perturbing,
+        behaviour_hash: r.behaviour_hash.clone(),
+        schedule_fp: r.schedule_fp.clone(),
+        syscalls: r.syscalls,
+        work_ops: r.work_ops,
+        elapsed_ms: r.elapsed_ms,
+        max_idx,
+        digest: r.digest.clone(),
+        detail: r.detail.as_ref().map(|d| d.clone().into_bytes()),
+        output: r.output.as_ref().map(|o| o.clone().into_bytes()),
+    };
+    let rows = r.catalog.iter().map(row_record).collect();
+    Ok((Checked { trial, rows }, catalog))
+}
+
+fn size_of(r: &TrialReport) -> usize {
+    r.digest.len()
+        + r.detail.as_ref().map_or(0, String::len)
+        + r.output.as_ref().map_or(0, String::len)
+}
+
+/// Splits records into batches the store will take: at most [`MAX_TRIALS_PER_BATCH`] records and about
+/// [`MAX_BATCH_BYTES`] bytes each.
+pub(crate) fn batches(reports: &[TrialReport]) -> Vec<&[TrialReport]> {
+    let mut out = Vec::new();
+    let (mut start, mut bytes) = (0, 0);
+    for (i, r) in reports.iter().enumerate() {
+        let size = size_of(r);
+        if i > start && (i - start >= MAX_TRIALS_PER_BATCH || bytes + size > MAX_BATCH_BYTES) {
+            out.push(&reports[start..i]);
+            (start, bytes) = (i, 0);
+        }
+        bytes += size;
+    }
+    if start < reports.len() {
+        out.push(&reports[start..]);
+    }
+    out
+}
+
+impl Service {
+    /// Whether rows from this worker may back a claim. The process's own workers are trusted; a remote worker is
+    /// trusted only when an administrator said so.
+    pub(crate) fn worker_is_trusted(&self, worker_id: &str) -> Result<bool> {
+        if worker_id.starts_with(LOCAL_WORKER_PREFIX) {
+            return Ok(true);
+        }
+        Ok(self.store.worker_trusted(worker_id)?.unwrap_or(false))
+    }
+
+    /// The run's catalog as the server holds it, or an empty one when the job is on a newer attempt than the rows.
+    fn catalog_for(&self, run: &RunRecord, job: &Job) -> Result<RunCatalog> {
+        if u64::from(job.attempts) > run.ingest_attempt {
+            return Ok(RunCatalog::new());
+        }
+        let rows = self
+            .store
+            .get_catalog(&run.id)?
+            .into_iter()
+            .map(|r| stored_row(&r))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| ServiceError::Internal("a stored catalog row is unreadable".into()))?;
+        RunCatalog::from_rows(rows).map_err(|e| ServiceError::Internal(e.to_string()))
+    }
+
+    /// Stores a batch of trial records from the worker holding the job's lease, all or nothing. Sending a batch
+    /// again changes nothing.
+    pub fn ingest_trials(
+        &self,
+        job_id: &str,
+        worker_id: &str,
+        reports: &[TrialReport],
+    ) -> Result<IngestReceipt> {
+        if reports.len() > MAX_TRIALS_PER_BATCH {
+            return Err(invalid(format!(
+                "a batch may hold at most {MAX_TRIALS_PER_BATCH} trials"
+            )));
+        }
+        let job = self.owned_running_job(job_id, worker_id)?;
+        let run = self
+            .store
+            .get_run(&job.run_id)?
+            .ok_or_else(|| ServiceError::NotFound(format!("run {}", job.run_id)))?;
+        if run.state.is_terminal() {
+            return Err(invalid("the run is already finished"));
+        }
+        let mut catalog = self.catalog_for(&run, &job)?;
+        let (mut trials, mut rows) = (Vec::with_capacity(reports.len()), Vec::new());
+        for r in reports {
+            let (checked, next) = check_report(r, catalog)?;
+            catalog = next;
+            rows.extend(checked.rows);
+            trials.push(checked.trial);
+        }
+        let batch = TrialBatch {
+            catalog: rows,
+            trials,
+            kept_bytes_cap: self.cfg.kept_bytes_per_run,
+        };
+        let trusted = self.worker_is_trusted(worker_id)?;
+        match self.store.ingest_trials(
+            job_id,
+            worker_id,
+            trusted,
+            &batch,
+            hairspring_store::now_ms(),
+        )? {
+            IngestOutcome::Applied {
+                inserted,
+                duplicates,
+            } => {
+                self.heartbeat(job_id, worker_id)?;
+                Ok(IngestReceipt {
+                    inserted,
+                    duplicates,
+                })
+            }
+            IngestOutcome::NotLeased => Err(invalid("job is not leased by this worker")),
+            IngestOutcome::RunNotOpen => Err(invalid("the run is already finished")),
+            IngestOutcome::Rejected(why) => Err(invalid(why)),
+        }
+    }
+}
+
+/// A stored catalog row as a protocol row, or `None` if its kind is not one this build knows.
+pub(crate) fn stored_row(r: &CatalogRowRecord) -> Option<CatalogRow> {
+    Some(CatalogRow {
+        id: r.prop_id.clone(),
+        kind: hairspring_props::AssertKind::from_wire(&r.kind)?,
+        msg: r.msg.clone(),
+        loc: r.loc_file.as_ref().map(|file| hairspring_props::Loc {
+            file: file.clone(),
+            line: r.loc_line.unwrap_or(0),
+            func: r.loc_func.clone(),
+        }),
+        decided: r.decided,
+    })
+}

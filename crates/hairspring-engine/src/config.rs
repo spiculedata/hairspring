@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 const MAX_STEPS_CAP: u64 = 50_000_000;
-const MAX_TRIALS_CAP: u64 = 10_000;
+/// Most trials one run may be asked for. The server also bounds the trial rows it stores for a run by it.
+pub const MAX_TRIALS_CAP: u64 = 10_000;
 const MAX_WALL_SECS_CAP: u64 = 600;
 const MAX_NAME_LEN: usize = 64;
 const MAX_PARALLELISM: u32 = 64;

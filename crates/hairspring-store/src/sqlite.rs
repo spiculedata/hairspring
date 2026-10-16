@@ -40,6 +40,7 @@ fn run_from_row(r: &Row<'_>) -> rusqlite::Result<RunRecord> {
         property_summary_json: r.get("property_summary_json")?,
         catalog_size: r.get::<_, i64>("catalog_size")? as u64,
         ingest_incomplete: r.get("ingest_incomplete")?,
+        ingest_attempt: r.get::<_, i64>("ingest_attempt")? as u64,
         build_id: r.get("build_id")?,
     })
 }

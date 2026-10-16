@@ -82,6 +82,8 @@ pub struct RunRecord {
     pub catalog_size: u64,
     /// The trial rows held do not match what the worker said it ran, so no must-hit claim is made from them.
     pub ingest_incomplete: bool,
+    /// The job attempt whose trial rows the run holds; zero before any rows were stored.
+    pub ingest_attempt: u64,
     pub build_id: Option<String>,
 }
 

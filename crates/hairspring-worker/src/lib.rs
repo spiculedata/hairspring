@@ -2,6 +2,7 @@
 //! (which may have backends the server lacks, such as Hermit on a Linux box) and
 //! reports progress and results back.
 mod completion;
+mod trials;
 
 use completion::completion_body;
 use hairspring_engine::backend::Progress;
@@ -14,6 +15,7 @@ use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use trials::request_batches;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_BACKOFF: Duration = Duration::from_secs(10);
@@ -267,7 +269,10 @@ fn execute(
             job_path("fail"),
             json!({ "worker_id": worker_id, "error": "interrupted by worker shutdown" }),
         ),
-        Ok(Ok(outcome)) => (job_path("complete"), completion_body(worker_id, outcome)),
+        Ok(Ok(outcome)) => {
+            let outcome = deliver_trials(api, worker_id, job, outcome);
+            (job_path("complete"), completion_body(worker_id, outcome))
+        }
         Ok(Err(e)) => (
             job_path("complete"),
             completion_body(worker_id, RunOutcome::error(e.to_string())),
@@ -286,6 +291,30 @@ fn execute(
         );
     }
     Ok(())
+}
+
+/// Sends the run's per-trial records, batch by batch, and says in the outcome how many there were. A batch that cannot
+/// be delivered is reported and skipped: the count in the outcome then disagrees with the rows the server holds, and
+/// the server marks the run incomplete rather than treating the missing trials as passes.
+fn deliver_trials(api: &Api, worker_id: &str, job: &LeasedJob, outcome: RunOutcome) -> RunOutcome {
+    if outcome.trial_log.is_empty() {
+        return outcome;
+    }
+    let path = format!("/api/worker/jobs/{}/trials", job.job_id);
+    for batch in request_batches(&outcome.trial_log) {
+        let body = json!({ "worker_id": worker_id, "trials": batch });
+        if let Err(e) = api.post_reliably(&path, &body, &AtomicBool::new(false)) {
+            eprintln!(
+                "hairspring-worker: could not deliver {} trial records of job {}: {e}",
+                batch.len(),
+                job.job_id
+            );
+        }
+    }
+    RunOutcome {
+        trials_reported: Some(outcome.trial_log.len() as u64),
+        ..outcome
+    }
 }
 
 /// Registers with the server and processes jobs until `stop` is set.

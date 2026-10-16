@@ -242,3 +242,22 @@ pub async fn mcp(
         None => StatusCode::ACCEPTED.into_response(),
     })
 }
+
+#[derive(Deserialize)]
+pub struct TrustBody {
+    trusted: bool,
+}
+
+/// Marks a worker's data as trusted or not. Claims need trusted workers; every other view shows untrusted data,
+/// labelled.
+pub async fn set_worker_trust(
+    State(s): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    ApiJson(b): ApiJson<TrustBody>,
+) -> Result<Json<Value>, ApiError> {
+    caller.need(Role::Admin)?;
+    crate::worker_api::check_worker(&id).map_err(|_| ApiError::not_found())?;
+    blocking(move || s.svc.set_worker_trust(&id, b.trusted)).await?;
+    Ok(Json(json!({ "ok": true })))
+}
