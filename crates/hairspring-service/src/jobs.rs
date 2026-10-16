@@ -123,7 +123,11 @@ impl Service {
         Ok(())
     }
 
-    pub(crate) fn owned_running_job(&self, job_id: &str, worker_id: &str) -> Result<hairspring_store::Job> {
+    pub(crate) fn owned_running_job(
+        &self,
+        job_id: &str,
+        worker_id: &str,
+    ) -> Result<hairspring_store::Job> {
         let job = self
             .store
             .get_job(job_id)?
