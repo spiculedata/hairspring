@@ -165,9 +165,15 @@ fields are counted and ignored, so new fields and kinds can be added without bre
 
 Ids and process tags are 1 to 128 and 1 to 64 bytes of `[A-Za-z0-9._:/-]`; thread keys are 1 to 64 bytes of the same
 set plus `#`; messages are at most 512 bytes. At most 4096 ids per process, 256 `thread` lines per process, 64
-processes and 1 MiB of event lines per trial. Malformed, over-limit, duplicate and uncatalogued lines are dropped
+processes and 4 MiB of event lines per trial. Malformed, over-limit, duplicate and uncatalogued lines are dropped
 (duplicate asserts are summed) and counted; a trial with any of those, a conflict or a failed cross-check is marked
 degraded.
+
+The 4 MiB event budget (`max_event_bytes_per_trial` in the schema; 1 MiB before it was raised) is shared by every
+process in a trial and by every transport (stdout, stderr and the events file), newlines included. A catalog line plus
+an assert line cost about 850 bytes per id, so the budget holds about 4,900 ids, or about 1,200 ids per MiB summed over
+processes. Backends take the budget as a setting (`HermitSettings::max_event_bytes`, default 4 MiB). The capture buffer
+is a cap, not an allocation: it grows as events arrive, so only trials that emit events spend memory.
 
 A process with no `end` line is reported as `report_missing`: its report was lost or cut, or it crashed with signal
 handlers off.
