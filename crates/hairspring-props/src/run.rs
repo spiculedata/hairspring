@@ -133,6 +133,9 @@ pub struct RunSummary {
     /// once for each trial that catalogued it). Each trial that lost an id is also counted in `degraded_trials`.
     #[serde(default)]
     pub ids_dropped: u64,
+    /// The distinct-id cap this run used; 0 when read from a report written before it was recorded.
+    #[serde(default)]
+    pub id_cap: usize,
     /// Trials with a catalog conflict (timed-out trials are not counted: their reports decide nothing).
     pub conflict_trials: u64,
     /// Trials whose declared kind for an id disagreed with an earlier trial (their data for that id is not merged).
@@ -289,6 +292,14 @@ impl IdAcc {
         self
     }
 
+    /// Counts a timed-out trial whose kind differs from this id's: an unreported trial, nothing else.
+    fn with_unjudged_trial(mut self, class: TrialClass) -> Self {
+        self.trials += 1;
+        self.unreported += 1;
+        self.perturbing += u64::from(class.perturbing);
+        self
+    }
+
     fn with_conflict(mut self, seed: u64) -> Self {
         self.conflicted += 1;
         self.note_failure(seed, None);
@@ -419,10 +430,15 @@ impl RunProps {
     }
 
     /// An accumulator tracking at most `id_cap` distinct ids. Ids past the cap are counted in
-    /// [`RunSummary::ids_dropped`] and the trial that lost them is marked degraded.
+    /// [`RunSummary::ids_dropped`] and the trial that lost them is counted in `degraded_trials`; no per-id statistic
+    /// changes. Timed-out trials take cap slots like any other, so ids first seen only in timed-out trials can crowd
+    /// out ids that later trials report.
     pub fn with_id_cap(id_cap: usize) -> Self {
         RunProps {
-            summary: RunSummary::default(),
+            summary: RunSummary {
+                id_cap,
+                ..RunSummary::default()
+            },
             ids: BTreeMap::new(),
             id_cap,
         }
@@ -465,9 +481,10 @@ impl RunProps {
             };
             let acc = if acc.kind == p.kind {
                 acc.with_trial(class, p)
-            } else if !acc.decided {
-                // Only inconclusive trials so far, and so is this one: nothing has decided the kind.
-                acc
+            } else if inconclusive {
+                // A timed-out trial's kind is not trusted: it decides nothing and is no mismatch. It still counts as
+                // an unreported trial of the id, but its failure is not attributed to a kind it may not have.
+                acc.with_unjudged_trial(class)
             } else {
                 summary.kind_mismatches += 1;
                 if summary.kind_mismatch_details.len() < MAX_KIND_MISMATCH_DETAILS {

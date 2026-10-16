@@ -123,7 +123,7 @@ fn the_text_report_separates_timed_out_trials_and_flags_dropped_ids() {
     assert!(text.contains("0 without an end report"), "{text}");
     assert!(text.contains("1 timed out"), "{text}");
     assert!(
-        text.contains("2 id(s) dropped") && text.contains("run-wide id limit"),
+        text.contains("2 id(s) dropped") && text.contains("run-wide id limit (1)"),
         "{text}"
     );
 }

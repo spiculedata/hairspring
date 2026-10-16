@@ -58,7 +58,11 @@ fn table(outcome: &RunOutcome) -> String {
         out.push_str(&format!(
             "  WARNING: {} id(s) dropped: the run-wide id limit ({}) was reached, so some properties are not shown\n",
             run.ids_dropped,
-            limits::MAX_IDS_PER_RUN
+            if run.id_cap == 0 {
+                limits::MAX_IDS_PER_RUN
+            } else {
+                run.id_cap
+            }
         ));
     }
     for stat in &outcome.properties {

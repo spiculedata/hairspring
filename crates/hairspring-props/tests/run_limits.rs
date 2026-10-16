@@ -147,3 +147,35 @@ fn an_inconclusive_failure_under_a_kind_that_lost_is_forgotten() {
         .remove(0);
     assert_eq!(stat.trials_inconclusive_with_failures, 0);
 }
+
+#[test]
+fn a_timed_out_trial_of_another_kind_leaves_no_mismatch_residue_against_a_decided_kind() {
+    let clean = fold(&single(AssertKind::Always, 1, 0));
+    let other = fold(&single(AssertKind::Sometimes, 1, 1));
+    let run = RunProps::new().add(1, &clean).add_inconclusive(2, &other);
+    let summary = run.summary();
+    assert_eq!(summary.kind_mismatches, 0);
+    assert!(summary.kind_mismatch_details.is_empty());
+    let stat = run.finish().remove(0);
+    assert_eq!(stat.kind, AssertKind::Always);
+    assert_eq!(stat.trials_inconclusive_with_failures, 0);
+}
+
+#[test]
+fn a_timed_out_trial_of_another_kind_is_still_a_trial_while_the_kind_is_undecided() {
+    let a = fold(&single(AssertKind::Always, 1, 0));
+    let b = fold(&single(AssertKind::Sometimes, 1, 1));
+    let stat = RunProps::new()
+        .add_inconclusive(1, &a)
+        .add_inconclusive(2, &b)
+        .finish()
+        .remove(0);
+    assert_eq!(stat.trials, 2);
+    assert_eq!(stat.trials_inconclusive_with_failures, 0);
+}
+
+#[test]
+fn the_summary_reports_the_cap_the_accumulator_actually_uses() {
+    assert_eq!(RunProps::with_id_cap(2).summary().id_cap, 2);
+    assert_eq!(RunProps::new().summary().id_cap, MAX_IDS_PER_RUN);
+}
