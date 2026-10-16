@@ -1,5 +1,7 @@
 /* hairspring.c -- thread slots, startup and exit wiring for the Hairspring C SDK. */
+#ifndef _GNU_SOURCE /* a -D_GNU_SOURCE build must not redefine it under -Werror */
 #define _GNU_SOURCE /* secure_getenv on glibc */
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -132,22 +134,27 @@ static const char *events_file_setting(void) {
 #endif
 }
 
+/* The descriptor is published (release) only after its identity is recorded, because another thread can reach an
+** eval line while startup is still running. */
+static void publish_events_fd(int fd) {
+  __atomic_store_n(&hs_proc.fd, hs_events_fd_remember(fd), __ATOMIC_RELEASE);
+}
+
 static void open_events(void) {
   const char *mode = getenv("HAIRSPRING_EVENTS");
   const char *path = events_file_setting();
-  hs_proc.fd = -1;
   if (mode && strcmp(mode, "off") == 0) return;
   if (path && path[0]) {
     int fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NOFOLLOW, 0644);
     if (fd >= 0) {
       int high = private_copy(fd);
       if (high != fd && high >= 0) close(fd);
-      hs_proc.fd = high >= 0 ? high : fd;
+      publish_events_fd(high >= 0 ? high : fd);
       return;
     }
     hs_proc.dropped++; /* the file could not be opened: events fall back to stderr, and this is counted */
   }
-  hs_proc.fd = private_copy(2);
+  publish_events_fd(private_copy(2));
 }
 
 /* The key lock is held across fork, so the child cannot inherit it held by a thread that no longer exists. */
@@ -210,7 +217,6 @@ void hs_init(void) {
   if (signals && strcmp(signals, "1") == 0 && hs_install_signal_handlers() == 0) hs_proc.signal_handlers = 1;
   REGISTER_EXIT_HANDLER();
   pthread_atfork(atfork_prepare, atfork_parent, atfork_child);
-  hs_events_fd_remember();
   hs_emit_startup();
   hs_identity_announced();
   errno = saved_errno;

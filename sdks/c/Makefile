@@ -23,7 +23,7 @@ LIB := $(BUILD)/libhairspring.a
 SCENARIOS := basic merge fork threads crash exit_status eval big forkexec spawn closefd forklock execself dup2fd manyids conflict empty limits plain_exit segv abort threadsegv alive alarm evalfd sigign
 SAMPLES := $(SCENARIOS:%=$(BUILD)/hs_sample_%)
 
-.PHONY: all lib fixtures test unit proc nosyscall nosyscall-pic cxx staticfail disasm conformance clean
+.PHONY: all lib fixtures test unit proc nosyscall nosyscall-pic cxx staticfail gnusource disasm conformance clean
 
 all: lib
 
@@ -91,7 +91,11 @@ staticfail:
 	  if $(CC) $(CFLAGS) -fsyntax-only $$f 2>/dev/null; then echo "FAIL $$f compiled"; exit 1; \
 	  else echo "ok   $$f is rejected"; fi; done
 
-test: unit proc nosyscall nosyscall-pic staticfail cxx
+# A build that already defines _GNU_SOURCE must not trip -Werror on a redefinition.
+gnusource: | $(BUILD)
+	$(CC) $(CFLAGS) -D_GNU_SOURCE -c -o $(BUILD)/gnusource.o src/hairspring.c && echo "ok   builds with -D_GNU_SOURCE"
+
+test: unit proc nosyscall nosyscall-pic staticfail cxx gnusource
 
 conformance: $(SAMPLES)
 	cd ../.. && HS_C_SDK_BUILD=$(abspath $(BUILD)) cargo test -p hairspring-props --test c_sdk

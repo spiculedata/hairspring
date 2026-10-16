@@ -25,20 +25,20 @@ void hs_test_set_sink(hs_sink_fn fn) { hs_proc.sink = fn; }
 static dev_t events_dev;
 static ino_t events_ino;
 
-void hs_events_fd_remember(void) {
+/* Called before the descriptor is published in hs_proc.fd (a release store), so a thread that sees the descriptor
+** also sees the identity it is compared with. Returns `fd`, or -1 if it cannot be identified. */
+int hs_events_fd_remember(int fd) {
   struct stat st;
-  if (hs_proc.fd >= 0 && fstat(hs_proc.fd, &st) == 0) {
-    events_dev = st.st_dev;
-    events_ino = st.st_ino;
-  } else {
-    hs_proc.fd = -1;
-  }
+  if (fd < 0 || fstat(fd, &st) != 0) return -1;
+  events_dev = st.st_dev;
+  events_ino = st.st_ino;
+  return fd;
 }
 
 /* Checked before the report and before every eval line. Once it fails the descriptor is given up for good, so no
 ** later line can follow it either. */
 static void verify_events_fd(void) {
-  int fd = hs_proc.fd;
+  int fd = __atomic_load_n(&hs_proc.fd, __ATOMIC_ACQUIRE);
   if (fd < 0 || hs_proc.sink) return;
   int saved_errno = errno;
   struct stat st;
@@ -46,7 +46,7 @@ static void verify_events_fd(void) {
   errno = saved_errno;
   if (same) return;
   __atomic_fetch_add(&hs_proc.dropped, 1, __ATOMIC_RELAXED); /* nothing is written: the descriptor leads elsewhere */
-  hs_proc.fd = -1;
+  __atomic_store_n(&hs_proc.fd, -1, __ATOMIC_RELEASE);
 }
 
 /* ---- the write path ------------------------------------------------------------------------------------------- */
@@ -112,12 +112,13 @@ void hs_emit_line(const struct hs_buf *b) {
     hs_proc.sink(b->p, b->len);
     return;
   }
-  if (hs_proc.fd < 0) return;
+  int fd = __atomic_load_n(&hs_proc.fd, __ATOMIC_ACQUIRE);
+  if (fd < 0) return;
   int saved_errno = errno;
-  long failed = write_all(hs_proc.fd, b->p, b->len);
+  long failed = write_all(fd, b->p, b->len);
   if (failed != 0) {
     __atomic_fetch_add(&hs_proc.dropped, 1, __ATOMIC_RELAXED);
-    if (failed < -1) (void)!write(hs_proc.fd, "\n", 1);
+    if (failed < -1) (void)!write(fd, "\n", 1);
   }
   errno = saved_errno;
 }

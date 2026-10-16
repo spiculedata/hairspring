@@ -82,7 +82,7 @@ const char *hs_kind_name(uint32_t kind);
 void hs_emit_line(const struct hs_buf *b);
 void hs_emit_startup(void);
 void hs_report_now(enum hs_end_reason reason, int64_t status);
-void hs_events_fd_remember(void); /* note which file the events descriptor refers to */
+int hs_events_fd_remember(int fd); /* note which file `fd` refers to, before it is published; -1 if unknown */
 void hs_report_rearm(void); /* the fork child may report again */
 /* Returns how many handlers could not be installed (0 = all installed). */
 int hs_install_signal_handlers(void);
