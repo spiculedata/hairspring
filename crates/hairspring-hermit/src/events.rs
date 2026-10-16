@@ -66,6 +66,43 @@ pub fn read_events_file(dir: &Path) -> Result<Option<FileEvents>, String> {
     Ok(Some(FileEvents { bytes, truncated }))
 }
 
+fn is_silent(file: Option<&FileEvents>, stdout: &EventLines, stderr: &EventLines) -> bool {
+    file.is_none_or(|f| f.bytes.is_empty() && !f.truncated)
+        && stdout.is_empty()
+        && stderr.is_empty()
+}
+
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0100_0000_01b3;
+
+/// A digest of everything the guest reported, in the fixed order stdout, stderr, file, so that `behaviour_hash` can
+/// tell two trials apart by their property outcomes. `None` when the guest reported nothing, which keeps the hash of
+/// every trial without events exactly what it was before events existed.
+pub fn digest(file: Option<&FileEvents>, stdout: &EventLines, stderr: &EventLines) -> Option<u64> {
+    if is_silent(file, stdout, stderr) {
+        return None;
+    }
+    let mut h = FNV_OFFSET;
+    let mut feed = |bytes: &[u8]| {
+        for b in bytes {
+            h = (h ^ u64::from(*b)).wrapping_mul(FNV_PRIME);
+        }
+    };
+    let empty = FileEvents::default();
+    let file = file.unwrap_or(&empty);
+    // Each part is length-prefixed so that moving a byte between sources changes the digest.
+    for (bytes, refused) in [
+        (&stdout.bytes, stdout.dropped),
+        (&stderr.bytes, stderr.dropped),
+        (&file.bytes, u64::from(file.truncated)),
+    ] {
+        feed(&(bytes.len() as u64).to_le_bytes());
+        feed(bytes);
+        feed(&refused.to_le_bytes());
+    }
+    Some(h)
+}
+
 /// Folds every source of event lines (file first, then stdout, then stderr) into one result, or `None` when the guest
 /// sent nothing at all. Lines refused for budget before they got here are added to the health counters.
 pub fn fold_sources(
@@ -77,10 +114,7 @@ pub fn fold_sources(
         .into_iter()
         .flat_map(|f| f.bytes.split(|b| *b == b'\n'));
     let lines = file_lines.chain(stdout.lines()).chain(stderr.lines());
-    let silent = file.is_none_or(|f| f.bytes.is_empty() && !f.truncated)
-        && stdout.is_empty()
-        && stderr.is_empty();
-    if silent {
+    if is_silent(file, stdout, stderr) {
         return None;
     }
     let props = TrialEvents::fold_stream(lines);

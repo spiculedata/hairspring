@@ -27,7 +27,7 @@ pub struct ProcessSpec<'a> {
     pub parallelism: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Trial {
     pub exit_code: Option<i32>,
     pub signal: Option<i32>,
@@ -39,6 +39,8 @@ pub struct Trial {
     /// What the guest reported through the event protocol, from stdout, stderr and the events file. `None` when it
     /// sent nothing. Event lines are not part of `stdout`/`stderr`.
     pub events: Option<TrialProps>,
+    /// A digest of the raw event lines, so that `behaviour_hash` sees property outcomes. `None` without events.
+    pub events_digest: Option<u64>,
     /// Why the events file could not be used, when it was asked for and something went wrong.
     pub events_error: Option<String>,
 }
@@ -221,14 +223,15 @@ fn collect_events(
     dir: Option<&ScratchDir>,
     out: &Captured,
     err: &Captured,
-) -> (Option<TrialProps>, Option<String>) {
+) -> (Option<TrialProps>, Option<u64>, Option<String>) {
     let (file, error) = match dir.map(|d| events::read_events_file(d.path())) {
         Some(Ok(file)) => (file, None),
         Some(Err(e)) => (None, Some(e)),
         None => (None, None),
     };
     let folded = events::fold_sources(file.as_ref(), &out.events, &err.events);
-    (folded, error)
+    let digest = events::digest(file.as_ref(), &out.events, &err.events);
+    (folded, digest, error)
 }
 
 fn run_trial_with_summary(
@@ -291,7 +294,7 @@ fn run_trial_with_summary(
     // After a kill a surviving grandchild could hold the pipes open; do not wait for it forever.
     let out = out_rx.recv_timeout(READER_GRACE).unwrap_or_default();
     let err = err_rx.recv_timeout(READER_GRACE).unwrap_or_default();
-    let (events, events_error) = collect_events(events_dir, &out, &err);
+    let (events, events_digest, events_error) = collect_events(events_dir, &out, &err);
     Ok(Trial {
         exit_code: status.and_then(|s| s.code()),
         signal: status.and_then(|s| s.signal()),
@@ -300,6 +303,7 @@ fn run_trial_with_summary(
         timed_out,
         schedule: None,
         events,
+        events_digest,
         events_error,
     })
 }

@@ -35,6 +35,11 @@ pub fn behaviour_hash(t: &Trial) -> String {
     feed(&t.exit_code.unwrap_or(-1).to_le_bytes());
     feed(&t.signal.unwrap_or(-1).to_le_bytes());
     feed(t.stdout.as_bytes());
+    if let Some(digest) = t.events_digest {
+        // Only trials that reported events get this, so every other trial hashes exactly as it always did.
+        feed(b"events");
+        feed(&digest.to_le_bytes());
+    }
     format!("{h:016x}")
 }
 
@@ -159,4 +164,44 @@ pub fn steps(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod hash_tests {
+    use super::*;
+
+    fn trial(code: i32, stdout: &str) -> Trial {
+        Trial {
+            exit_code: Some(code),
+            stdout: stdout.to_string(),
+            ..Trial::default()
+        }
+    }
+
+    /// Hashes recorded in bundles before guest events existed. They must never change: old bundles stay replayable.
+    #[test]
+    fn trials_without_events_keep_their_historic_hash() {
+        assert_eq!(
+            behaviour_hash(&trial(1, "HAIRSPRING_VIOLATION: boom\n")),
+            "ae348452964ed6ea"
+        );
+        assert_eq!(behaviour_hash(&trial(0, "")), "3cd02a862a574321");
+        let killed = Trial {
+            signal: Some(9),
+            ..Trial::default()
+        };
+        assert_eq!(behaviour_hash(&killed), "ae9561c0a73f1ad8");
+    }
+
+    #[test]
+    fn events_change_the_hash_and_equal_events_do_not() {
+        let plain = trial(1, "x\n");
+        let with = |d: u64| Trial {
+            events_digest: Some(d),
+            ..plain.clone()
+        };
+        assert_ne!(behaviour_hash(&plain), behaviour_hash(&with(1)));
+        assert_ne!(behaviour_hash(&with(1)), behaviour_hash(&with(2)));
+        assert_eq!(behaviour_hash(&with(7)), behaviour_hash(&with(7)));
+    }
 }
