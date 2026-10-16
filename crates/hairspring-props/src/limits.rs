@@ -41,8 +41,10 @@ pub const MAX_THREADS_PER_PROC: usize = 256;
 pub const MAX_PROCS_PER_TRIAL: usize = 64;
 /// The event-line byte budget before it was raised to 4 MiB. Kept so a smaller budget can still be asked for.
 pub const LEGACY_MAX_EVENT_BYTES_PER_TRIAL: usize = 1024 * 1024;
-/// Default most event-line bytes (newlines included) accepted from one trial, shared by every process in it and by
-/// every transport (stdout, stderr, the events file). A catalog line plus an assert line cost about 850 bytes per id,
+/// Default most event-line bytes (newlines included) accepted from one trial. Each transport (stdout, stderr, the
+/// events file) is captured against this budget on its own, shared by the processes writing to it, and the fold
+/// applies it again to the merged stream; so the events kept never exceed it, but memory per trial can reach about
+/// three times it. A catalog line plus an assert line cost about 850 bytes per id,
 /// so 4 MiB holds about 4,900 ids, or about 1,200 ids per MiB summed over processes. Backends take the budget as a
 /// parameter (`TrialEvents::fold_with_budget`); this is the value the schema documents and the default they use.
 pub const DEFAULT_MAX_EVENT_BYTES_PER_TRIAL: usize = 4 * 1024 * 1024;

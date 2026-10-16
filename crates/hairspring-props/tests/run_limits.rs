@@ -68,7 +68,9 @@ fn ids_already_tracked_keep_accumulating_after_the_cap_is_reached() {
 fn an_inconclusive_trial_decides_no_kind() {
     let timed_out = fold(&single(AssertKind::Always, 1, 0));
     let clean = fold(&single(AssertKind::Sometimes, 2, 0));
-    let run = RunProps::new().add_inconclusive(1, &timed_out).add(2, &clean);
+    let run = RunProps::new()
+        .add_inconclusive(1, &timed_out)
+        .add(2, &clean);
     let summary = run.summary();
     let stat = run.finish().remove(0);
     assert_eq!(stat.kind, AssertKind::Sometimes);
@@ -78,10 +80,13 @@ fn an_inconclusive_trial_decides_no_kind() {
 }
 
 #[test]
-fn a_later_inconclusive_trial_of_another_kind_is_not_a_mismatch_against_a_kind_it_decided_nothing_about() {
+fn a_later_inconclusive_trial_of_another_kind_is_not_a_mismatch_against_a_kind_it_decided_nothing_about(
+) {
     let a = fold(&single(AssertKind::Always, 1, 0));
     let b = fold(&single(AssertKind::Sometimes, 1, 0));
-    let run = RunProps::new().add_inconclusive(1, &a).add_inconclusive(2, &b);
+    let run = RunProps::new()
+        .add_inconclusive(1, &a)
+        .add_inconclusive(2, &b);
     assert_eq!(run.summary().kind_mismatches, 0);
 }
 

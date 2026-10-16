@@ -169,9 +169,11 @@ processes and 4 MiB of event lines per trial. Malformed, over-limit, duplicate a
 (duplicate asserts are summed) and counted; a trial with any of those, a conflict or a failed cross-check is marked
 degraded.
 
-The 4 MiB event budget (`max_event_bytes_per_trial` in the schema; 1 MiB before it was raised) is shared by every
-process in a trial and by every transport (stdout, stderr and the events file), newlines included. A catalog line plus
-an assert line cost about 850 bytes per id, so the budget holds about 4,900 ids, or about 1,200 ids per MiB summed over
+The 4 MiB event budget (`max_event_bytes_per_trial` in the schema; 1 MiB before it was raised) applies to each
+transport separately (stdout, stderr and the events file), and within one transport it is shared by every process in the
+trial, newlines included. The fold then applies the budget again to the merged stream, so the events kept per trial
+never exceed it, but a trial that fills all three transports can hold up to about 3x the budget in memory while it runs.
+A catalog line plus an assert line cost about 850 bytes per id, so the budget holds about 4,900 ids, or about 1,200 ids per MiB summed over
 processes. Backends take the budget as a setting (`HermitSettings::max_event_bytes`, default 4 MiB). The capture buffer
 is a cap, not an allocation: it grows as events arrive, so only trials that emit events spend memory.
 

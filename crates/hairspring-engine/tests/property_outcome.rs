@@ -96,7 +96,9 @@ fn a_failed_outcome_never_prints_an_unmet_section_even_if_statuses_say_unmet() {
 
 fn report_with_two_ids() -> String {
     let line = |body: &str| format!("HAIRSPRING_EVENT {body}\n");
-    let mut out = line(r#"{"v":1,"kind":"hello","sdk":"c","sdk_version":"0.1.0","proc":"p1","catalog_hash":"abc","signal_handlers":false}"#);
+    let mut out = line(
+        r#"{"v":1,"kind":"hello","sdk":"c","sdk_version":"0.1.0","proc":"p1","catalog_hash":"abc","signal_handlers":false}"#,
+    );
     for id in ["a.id", "b.id"] {
         out.push_str(&line(&format!(
             r#"{{"v":1,"kind":"catalog","proc":"p1","id":"{id}","type":"always","must_hit":true}}"#
