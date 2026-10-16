@@ -1,0 +1,413 @@
+# C SDK
+
+The C SDK (`sdks/c`) lets a C program declare assertions that Hairspring tracks across trials. It speaks
+[guest protocol v1](guest-protocol.md). A call site only updates counters in memory; the program reports once, at
+exit (or from a fatal signal, if the target opts in).
+
+```c
+#include "hairspring.h"
+
+HS_ALWAYS(nbackfill <= mxframe, "wal.ckpt.nbackfill_le_mxframe", "nBackfill <= live mxFrame", nbackfill, mxframe);
+HS_SOMETIMES(waited, "wal.writer.waited", "a writer waited for the lock");
+HS_REACHABLE("wal.reset.reached", "the WAL was reset");
+HS_UNREACHABLE("wal.bad.state", "never expected");
+HS_WORK(1);                       /* operations done, reported as work.ops */
+hs_thread("writer", 0);           /* stable thread key "writer-0" */
+```
+
+## API
+
+| Macro | Meaning | Trial-level failure | Run-level UNMET |
+|---|---|---|---|
+| `HS_ALWAYS(cond, id, msg, ...)` | must hold at every evaluation | any false | never evaluated |
+| `HS_ALWAYS_OR_UNREACHABLE(cond, id, msg, ...)` | same, but never reaching it is fine | any false | none |
+| `HS_SOMETIMES(cond, id, msg, ...)` | must hold at least once per run | none | never true |
+| `HS_REACHABLE(id, msg, ...)` | must be reached at least once per run | none | never hit |
+| `HS_UNREACHABLE(id, msg, ...)` | must never be reached | hit | none |
+| `HS_WORK(n)` | adds `n` to the process's operation count | | |
+
+* `id` and `msg` must be string literals: they are pasted into the offline catalog at compile time. Ids are 1 to 128
+  bytes of `[A-Za-z0-9._:/-]`; other bytes are sent as `_`. Messages keep printable ASCII only (other bytes become
+  `?`), at most 512 bytes.
+* `...` is 0 to 4 integer values, captured at the first true and the first false evaluation (`vals` in the protocol;
+  missing values are 0).
+* Using the same id at several call sites is fine (macros inside inline functions, headers included twice): the
+  report merges them into one `assert` line, and `end.sites` counts distinct ids.
+* `hs_thread(label, index)` gives the calling thread the key `label-index`. It returns -1 (and the thread keeps its
+  claim-order key `t#<n>`, flagged `key_stable:false`) if the label is empty or too long, or the key is already taken.
+* `hs_report()` writes the report now (reason `explicit`); `hs_exit(status)` records the exit status and exits.
+  Plain `exit`/`return from main` reports with status 0, because an `atexit` handler cannot see the exit status.
+* `HS_EVAL_ALWAYS(cond, id)`, `HS_EVAL_SOMETIMES`, `HS_EVAL_ALWAYS_OR_UNREACHABLE`, `HS_EVAL_REACHABLE`,
+  `HS_EVAL_UNREACHABLE` write one protocol `eval` line per call. That is a `write(2)` at the call site, so the engine
+  marks the trial `perturbing` and excludes it from tier claims. They record nothing in memory and need no catalog.
+* `hs_choice` (the tape API) is not implemented yet: the tape layout is not agreed. `thread.tape_consumed` is
+  always 0 until it exists.
+
+Build: `make -C sdks/c lib` makes `build/<cc><opt>/libhairspring.a`; compile your program with
+`-Isdks/c/include`, link the archive and `-pthread`. Link statically into the executable: the catalog is found
+through the executable's own section, so shared objects are not covered in v1.
+
+## Environment
+
+| Variable | Effect |
+|---|---|
+| `HAIRSPRING_EVENTS_FILE=path` | write events to this file (`O_APPEND`) instead of stderr; if it cannot be opened, events go to stderr and `dropped` counts it |
+| `HAIRSPRING_EVENTS=off` | record as usual but write nothing |
+| `HAIRSPRING_SIGNAL_REPORT=1` | install SIGSEGV, SIGBUS, SIGABRT, SIGFPE, SIGILL and SIGTERM handlers that write the report (reason `signal`, status = the signal number) and re-raise; `hello.signal_handlers` is then true. Default off: handlers add syscalls at startup and change how a crash looks under Hermit |
+| `HAIRSPRING_PROC=tag` | the root process tag (default `p1`, at most 40 bytes) |
+
+## What is written, and when
+
+Every line is `HAIRSPRING_EVENT ` plus one JSON object, at most 4096 bytes including the newline, and is written with
+**one** `write(2)`.
+
+1. **Startup** (a constructor, before `main`): `hello`, then one `catalog` line per distinct id with `hit` not yet
+   known, so a program that crashes, hangs or is killed still has a catalog. A fork child sends its own `hello` and
+   catalog.
+2. **Exit** (`atexit`, `hs_report`, or a fatal signal when opted in; at most once per process): one `assert` per
+   distinct id, `work`, one `thread` per thread (up to 256), then `end`.
+
+Properties of the report:
+
+* **Fixed width.** Counters are right-aligned in 20 characters (`status` too), and each witness (`first_false`,
+  `first_true`) is padded to a constant 197 characters whether it holds an object or `null`, so a line's length does
+  not depend on any counter or on whether a failure happened. `key_stable` is padded to 5 characters.
+* `reachable` and `unreachable` send `trues = hits`, `falses = 0` and only `first_true`.
+* **Threads.** A fixed table of 256 slots, claimed on a thread's first SDK call. Slots are never freed, so a process
+  that starts more than 255 threads over its lifetime shares the last slot (`t#overflow`, `key_stable:false`) among the
+  rest and counts each such thread in `end.dropped`; counts in the shared slot are approximate under contention.
+* **Fork.** A `pthread_atfork` handler gives the child the tag `<parent>.f<n>` (`n` counts the parent's forks, so the
+  tags are deterministic; a tag that would pass 64 bytes becomes `h` plus a hash), zeroes all counters and slots,
+  keeps the forking thread (and its key) and sends the child's own `hello` and `catalog`. `exec` loses in-memory state.
+* **Catalog hash.** `hello.catalog_hash` is an order-independent hash of the distinct (id, kind) pairs.
+* **Offline catalog.** Each call site also places the JSON of its catalog line (without `proc`) in the section
+  `hs_catalog_str_v1` (Mach-O: `__DATA,__hs_catstr`), as NUL-terminated strings, so a tool can read the catalog from
+  the binary without running it. A test checks that this text equals the live `catalog` line for the same site.
+  `loc.func` is not available at compile time and is omitted. `id` and `msg` must not contain `"` or `\` for the
+  offline copy to be valid JSON (the runtime line escapes them).
+
+## Call-site cost
+
+Requirements: no syscall, no allocation, no lock, no printing; the same work whether the condition holds or not.
+
+A call site (`hs__eval` in `hairspring.h`) does this and nothing else:
+
+1. find the thread's slot through a thread-local pointer; if it is null (the thread's first SDK call) call
+   `hs__claim()`, a `fetch_add` on a counter plus plain stores;
+2. `ord = ++slot->evals` (a plain load and store of a thread-local word);
+3. `ok = (cond != 0)`, `bad = ok ^ 1`, an empty `asm` keeps the compiler from turning the masks into branches;
+4. `prev_t = fetch_add(&site->trues, ok)`, `prev_f = fetch_add(&site->falses, bad)` (relaxed atomics on the site's own
+   cache line; they commute, so the final totals do not depend on thread interleaving);
+5. the evaluation that moved a counter off zero owns that side's witness: `win = side & is_zero(prev)`, where
+   `is_zero(x) = ((x | -x) >> 63) ^ 1`. The destination is chosen by arithmetic, not a ternary:
+   `dst = (site_witness & -win) | (slot_scratch & ~(-win))`. Six stores then go to `dst` **unconditionally** (slot
+   index, ordinal, four values): the real witness for the winner, the thread's private scratch for everyone else.
+
+There is no compare-and-swap, so there is no retry loop and no early exit on a failed compare. `hits` is not stored
+(it is `trues + falses`). `reachable` and `unreachable` use the true side only.
+
+What stays data dependent, and why it does not matter:
+
+* The slot-null test is one well-predicted conditional branch. It depends on the thread's history (taken once per
+  thread), never on the condition.
+* The caller's `cond` expression is the caller's: `a && b` inside it branches however the compiler decides.
+* On arm64 without LSE, `fetch_add` is a load-exclusive/store-exclusive loop that retries only under contention;
+  gcc and clang on aarch64 Linux call libgcc's `__aarch64_ldadd8_relax` instead, which picks LSE or the loop once per
+  process. macOS arm64 uses `ldadd` directly.
+* On macOS the thread-local access is a call through `_tlv_get_addr`, which may allocate a thread's TLS block on its
+  first use. macOS is for development builds only; on Linux the access is one `mov %fs:...`.
+
+### Evidence: machine code
+
+`make -C sdks/c disasm` prints the code of two call sites compiled from `tests/fixtures/callsite.c`:
+
+```c
+void site_always(long ok, long a, long b) { HS_ALWAYS(ok != 0, "disasm.always", "cond holds", a, b, 3, 4); }
+void site_reach(void) { HS_REACHABLE("disasm.reach", "reached"); }
+```
+
+Findings, from the listings below:
+
+* **No syscall instruction** appears in either function (x86-64 `syscall`/`sysenter`/`int 0x80`: count 0; arm64
+  `svc`: none). The only calls are `hs__claim` (cold path, first call per thread) and, on macOS, `_tlv_get_addr` and,
+  on aarch64 Linux, `__aarch64_ldadd8_relax`. None allocates or locks on the hot path.
+* **The only conditional branch is the slot-null test**: `je` on x86-64, `cbz` on arm64. The mask selects compile to
+  and/or arithmetic (x86-64) or `csel` (arm64, a conditional select, not a branch).
+* **The same instructions execute for a true and a false condition.** `site_always` is 65 instructions on x86-64
+  (prologue, body, epilogue), `site_reach` 31.
+
+x86-64, gcc 14.2 `-O2` (Debian container, compile and `objdump` only):
+
+```
+0000000000000000 <site_always>:
+   0:	push   %rbp
+   1:	mov    %rdx,%rbp
+   4:	push   %rbx
+   5:	mov    %rsi,%rbx
+   8:	sub    $0x18,%rsp
+   c:	mov    0x0(%rip),%rax        # 13 <site_always+0x13>
+  13:	mov    %fs:(%rax),%rdx
+  17:	test   %rdx,%rdx
+  1a:	je     100 <site_always+0x100>
+  20:	mov    (%rdx),%rcx
+  23:	add    $0x1,%rcx
+  27:	test   %rdi,%rdi
+  2a:	mov    %rcx,(%rdx)
+  2d:	setne  %dil
+  31:	movzbl %dil,%edi
+  35:	mov    %rdi,%rsi
+  38:	mov    %rdi,%r9
+  3b:	xor    $0x1,%rsi
+  3f:	lock xadd %r9,0x0(%rip)        # 48 <site_always+0x48>
+  48:	mov    %rsi,%r8
+  4b:	lock xadd %r8,0x0(%rip)        # 54 <site_always+0x54>
+  54:	lea    0x0(%rip),%r10        # 5b <site_always+0x5b>
+  5b:	mov    %r9,%rax
+  5e:	neg    %rax
+  61:	or     %r9,%rax
+  64:	shr    $0x3f,%rax
+  68:	xor    $0x1,%rax
+  6c:	and    %rdi,%rax
+  6f:	lea    0x10(%rdx),%rdi
+  73:	lea    -0x1(%rax),%r9
+  77:	neg    %rax
+  7a:	and    %rdi,%r9
+  7d:	and    %r10,%rax
+  80:	or     %r9,%rax
+  83:	mov    0x8(%rdx),%r9
+  87:	mov    %r9,(%rax)
+  8a:	mov    %rcx,0x8(%rax)
+  8e:	mov    %rbx,0x10(%rax)
+  92:	mov    %rbp,0x18(%rax)
+  96:	movq   $0x3,0x20(%rax)
+  9e:	movq   $0x4,0x28(%rax)
+  a6:	mov    %r8,%rax
+  a9:	neg    %rax
+  ac:	or     %r8,%rax
+  af:	mov    0x8(%rdx),%rdx
+  b3:	shr    $0x3f,%rax
+  b7:	xor    $0x1,%rax
+  bb:	and    %rsi,%rax
+  be:	lea    -0x1(%rax),%rsi
+  c2:	neg    %rax
+  c5:	and    %rdi,%rsi
+  c8:	lea    0x30(%r10),%rdi
+  cc:	and    %rdi,%rax
+  cf:	or     %rsi,%rax
+  d2:	mov    %rdx,(%rax)
+  d5:	mov    %rcx,0x8(%rax)
+  d9:	mov    %rbx,0x10(%rax)
+  dd:	mov    %rbp,0x18(%rax)
+  e1:	movq   $0x3,0x20(%rax)
+  e9:	movq   $0x4,0x28(%rax)
+  f1:	add    $0x18,%rsp
+  f5:	pop    %rbx
+  f6:	pop    %rbp
+  f7:	ret
+  f8:	nopl   0x0(%rax,%rax,1)
+ 100:	mov    %rdi,0x8(%rsp)
+ 105:	call   10a <site_always+0x10a>
+ 10a:	mov    0x8(%rsp),%rdi
+ 10f:	mov    %rax,%rdx
+ 112:	jmp    20 <site_always+0x20>
+ 117:	nopw   0x0(%rax,%rax,1)
+0000000000000120 <site_reach>:
+ 120:	sub    $0x8,%rsp
+ 124:	mov    0x0(%rip),%rax        # 12b <site_reach+0xb>
+ 12b:	mov    %fs:(%rax),%rax
+ 12f:	test   %rax,%rax
+ 132:	je     1b0 <site_reach+0x90>
+ 134:	mov    (%rax),%rsi
+ 137:	mov    $0x1,%ecx
+ 13c:	add    $0x1,%rsi
+ 140:	mov    %rsi,(%rax)
+ 143:	lock xadd %rcx,0x0(%rip)        # 14c <site_reach+0x2c>
+ 14c:	mov    %rcx,%rdx
+ 14f:	lea    0x10(%rax),%rdi
+ 153:	mov    0x8(%rax),%rax
+ 157:	neg    %rdx
+ 15a:	or     %rcx,%rdx
+ 15d:	mov    %rdx,%rcx
+ 160:	sar    $0x3f,%rdx
+ 164:	shr    $0x3f,%rcx
+ 168:	and    %rdi,%rdx
+ 16b:	lea    0x0(%rip),%rdi        # 172 <site_reach+0x52>
+ 172:	sub    $0x1,%rcx
+ 176:	and    %rdi,%rcx
+ 179:	or     %rcx,%rdx
+ 17c:	mov    %rax,(%rdx)
+ 17f:	mov    %rsi,0x8(%rdx)
+ 183:	movq   $0x0,0x10(%rdx)
+ 18b:	movq   $0x0,0x18(%rdx)
+ 193:	movq   $0x0,0x20(%rdx)
+ 19b:	movq   $0x0,0x28(%rdx)
+ 1a3:	add    $0x8,%rsp
+ 1a7:	ret
+ 1a8:	nopl   0x0(%rax,%rax,1)
+ 1b0:	call   1b5 <site_reach+0x95>
+ 1b5:	jmp    134 <site_reach+0x14>
+```
+
+Relocations of the same object (the only references outside the function: the thread-local pointer, the site
+records in `hs_catalog_v1`, and the cold-path call):
+
+```
+f: R_X86_64_GOTTPOFF	hs__tls-0x4
+			44: R_X86_64_PC32	hs_catalog_v1+0xdc
+			50: R_X86_64_PC32	hs_catalog_v1+0xe4
+			57: R_X86_64_PC32	hs_catalog_v1+0xec
+			106: R_X86_64_PLT32	hs__claim-0x4
+			127: R_X86_64_GOTTPOFF	hs__tls-0x4
+			148: R_X86_64_PC32	hs_catalog_v1+0x1c
+			16e: R_X86_64_PC32	hs_catalog_v1+0x2c
+			1b1: R_X86_64_PLT32	hs__claim-0x4
+```
+
+arm64 macOS, Apple clang 21 `-O2` (`otool -tvV`):
+
+```
+(__TEXT,__text) section
+_site_always:
+000	stp	x22, x21, [sp, #-0x30]!
+004	stp	x20, x19, [sp, #0x10]
+008	stp	x29, x30, [sp, #0x20]
+00c	add	x29, sp, #0x20
+010	mov	x19, x0
+014	adrp	x0, 0 ; 0x0
+018	ldr	x0, [x0]
+01c	ldr	x8, [x0]
+020	blr	x8
+024	ldr	x0, [x0]
+028	cbz	x0, 0xf4
+02c	cmp	x19, #0x0
+030	cset	w8, ne
+034	ldr	x9, [x0]
+038	add	x9, x9, #0x1
+03c	str	x9, [x0]
+040	eor	x10, x8, #0x1
+044	adrp	x11, 0 ; 0x0
+048	add	x11, x11, #0x0
+04c	ldadd	x8, x12, [x11]
+050	add	x13, x11, #0x8
+054	ldadd	x10, x13, [x13]
+058	add	x14, x0, #0x10
+05c	and	x8, x8, #0x1
+060	cmp	x12, #0x0
+064	csel	x8, x8, xzr, eq
+068	add	x12, x11, #0x10
+06c	neg	x15, x8
+070	and	x12, x15, x12
+074	cmp	x8, #0x0
+078	csel	x8, x14, xzr, eq
+07c	orr	x8, x8, x12
+080	ldr	x12, [x0, #0x8]
+084	str	x12, [x8]
+088	str	x9, [x8, #0x8]
+08c	str	x1, [x8, #0x10]
+090	str	x2, [x8, #0x18]
+094	mov	w12, #0x3
+098	str	x12, [x8, #0x20]
+09c	mov	w15, #0x4
+0a0	str	x15, [x8, #0x28]
+0a4	and	x8, x10, #0x1
+0a8	cmp	x13, #0x0
+0ac	csel	x8, x8, xzr, eq
+0b0	ldr	x10, [x0, #0x8]
+0b4	add	x11, x11, #0x40
+0b8	neg	x13, x8
+0bc	and	x11, x13, x11
+0c0	cmp	x8, #0x0
+0c4	csel	x8, x14, xzr, eq
+0c8	orr	x8, x8, x11
+0cc	str	x10, [x8]
+0d0	str	x9, [x8, #0x8]
+0d4	str	x1, [x8, #0x10]
+0d8	str	x2, [x8, #0x18]
+0dc	str	x12, [x8, #0x20]
+0e0	str	x15, [x8, #0x28]
+0e4	ldp	x29, x30, [sp, #0x20]
+0e8	ldp	x20, x19, [sp, #0x10]
+0ec	ldp	x22, x21, [sp], #0x30
+0f0	ret
+0f4	mov	x20, x2
+0f8	mov	x21, x1
+0fc	bl	0xfc
+100	mov	x1, x21
+104	mov	x2, x20
+108	b	0x2c
+_site_reach:
+10c	stp	x29, x30, [sp, #-0x10]!
+110	mov	x29, sp
+114	adrp	x0, 0 ; 0x0
+118	ldr	x0, [x0]
+11c	ldr	x8, [x0]
+120	blr	x8
+124	ldr	x0, [x0]
+128	cbz	x0, 0x17c
+12c	ldr	x8, [x0]
+130	add	x8, x8, #0x1
+134	str	x8, [x0]
+138	adrp	x9, 0 ; 0x0
+13c	add	x9, x9, #0x0
+140	mov	w10, #0x1
+144	ldadd	x10, x10, [x9]
+148	ldr	x11, [x0, #0x8]
+14c	add	x12, x0, #0x10
+150	add	x9, x9, #0x10
+154	cmp	x10, #0x0
+158	csel	x9, x9, x12, eq
+15c	str	x11, [x9]
+160	str	x8, [x9, #0x8]
+164	str	xzr, [x9, #0x10]
+168	str	xzr, [x9, #0x18]
+16c	str	xzr, [x9, #0x20]
+170	str	xzr, [x9, #0x28]
+174	ldp	x29, x30, [sp], #0x10
+178	ret
+17c	bl	0x17c
+180	b	0x12c
+```
+
+On aarch64 Linux, gcc 13.3 and clang 18 produce the same structure with `bl __aarch64_ldadd8_relax` in place of
+`ldadd` (`make disasm` prints it).
+
+### Evidence: tests
+
+* `tests/test_nosyscall.c` (T1, Linux): a fresh thread installs a seccomp filter that allows only `exit`,
+  `exit_group` and `rt_sigreturn`, then runs 10^6 iterations of every kind (true and false alternating, first
+  evaluations and the slot claim included), `HS_WORK` and `hs_thread`, and ends with a raw `exit`. Passes on aarch64
+  Linux with gcc 13.3 and clang 18 at -O0, -O2, -O3. Adding one `getpid` to the loop makes it fail.
+* Outcome-independent instruction and branch counts (plan T2, `perf_event_open`) are **not** measured yet: that needs
+  a Linux host with perf access (see "Not done" below). The listings are the static argument.
+
+## Tests
+
+`make -C sdks/c test` (add `CC=gcc` or `CC=clang`, `OPT=-O0|-O2|-O3`): warnings are errors (`-Wall -Wextra -Werror`).
+
+* `tests/test_unit.c`: formatting and fixed widths, counters and first-witness ownership, merged sites, thread keys,
+  the 256-slot table with 300 threads, the offline catalog twin, and an in-process report (one `assert` per id,
+  `end.sites`, `end.threads`, every line within 4096 bytes).
+* `tests/test_proc.c` with the programs in `tests/fixtures/hs_sample.c` (one binary per scenario, because a binary's
+  catalog holds every assertion compiled into it): report shape, the same id at two call sites, fork tags and fresh
+  child counters, 100 and 300 threads, crash with and without `HAIRSPRING_SIGNAL_REPORT`, `hs_exit` status, the events
+  file, `HAIRSPRING_EVENTS=off`, `eval` lines, and **two processes writing to one pipe** (20 rounds, every line
+  checked to be one whole object, exact line counts per process).
+* `make -C sdks/c conformance` or `cargo test -p hairspring-props --test c_sdk`: the same programs' output is folded
+  by the reference parser. Checks: no degradation, an always-false is a `Violation` with its witness, a never-hit
+  `reachable` is `Unmet`, merged sites sum, fork tags, thread counts (101 and 256), `report_missing` after a crash
+  with handlers off, `eval` marks `perturbing`, and two processes on one pipe fold cleanly.
+  `cargo run -p hairspring-props --example fold_events -- file.events` prints the folded verdicts of any capture.
+
+### Pipe atomicity differs by platform
+
+A write of at most `PIPE_BUF` bytes to a pipe is atomic. `PIPE_BUF` is 4096 on Linux, so a report line (at most 4096
+bytes) never interleaves with another process's. It is **512 on macOS**, and a test run showed lines of about 600
+bytes (an `assert` with two witnesses) being split when two processes shared a pipe. On macOS the pipe tests therefore
+use a scenario whose lines stay under 512 bytes, and the real long-line check runs on Linux only. The engine targets
+Linux (Hermit); macOS is for development.
+
+## Not done
+
+* Rust SDK, `hs_choice` and the tape (layout not agreed), `hairspring catalog <binary>` (C2), shared objects.
+* Plan T2 (perf counters) and T3 (schedule perturbation under Hermit): need the Linux runner with perf and Hermit.
+* Linux x86-64 was compiled and disassembled only (an emulated container); the tests ran natively on aarch64 Linux.

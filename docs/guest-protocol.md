@@ -7,8 +7,8 @@ a v2.
 
 ## Status
 
-Status: the protocol and the parser are done; the C SDK is outstanding. The wire format is frozen once the review
-findings are closed.
+Status: the protocol and the parser are done; the C SDK is in [`sdks/c`](../sdks/c) (see [c-sdk.md](c-sdk.md)). The wire
+format is frozen once the review findings are closed.
 
 ## Transport
 
@@ -20,7 +20,8 @@ nesting deeper than 4. There is one line cap everywhere. SDKs MUST write each li
 4096 bytes, so that concurrent writers to a pipe cannot interleave inside a line (`PIPE_BUF` atomicity).
 
 Counters may be right-aligned in a 20-character field (JSON allows the padding). SDKs do this so a report's length does
-not depend on the counter values, which keeps syscall arguments identical across outcomes.
+not depend on the counter values, which keeps syscall arguments identical across outcomes. The same whitespace rule
+lets an SDK pad a `first_false` / `first_true` value (object or `null`) to a constant width.
 
 ### Leniency
 
