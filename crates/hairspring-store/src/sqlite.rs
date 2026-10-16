@@ -13,6 +13,55 @@ impl From<rusqlite::Error> for StoreError {
     }
 }
 
+/// How long a connection waits for another writer before giving up with `SQLITE_BUSY`.
+const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Pause between attempts to switch the journal mode while another connection holds the file.
+const WAL_RETRY_PAUSE: std::time::Duration = std::time::Duration::from_millis(5);
+
+/// Puts the database in WAL mode. Changing the journal mode takes locks for which SQLite does not always call the busy
+/// handler, so concurrent first opens can see `SQLITE_BUSY` even with a busy timeout set; retry until [`BUSY_TIMEOUT`]
+/// has passed in total (each attempt waits only for the time that remains). A database already in WAL mode needs no
+/// change, which keeps later opens off the lock entirely. A filesystem that cannot do WAL answers with another mode;
+/// that is an error rather than a silent downgrade.
+fn enable_wal(conn: &Connection) -> Result<()> {
+    let deadline = std::time::Instant::now() + BUSY_TIMEOUT;
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        conn.busy_timeout(remaining)?;
+        match switch_to_wal(conn) {
+            Ok(mode) if is_wal(&mode) => return Ok(()),
+            Ok(mode) => {
+                return Err(StoreError::Backend(format!(
+                    "could not enable WAL journal mode (the database reports `{mode}`); the filesystem may not support it"
+                )))
+            }
+            Err(e) if is_busy(&e) && !remaining.is_zero() => std::thread::sleep(WAL_RETRY_PAUSE),
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+/// Returns the journal mode in effect afterwards, changing it only when it is not already WAL.
+fn switch_to_wal(conn: &Connection) -> rusqlite::Result<String> {
+    let current: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0))?;
+    if is_wal(&current) {
+        return Ok(current);
+    }
+    conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))
+}
+
+fn is_wal(mode: &str) -> bool {
+    mode.eq_ignore_ascii_case("wal")
+}
+
+fn is_busy(e: &rusqlite::Error) -> bool {
+    matches!(
+        e.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    )
+}
+
 pub struct SqliteStore {
     conn: Mutex<Connection>,
 }
@@ -78,7 +127,10 @@ fn job_from_row(r: &Row<'_>) -> rusqlite::Result<Job> {
 impl SqliteStore {
     pub fn open(path: &Path) -> Result<SqliteStore> {
         let conn = Connection::open(path)?;
-        conn.pragma_update(None, "journal_mode", "WAL")?;
+        // The timeout must be in place before the first statement that takes a lock: switching to WAL needs one, and
+        // without a busy handler it fails at once with "database is locked" when another process is opening the file.
+        conn.busy_timeout(BUSY_TIMEOUT)?;
+        enable_wal(&conn)?;
         SqliteStore::init(conn)
     }
 
@@ -87,7 +139,7 @@ impl SqliteStore {
     }
 
     fn init(conn: Connection) -> Result<SqliteStore> {
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         sqlite_schema::migrate(&conn)?;
         Ok(SqliteStore {
