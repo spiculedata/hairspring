@@ -68,6 +68,10 @@ pub struct LogicalEntry {
     pub trues: u64,
     pub falses: u64,
     pub conflicted: bool,
+    /// The trial declares the id with a kind other than the catalog's (a kind mismatch).
+    pub kind_override: Option<AssertKind>,
+    /// The entry only marks a catalog conflict: it carries no counts.
+    pub conflict_only: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -81,11 +85,23 @@ pub fn logical_trial(rng: &mut Rng, members: &[usize]) -> LogicalTrial {
     let mut entries = Vec::new();
     for id in members {
         if rng.chance(40) {
+            let other = AssertKind::ALL[rng.below(AssertKind::ALL.len() as u64) as usize];
             entries.push(LogicalEntry {
                 id: *id,
                 trues: rng.below(4),
                 falses: if rng.chance(25) { rng.below(3) + 1 } else { 0 },
                 conflicted: rng.chance(4),
+                kind_override: (rng.chance(8) && other != row(*id).kind).then_some(other),
+                conflict_only: false,
+            });
+        } else if rng.chance(5) {
+            entries.push(LogicalEntry {
+                id: *id,
+                trues: 0,
+                falses: 0,
+                conflicted: true,
+                kind_override: None,
+                conflict_only: true,
             });
         }
     }
@@ -120,13 +136,13 @@ pub fn digest_in(trial: &LogicalTrial, catalog: &RunCatalog) -> TrialDigest {
         .iter()
         .filter_map(|e| {
             let idx = catalog.index_of(&id_name(e.id))?;
-            let kind = row(e.id).kind;
+            let kind = e.kind_override.unwrap_or(row(e.id).kind);
             let hits = e.trues + e.falses;
             let fails = failure_basis(kind, hits, e.falses).is_some();
             Some(DigestEntry {
                 idx,
                 kind,
-                catalogued: true,
+                catalogued: !e.conflict_only,
                 conflicted: e.conflicted,
                 hits,
                 trues: e.trues,
@@ -140,6 +156,30 @@ pub fn digest_in(trial: &LogicalTrial, catalog: &RunCatalog) -> TrialDigest {
         flags: trial.flags,
         ids_dropped: trial.ids_dropped,
         entries,
+    }
+}
+
+/// A clean digest that catalogues every id of `catalog` once, with the catalog's own kind. Folded first, it fixes each
+/// id's kind in the run fold to the catalog's, as it is in a real run whose catalog came from that fold.
+pub fn priming_digest(catalog: &RunCatalog) -> TrialDigest {
+    TrialDigest {
+        entries: catalog
+            .rows()
+            .iter()
+            .enumerate()
+            .map(|(i, r)| DigestEntry {
+                idx: i as u32,
+                kind: r.kind,
+                catalogued: true,
+                conflicted: false,
+                hits: 0,
+                trues: 0,
+                falses: 0,
+                witness: None,
+                decl: None,
+            })
+            .collect(),
+        ..TrialDigest::default()
     }
 }
 

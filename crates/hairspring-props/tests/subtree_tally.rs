@@ -1,15 +1,41 @@
 //! `NodeTally::merge` must give the same tally for every split, order and bracketing of the same trials, must never
-//! hide that its failing-id set was cut, and must not wrap its counters.
+//! hide that its failing-id set is cut or incomplete, and must not wrap its counters. Verdicts come from the store's
+//! verdict column, never from the digest.
 mod common;
 
 use common::subtree_gen::*;
 use hairspring_props::*;
 use std::collections::BTreeSet;
 
-fn tally_of(digests: &[TrialDigest]) -> NodeTally {
-    digests
-        .iter()
-        .fold(NodeTally::empty(), |t, d| t.merge(&NodeTally::of_digest(d)))
+const VERDICTS: [&str; 6] = [
+    "pass",
+    "violation",
+    "inconclusive",
+    "unusable",
+    "infra",
+    "novel",
+];
+
+type Row = (String, Option<TrialDigest>);
+
+/// A catalog of `n` always-rules, so any index below `n` can fail.
+fn wide_catalog(n: usize) -> RunCatalog {
+    let rows = (0..n)
+        .map(|i| CatalogRow {
+            id: format!("wide{i}"),
+            kind: AssertKind::Always,
+            msg: String::new(),
+            loc: None,
+            decided: true,
+        })
+        .collect();
+    RunCatalog::from_rows(rows).expect("valid rows")
+}
+
+fn tally_of(rows: &[Row], catalog: &RunCatalog) -> NodeTally {
+    rows.iter().fold(NodeTally::empty(), |t, (v, d)| {
+        t.merge(&NodeTally::of_trial(v, d.as_ref(), catalog))
+    })
 }
 
 fn merge_all(tallies: &[NodeTally]) -> NodeTally {
@@ -18,11 +44,17 @@ fn merge_all(tallies: &[NodeTally]) -> NodeTally {
         .fold(NodeTally::empty(), |acc, t| acc.merge(t))
 }
 
-fn random_digests(rng: &mut Rng, count: usize) -> Vec<TrialDigest> {
+fn random_rows(rng: &mut Rng, count: usize) -> Vec<Row> {
     let members: Vec<usize> = (0..UNIVERSE).collect();
     let catalog = catalog_of(&members);
     (0..count)
-        .map(|_| digest_in(&logical_trial(rng, &members), &catalog))
+        .map(|_| {
+            let verdict = VERDICTS[rng.below(VERDICTS.len() as u64) as usize].to_owned();
+            let digest = rng
+                .chance(70)
+                .then(|| digest_in(&logical_trial(rng, &members), &catalog));
+            (verdict, digest)
+        })
         .collect()
 }
 
@@ -47,24 +79,34 @@ fn failing_digest(idxs: &[u32]) -> TrialDigest {
     }
 }
 
+fn violation_with(idxs: &[u32], catalog: &RunCatalog) -> NodeTally {
+    NodeTally::of_trial("violation", Some(&failing_digest(idxs)), catalog)
+}
+
 fn ids(from: u32, to: u32) -> Vec<u32> {
     (from..to).collect()
 }
 
+fn universe_catalog() -> RunCatalog {
+    catalog_of(&(0..UNIVERSE).collect::<Vec<_>>())
+}
+
 #[test]
 fn merge_is_the_same_for_every_random_split_and_order() {
+    let catalog = universe_catalog();
     for seed in 1..=60u64 {
         let mut rng = Rng(seed * 7919);
         let count = 1 + rng.below(40) as usize;
-        let digests = random_digests(&mut rng, count);
-        let whole = tally_of(&digests);
+        let rows = random_rows(&mut rng, count);
+        let whole = tally_of(&rows, &catalog);
+        let unknown_rows = rows.iter().filter(|(v, _)| v == "novel").count() as u64;
 
         let groups = 1 + rng.below(6) as usize;
-        let mut buckets: Vec<Vec<TrialDigest>> = vec![Vec::new(); groups];
-        for d in digests {
-            buckets[rng.below(groups as u64) as usize].push(d);
+        let mut buckets: Vec<Vec<Row>> = vec![Vec::new(); groups];
+        for r in rows {
+            buckets[rng.below(groups as u64) as usize].push(r);
         }
-        let parts: Vec<NodeTally> = buckets.iter().map(|b| tally_of(b)).collect();
+        let parts: Vec<NodeTally> = buckets.iter().map(|b| tally_of(b, &catalog)).collect();
 
         assert_eq!(merge_all(&parts), whole, "seed {seed}: in order");
         assert_eq!(
@@ -77,16 +119,28 @@ fn merge_is_the_same_for_every_random_split_and_order() {
             .rev()
             .fold(NodeTally::empty(), |acc, t| t.merge(&acc));
         assert_eq!(right_nested, whole, "seed {seed}: bracketed from the right");
+        assert_eq!(
+            merge_all(&parts).verdicts().unknown,
+            unknown_rows,
+            "seed {seed}: the unknown bucket survives every split"
+        );
     }
 }
 
 #[test]
-fn merge_is_associative_commutative_and_has_an_identity() {
-    for seed in 1..=40u64 {
+fn merge_is_associative_commutative_and_has_an_identity_over_mixed_sources() {
+    let catalog = universe_catalog();
+    for seed in 1..=60u64 {
         let mut rng = Rng(seed * 104_729);
+        // A third of the parts come from a count query alone: violations with no ids behind them.
         let part = |rng: &mut Rng| {
             let count = 1 + rng.below(8) as usize;
-            tally_of(&random_digests(rng, count))
+            let rows = random_rows(rng, count);
+            if rng.chance(33) {
+                NodeTally::from_verdicts(tally_of(&rows, &catalog).verdicts().to_owned())
+            } else {
+                tally_of(&rows, &catalog)
+            }
         };
         let (a, b, c) = (part(&mut rng), part(&mut rng), part(&mut rng));
         assert_eq!(a.merge(&b), b.merge(&a), "seed {seed}: commutative");
@@ -102,6 +156,7 @@ fn merge_is_associative_commutative_and_has_an_identity() {
 
 #[test]
 fn capped_merge_is_associative_and_commutative_and_flags_the_cut() {
+    let catalog = wide_catalog(600);
     for seed in 1..=60u64 {
         let mut rng = Rng(seed * 15_485_863);
         let pool = 1 + rng.below(600) as u32;
@@ -119,7 +174,10 @@ fn capped_merge_is_associative_and_commutative_and_flags_the_cut() {
             .flat_map(|d| d.entries.iter().map(|e| e.idx))
             .collect();
 
-        let parts: Vec<NodeTally> = digests.iter().map(NodeTally::of_digest).collect();
+        let parts: Vec<NodeTally> = digests
+            .iter()
+            .map(|d| NodeTally::of_trial("violation", Some(d), &catalog))
+            .collect();
         let whole = merge_all(&parts);
         assert_eq!(merge_all(&rng.shuffled(&parts)), whole, "seed {seed}");
 
@@ -138,34 +196,30 @@ fn capped_merge_is_associative_and_commutative_and_flags_the_cut() {
             all_ids.len() > MAX_TALLY_FAILING_IDS,
             "seed {seed}: flagged exactly when ids were lost"
         );
-        let failing_digests = digests.iter().filter(|d| !d.entries.is_empty()).count() as u64;
         assert_eq!(
             whole.verdicts().violation,
-            failing_digests,
+            parts.len() as u64,
             "seed {seed}: counts untouched"
-        );
-        assert_eq!(
-            whole.verdicts().total(),
-            digests.len() as u64,
-            "seed {seed}: no trial lost"
         );
     }
 }
 
 #[test]
 fn cap_boundary_is_exact() {
-    let at_cap = NodeTally::of_digest(&failing_digest(&ids(0, MAX_TALLY_FAILING_IDS as u32)));
+    let catalog = wide_catalog(MAX_TALLY_FAILING_IDS + 2);
+    let cap = MAX_TALLY_FAILING_IDS as u32;
+    let at_cap = violation_with(&ids(0, cap), &catalog);
     assert_eq!(at_cap.failing_ids().len(), MAX_TALLY_FAILING_IDS);
     assert!(
         !at_cap.failing_ids_truncated(),
         "exactly the cap is not a cut"
     );
 
-    let over = NodeTally::of_digest(&failing_digest(&ids(0, MAX_TALLY_FAILING_IDS as u32 + 1)));
+    let over = violation_with(&ids(0, cap + 1), &catalog);
     assert_eq!(over.failing_ids().len(), MAX_TALLY_FAILING_IDS);
     assert!(over.failing_ids_truncated(), "one past the cap is a cut");
     assert!(
-        !over.failing_ids().contains(&(MAX_TALLY_FAILING_IDS as u32)),
+        !over.failing_ids().contains(&cap),
         "the highest id is the one dropped"
     );
     assert_eq!(over.verdicts().violation, 1);
@@ -177,12 +231,12 @@ fn cap_boundary_is_exact() {
     );
     assert_eq!(same_again.failing_ids(), at_cap.failing_ids());
 
-    let one_more = at_cap.merge(&NodeTally::of_digest(&failing_digest(&[10_000])));
+    let one_more = at_cap.merge(&violation_with(&[cap + 1], &catalog));
     assert!(
         one_more.failing_ids_truncated(),
         "a new id past a full set is a cut"
     );
-    assert!(!one_more.failing_ids().contains(&10_000));
+    assert!(!one_more.failing_ids().contains(&(cap + 1)));
 
     assert!(
         over.merge(&NodeTally::empty()).failing_ids_truncated(),
@@ -212,7 +266,7 @@ fn counts_saturate_at_the_u64_boundary_and_stay_associative() {
     assert_eq!(
         near.merge(&one.merge(&one)),
         near.merge(&one).merge(&one),
-        "saturation does not break associativity"
+        "saturation keeps associativity"
     );
     assert_eq!(near.merge(&one), one.merge(&near));
     assert_eq!(
@@ -249,43 +303,141 @@ fn query_counts_map_to_named_verdicts_and_unknown_names_stay_apart() {
         (5, 2, 1)
     );
     assert_eq!((counts.unusable, counts.infra, counts.unknown), (3, 4, 7));
-    let tally = NodeTally::from_verdicts(counts);
-    assert!(tally.failing_ids().is_empty() && !tally.failing_ids_truncated());
-    assert_eq!(tally.verdicts().total(), 22);
+    assert_eq!(NodeTally::from_verdicts(counts).verdicts().total(), 22);
 }
 
 #[test]
-fn one_digest_is_classified_as_the_run_fold_would() {
-    let clean = TrialDigest::default();
-    assert_eq!(NodeTally::of_digest(&clean).verdicts().pass, 1);
+fn of_trial_counts_equal_from_verdicts_for_every_verdict_with_or_without_a_digest() {
+    let catalog = universe_catalog();
+    for seed in 1..=40u64 {
+        let mut rng = Rng(seed * 6_700_417);
+        let count = rng.below(50) as usize;
+        let rows = random_rows(&mut rng, count);
+        let counts = rows
+            .iter()
+            .fold(VerdictCounts::default(), |c, (v, _)| c.with_named(v, 1));
+        assert_eq!(
+            tally_of(&rows, &catalog).verdicts(),
+            NodeTally::from_verdicts(counts).verdicts(),
+            "seed {seed}"
+        );
+    }
+    for name in VERDICTS {
+        for digest in [
+            None,
+            Some(TrialDigest::default()),
+            Some(failing_digest(&[0, 1])),
+        ] {
+            let t = NodeTally::of_trial(name, digest.as_ref(), &catalog);
+            let expected = VerdictCounts::default().with_named(name, 1);
+            assert_eq!(
+                t.verdicts(),
+                &expected,
+                "{name}: the store's verdict decides the count"
+            );
+        }
+    }
+}
 
-    let excluded = TrialDigest {
-        flags: DigestFlags {
-            excluded: true,
-            ..DigestFlags::default()
-        },
-        ..failing_digest(&[1])
-    };
-    let t = NodeTally::of_digest(&excluded);
-    assert_eq!((t.excluded(), t.verdicts().total()), (1, 0));
-    assert!(t.failing_ids().is_empty());
-
-    let timed_out = TrialDigest {
-        flags: DigestFlags {
-            inconclusive: true,
-            perturbing: true,
-            ..DigestFlags::default()
-        },
-        ..failing_digest(&[1])
-    };
-    let t = NodeTally::of_digest(&timed_out);
-    assert_eq!(
-        (
-            t.verdicts().inconclusive,
-            t.verdicts().violation,
-            t.perturbing()
+#[test]
+fn a_violation_without_a_failing_property_is_still_a_violation() {
+    let catalog = universe_catalog();
+    // An exit-code or hang violation: the digest has no failing entry. A verdict-only digest has no entries at all.
+    for digest in [
+        TrialDigest::default(),
+        digest_in(
+            &LogicalTrial {
+                flags: DigestFlags::default(),
+                ids_dropped: 0,
+                entries: Vec::new(),
+            },
+            &catalog,
         ),
-        (1, 0, 1)
+    ] {
+        let t = NodeTally::of_trial("violation", Some(&digest), &catalog);
+        assert_eq!((t.verdicts().violation, t.verdicts().pass), (1, 0));
+        assert!(t.failing_ids().is_empty());
+        assert!(
+            t.failing_ids_exhaustive(),
+            "the digest says no property failed, so no ids are missing"
+        );
+    }
+    // A passing verdict is not turned into a violation by a failing entry in the digest.
+    let t = NodeTally::of_trial("pass", Some(&failing_digest(&[0])), &catalog);
+    assert_eq!((t.verdicts().pass, t.verdicts().violation), (1, 0));
+}
+
+#[test]
+fn a_violation_with_no_digest_does_not_claim_its_ids_are_known() {
+    let catalog = wide_catalog(UNIVERSE);
+    let none = NodeTally::of_trial("violation", None, &catalog);
+    assert!(!none.failing_ids_exhaustive());
+    assert!(NodeTally::of_trial("pass", None, &catalog).failing_ids_exhaustive());
+
+    let five = NodeTally::from_verdicts(VerdictCounts::default().with_named("violation", 5));
+    assert!(
+        !five.failing_ids_exhaustive(),
+        "violations from a count query have no ids"
+    );
+    let mixed = five.merge(&violation_with(&[1], &catalog));
+    assert_eq!(mixed.verdicts().violation, 6);
+    assert_eq!(
+        mixed.failing_ids().iter().copied().collect::<Vec<_>>(),
+        vec![1]
+    );
+    assert!(
+        !mixed.failing_ids_exhaustive(),
+        "6 violations, one known id: not complete"
+    );
+    assert!(
+        !violation_with(&[1], &catalog)
+            .merge(&five)
+            .failing_ids_exhaustive(),
+        "either order"
+    );
+    assert!(!five.merge(&NodeTally::empty()).failing_ids_exhaustive());
+
+    let zero = NodeTally::from_verdicts(VerdictCounts::default().with_named("pass", 3));
+    assert!(
+        zero.failing_ids_exhaustive(),
+        "no violations, nothing missing"
+    );
+    assert!(NodeTally::empty().failing_ids_exhaustive());
+}
+
+#[test]
+fn flags_follow_the_run_fold_rules() {
+    let catalog = universe_catalog();
+    let flags = |f: DigestFlags| TrialDigest {
+        flags: f,
+        ..failing_digest(&[1])
+    };
+
+    let excluded = flags(DigestFlags {
+        excluded: true,
+        perturbing: true,
+        ..DigestFlags::default()
+    });
+    let t = NodeTally::of_trial("unusable", Some(&excluded), &catalog);
+    assert_eq!(
+        (t.excluded(), t.degraded(), t.perturbing()),
+        (1, 0, 0),
+        "excluded trials add to nothing else"
+    );
+    assert!(t.failing_ids().is_empty());
+    assert_eq!(t.verdicts().unusable, 1);
+
+    let timed_out = flags(DigestFlags {
+        inconclusive: true,
+        perturbing: true,
+        degraded: true,
+        ..DigestFlags::default()
+    });
+    let t = NodeTally::of_trial("inconclusive", Some(&timed_out), &catalog);
+    assert_eq!(
+        (t.degraded(), t.perturbing()),
+        (1, 1),
+        "a degraded timed-out trial is still degraded"
     );
     assert!(
         t.failing_ids().is_empty(),
@@ -296,7 +448,68 @@ fn one_digest_is_classified_as_the_run_fold_would() {
         ids_dropped: 2,
         ..TrialDigest::default()
     };
-    assert_eq!(NodeTally::of_digest(&lossy).degraded(), 1);
+    assert_eq!(
+        NodeTally::of_trial("pass", Some(&lossy), &catalog).degraded(),
+        1
+    );
+    assert_eq!(tally_of(&[], &catalog), NodeTally::empty());
+}
 
-    assert_eq!(tally_of(&[]), NodeTally::empty());
+#[test]
+fn kind_mismatches_and_conflict_only_entries_are_judged_as_the_run_fold_judges_them() {
+    let sometimes = |id: &str| CatalogRow {
+        id: id.to_owned(),
+        kind: AssertKind::Sometimes,
+        msg: String::new(),
+        loc: None,
+        decided: true,
+    };
+    let catalog = RunCatalog::from_rows(vec![sometimes("a"), sometimes("b")]).expect("rows");
+    let own_kind = |idx: u32| catalog.get(idx).expect("row").kind;
+    let entry =
+        |idx: u32, kind: AssertKind, falses: u64, catalogued: bool, conflicted: bool| DigestEntry {
+            idx,
+            kind,
+            catalogued,
+            conflicted,
+            hits: falses,
+            trues: 0,
+            falses,
+            witness: None,
+            decl: None,
+        };
+    let one = |e: DigestEntry| TrialDigest {
+        entries: vec![e],
+        ..TrialDigest::default()
+    };
+
+    // Under its own declared kind (Always) this entry fails, but the catalog says Sometimes: a mismatch, which the
+    // run fold does not merge.
+    let t = NodeTally::of_trial(
+        "pass",
+        Some(&one(entry(0, AssertKind::Always, 1, true, false))),
+        &catalog,
+    );
+    assert!(
+        t.failing_ids().is_empty(),
+        "a mismatched entry's own kind does not decide"
+    );
+
+    // A conflict on a catalogued entry is a failure; a conflict-only entry may be one, so ids are not exhaustive.
+    let t = NodeTally::of_trial(
+        "violation",
+        Some(&one(entry(1, own_kind(1), 0, true, true))),
+        &catalog,
+    );
+    assert_eq!(t.failing_ids().iter().copied().collect::<Vec<_>>(), vec![1]);
+    let t = NodeTally::of_trial(
+        "violation",
+        Some(&one(entry(1, own_kind(1), 0, false, true))),
+        &catalog,
+    );
+    assert!(t.failing_ids().is_empty());
+    assert!(
+        !t.failing_ids_exhaustive(),
+        "a conflict-only entry may fail an id this trial cannot see"
+    );
 }
