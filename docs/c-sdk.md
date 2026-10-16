@@ -76,9 +76,14 @@ the thread-local slot pointer is declared `initial-exec` on Linux (one load from
 At startup the SDK duplicates descriptor 2 (or opens the events file) to a high number with `fcntl(F_DUPFD_CLOEXEC)`
 and writes only to that copy, so a program that closes stderr and then opens `data.db` (which becomes descriptor 2)
 cannot receive the report. This is one extra syscall at startup (two when the first high number is refused), which
-the T3 "A" arm must also make. A program that closes every descriptor, or runs with a very low `RLIMIT_NOFILE`, defeats
-it; in the latter case the SDK falls back to the original descriptor. If stderr is already closed at startup there is
-no output. The copy is close-on-exec: an exec'd image makes its own copy from its inherited descriptor 2.
+the T3 "A" arm must also make. The SDK also remembers which file the copy refers to (`st_dev`, `st_ino`) and, before
+writing the report, checks it with one `fstat` (a second extra syscall for the "A" arm, this one at exit). A program
+that `dup2`s something onto the copy's number, or closes every descriptor, therefore loses the report rather than
+sending it somewhere else: the SDK writes nothing and counts it in `end.dropped` (which the lost report cannot show;
+the run's `report_missing` does). With a very low `RLIMIT_NOFILE` no private copy can be made; the SDK then falls back
+to the original descriptor, still exposed to the program, and counts that in `end.dropped`. If stderr is already
+closed at startup there is no output. The copy is close-on-exec: an exec'd image makes its own copy from its inherited
+descriptor 2.
 
 ### Processes: fork, exec and spawn
 
@@ -92,16 +97,21 @@ owner's pid in `HAIRSPRING_PROC_PID`, in static buffers it hands to `putenv`; a 
 | `fork()` (the `pthread_atfork` handler runs) | `<parent>.f<n>`, `n` counting the parent's forks; if that passes 64 bytes, `<first 40 bytes>.h<16 hex digits>` |
 | `fork()` then `exec` of an instrumented image | the same `<parent>.f<n>`, inherited through the environment; the image sends its own `hello`, `catalog`, `assert`s and `end` once |
 | `fork()` then `exec` of an uninstrumented image | nothing: a fork child sends `hello` and `catalog` only when it reports, so a child that never reports leaves no trace |
-| `posix_spawn`, `system()`, `vfork`-style starts (no fork handler) | the inherited pid is not the child's own, so the child takes `<inherited>.s<pid>`. Deterministic only when pids are (they are under Hermit) |
+| `posix_spawn`, `system()`, `vfork`-style starts (no fork handler) | the inherited pid is not the child's own, so the child takes `<inherited>.s<pid>`. A pid differs between runs outside Hermit, so such a tag, and every tag below it, is announced with `hello.tag_stable:false` (additive; the parser ignores and counts it) |
+| `exec` of another image **without** forking | the image inherited its own pid with the "announced" flag set, so it takes `<tag>.x1`; the old image is gone and never sends `end`, so the trial shows it as `report_missing` |
 
 Limits, stated plainly:
 
 * A forked child that **crashes with signal handlers off** never reports, so it is invisible (no `hello`, no
   `catalog`); the parent's report is unaffected. With handlers on it reports `reason: signal`.
-* An image that `exec`s another image **without forking** reuses its own tag, so both images send `hello` for it and
-  the engine marks the trial degraded. In-memory state is lost at `exec` anyway; fork first, or give the harness-started
-  program distinct `HAIRSPRING_PROC` values.
-* `setenv`/`unsetenv` of `HAIRSPRING_PROC` by the program breaks the in-place rewrite; do not.
+* `setenv`/`unsetenv` of `HAIRSPRING_PROC` by the program breaks the in-place rewrite; do not. A program that replaces
+  or clears `environ` (`clearenv`, an `execve` with its own `envp`) does not export the tag at all: what it starts
+  begins as `p1` again, duplicates its parent's tag, and the trial is degraded.
+* **The backend must strip** any stray `HAIRSPRING_PROC` and `HAIRSPRING_PROC_PID` from the environment it gives the
+  guest (or set `HAIRSPRING_PROC` itself and no `HAIRSPRING_PROC_PID`); a stray pair makes the first process look
+  like a spawned child.
+* `fork` takes the `hs_thread` key lock in its prepare handler and releases it in both the parent and the child, so a
+  child never inherits the lock held by a thread that does not exist in it.
 * Independently started instrumented programs (not children of an instrumented one) must be started by the harness
   with distinct `HAIRSPRING_PROC` values.
 
@@ -122,8 +132,10 @@ Properties of the report:
   `first_true`) is padded to a constant 197 characters whether it holds an object or `null`, and a `thread` line's key
   is padded to 64 bytes, so a line's length does not depend on any counter, on whether a failure happened, or on which
   key a slot got. `key_stable` is padded to 5 characters. Both paddings are whitespace between JSON tokens, which the
-  protocol allows. The cost: an `assert` line is about 600 bytes whatever it says, so the parser's 1 MiB per-trial
-  event budget is used up by roughly 1,300 ids.
+  protocol allows. The cost: an `assert` plus its `catalog` line is about 850 bytes per id, whatever it says. The
+  witness padding (197 characters) stays. The engine's per-trial event budget is **shared by every process of the
+  trial**: at 1 MiB it holds about 1,200 ids summed over processes, and it is being raised to 4 MiB in the engine
+  (about 4,900 ids).
 * `reachable` and `unreachable` send `trues = hits`, `falses = 0` and only `first_true`.
 * **One reading.** The report reads every thread's totals once; the `thread` lines, `end.threads` and `end.evals`
   all come from that reading, so threads still running (or starting) while the process exits cannot make them
@@ -148,6 +160,9 @@ Properties of the report:
   string literal cannot be escaped or inspected by the preprocessor, so the offline copy would be invalid JSON, and
   for an id that is outside the id alphabet the offline copy would differ from the live id (which has `_` for each
   disallowed byte). The runtime line escapes `msg` and replaces id bytes, so a run is unaffected.
+  **Requirement for C2** (`hairspring catalog <binary>`): it must not depend on the twin being valid JSON. It has to
+  either read the strings as fields and apply the same sanitising as the live line (escape `msg`, replace id bytes
+  outside the alphabet, cut at the limits), or the SDK has to switch the twin to NUL-separated fields first.
 
 ### Limits and losses
 
@@ -158,7 +173,7 @@ Where the parser can notice a loss without that, the SDK makes it:
 
 * More than 4096 distinct ids: the SDK still sends `catalog` and `assert` lines for all of them (up to 16384), so the
   parser counts the excess as over the limit and marks the trial degraded. `end.sites` is capped at 4096 to match what
-  the parser accepted. In practice the 1 MiB event budget trips first (about 1,300 ids, see above).
+  the parser accepted. In practice the per-trial event budget trips first (see above).
 * Beyond 16384 distinct ids the extra records are not catalogued at all; only `end.dropped` shows it.
 * An id outside the alphabet is sent with `_` in place of each bad byte; two such ids can merge.
 
@@ -166,8 +181,10 @@ Where the parser can notice a loss without that, the SDK makes it:
 
 * The report runs with SIGPIPE blocked (one `pthread_sigmask` before and one after), so a closed reader costs the
   report, not the process; a SIGPIPE that this write raised is consumed before the mask is restored. After a fatal
-  signal the mask is left alone, since the process is about to die. These are two more syscalls per report for the T3
-  arms to replay.
+  signal the mask is left alone, since the process is about to die. Each `eval` line does the same around its own
+  write. These are two `rt_sigprocmask` calls per report and per `eval` line for the T3 arms to replay. (`sigwait`,
+  which consumes a SIGPIPE the write raised, is not on POSIX's async-signal-safe list; it is only reached outside the
+  signal path.)
 * `EINTR` is retried, `EAGAIN` is retried with `sched_yield` (both up to 1000 times per line), and a short write is
   completed with a second `write` of the remainder. If a line still fails after part of it went out, one newline is
   written so the next line does not glue onto the fragment (the parser counts the fragment as malformed). Every failed
@@ -185,8 +202,8 @@ rule. For the T3 "A" arm (which replays the instrumented run's syscalls without 
   `work`, one per thread slot in use, one `end`. Each write's length is fixed by the catalog (ids, messages, file
   names) and the number of slots in use, never by a counter value.
 * Besides the writes: one `fcntl(F_DUPFD_CLOEXEC)` at startup (two if the first high number is refused; one `open`
-  more with `HAIRSPRING_EVENTS_FILE`), two `rt_sigprocmask` around the report, and with `HAIRSPRING_SIGNAL_REPORT=1`
-  one `sigaltstack` and six `rt_sigaction` at startup.
+  more with `HAIRSPRING_EVENTS_FILE`), one `fstat` before the report, two `rt_sigprocmask` around the report (and
+  around each `eval` line), and with `HAIRSPRING_SIGNAL_REPORT=1` one `sigaltstack` and six `rt_sigaction` at startup.
 * The exit report can interleave with threads that are still running, and they can add lines of their own (an
   `eval`) between the report's.
 
@@ -498,15 +515,15 @@ On aarch64 Linux, gcc 13.3 and clang 18 produce the same structure with `bl __aa
   child counters, 100 and 300 threads, crash with and without `HAIRSPRING_SIGNAL_REPORT` (also a null dereference,
   `abort()` and a fault in a worker thread), `hs_exit` and plain-return status, the events file (and a symlink, and an
   unwritable path), `HAIRSPRING_EVENTS=off`, `eval` lines, stderr closed with and without descriptor reuse, a timer
-  signal during the report, an empty catalog, constant thread-line length, and **two processes writing to one pipe**
+  signal during the report, fork while another thread is inside `hs_thread`, a dup2 onto the events descriptor, a descriptor limit too low for a private copy, an empty catalog, constant thread-line length, and **two processes writing to one pipe**
   (Linux) or one events file (macOS), 20 rounds, every line checked to be one whole object.
 * `make nosyscall` and `make nosyscall-pic` (T1, Linux): the seccomp test, built normally and with `-fPIC`.
 * `make staticfail`: an id of 129 bytes, a message of 513 bytes and five values are rejected at compile time.
 * `make cxx`: the macros compile and report from C++ (skipped when the matching C++ compiler is absent).
-* `make -C sdks/c conformance` or `cargo test -p hairspring-props --test c_sdk` (21 tests): the same programs' output is
+* `make -C sdks/c conformance` or `cargo test -p hairspring-props --test c_sdk` (23 tests): the same programs' output is
   folded by the reference parser. Checks: no degradation, an always-false is a `Violation` with its witness, a
   never-hit `reachable` is `Unmet`, merged sites sum, fork tags, **fork then exec of an instrumented and of an
-  uninstrumented image**, a spawned child's tag, thread counts (101 and 256), threads still running at exit,
+  uninstrumented image**, a spawned child's tag and `tag_stable`, an exec without fork (`<tag>.x1`), thread counts (101 and 256), threads still running at exit,
   `report_missing` after a crash with handlers off, a worker-thread fault with handlers on, `eval` marks `perturbing`,
   ids and messages at their limits, a catalog conflict, an empty catalog, more ids than the limit (degraded), and two
   processes on one output.

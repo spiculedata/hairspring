@@ -42,7 +42,7 @@ Every object carries `"v": 1` and a `"kind"`.
 
 | kind | when | fields |
 |---|---|---|
-| `hello` | first line per process | `proc`, `sdk`, `sdk_version`, `catalog_hash`, `signal_handlers` |
+| `hello` | first line per process | `proc`, `sdk`, `sdk_version`, `catalog_hash`, `signal_handlers`, optional `tag_stable` |
 | `catalog` | once per assertion id, at startup | `proc`, `id`, `type`, `must_hit`, optional `msg`, `loc` |
 | `assert` | exactly once per catalogued id, at exit | `proc`, `id`, `hits`, `trues`, `falses`, optional `first_false`, `first_true` |
 | `work` | at exit | `proc`, `ops` |
@@ -79,6 +79,15 @@ Every process in a trial MUST have a unique `proc` tag. An SDK's fork handler de
 parent's deterministically (`<parent>.f<n>`, `n` counting the parent's forks). The tag `_eval` is reserved for `eval`
 lines. Duplicate `hello`, `work` and `end` lines for one tag, and duplicate `thread` lines for one thread key, keep
 the first and are counted as duplicates.
+
+`hello.tag_stable` (optional, default true) is false when the tag was derived from a pid rather than from the process
+tree (the C SDK's `<tag>.s<pid>` for a child started with `posix_spawn` or `system()`, and everything below it). Such a
+tag can differ between runs of one schedule, like an unstable thread key, so it must not be used for cross-run
+comparison. It is additive: a parser that does not know the field ignores and counts it.
+
+A backend MUST strip any `HAIRSPRING_PROC` and `HAIRSPRING_PROC_PID` from the environment it gives a guest, or set
+`HAIRSPRING_PROC` itself and no `HAIRSPRING_PROC_PID`; a stray inherited pair makes the first process look like a
+spawned child.
 
 SDKs MUST send exactly one `assert` per `(proc, id)`, merging call sites that were inlined or duplicated (the same id
 at two call sites is one catalogued id: `catalog` may be repeated, and `end.sites` counts distinct ids after merging). If a second
