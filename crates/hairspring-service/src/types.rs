@@ -1,3 +1,4 @@
+use crate::RunCompletion;
 use hairspring_engine::config::Budget;
 use hairspring_engine::report::Step;
 use hairspring_store::{Contributor, RunRecord};
@@ -70,6 +71,10 @@ pub struct PropertySummary {
     pub ingest_incomplete: bool,
     /// Some trial came from a worker that is not trusted.
     pub unverified_worker_data: bool,
+    /// How the run ended against its trial budget.
+    pub completion: RunCompletion,
+    /// The wording for `completion`.
+    pub completion_label: String,
     pub guest: GuestStrings,
 }
 

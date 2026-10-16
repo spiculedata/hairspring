@@ -1,5 +1,6 @@
 //! Property statistics: folded by the server from the stored per-trial digests, written when a job finishes, and
 //! read back as the same figures.
+use crate::completion_of;
 use crate::ingest::stored_row;
 use crate::types::{GuestStrings, PropertySummary, RunTrust};
 use crate::{Result, Service, ServiceError};
@@ -255,6 +256,7 @@ impl Service {
             .filter_map(|s| s.first_failure.as_ref().map(|f| f.seed))
             .min();
         let trusted = self.run_trust(&run.id)?.is_some_and(|t| t.all_trusted);
+        let completion = completion_of(run);
         Ok(Some(PropertySummary {
             catalog_size: run.catalog_size,
             counts,
@@ -262,6 +264,8 @@ impl Service {
             stopped_at_first_failure: run.stopped_at_first_failure,
             ingest_incomplete: run.ingest_incomplete,
             unverified_worker_data: !trusted,
+            completion,
+            completion_label: completion.label(),
             guest: GuestStrings {
                 note: "ids come from the program under test and are untrusted text".to_owned(),
                 violation_ids: listed(PropertyStatus::Violation),

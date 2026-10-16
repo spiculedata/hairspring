@@ -2,6 +2,7 @@
 //! record an outcome / replay a bundle" into store and engine calls. The CLI,
 //! the REST server, remote workers and the MCP server all go through it.
 pub mod claims;
+mod completion;
 mod error;
 mod ingest;
 mod jobs;
@@ -9,6 +10,7 @@ mod properties;
 pub mod sanitize;
 mod types;
 
+pub use completion::{completion_of, RunCompletion};
 pub use error::ServiceError;
 pub use types::*;
 

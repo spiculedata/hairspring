@@ -1,8 +1,10 @@
 //! Job lifecycle: leasing, progress, heartbeats, completion and local execution.
+use crate::completion::hit_time_or_step_limit;
 use crate::sanitize;
 use crate::types::{JobPayload, LeasedJob, RunDetail, StartRun};
 use crate::{Result, Service, ServiceError};
 use hairspring_engine::backend::Progress;
+use hairspring_engine::config::Budget;
 use hairspring_engine::engine::{Engine, RunRequest};
 use hairspring_engine::report::{RunOutcome, RunStatus};
 use hairspring_store::{
@@ -187,11 +189,10 @@ impl Service {
             }
             None => None,
         };
-        let budget_trials = serde_json::from_str::<JobPayload>(&job.payload_json)
+        let budget = serde_json::from_str::<JobPayload>(&job.payload_json)
             .ok()
-            .and_then(|p| p.budget)
-            .map(|b| b.max_trials);
-        let stats = self.run_stats(&job.run_id, job.attempts, &clean, reported, budget_trials)?;
+            .and_then(|p| p.budget);
+        let stats = self.run_stats(&job.run_id, job.attempts, &clean, reported, budget)?;
         let event_payload_json = finished_payload(state, Some(&clean));
         let result = JobResult {
             state,
@@ -242,7 +243,7 @@ impl Service {
         attempt: u32,
         clean: &RunOutcome,
         reported: Option<u64>,
-        budget_trials: Option<u64>,
+        budget: Option<Budget>,
     ) -> Result<RunStats> {
         // Rows an earlier attempt left belong to a run that is over; they are removed when this job finishes.
         let stale = self
@@ -258,14 +259,25 @@ impl Service {
             None => held == 0,
             Some(n) => n == held && (clean.status == RunStatus::Error || clean.trials == held),
         };
-        // A run that passed without holding as many trials as it was asked for was ended early, by the worker or
-        // by whoever called `complete`, and cannot back a claim about the trials it never ran. (A run limited by
-        // wall-clock time is treated the same way: it did not complete its budget.)
+        // A run that passed without holding as many trials as it was asked for ended early. If it ended on its
+        // wall-clock or step limit, the server's own clock and the step count say so, nothing is missing, and its
+        // result stands for the trials it ran. Otherwise whoever called `complete` stopped it, and the trials it never
+        // ran cannot back a claim.
         let uses_rows = held > 0 || reported.is_some();
         let short = clean.status == RunStatus::Passed
             && uses_rows
-            && budget_trials.is_some_and(|b| held < b);
-        let mut incomplete = !counts_match || short;
+            && budget.is_some_and(|b| held < b.max_trials);
+        let limited = short
+            && budget.is_some_and(|b| {
+                let started = self
+                    .store
+                    .get_run(run_id)
+                    .ok()
+                    .flatten()
+                    .and_then(|r| r.started_at);
+                hit_time_or_step_limit(&b, started, now_ms(), clean.steps_executed, attempt)
+            });
+        let mut incomplete = !counts_match || (short && !limited);
         let (properties, property_summary_json) = if held == 0 {
             (Vec::new(), None)
         } else {
