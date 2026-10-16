@@ -108,7 +108,7 @@ fn more_than_a_megabyte_of_chatter_before_the_report_still_yields_the_verdict() 
 
 #[test]
 fn a_truncated_events_file_degrades_the_trial_but_a_false_that_was_read_still_fails_it() {
-    let pad = "head -c 1200000 /dev/zero | tr '\\0' x >> \"$HAIRSPRING_EVENTS_FILE\"";
+    let pad = "head -c 5000000 /dev/zero | tr '\\0' x >> \"$HAIRSPRING_EVENTS_FILE\"";
     let falsy = format!(
         "cat <<'EOF' > \"$HAIRSPRING_EVENTS_FILE\"\n{}EOF\n{pad}",
         report("f.id", "always", 1, 1, true)
@@ -122,7 +122,7 @@ fn a_truncated_events_file_degrades_the_trial_but_a_false_that_was_read_still_fa
 
 #[test]
 fn a_truncated_events_file_without_a_false_yields_no_pass_and_no_must_hit_claim() {
-    let pad = "head -c 1200000 /dev/zero | tr '\\0' x >> \"$HAIRSPRING_EVENTS_FILE\"";
+    let pad = "head -c 5000000 /dev/zero | tr '\\0' x >> \"$HAIRSPRING_EVENTS_FILE\"";
     let hit = report("s.id", "sometimes", 1, 0, true);
     let degraded = format!("cat <<'EOF' > \"$HAIRSPRING_EVENTS_FILE\"\n{hit}EOF\n{pad}");
     let miss = format!(

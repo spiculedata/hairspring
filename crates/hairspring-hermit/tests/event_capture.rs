@@ -1,9 +1,10 @@
 //! Guest event lines are captured apart from the capped output, from stdout, stderr and the events file.
 mod common;
 
-use common::events::{rig, FAKE};
+use common::events::{rig, rig_with, FAKE};
 use common::{scratch, write_fake};
 use hairspring_hermit::{EventsFault, HermitBackend, HermitSettings};
+use hairspring_props::limits::LEGACY_MAX_EVENT_BYTES_PER_TRIAL;
 
 #[test]
 fn a_report_printed_after_a_megabyte_of_chatter_survives() {
@@ -78,7 +79,10 @@ fn event_lines_over_the_byte_budget_are_counted_not_stored() {
         echo \"HAIRSPRING_EVENT {\\\"v\\\":1,\\\"kind\\\":\\\"work\\\",\\\"proc\\\":\\\"p1\\\",\\\"ops\\\":1,\\\"x\\\":\\\"$pad\\\"}\"; \
         echo \"HAIRSPRING_EVENT {\\\"v\\\":1,\\\"kind\\\":\\\"work\\\",\\\"proc\\\":\\\"p1\\\",\\\"ops\\\":1,\\\"x\\\":\\\"$pad\\\"}\" >&2; \
         i=$((i+1)); done; cat $REPORT";
-    let r = rig("overlimit", script, false, vec![]);
+    // The default budget is 4 MiB; these tests use the old 1 MiB one so the scenario stays small.
+    let r = rig_with("overlimit", script, false, vec![], |s| {
+        s.max_event_bytes = LEGACY_MAX_EVENT_BYTES_PER_TRIAL;
+    });
     let t = r.run(1);
     assert_eq!(t.exit_code, Some(0));
     let props = t.events.expect("events");
@@ -172,11 +176,12 @@ fn the_guest_sees_the_same_events_path_for_every_seed() {
 
 #[test]
 fn a_file_over_the_budget_is_cut_and_counted() {
-    let r = rig(
+    let r = rig_with(
         "bigfile",
         "head -c 1500000 /dev/zero | tr '\\0' a > \"$HAIRSPRING_EVENTS_FILE\"; cat $REPORT",
         true,
         vec![],
+        |s| s.max_event_bytes = LEGACY_MAX_EVENT_BYTES_PER_TRIAL,
     );
     let props = r.run(1).events.expect("events");
     assert!(props.health.over_limit >= 1);

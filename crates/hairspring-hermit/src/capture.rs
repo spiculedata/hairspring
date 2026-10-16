@@ -4,7 +4,7 @@
 //! with `HAIRSPRING_EVENT` go to a separate buffer with its own budget, so an end-of-run report printed after a
 //! megabyte of chatter is not lost. The splitter works on the byte stream, one line at a time, and never holds more
 //! than one bounded line (plus the two buffers); it does not parse events, that is `hairspring-props`' job.
-use hairspring_props::limits::{EVENT_PREFIX_BARE, MAX_EVENT_BYTES_PER_TRIAL, MAX_LINE_BYTES};
+use hairspring_props::limits::{EVENT_PREFIX_BARE, MAX_LINE_BYTES};
 use std::io::Read;
 use std::sync::mpsc;
 
@@ -53,6 +53,8 @@ enum Line {
 
 pub struct Splitter {
     cap: usize,
+    /// Most event-line bytes this stream may store (the trial's budget; the fold applies it to all streams together).
+    event_budget: usize,
     kept: Vec<u8>,
     events: EventLines,
     event_bytes: usize,
@@ -94,9 +96,18 @@ fn classify(head: &[u8], next: Next) -> Option<bool> {
 }
 
 impl Splitter {
+    #[cfg(test)]
     pub fn new(cap: usize) -> Splitter {
+        Splitter::with_event_budget(
+            cap,
+            hairspring_props::limits::DEFAULT_MAX_EVENT_BYTES_PER_TRIAL,
+        )
+    }
+
+    pub fn with_event_budget(cap: usize, event_budget: usize) -> Splitter {
         Splitter {
             cap,
+            event_budget,
             kept: Vec::new(),
             events: EventLines::default(),
             event_bytes: 0,
@@ -185,7 +196,7 @@ impl Splitter {
     /// fold cannot fit, taken in the order file, stdout, stderr, it counts as over the limit.
     fn finish_event(&mut self, stored: &[u8], len: usize) {
         let cost = len.min(MAX_LINE_BYTES) + 1;
-        if self.event_bytes.saturating_add(cost) > MAX_EVENT_BYTES_PER_TRIAL {
+        if self.event_bytes.saturating_add(cost) > self.event_budget {
             self.events.dropped += 1;
             return;
         }
@@ -196,9 +207,14 @@ impl Splitter {
 }
 
 /// Reads `stream` to its end on a thread and sends what it captured. Read errors end the stream, as before.
-pub fn drain(mut stream: impl Read + Send + 'static, cap: usize, tx: mpsc::Sender<Captured>) {
+pub fn drain(
+    mut stream: impl Read + Send + 'static,
+    cap: usize,
+    event_budget: usize,
+    tx: mpsc::Sender<Captured>,
+) {
     std::thread::spawn(move || {
-        let mut splitter = Splitter::new(cap);
+        let mut splitter = Splitter::with_event_budget(cap, event_budget);
         let mut buf = [0u8; READ_CHUNK];
         loop {
             match stream.read(&mut buf) {
@@ -213,6 +229,7 @@ pub fn drain(mut stream: impl Read + Send + 'static, cap: usize, tx: mpsc::Sende
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hairspring_props::limits::MAX_EVENT_BYTES_PER_TRIAL;
 
     fn capture(cap: usize, chunks: &[&[u8]]) -> Captured {
         let mut s = Splitter::new(cap);
@@ -251,6 +268,18 @@ mod tests {
         let c = capture(100, &[b"HAIRSPR", b"ING_EVENT {\"v\"", b":1}\nok", b"\n"]);
         assert_eq!(c.text, "ok\n");
         assert_eq!(c.events.lines().count(), 1);
+    }
+
+    #[test]
+    fn the_event_budget_is_a_parameter() {
+        let line = b"HAIRSPRING_EVENT {\"v\":1}\n";
+        let mut s = Splitter::with_event_budget(100, 2 * (line.len() - 1) + 2);
+        for _ in 0..5 {
+            s.feed(line);
+        }
+        let c = s.finish();
+        assert_eq!(c.events.lines().count(), 2);
+        assert_eq!(c.events.dropped, 3);
     }
 
     #[test]

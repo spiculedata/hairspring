@@ -69,7 +69,7 @@ fn the_same_report_overflows_the_old_budget_when_it_is_asked_for() {
 
 #[test]
 fn at_the_default_budget_lines_past_four_mebibytes_are_counted_not_stored() {
-    let text = big_report(6000_usize.min(4096));
+    let text = big_report(4096);
     let doubled = format!("{text}{}", big_report(1300));
     let t = TrialEvents::from_output(doubled.as_bytes()).fold();
     assert!(t.health.over_limit > 0, "{:?}", t.health);

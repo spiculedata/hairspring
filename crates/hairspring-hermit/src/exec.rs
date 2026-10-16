@@ -12,6 +12,11 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+/// The environment variable an SDK reads for its process tag, and the fixed tag the backend gives the root process.
+const ROOT_PROC_ENV: &str = "HAIRSPRING_PROC";
+const ROOT_PROC_TAG: &str = "p1";
+/// Set by an SDK for the processes it forks; inheriting it would turn the root into `p1.s<pid>`.
+const PROC_PID_ENV: &str = "HAIRSPRING_PROC_PID";
 const POLL: Duration = Duration::from_millis(10);
 const READER_GRACE: Duration = Duration::from_secs(2);
 
@@ -231,10 +236,11 @@ pub fn run_trial(
 /// Reads the events file (when there is one) and folds it with the lines captured from the output.
 fn collect_events(
     dir: Option<&ScratchDir>,
+    budget: usize,
     out: &Captured,
     err: &Captured,
 ) -> (Option<TrialProps>, Option<u64>, Option<EventsFault>) {
-    let (file, error) = match dir.map(|d| events::read_events_file(d.path())) {
+    let (file, error) = match dir.map(|d| events::read_events_file(d.path(), budget)) {
         Some(Ok(Some(file))) if file.truncated => {
             let fault = EventsFault::Guest(
                 "the events file is larger than the per-trial budget; the rest was not read"
@@ -246,7 +252,7 @@ fn collect_events(
         Some(Err(e)) => (None, Some(e)),
         None => (None, None),
     };
-    let folded = events::fold_sources(file.as_ref(), &out.events, &err.events);
+    let folded = events::fold_sources(file.as_ref(), &out.events, &err.events, budget);
     let digest = events::digest(file.as_ref(), &out.events, &err.events);
     (folded, digest, error)
 }
@@ -267,6 +273,10 @@ fn run_trial_with_summary(
         .env("HAIRSPRING_SEED", seed.to_string())
         .envs(settings.extra_env.iter().map(|(k, v)| (k, v)))
         .envs(events_dir.map(|_| (events::EVENTS_FILE_ENV, events::GUEST_EVENTS_FILE)))
+        // Last, so nothing configured or passed through can change it: the root process tag is the same bytes for
+        // every seed and trial, and a stray pid variable (which would make the root `p1.s<pid>`) never reaches the guest.
+        .env(ROOT_PROC_ENV, ROOT_PROC_TAG)
+        .env_remove(PROC_PID_ENV)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -281,10 +291,20 @@ fn run_trial_with_summary(
     let (out_tx, out_rx) = mpsc::channel();
     let (err_tx, err_rx) = mpsc::channel();
     if let Some(s) = child.stdout.take() {
-        drain(s, settings.max_capture_bytes, out_tx);
+        drain(
+            s,
+            settings.max_capture_bytes,
+            settings.max_event_bytes,
+            out_tx,
+        );
     }
     if let Some(s) = child.stderr.take() {
-        drain(s, settings.max_capture_bytes, err_tx);
+        drain(
+            s,
+            settings.max_capture_bytes,
+            settings.max_event_bytes,
+            err_tx,
+        );
     }
     let deadline = Instant::now() + timeout;
     let (status, timed_out) = loop {
@@ -318,7 +338,8 @@ fn run_trial_with_summary(
         ))
     });
     let (out, err) = (out.unwrap_or_default(), err.unwrap_or_default());
-    let (events, events_digest, file_fault) = collect_events(events_dir, &out, &err);
+    let (events, events_digest, file_fault) =
+        collect_events(events_dir, settings.max_event_bytes, &out, &err);
     let events_error = file_fault.or(incomplete);
     Ok(Trial {
         exit_code: status.and_then(|s| s.code()),
