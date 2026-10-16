@@ -188,6 +188,7 @@ static void report_body(enum hs_end_reason reason, int64_t status) {
     evals += totals[i].evals;
     work += totals[i].work;
   }
+  (void)hs_audit_run(reason, n); /* before `end`, whose `dropped` it may raise */
   struct hs_buf b;
   fresh(&b);
   send_built(hs_line_work(&b, work), &b);

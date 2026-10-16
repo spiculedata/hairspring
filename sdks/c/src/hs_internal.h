@@ -59,6 +59,14 @@ void hs_catalog_sum(void);
 /* Zero every record's counters (the fork child starts a fresh process). */
 void hs_catalog_reset(void);
 
+/* Audit (hs_audit.c): do the records in the catalog account for every evaluation the threads counted? */
+uint64_t hs_catalog_counted(void); /* sum of trues + falses over the records in the section */
+/* How many of `evals` were never attributed to a catalogued record: the shortfall when it exceeds `tolerance`
+** (threads that may be mid-update), else 0. */
+uint64_t hs_audit_missing(uint64_t evals, uint64_t counted, uint64_t tolerance);
+/* Report time: on a shortfall, add one to `dropped` and write a diagnostic line. Returns the shortfall. */
+uint64_t hs_audit_run(enum hs_end_reason reason, uint64_t threads);
+
 /* One thread's totals, read once per report so the thread lines and the end line agree. */
 struct hs_thread_totals {
   const struct hs_slot *slot;
