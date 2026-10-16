@@ -1,4 +1,5 @@
-use crate::exec::{run_trial, scheduler_flags, ProcessSpec, SpawnError, Trial};
+use crate::events;
+use crate::exec::{run_trial, scheduler_flags, Dirs, ProcessSpec, SpawnError, Trial};
 use crate::summary_dir::PrivateDir;
 use crate::trace::{behaviour_hash, classify, steps, Verdict};
 use crate::HermitSettings;
@@ -44,6 +45,8 @@ pub struct HermitBackend {
     /// Where Hermit writes each trial's summary; `None` turns schedule fingerprints off (no directory configured, or
     /// one that could not be made private).
     summaries: Option<PrivateDir>,
+    /// Where the events file's per-trial directories go when `events_dir` is set; otherwise `summaries` is used.
+    events_scratch: Option<PrivateDir>,
 }
 
 impl HermitBackend {
@@ -52,9 +55,42 @@ impl HermitBackend {
             .summary_dir
             .as_deref()
             .and_then(|base| PrivateDir::create(base).ok());
+        let events_scratch = settings
+            .events_dir
+            .as_deref()
+            .and_then(|base| PrivateDir::create(base).ok());
         HermitBackend {
             settings,
             summaries,
+            events_scratch,
+        }
+    }
+
+    fn dirs(&self) -> Dirs<'_> {
+        Dirs {
+            summaries: self.summaries.as_ref(),
+            events: self.events_scratch.as_ref().or(self.summaries.as_ref()),
+        }
+    }
+
+    /// The events transport this backend uses, as recorded in bundles.
+    fn events_transport(&self) -> &'static str {
+        if self.settings.events_file {
+            "file"
+        } else {
+            "stream"
+        }
+    }
+
+    /// Refuses to start a run or replay whose events file cannot work, before any trial is spent.
+    fn check_events_setup(&self, p: &ProcessSpec) -> Result<(), EngineError> {
+        match events::config_problem(
+            self.settings.events_file,
+            p.hermit_args,
+            self.dirs().events.is_some(),
+        ) {
+            Some(problem) => Err(EngineError::Backend(problem)),
+            None => Ok(()),
         }
     }
 
@@ -103,8 +139,17 @@ impl HermitBackend {
         }
     }
 
+    /// Runs one trial of a process target at `seed` and returns everything captured, without judging it. This is what
+    /// the engine's run loop does per seed, exposed for tooling and tests that need the raw outcome (output, exit
+    /// status, schedule, guest events).
+    pub fn run_one(&self, spec: &TargetSpec, seed: u64) -> Result<Trial, EngineError> {
+        let p = self.process(spec)?;
+        self.trial(&p, seed, self.trial_timeout(&p))
+            .map_err(|e| EngineError::Backend(e.to_string()))
+    }
+
     fn trial(&self, p: &ProcessSpec, seed: u64, timeout: Duration) -> Result<Trial, SpawnError> {
-        run_trial(&self.settings, p, seed, timeout, self.summaries.as_ref())
+        run_trial(&self.settings, p, seed, timeout, self.dirs())
     }
 
     /// Re-runs a violating seed and counts how many runs show the same behaviour.
@@ -213,6 +258,7 @@ impl HermitBackend {
             .with_param("scheduler", scheduler_flags(p.scheduler).join(" "))
             .with_param("hermit_args", p.hermit_args.join(" "))
             .with_param("hang_is_violation", p.hang_is_violation.to_string())
+            .with_param("events_transport", self.events_transport())
             .with_param("output_hash", hash);
         if let Some(schedule) = &t.schedule {
             bundle = bundle.with_param("schedule_fingerprint", schedule.fingerprint.clone());
@@ -361,6 +407,24 @@ fn check_same_scheduler(p: &ProcessSpec, bundle: &Bundle) -> Result<(), EngineEr
     Ok(())
 }
 
+impl HermitBackend {
+    /// Replaying through the other transport would change what the guest sees (its `/tmp`, its environment), so the
+    /// schedule would not reproduce. Bundles from before the setting existed used the stream transport.
+    fn check_same_events_transport(&self, bundle: &Bundle) -> Result<(), EngineError> {
+        let recorded = bundle
+            .params
+            .get("events_transport")
+            .map_or("stream", String::as_str);
+        let current = self.events_transport();
+        if recorded == current {
+            return Ok(());
+        }
+        Err(EngineError::Backend(format!(
+            "events transport differs: the bundle was recorded with the `{recorded}` transport but this backend uses `{current}`; replay needs the same `events_file` setting"
+        )))
+    }
+}
+
 fn infra(msg: impl Into<String>) -> RunOutcome {
     RunOutcome::error(msg)
 }
@@ -382,6 +446,7 @@ impl Backend for HermitBackend {
         progress: &mut dyn FnMut(Progress) -> bool,
     ) -> Result<RunOutcome, EngineError> {
         let p = self.process(spec)?;
+        self.check_events_setup(&p)?;
         let started = Instant::now();
         let wall = Duration::from_secs(budget.wall_secs);
         let trials = budget.max_trials.max(1);
@@ -439,6 +504,8 @@ impl Backend for HermitBackend {
     fn replay(&self, spec: &TargetSpec, bundle: &Bundle) -> Result<ReplayOutcome, EngineError> {
         let p = self.process(spec)?;
         check_same_scheduler(&p, bundle)?;
+        self.check_events_setup(&p)?;
+        self.check_same_events_transport(bundle)?;
         let seed = bundle
             .params
             .get("sched_seed")
@@ -449,7 +516,7 @@ impl Backend for HermitBackend {
             settings.epoch = epoch.clone();
         }
         let timeout = self.trial_timeout(&p);
-        let trial = run_trial(&settings, &p, seed, timeout, self.summaries.as_ref())
+        let trial = run_trial(&settings, &p, seed, timeout, self.dirs())
             .map_err(|e| EngineError::Backend(e.to_string()))?;
         let verdict = self.verdict(&p, &trial, timeout);
         if let Verdict::Infra(m) = &verdict {
