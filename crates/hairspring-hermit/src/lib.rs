@@ -16,6 +16,7 @@ mod env;
 mod events;
 mod exec;
 mod head_tail;
+mod line_scan;
 mod property_verdict;
 mod safe_open;
 mod schedule_set;

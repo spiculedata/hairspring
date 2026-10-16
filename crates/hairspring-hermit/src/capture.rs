@@ -7,6 +7,7 @@
 //! on the byte stream, one line at a time, and never holds more than one bounded line (plus the two buffers); it
 //! does not parse events, that is `hairspring-props`' job.
 use crate::head_tail::{HeadTail, Omitted};
+use crate::line_scan::{Findings, LineScan};
 use hairspring_props::limits::{EVENT_PREFIX_BARE, MAX_LINE_BYTES};
 use std::io::Read;
 use std::sync::mpsc;
@@ -42,6 +43,8 @@ pub struct Captured {
     pub text: String,
     /// What the cap left out of the middle of the ordinary output.
     pub omitted: Omitted,
+    /// What the lines of the ordinary output said, read at their true line starts whatever the cap kept.
+    pub findings: Findings,
     pub events: EventLines,
 }
 
@@ -60,6 +63,7 @@ pub struct Splitter {
     /// Most event-line bytes this stream may store (the trial's budget; the fold applies it to all streams together).
     event_budget: usize,
     kept: HeadTail,
+    scan: LineScan,
     events: EventLines,
     event_bytes: usize,
     line: Line,
@@ -112,6 +116,7 @@ impl Splitter {
         Splitter {
             event_budget,
             kept: HeadTail::new(cap),
+            scan: LineScan::default(),
             events: EventLines::default(),
             event_bytes: 0,
             line: Line::Undecided(Vec::new()),
@@ -141,6 +146,7 @@ impl Splitter {
         Captured {
             text,
             omitted,
+            findings: self.scan.finish(),
             events: self.events,
         }
     }
@@ -192,6 +198,7 @@ impl Splitter {
 
     fn push_plain(&mut self, bytes: &[u8]) {
         self.kept.push(bytes);
+        self.scan.feed(bytes);
     }
 
     /// Stores a finished event line if this stream's budget allows. The cost is computed exactly as the fold computes
