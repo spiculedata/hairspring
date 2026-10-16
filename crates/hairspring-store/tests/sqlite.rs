@@ -125,7 +125,7 @@ fn a_version_one_database_migrates_in_place_and_old_rows_read_back_with_zero_cou
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     std::fs::remove_dir_all(path.parent().unwrap()).ok();
 }
 
@@ -291,10 +291,12 @@ fn a_version_two_database_from_before_worker_secrets_gains_the_column_when_opene
     let path = temp_db("v2-no-secret");
     drop(SqliteStore::open(&path).unwrap());
     {
-        // The earlier version 2 had no secret column.
+        // The earlier version 2 had no secret column. (Version 3 adds nothing to `workers`, so a database is made to
+        // look like that earlier build by dropping the column and marking it version 2.)
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute_batch("ALTER TABLE workers DROP COLUMN secret_hash")
             .unwrap();
+        conn.pragma_update(None, "user_version", 2).unwrap();
     }
     let s = SqliteStore::open(&path).unwrap();
     let w = s

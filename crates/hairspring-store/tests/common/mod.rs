@@ -3,8 +3,18 @@
 use hairspring_store::*;
 use std::sync::Arc;
 
+#[cfg(feature = "postgres")]
+pub mod pg_support;
+pub mod tree;
+pub mod tree_attempts;
+pub mod tree_downgrade;
+pub mod tree_gc_spec;
+pub mod tree_oracle;
+pub mod tree_reads;
+pub mod tree_support;
 mod trials;
 pub mod v1_schema;
+pub mod v2_schema;
 
 fn new_run(s: &dyn Store, target: &str, now: i64) -> RunRecord {
     s.create_run(
@@ -38,6 +48,7 @@ pub fn run_all(make: &dyn Fn() -> Arc<dyn Store>) {
     stale_workers_can_be_pruned(&*make());
     concurrent_leases_never_duplicate(make());
     trials::run_all_trials(make);
+    tree::run_all_trees(make);
 }
 
 pub fn runs_lifecycle(s: &dyn Store) {
