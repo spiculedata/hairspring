@@ -785,6 +785,7 @@ name = "hairspring-engine"
 version = "0.1.0"
 dependencies = [
  "hairspring-core",
+ "hairspring-props",
  "hairspring-pubsub",
  "serde",
  "serde_json",

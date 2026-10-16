@@ -15,15 +15,20 @@ mod capture;
 mod env;
 mod events;
 mod exec;
+mod property_verdict;
 mod safe_open;
 mod summary;
 mod summary_dir;
+mod tally;
 mod trace;
+#[cfg(test)]
+mod verdict_tests;
 
 pub use backend::HermitBackend;
 pub use env::guest_env;
 pub use events::{EventsFault, GUEST_EVENTS_FILE};
 pub use exec::Trial;
+pub use tally::TrialObserver;
 
 use std::path::PathBuf;
 use std::time::Duration;

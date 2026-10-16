@@ -130,6 +130,27 @@ Per id, evidence counts and rate counts are kept separately.
 * If a trial declares an id with a different kind from the first trial that did, its data for that id is not merged;
   the mismatch and that trial's own failure are listed in the run summary.
 
+## How the Hermit backend judges a trial
+
+In this order, the first rule that applies decides:
+
+1. Hermit's own failure, or a misconfigured events setup (a Config fault): the run is an error and no trial is spent.
+2. A timeout: inconclusive (or a violation when the target sets `hang_is_violation`).
+3. The host failed to collect the events (an Infra fault: scratch I/O or cleanup failed): inconclusive, never a pass.
+4. A trial-level property failure (`always` false, `unreachable` hit, catalog conflict): the trial fails and gets a
+   bundle recording `property` and `property_kind`. This holds for degraded trials too: a false that was read is a
+   false.
+5. A `HAIRSPRING_VIOLATION:` line, then the exit status, as before.
+6. Otherwise a clean exit is a pass, unless the events are unusable (a Guest fault such as an unreadable, oversized or
+   truncated file or an output stream that never closed; lost or contradictory data; a process with no `end`). Such a
+   trial is degraded and inconclusive: it is never a pass, is not rated, and makes no must-hit claim.
+
+UNMET (`sometimes`, `reachable`, `always` never evaluated) is a run-level finding over claimable trials only (rated and
+not perturbing). It never fails a trial, and it is listed in its own section of the report. A run that stops at its first
+failure makes no UNMET claim. `confirm` reruns count only when they fail the same property ids and kinds and reproduce
+the behaviour hash (which includes the reported events). Replay of a bundle with a `property` also requires that
+property to fail again.
+
 ## Versioning and unknowns
 
 `v` is a major version. A line with `v` greater than 1 is counted and ignored. Within v1, unknown kinds and unknown
