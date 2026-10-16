@@ -27,13 +27,26 @@
 #endif
 #endif
 
-/* Under TSan these tests do not get a plain SIGSEGV death; the cause is not established (see PR #30). */
+/* Under TSan the SIGSEGV tests do not get a plain SIGSEGV death by default; the cause is not established (see PR #30).
+** `make tsan-signals` (HS_TEST_TSAN_SIGNALS=1) runs them with TSan's own handlers for the fatal signals switched off,
+** so the SDK installs its handlers and reports; without it they skip. */
 #if defined(__SANITIZE_THREAD__)
 #define HS_T_TSAN 1
 #elif defined(__has_feature)
 #if __has_feature(thread_sanitizer)
 #define HS_T_TSAN 1
 #endif
+#endif
+
+/* The SDK reports "signal_handlers":true only if it could install all of SEGV, BUS, ABRT, FPE, ILL and TERM, and it
+** leaves a signal alone when a handler is already there, so every signal TSan handles by default is switched off. */
+#define HS_T_TSAN_NO_HANDLERS "TSAN_OPTIONS=handle_segv=0:handle_sigbus=0:handle_sigfpe=0:handle_sigill=0"
+
+#ifdef HS_T_TSAN
+static int tsan_signals_enabled(void) {
+  const char *v = getenv("HS_TEST_TSAN_SIGNALS");
+  return v && strcmp(v, "1") == 0;
+}
 #endif
 
 static const char *g_dir; /* directory holding the hs_sample_<scenario> binaries */
@@ -294,14 +307,11 @@ static void test_threads_beyond_the_table_are_capped_and_counted(void) {
   free_capture(c);
 }
 
-static void test_signal_report_is_opt_in(void) {
-#ifdef HS_T_ASAN
-  /* ASan owns SIGSEGV: the SDK leaves that handler alone, and without the opt-in ASan ends the run itself. */
-  printf("skip: SIGSEGV opt-in report under AddressSanitizer\n");
-#elif defined(HS_T_TSAN)
-  printf("skip: SIGSEGV opt-in report under ThreadSanitizer\n");
-#else
-  const char *on[] = {"HAIRSPRING_SIGNAL_REPORT=1", NULL};
+#ifndef HS_T_ASAN
+/* `sanitizer_env` is NULL, or one NAME=VALUE that stops a sanitizer from owning the fatal signals. */
+static void check_signal_report_is_opt_in(const char *sanitizer_env) {
+  const char *on[] = {"HAIRSPRING_SIGNAL_REPORT=1", sanitizer_env, NULL};
+  const char *off[] = {sanitizer_env, NULL};
   struct capture *c = run_capture("crash", NULL, on);
   CHECK(WIFSIGNALED(c->status) && WTERMSIG(c->status) == SIGSEGV);
   check_all_lines_wellformed(c);
@@ -313,13 +323,25 @@ static void test_signal_report_is_opt_in(void) {
   CHECK_U64(count(c, "end", "p1"), 1);
   free_capture(c);
 
-  c = run_capture("crash", NULL, NULL);
+  c = run_capture("crash", NULL, off);
   CHECK(WIFSIGNALED(c->status) && WTERMSIG(c->status) == SIGSEGV);
   CHECK(has(c->lines[0], "\"signal_handlers\":false"));
   CHECK_U64(count(c, "catalog", "p1"), 2); /* the catalog is out before the crash... */
   CHECK_U64(count(c, "end", "p1"), 0);     /* ...but nothing else: the engine reports report_missing */
   CHECK_U64(count(c, "assert", "p1"), 0);
   free_capture(c);
+}
+#endif
+
+static void test_signal_report_is_opt_in(void) {
+#ifdef HS_T_ASAN
+  /* ASan owns SIGSEGV: the SDK leaves that handler alone, and without the opt-in ASan ends the run itself. */
+  printf("skip: SIGSEGV opt-in report under AddressSanitizer\n");
+#elif defined(HS_T_TSAN)
+  if (tsan_signals_enabled()) check_signal_report_is_opt_in(HS_T_TSAN_NO_HANDLERS);
+  else printf("skip: SIGSEGV opt-in report under ThreadSanitizer (run `make tsan-signals` for the variant with TSan's handlers off)\n");
+#else
+  check_signal_report_is_opt_in(NULL);
 #endif
 }
 
@@ -505,8 +527,8 @@ static void test_plain_return_reports_the_real_status_where_glibc_allows(void) {
   free_capture(c);
 }
 
-static void crash_reports(const char *scenario, int expected_signal, const char *id) {
-  const char *on[] = {"HAIRSPRING_SIGNAL_REPORT=1", NULL};
+static void crash_reports_with(const char *scenario, int expected_signal, const char *id, const char *sanitizer_env) {
+  const char *on[] = {"HAIRSPRING_SIGNAL_REPORT=1", sanitizer_env, NULL};
   struct capture *c = run_capture(scenario, NULL, on);
   CHECK(WIFSIGNALED(c->status) && WTERMSIG(c->status) == expected_signal);
   check_all_lines_wellformed(c);
@@ -516,11 +538,20 @@ static void crash_reports(const char *scenario, int expected_signal, const char 
   free_capture(c);
 }
 
+static void crash_reports(const char *scenario, int expected_signal, const char *id) {
+  crash_reports_with(scenario, expected_signal, id, NULL);
+}
+
 static void test_real_faults_are_reported_when_handlers_are_on(void) {
 #ifdef HS_T_ASAN
   printf("skip: SIGSEGV reports under AddressSanitizer\n");
 #elif defined(HS_T_TSAN)
-  printf("skip: SIGSEGV reports under ThreadSanitizer\n");
+  if (tsan_signals_enabled()) {
+    crash_reports_with("segv", SIGSEGV, "segv.before", HS_T_TSAN_NO_HANDLERS);
+    crash_reports_with("threadsegv", SIGSEGV, "threadsegv.worker", HS_T_TSAN_NO_HANDLERS);
+  } else {
+    printf("skip: SIGSEGV reports under ThreadSanitizer (run `make tsan-signals` for the variant with TSan's handlers off)\n");
+  }
 #else
   crash_reports("segv", SIGSEGV, "segv.before");
   crash_reports("threadsegv", SIGSEGV, "threadsegv.worker");

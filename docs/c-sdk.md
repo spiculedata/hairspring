@@ -644,6 +644,12 @@ On aarch64 Linux, gcc 13.3 and clang 18 produce the same structure with `bl __aa
 * AddressSanitizer and UBSan: `make -C sdks/c test BUILD=build/asan EXTRA="-fsanitize=address,undefined"` is clean on
   macOS. Two tests skip with a message under ASan, because ASan owns SIGSEGV (and SIGBUS, and on macOS also SIGFPE) and the SDK leaves them alone: the
   SIGSEGV crash tests, with and without `HAIRSPRING_SIGNAL_REPORT` (the SIGABRT test still runs).
+* ThreadSanitizer: the same two tests skip with a message under a plain TSan build. `make -C sdks/c tsan-signals`
+  (not part of `make test`) builds with `-fsanitize=thread` and runs `test_proc` with `HS_TEST_TSAN_SIGNALS=1`, which
+  runs them with `TSAN_OPTIONS=handle_segv=0:handle_sigbus=0:handle_sigfpe=0:handle_sigill=0` so the runtime leaves
+  those signals alone and the SDK installs its handlers. All four are needed: with only `handle_segv=0` the SDK reports
+  `"signal_handlers":false`, because it counts a signal that already has a handler as not installed. The assertions are
+  the same as in a plain build. Observed passing on macOS (Apple clang, TSan, `-O0` and `-O2`); not yet run on Linux.
 * `make nosyscall` and `make nosyscall-pic` (T1, Linux): the seccomp test, built normally and with `-fPIC`.
 * `make staticfail`: an id of 129 bytes, a message of 513 bytes and five values are rejected at compile time.
 * `make cxx`: the macros compile and report from C++ (skipped when the matching C++ compiler is absent).

@@ -3,7 +3,8 @@
 #   make test            unit, audit and process tests, the C++ checks (incl. audit-control), the no-syscall test (Linux)
 #   make disasm         machine code of two call sites
 #   make test CC=gcc     the same with another compiler (warnings are errors either way)
-#   make conformance     fold the sample programs' output with the Rust parser (needs cargo)
+#   make tsan-signals   the process tests under TSan with its signal handlers off (runs the SIGSEGV report tests)
+#   make conformance    fold the sample programs' output with the Rust parser (needs cargo)
 #   make clean
 
 CC ?= cc
@@ -23,7 +24,7 @@ LIB := $(BUILD)/libhairspring.a
 SCENARIOS := basic merge fork threads crash exit_status eval big forkexec spawn closefd forklock execself dup2fd manyids conflict empty limits plain_exit segv abort threadsegv alive alarm evalfd sigign
 SAMPLES := $(SCENARIOS:%=$(BUILD)/hs_sample_%)
 
-.PHONY: all lib fixtures test unit audit proc nosyscall nosyscall-pic cxx cxx-templates audit-control cxx-mixed staticfail gnusource disasm conformance clean
+.PHONY: all lib fixtures test unit audit proc tsan-signals nosyscall nosyscall-pic cxx cxx-templates audit-control cxx-mixed staticfail gnusource disasm conformance clean
 
 all: lib
 
@@ -62,6 +63,14 @@ unit: $(BUILD)/test_unit
 
 proc: $(BUILD)/test_proc $(SAMPLES)
 	$(BUILD)/test_proc $(BUILD)
+
+# The process tests under ThreadSanitizer with TSan's own fatal-signal handlers switched off (TSAN_OPTIONS handle_segv=0
+# and friends, set by the test), so the SDK installs its handlers and the SIGSEGV report tests run instead of skipping.
+# Not part of `make test`. Whether the runtime leaves the signals alone is the runtime's behaviour, not the SDK's.
+TSAN_BUILD ?= build/tsan
+
+tsan-signals:
+	env HS_TEST_TSAN_SIGNALS=1 $(MAKE) proc BUILD=$(TSAN_BUILD) EXTRA=-fsanitize=thread
 
 # T1: no system call at a call site (seccomp; the test itself prints "skip" off Linux).
 $(BUILD)/test_nosyscall: tests/test_nosyscall.c $(LIB) $(SDK_HDR) | $(BUILD)
