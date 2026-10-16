@@ -154,9 +154,9 @@ fn digest_prefix(s: &str) -> String {
 /// Who a request counts against. A valid token gets its own bucket; everything else (no token, a wrong
 /// token, a made-up token) shares one bucket per client address, so guessing cannot dodge the limit.
 fn limit_key(state: &AppState, peer: SocketAddr, authorization: Option<&str>) -> String {
-    if !state.auth.is_open() && state.auth.authenticate(authorization).is_some() {
-        if let Some(h) = authorization {
-            return format!("t:{}", digest_prefix(h));
+    if !state.auth.is_open() {
+        if let Some((_, key)) = state.auth.identify(authorization) {
+            return key;
         }
     }
     format!("ip:{}", peer.ip())

@@ -732,3 +732,37 @@ fn a_zero_registration_limit_means_unlimited() {
         assert_eq!(r.status, 200);
     }
 }
+
+#[test]
+fn whitespace_variants_of_one_token_share_one_registration_allowance() {
+    let srv = boot_with_register_limit(2);
+    let statuses: Vec<u16> = [
+        RUN.to_string(),
+        format!(" {RUN}"),
+        format!("  {RUN}"),
+        format!("\t {RUN}"),
+    ]
+    .iter()
+    .map(|t| {
+        client(srv.addr(), Some(t))
+            .post("/api/worker/register", &json!({"name": "w"}))
+            .status
+    })
+    .collect();
+    assert_eq!(statuses, vec![200, 200, 429, 429]);
+}
+
+#[test]
+fn whitespace_variants_of_one_token_share_one_request_allowance() {
+    let (srv, _) = boot(tokens(), 0, 3);
+    let statuses: Vec<u16> = [
+        RUN.to_string(),
+        format!(" {RUN}"),
+        format!("  {RUN}"),
+        format!("   {RUN}"),
+    ]
+    .iter()
+    .map(|t| client(srv.addr(), Some(t)).get("/api/targets").status)
+    .collect();
+    assert_eq!(statuses, vec![200, 200, 200, 429]);
+}
