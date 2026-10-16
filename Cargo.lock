@@ -863,6 +863,7 @@ version = "0.1.0"
 dependencies = [
  "hairspring-core",
  "hairspring-engine",
+ "hairspring-hermit",
  "hairspring-props",
  "hairspring-store",
  "serde",

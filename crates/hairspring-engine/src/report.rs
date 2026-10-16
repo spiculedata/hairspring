@@ -120,6 +120,16 @@ impl RunOutcome {
         }
     }
 
+    /// Records how many trials were attempted (and, as `passed` does for a Hermit run, one step per trial), for an
+    /// outcome that ended without a verdict but did run trials, so `inconclusive` never exceeds `trials`.
+    pub fn with_trials_attempted(self, trials: u64) -> Self {
+        RunOutcome {
+            steps_executed: trials,
+            trials,
+            ..self
+        }
+    }
+
     pub fn with_schedule_stats(self, distinct_schedules: u64, work: u64) -> Self {
         RunOutcome {
             distinct_schedules,

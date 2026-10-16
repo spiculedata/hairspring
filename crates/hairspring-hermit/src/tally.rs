@@ -179,7 +179,9 @@ impl Tally {
     pub fn finish(&self, started: Instant) -> RunOutcome {
         if self.inconclusive > 0 && self.inconclusive == self.trials {
             return self.with_partial_properties(
-                RunOutcome::error(self.nothing_tested()).with_inconclusive(self.inconclusive),
+                RunOutcome::error(self.nothing_tested())
+                    .with_trials_attempted(self.trials)
+                    .with_inconclusive(self.inconclusive),
             );
         }
         let ms = started.elapsed().as_millis() as u64;
@@ -322,6 +324,25 @@ mod tests {
         let mut only_cut = Tally::new(None);
         only_cut.cut_by_budget();
         assert!(only_cut.nothing_tested().contains("wall-clock"));
+    }
+
+    #[test]
+    fn a_run_where_every_trial_was_inconclusive_counts_them_in_its_error_outcome() {
+        let tally = (0..3).fold(Tally::new(None), |mut t, i| {
+            match i {
+                0 => t.hang(),
+                _ => t.unusable(),
+            }
+            t
+        });
+        let out = tally.finish(Instant::now());
+        assert_eq!(out.status, RunStatus::Error);
+        assert_eq!(
+            (out.trials, out.inconclusive, out.steps_executed),
+            (3, 3, 3)
+        );
+        let msg = out.error.unwrap();
+        assert!(msg.starts_with("all 3 trials were inconclusive"), "{msg}");
     }
 
     #[test]
