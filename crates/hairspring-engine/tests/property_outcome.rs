@@ -93,3 +93,35 @@ fn a_failed_outcome_never_prints_an_unmet_section_even_if_statuses_say_unmet() {
     let text = hairspring_engine::format::to_text("svc", &outcome);
     assert!(!text.contains("UNMET (run-level"), "{text}");
 }
+
+fn report_with_two_ids() -> String {
+    let line = |body: &str| format!("HAIRSPRING_EVENT {body}\n");
+    let mut out = line(r#"{"v":1,"kind":"hello","sdk":"c","sdk_version":"0.1.0","proc":"p1","catalog_hash":"abc","signal_handlers":false}"#);
+    for id in ["a.id", "b.id"] {
+        out.push_str(&line(&format!(
+            r#"{{"v":1,"kind":"catalog","proc":"p1","id":"{id}","type":"always","must_hit":true}}"#
+        )));
+        out.push_str(&line(&format!(
+            r#"{{"v":1,"kind":"assert","proc":"p1","id":"{id}","hits":1,"trues":1,"falses":0}}"#
+        )));
+    }
+    out.push_str(&line(r#"{"v":1,"kind":"end","proc":"p1","reason":"exit","status":0,"sites":2,"evals":2,"dropped":0,"threads":0}"#));
+    out
+}
+
+#[test]
+fn the_text_report_separates_timed_out_trials_and_flags_dropped_ids() {
+    let trial = TrialEvents::from_output(report_with_two_ids().as_bytes()).fold();
+    let run = RunProps::with_id_cap(1)
+        .add_inconclusive(1, &trial)
+        .add(2, &trial);
+    let summary = run.summary();
+    let outcome = RunOutcome::passed(2, 2, 1).with_properties(run.finish(), summary);
+    let text = hairspring_engine::format::to_text("svc", &outcome);
+    assert!(text.contains("0 without an end report"), "{text}");
+    assert!(text.contains("1 timed out"), "{text}");
+    assert!(
+        text.contains("2 id(s) dropped") && text.contains("run-wide id limit"),
+        "{text}"
+    );
+}

@@ -6,6 +6,7 @@
 //! before reporting is not mistaken for a trial in which nothing went wrong.
 
 use crate::event::{AssertKind, Loc};
+use crate::limits::MAX_IDS_PER_RUN;
 use crate::stats::{rule_of_three, wilson, Z_95};
 use crate::trial::{PropertyFailure, TrialProperty, TrialProps, Witness};
 use std::collections::{BTreeMap, HashSet};
@@ -125,9 +126,14 @@ pub struct RunSummary {
     /// Trials added with [`RunProps::add_inconclusive`]: their failures are not findings.
     #[serde(default)]
     pub inconclusive_trials: u64,
-    /// Trials in which at least one process sent no `end`.
+    /// Conclusive trials in which at least one process sent no `end`. Timed-out trials are counted in
+    /// `inconclusive_trials` instead.
     pub report_missing_trials: u64,
-    /// Trials with a catalog conflict.
+    /// Id occurrences left out because the run already tracked [`MAX_IDS_PER_RUN`] distinct ids (an id is counted
+    /// once for each trial that catalogued it). Each trial that lost an id is also counted in `degraded_trials`.
+    #[serde(default)]
+    pub ids_dropped: u64,
+    /// Trials with a catalog conflict (timed-out trials are not counted: their reports decide nothing).
     pub conflict_trials: u64,
     /// Trials whose declared kind for an id disagreed with an earlier trial (their data for that id is not merged).
     pub kind_mismatches: u64,
@@ -168,6 +174,8 @@ struct IdAcc {
     kind: AssertKind,
     msg: String,
     loc: Option<Loc>,
+    /// False while only inconclusive trials have been seen: their data decides neither the kind nor the message.
+    decided: bool,
     trials: u64,
     rated: u64,
     unreported: u64,
@@ -191,11 +199,12 @@ struct IdAcc {
 }
 
 impl IdAcc {
-    fn start(kind: AssertKind, msg: String, loc: Option<Loc>) -> Self {
+    fn start(p: &TrialProperty, decided: bool) -> Self {
         IdAcc {
-            kind,
-            msg,
-            loc,
+            kind: p.kind,
+            msg: p.msg.clone(),
+            loc: p.loc.clone(),
+            decided,
             trials: 0,
             rated: 0,
             unreported: 0,
@@ -216,6 +225,19 @@ impl IdAcc {
             evals_true: 0,
             evals_false: 0,
             first_failure: None,
+        }
+    }
+
+    /// The first conclusive trial settles the kind, message and location. A failure counted from the inconclusive
+    /// trials before it was seen under a kind that was never decided, so it is forgotten.
+    fn decide(self, p: &TrialProperty) -> Self {
+        IdAcc {
+            kind: p.kind,
+            msg: p.msg.clone(),
+            loc: p.loc.clone(),
+            decided: true,
+            inconclusive_failures: 0,
+            ..self
         }
     }
 
@@ -376,15 +398,33 @@ impl PropertyStat {
 }
 
 /// Accumulator over trials. Consumed and returned by value, so no accumulator is ever shared or mutated in place.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct RunProps {
     summary: RunSummary,
     ids: BTreeMap<String, IdAcc>,
+    id_cap: usize,
+}
+
+impl Default for RunProps {
+    fn default() -> Self {
+        RunProps::with_id_cap(MAX_IDS_PER_RUN)
+    }
 }
 
 impl RunProps {
+    /// An accumulator tracking at most [`MAX_IDS_PER_RUN`] distinct ids.
     pub fn new() -> Self {
         RunProps::default()
+    }
+
+    /// An accumulator tracking at most `id_cap` distinct ids. Ids past the cap are counted in
+    /// [`RunSummary::ids_dropped`] and the trial that lost them is marked degraded.
+    pub fn with_id_cap(id_cap: usize) -> Self {
+        RunProps {
+            summary: RunSummary::default(),
+            ids: BTreeMap::new(),
+            id_cap,
+        }
     }
 
     /// Fold one trial in. `seed` identifies the trial in first-failure reports.
@@ -405,20 +445,28 @@ impl RunProps {
         let RunProps {
             mut summary,
             mut ids,
+            id_cap,
         } = self;
         let class = TrialClass::of(seed, trial, inconclusive);
-        summary.trials += 1;
-        summary.perturbing_trials += u64::from(class.perturbing);
-        summary.degraded_trials += u64::from(class.degraded);
-        summary.inconclusive_trials += u64::from(class.inconclusive);
-        summary.report_missing_trials += u64::from(class.unreported);
-        summary.conflict_trials += u64::from(!trial.conflicts.is_empty());
+        let mut dropped = 0u64;
         for p in &trial.properties {
-            let acc = ids
-                .remove(&p.id)
-                .unwrap_or_else(|| IdAcc::start(p.kind, p.msg.clone(), p.loc.clone()));
+            let acc = match ids.remove(&p.id) {
+                Some(acc) => acc,
+                None if ids.len() >= id_cap => {
+                    dropped += 1;
+                    continue;
+                }
+                None => IdAcc::start(p, !inconclusive),
+            };
+            let acc = match (acc.decided, inconclusive) {
+                (false, false) => acc.decide(p),
+                _ => acc,
+            };
             let acc = if acc.kind == p.kind {
                 acc.with_trial(class, p)
+            } else if !acc.decided {
+                // Only inconclusive trials so far, and so is this one: nothing has decided the kind.
+                acc
             } else {
                 summary.kind_mismatches += 1;
                 if summary.kind_mismatch_details.len() < MAX_KIND_MISMATCH_DETAILS {
@@ -445,7 +493,19 @@ impl RunProps {
                 ids.insert(id.to_owned(), acc.with_conflict(seed));
             }
         }
-        RunProps { summary, ids }
+        let lost_ids = dropped > 0;
+        summary.trials += 1;
+        summary.perturbing_trials += u64::from(class.perturbing);
+        summary.degraded_trials += u64::from(class.degraded || lost_ids);
+        summary.inconclusive_trials += u64::from(inconclusive);
+        summary.report_missing_trials += u64::from(class.unreported && !inconclusive);
+        summary.conflict_trials += u64::from(!inconclusive && !trial.conflicts.is_empty());
+        summary.ids_dropped = summary.ids_dropped.saturating_add(dropped);
+        RunProps {
+            summary,
+            ids,
+            id_cap,
+        }
     }
 
     pub fn summary(&self) -> RunSummary {

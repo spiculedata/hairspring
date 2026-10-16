@@ -1,6 +1,6 @@
 //! The property sections of the human-readable run report.
 use crate::report::{RunOutcome, RunStatus};
-use hairspring_props::{PropertyStat, PropertyStatus};
+use hairspring_props::{limits, PropertyStat, PropertyStatus};
 
 fn label(status: PropertyStatus) -> &'static str {
     match status {
@@ -47,9 +47,20 @@ fn table(outcome: &RunOutcome) -> String {
     let mut out = String::new();
     let run = outcome.property_run.clone().unwrap_or_default();
     out.push_str(&format!(
-        "  properties ({} trials with events: {} degraded, {} perturbing, {} without an end report):\n",
-        run.trials, run.degraded_trials, run.perturbing_trials, run.report_missing_trials
+        "  properties ({} trials with events: {} degraded, {} perturbing, {} without an end report, {} timed out):\n",
+        run.trials,
+        run.degraded_trials,
+        run.perturbing_trials,
+        run.report_missing_trials,
+        run.inconclusive_trials
     ));
+    if run.ids_dropped > 0 {
+        out.push_str(&format!(
+            "  WARNING: {} id(s) dropped: the run-wide id limit ({}) was reached, so some properties are not shown\n",
+            run.ids_dropped,
+            limits::MAX_IDS_PER_RUN
+        ));
+    }
     for stat in &outcome.properties {
         out.push_str(&row(stat));
     }

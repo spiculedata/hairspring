@@ -29,6 +29,12 @@ pub const MAX_LOC_FUNC_BYTES: usize = 128;
 pub const VALS_LEN: usize = 4;
 /// Most catalogued ids one process may declare.
 pub const MAX_IDS_PER_PROC: usize = 4096;
+/// Most distinct ids the host tracks across a whole run. This is a host-side limit, not part of the guest protocol.
+/// One trial can catalog about 4,900 ids within its byte budget, so a program with a stable catalog needs a few
+/// thousand at most; 16,384 leaves about three times that for programs that vary their catalog by seed. Each tracked
+/// id costs at most about 1.5 KiB (id, message and location), so the map is bounded near 25 MiB however many trials
+/// run and however many per-seed-unique ids a guest invents.
+pub const MAX_IDS_PER_RUN: usize = 16 * 1024;
 /// Most `thread` lines (and so the largest `end.threads` count) one process may send.
 pub const MAX_THREADS_PER_PROC: usize = 256;
 /// Most processes one trial may report.
