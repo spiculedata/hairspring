@@ -90,6 +90,19 @@ fn unsupported(version: i64) -> StoreError {
     ))
 }
 
+/// Databases created by an earlier build of version 2 have no `workers.secret_hash`; add it when missing.
+fn ensure_secret_column(conn: &Connection) -> Result<()> {
+    let present: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('workers') WHERE name='secret_hash'",
+        [],
+        |r| r.get(0),
+    )?;
+    if present == 0 {
+        conn.execute_batch("ALTER TABLE workers ADD COLUMN secret_hash TEXT")?;
+    }
+    Ok(())
+}
+
 fn upgrade(conn: &Connection, from: i64) -> Result<()> {
     if from == 0 {
         conn.execute_batch(SCHEMA_V1)?;
@@ -106,7 +119,7 @@ fn upgrade(conn: &Connection, from: i64) -> Result<()> {
 pub(crate) fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch("BEGIN IMMEDIATE")?;
     let outcome = match user_version(conn) {
-        Ok(v) if v == SCHEMA_VERSION => Ok(()),
+        Ok(v) if v == SCHEMA_VERSION => ensure_secret_column(conn),
         Ok(v) if (0..SCHEMA_VERSION).contains(&v) => upgrade(conn, v),
         Ok(v) => Err(unsupported(v)),
         Err(e) => Err(e),

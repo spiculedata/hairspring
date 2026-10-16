@@ -161,6 +161,14 @@ pub trait Store: Send + Sync {
     fn set_worker_trusted(&self, id: &str, trusted: bool) -> Result<()>;
     /// `None` for an unknown worker.
     fn worker_trusted(&self, id: &str) -> Result<Option<bool>>;
+    /// Registers a worker together with the hash of its secret, in one statement.
+    fn register_worker_with_secret(
+        &self,
+        name: &str,
+        caps_json: &str,
+        secret_hash: &str,
+        now: i64,
+    ) -> Result<WorkerRecord>;
     /// Stores the hash of the secret issued to a worker at registration. The secret itself is never stored.
     fn set_worker_secret_hash(&self, id: &str, hash: &str) -> Result<()>;
     /// `None` for an unknown worker or one registered without a secret.

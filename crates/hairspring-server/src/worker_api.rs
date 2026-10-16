@@ -65,6 +65,8 @@ pub async fn register(
 #[derive(Deserialize)]
 pub struct WorkerRef {
     worker_id: String,
+    /// The secret issued at registration. Every worker endpoint requires it: a worker id alone is not a credential.
+    worker_secret: Option<String>,
 }
 
 pub async fn lease(
@@ -75,6 +77,8 @@ pub async fn lease(
     caller.need(Role::Run)?;
     check_worker(&b.worker_id)?;
     let job = blocking(move || {
+        s.svc
+            .authenticate_worker(&b.worker_id, b.worker_secret.as_deref())?;
         s.svc
             .touch_worker(&b.worker_id)
             .map_err(|_| ServiceError::InvalidRequest("unknown worker".to_string()))?;
@@ -90,6 +94,7 @@ pub async fn lease(
 #[derive(Deserialize)]
 pub struct ProgressBody {
     worker_id: String,
+    worker_secret: Option<String>,
     steps: u64,
     trials: u64,
     message: Option<String>,
@@ -106,6 +111,8 @@ pub async fn progress(
     check_worker(&b.worker_id)?;
     let message: String = b.message.unwrap_or_default().chars().take(200).collect();
     let keep_going = blocking(move || {
+        s.svc
+            .authenticate_worker(&b.worker_id, b.worker_secret.as_deref())?;
         s.svc.report_job_progress(
             &job,
             &b.worker_id,
@@ -123,6 +130,7 @@ pub async fn progress(
 #[derive(Deserialize)]
 pub struct CompleteBody {
     worker_id: String,
+    worker_secret: Option<String>,
     outcome: RunOutcome,
 }
 
@@ -135,13 +143,19 @@ pub async fn complete(
     caller.need(Role::Run)?;
     check_job(&job)?;
     check_worker(&b.worker_id)?;
-    blocking(move || s.svc.complete(&job, &b.worker_id, &b.outcome)).await?;
+    blocking(move || {
+        s.svc
+            .authenticate_worker(&b.worker_id, b.worker_secret.as_deref())?;
+        s.svc.complete(&job, &b.worker_id, &b.outcome)
+    })
+    .await?;
     Ok(Json(json!({ "ok": true })))
 }
 
 #[derive(Deserialize)]
 pub struct FailBody {
     worker_id: String,
+    worker_secret: Option<String>,
     error: String,
 }
 
@@ -155,7 +169,12 @@ pub async fn fail(
     check_job(&job)?;
     check_worker(&b.worker_id)?;
     let error: String = b.error.chars().take(500).collect();
-    blocking(move || s.svc.fail(&job, &b.worker_id, &error)).await?;
+    blocking(move || {
+        s.svc
+            .authenticate_worker(&b.worker_id, b.worker_secret.as_deref())?;
+        s.svc.fail(&job, &b.worker_id, &error)
+    })
+    .await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -168,7 +187,12 @@ pub async fn heartbeat(
     caller.need(Role::Run)?;
     check_job(&job)?;
     check_worker(&b.worker_id)?;
-    let alive = blocking(move || s.svc.heartbeat(&job, &b.worker_id)).await?;
+    let alive = blocking(move || {
+        s.svc
+            .authenticate_worker(&b.worker_id, b.worker_secret.as_deref())?;
+        s.svc.heartbeat(&job, &b.worker_id)
+    })
+    .await?;
     Ok(Json(json!({ "ok": alive })))
 }
 

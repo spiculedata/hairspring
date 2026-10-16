@@ -171,3 +171,24 @@ fn a_database_from_the_future_is_refused_untouched() {
         .unwrap();
     assert_eq!(has_trials, 0, "a refused database is not modified");
 }
+
+#[test]
+fn a_version_two_database_from_before_worker_secrets_gains_the_column_when_opened() {
+    let path = temp_db("v2-no-secret");
+    drop(SqliteStore::open(&path).unwrap());
+    {
+        // The earlier version 2 had no secret column.
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch("ALTER TABLE workers DROP COLUMN secret_hash")
+            .unwrap();
+    }
+    let s = SqliteStore::open(&path).unwrap();
+    let w = s
+        .register_worker_with_secret("remote", "{}", "abc", 1)
+        .unwrap();
+    assert_eq!(s.worker_secret_hash(&w.id).unwrap().as_deref(), Some("abc"));
+    // Opening again, with the column present, changes nothing.
+    drop(s);
+    let again = SqliteStore::open(&path).unwrap();
+    assert_eq!(again.list_workers().unwrap().len(), 1);
+}

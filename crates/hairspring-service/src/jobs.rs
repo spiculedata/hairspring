@@ -187,7 +187,11 @@ impl Service {
             }
             None => None,
         };
-        let stats = self.run_stats(&job.run_id, job.attempts, &clean, reported)?;
+        let budget_trials = serde_json::from_str::<JobPayload>(&job.payload_json)
+            .ok()
+            .and_then(|p| p.budget)
+            .map(|b| b.max_trials);
+        let stats = self.run_stats(&job.run_id, job.attempts, &clean, reported, budget_trials)?;
         let event_payload_json = finished_payload(state, Some(&clean));
         let result = JobResult {
             state,
@@ -238,6 +242,7 @@ impl Service {
         attempt: u32,
         clean: &RunOutcome,
         reported: Option<u64>,
+        budget_trials: Option<u64>,
     ) -> Result<RunStats> {
         // Rows an earlier attempt left belong to a run that is over; they are removed when this job finishes.
         let stale = self
@@ -253,7 +258,14 @@ impl Service {
             None => held == 0,
             Some(n) => n == held && (clean.status == RunStatus::Error || clean.trials == held),
         };
-        let mut incomplete = !counts_match;
+        // A run that passed without holding as many trials as it was asked for was ended early, by the worker or
+        // by whoever called `complete`, and cannot back a claim about the trials it never ran. (A run limited by
+        // wall-clock time is treated the same way: it did not complete its budget.)
+        let uses_rows = held > 0 || reported.is_some();
+        let short = clean.status == RunStatus::Passed
+            && uses_rows
+            && budget_trials.is_some_and(|b| held < b);
+        let mut incomplete = !counts_match || short;
         let (properties, property_summary_json) = if held == 0 {
             (Vec::new(), None)
         } else {

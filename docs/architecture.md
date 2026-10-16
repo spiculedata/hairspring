@@ -87,10 +87,16 @@ incomplete or stopped at its first failure makes no must-hit (UNMET) claim.
 
 A worker id is not a credential: any caller with a `run` token can read ids from the worker list. Registration
 therefore issues each remote worker a random secret, shown once in the register reply; only its hash is stored, and
-it never appears in the worker list. A request that carries trial records must present it, and a request that
-names a worker without its secret is refused, so the trust flag cannot be borrowed by naming a trusted worker's id.
-(The other worker endpoints still identify a worker by id and lease alone, as before.) The program's own text from
-a kind-mismatch is not kept in the stored run summary, and ids appear in API replies only under `guest`.
+it never appears in the worker list. Every worker endpoint (`lease`, `progress`, `heartbeat`, `trials`, `complete`
+and `fail`) requires `worker_secret` and refuses a request that names a worker without it, so neither the trust flag
+nor a worker's lease can be borrowed by naming a worker's id; no endpoint identifies a worker by id alone. Only
+`register` is open to any `run` token, and it returns the new worker's own secret. The secret is a bearer
+credential: anyone who holds it acts as that worker. A worker that is pruned, or whose server database was replaced,
+registers again and gets a new id and secret; **a new id starts untrusted**, so an administrator must set trust
+again. Secrets are drawn from `/dev/urandom`, so the server needs a Unix host. A run that passed but holds fewer
+trial rows than the budget it was started with (including one limited by wall-clock time) is marked
+`ingest_incomplete` and makes no must-hit claim. The program's own text from a kind-mismatch is not kept in the
+stored run summary, and ids appear in API replies only under `guest`.
 
 Opening a version 1 database migrates it in place under one transaction (SQLite) or an advisory lock (PostgreSQL);
 old runs read back with zero counts. **Back up the database before upgrading: there is no downgrade from version 2

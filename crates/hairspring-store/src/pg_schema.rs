@@ -90,7 +90,10 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             tx.batch_execute(MIGRATE_V1_TO_V2)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
-        Some(v) if v == SCHEMA_VERSION => {}
+        Some(v) if v == SCHEMA_VERSION => {
+            // Schemas created by an earlier build of version 2 have no `workers.secret_hash`.
+            tx.batch_execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS secret_hash TEXT")?;
+        }
         Some(v) => {
             return Err(StoreError::Backend(format!(
                 "database schema version {v} is not supported (expected {SCHEMA_VERSION})"

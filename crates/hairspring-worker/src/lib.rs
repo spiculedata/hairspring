@@ -92,8 +92,11 @@ impl CallError {
         }
     }
 
+    /// The server does not know this worker, or no longer accepts its credential (it was pruned, or the server's
+    /// database was replaced). Registering again gets a new id and secret. Note that a new id starts untrusted.
     fn is_unknown_worker(&self) -> bool {
-        matches!(self, CallError::Status(400, body) if body.contains("unknown worker"))
+        matches!(self, CallError::Status(400, body)
+            if body.contains("unknown worker") || body.contains("invalid worker credential"))
     }
 }
 
@@ -253,7 +256,10 @@ fn execute(
             while !done.load(Ordering::SeqCst) {
                 std::thread::sleep(TICK);
                 if last.elapsed() >= heartbeat {
-                    let _ = api.post(&job_path("heartbeat"), &json!({ "worker_id": worker_id }));
+                    let _ = api.post(
+                        &job_path("heartbeat"),
+                        &json!({ "worker_id": worker_id, "worker_secret": secret }),
+                    );
                     last = Instant::now();
                 }
             }
@@ -264,7 +270,7 @@ fn execute(
                     interrupted.set(true);
                     return false;
                 }
-                let body = json!({ "worker_id": worker_id, "steps": p.steps, "trials": p.trials, "message": p.message });
+                let body = json!({ "worker_id": worker_id, "worker_secret": secret, "steps": p.steps, "trials": p.trials, "message": p.message });
                 // Best effort; the reply tells us if the run was cancelled meanwhile.
                 match api.post(&job_path("progress"), &body) {
                     Ok((_, text)) => serde_json::from_str::<Value>(&text).ok().and_then(|v| v["continue"].as_bool()).unwrap_or(true),
@@ -278,19 +284,22 @@ fn execute(
     let (path, body) = match result {
         Ok(Ok(_)) if interrupted.get() => (
             job_path("fail"),
-            json!({ "worker_id": worker_id, "error": "interrupted by worker shutdown" }),
+            json!({ "worker_id": worker_id, "worker_secret": secret, "error": "interrupted by worker shutdown" }),
         ),
         Ok(Ok(outcome)) => {
             let outcome = deliver_trials(api, worker_id, secret, job, outcome);
-            (job_path("complete"), completion_body(worker_id, outcome))
+            (
+                job_path("complete"),
+                completion_body(worker_id, secret, outcome),
+            )
         }
         Ok(Err(e)) => (
             job_path("complete"),
-            completion_body(worker_id, RunOutcome::error(e.to_string())),
+            completion_body(worker_id, secret, RunOutcome::error(e.to_string())),
         ),
         Err(_) => (
             job_path("fail"),
-            json!({ "worker_id": worker_id, "error": "worker panicked while running the target" }),
+            json!({ "worker_id": worker_id, "worker_secret": secret, "error": "worker panicked while running the target" }),
         ),
     };
     if let Err(e) = api.post_reliably(&path, &body, &AtomicBool::new(false)) {
@@ -342,7 +351,10 @@ pub fn run_loop(engine: &Engine, cfg: &WorkerConfig, stop: &AtomicBool) -> Resul
     let (mut worker_id, mut secret) = register(&api, cfg, stop)?;
     let mut backoff = Duration::from_millis(200);
     while !stop.load(Ordering::SeqCst) {
-        match api.post("/api/worker/lease", &json!({ "worker_id": worker_id })) {
+        match api.post(
+            "/api/worker/lease",
+            &json!({ "worker_id": worker_id, "worker_secret": secret }),
+        ) {
             Ok((204, _)) => sleep_unless_stopped(stop, cfg.poll),
             Ok((_, body)) => match serde_json::from_str::<LeasedJob>(&body) {
                 Ok(job) => {
@@ -369,4 +381,19 @@ pub fn run_loop(engine: &Engine, cfg: &WorkerConfig, stop: &AtomicBool) -> Resul
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_rejected_credential_or_an_unknown_worker_means_register_again() {
+        let status = |body: &str| CallError::Status(400, body.to_string());
+        assert!(status("invalid request: unknown worker").is_unknown_worker());
+        assert!(status("invalid request: invalid worker credential").is_unknown_worker());
+        assert!(!status("invalid request: job is not leased by this worker").is_unknown_worker());
+        assert!(!CallError::Status(403, "invalid worker credential".into()).is_unknown_worker());
+        assert!(!CallError::Transport("down".into()).is_unknown_worker());
+    }
 }

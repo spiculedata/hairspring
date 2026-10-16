@@ -32,7 +32,11 @@ fn stored_run(svc: &Service, engine: &Engine, ids_each: usize) -> String {
             &StartRun {
                 target: "lock-lease".into(),
                 seed: Some(1),
-                budget: None,
+                budget: Some(hairspring_engine::config::Budget {
+                    max_steps: 1000,
+                    max_trials: 2,
+                    wall_secs: 30,
+                }),
             },
         )
         .unwrap();

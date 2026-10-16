@@ -515,6 +515,28 @@ impl Store for PgStore {
         trials::set_worker_trusted(&mut *self.client()?, id, trusted)
     }
 
+    fn register_worker_with_secret(
+        &self,
+        name: &str,
+        caps_json: &str,
+        secret_hash: &str,
+        now: i64,
+    ) -> Result<WorkerRecord> {
+        let id = new_id("wrk");
+        self.client()?.execute(
+            "INSERT INTO workers(id,name,caps_json,registered_at,last_seen,secret_hash) VALUES ($1,$2,$3,$4,$4,$5)",
+            &[&id, &name, &caps_json, &now, &secret_hash],
+        )?;
+        Ok(WorkerRecord {
+            id,
+            name: name.to_string(),
+            caps_json: caps_json.to_string(),
+            registered_at: now,
+            last_seen: now,
+            trusted: false,
+        })
+    }
+
     fn set_worker_secret_hash(&self, id: &str, hash: &str) -> Result<()> {
         trials::set_worker_secret_hash(&mut *self.client()?, id, hash)
     }

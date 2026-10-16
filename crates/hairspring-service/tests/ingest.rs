@@ -246,7 +246,7 @@ fn a_trial_count_that_does_not_match_marks_the_run_incomplete_and_withholds_unme
         "no UNMET claim from an incomplete run"
     );
 
-    let job2 = lease(&svc, &engine, &local());
+    let job2 = lease_with_budget(&svc, &engine, &local(), 2);
     let mut rec2 = Recorder::new();
     let reports = vec![rec2.pass(1, &never), rec2.pass(2, &never)];
     svc.ingest_trials(&job2.job_id, &local(), &reports).unwrap();
@@ -366,7 +366,7 @@ fn a_run_with_no_trial_rows_and_no_count_is_not_incomplete() {
 #[test]
 fn the_local_path_ingests_the_outcomes_trial_log_before_completing() {
     let (svc, store, engine) = setup();
-    let job = lease(&svc, &engine, &local());
+    let job = lease_with_budget(&svc, &engine, &local(), 600);
     let mut rec = Recorder::new();
     let reports: Vec<_> = (0..600)
         .map(|i| rec.pass(i, &props("a.id", AssertKind::Always, 2, 0)))

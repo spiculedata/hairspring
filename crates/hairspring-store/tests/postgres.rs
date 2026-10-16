@@ -155,3 +155,21 @@ fn a_schema_from_the_future_is_refused_untouched() {
         .unwrap();
     assert!(rows.is_empty(), "a refused schema is not modified");
 }
+
+#[test]
+fn a_version_two_schema_from_before_worker_secrets_gains_the_column_when_connected() {
+    let Some(url) = url() else { return };
+    let schema = new_id("s").replace('-', "_");
+    drop(PgStore::connect_in_schema(&url, &schema, 1).unwrap());
+    let mut c = postgres::Client::connect(&url, postgres::NoTls).unwrap();
+    // The earlier version 2 had no secret column.
+    c.batch_execute(&format!(
+        "ALTER TABLE \"{schema}\".workers DROP COLUMN secret_hash"
+    ))
+    .unwrap();
+    let s = PgStore::connect_in_schema(&url, &schema, 2).unwrap();
+    let w = s
+        .register_worker_with_secret("remote", "{}", "abc", 1)
+        .unwrap();
+    assert_eq!(s.worker_secret_hash(&w.id).unwrap().as_deref(), Some("abc"));
+}

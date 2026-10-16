@@ -272,7 +272,7 @@ impl Service {
     /// Checks that the caller really is the worker it names. A worker id is not a credential (anyone with a `run`
     /// token can see ids), so a remote worker proves itself with the secret it was given at registration. Trust is
     /// only ever read for an authenticated worker.
-    fn authenticate_worker(&self, worker_id: &str, secret: Option<&str>) -> Result<()> {
+    pub fn authenticate_worker(&self, worker_id: &str, secret: Option<&str>) -> Result<()> {
         let denied = || invalid("invalid worker credential");
         if worker_id.starts_with(LOCAL_WORKER_PREFIX) {
             // The process's own workers are never reachable over the network and carry no secret.

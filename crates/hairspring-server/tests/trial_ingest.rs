@@ -153,17 +153,25 @@ fn register(c: &Client, name: &str) -> (String, String) {
     )
 }
 
-fn lease_as_remote(srv: &RunningServer) -> Leased {
+/// A run whose budget is `trials` trials, leased by a freshly registered remote worker.
+fn lease_as_remote(srv: &RunningServer, trials: u64) -> Leased {
     let c = client(srv.addr(), RUN);
     let run_id = c
-        .post("/api/runs", &json!({"target": "pubsub-atomic", "seed": 1}))
+        .post(
+            "/api/runs",
+            &json!({"target": "pubsub-atomic", "seed": 1,
+                "budget": {"max_steps": 1000, "max_trials": trials, "wall_secs": 30}}),
+        )
         .json()["run"]["id"]
         .as_str()
         .unwrap()
         .to_string();
     let (worker, secret) = register(&c, "remote");
     let job_id = c
-        .post("/api/worker/lease", &json!({"worker_id": worker}))
+        .post(
+            "/api/worker/lease",
+            &json!({"worker_id": worker, "worker_secret": secret}),
+        )
         .json()["job_id"]
         .as_str()
         .expect("leased")
@@ -188,7 +196,7 @@ fn a_second_run_token_naming_a_trusted_workers_id_cannot_send_trials_or_clear_th
 ) {
     let (srv, store) = boot(0);
     let owner_client = client(srv.addr(), RUN);
-    let l = lease_as_remote(&srv);
+    let l = lease_as_remote(&srv, 2);
     assert_eq!(
         client(srv.addr(), ADMIN)
             .post(
@@ -231,7 +239,7 @@ fn a_second_run_token_naming_a_trusted_workers_id_cannot_send_trials_or_clear_th
     assert_eq!(post_trials(&owner_client, &l, &reports(2)).status, 200);
     let done = owner_client.post(
         &format!("/api/worker/jobs/{}/complete", l.job_id),
-        &json!({"worker_id": l.worker, "outcome": {"status": "passed", "steps_executed": 2, "trials": 2, "elapsed_ms": 1, "failure": null, "error": null, "trials_reported": 2}}),
+        &json!({"worker_id": l.worker, "worker_secret": l.secret, "outcome": {"status": "passed", "steps_executed": 2, "trials": 2, "elapsed_ms": 1, "failure": null, "error": null, "trials_reported": 2}}),
     );
     assert_eq!(done.status, 200, "{}", done.body);
     let run = other.get(&format!("/api/runs/{}", l.run_id)).json();
@@ -243,7 +251,7 @@ fn text_from_the_program_never_appears_outside_the_guest_object_on_any_surface()
     use hairspring_props::AssertKind;
     let (srv, _) = boot(0);
     let c = client(srv.addr(), RUN);
-    let l = lease_as_remote(&srv);
+    let l = lease_as_remote(&srv, 2);
     // Two trials that disagree about an id's kind; the second carries marker text in its message and location.
     let mut catalog = RunCatalog::new();
     let first = props_for("guest.idmark", 3, 0);
@@ -283,7 +291,7 @@ fn text_from_the_program_never_appears_outside_the_guest_object_on_any_surface()
     assert_eq!(post_trials(&c, &l, &trials).status, 200);
     let done = c.post(
         &format!("/api/worker/jobs/{}/complete", l.job_id),
-        &json!({"worker_id": l.worker, "outcome": {"status": "passed", "steps_executed": 2, "trials": 2, "elapsed_ms": 1, "failure": null, "error": null, "trials_reported": 2}}),
+        &json!({"worker_id": l.worker, "worker_secret": l.secret, "outcome": {"status": "passed", "steps_executed": 2, "trials": 2, "elapsed_ms": 1, "failure": null, "error": null, "trials_reported": 2}}),
     );
     assert_eq!(done.status, 200, "{}", done.body);
 
@@ -327,6 +335,132 @@ fn text_from_the_program_never_appears_outside_the_guest_object_on_any_surface()
     }
 }
 
+fn state_of(c: &Client, run_id: &str) -> String {
+    c.get(&format!("/api/runs/{run_id}")).json()["run"]["state"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn every_worker_endpoint_refuses_a_caller_who_only_knows_a_trusted_workers_id() {
+    let (srv, store) = boot(0);
+    let owner = client(srv.addr(), RUN);
+    let l = lease_as_remote(&srv, 4);
+    assert_eq!(
+        client(srv.addr(), ADMIN)
+            .post(
+                &format!("/api/workers/{}/trust", l.worker),
+                &json!({"trusted": true})
+            )
+            .status,
+        200
+    );
+    // Some of the real worker's trials have arrived.
+    assert_eq!(post_trials(&owner, &l, &reports(2)).status, 200);
+    // Another run-role caller reads the id from the worker list and tries every endpoint with it.
+    let other = client(srv.addr(), RUN);
+    assert!(other.get("/api/workers").body.contains(&l.worker));
+    let early = json!({"status": "passed", "steps_executed": 2, "trials": 2, "elapsed_ms": 1,
+        "failure": null, "error": null, "trials_reported": 2});
+    let job = &l.job_id;
+    for secret in [None, Some("guess"), Some("")] {
+        let with = |mut v: Value| {
+            if let Some(s) = secret {
+                v["worker_secret"] = json!(s);
+            }
+            v
+        };
+        let calls = [
+            (
+                format!("/api/worker/jobs/{job}/complete"),
+                with(json!({"worker_id": l.worker, "outcome": early})),
+            ),
+            (
+                format!("/api/worker/jobs/{job}/fail"),
+                with(json!({"worker_id": l.worker, "error": "x"})),
+            ),
+            (
+                format!("/api/worker/jobs/{job}/progress"),
+                with(json!({"worker_id": l.worker, "steps": 1, "trials": 1})),
+            ),
+            (
+                format!("/api/worker/jobs/{job}/heartbeat"),
+                with(json!({"worker_id": l.worker})),
+            ),
+            (
+                "/api/worker/lease".to_string(),
+                with(json!({"worker_id": l.worker})),
+            ),
+        ];
+        for (path, body) in calls {
+            let r = other.post(&path, &body);
+            assert_eq!(r.status, 400, "{path} with {secret:?}: {}", r.body);
+        }
+    }
+    assert_eq!(
+        state_of(&owner, &l.run_id),
+        "running",
+        "the run was not finished early"
+    );
+    // The real worker, with its secret, can still finish, and its later trials are accepted.
+    assert_eq!(post_trials(&owner, &l, &reports(4)).status, 200);
+    let done = owner.post(
+        &format!("/api/worker/jobs/{job}/complete"),
+        &json!({"worker_id": l.worker, "worker_secret": l.secret,
+            "outcome": {"status": "passed", "steps_executed": 4, "trials": 4, "elapsed_ms": 1,
+                "failure": null, "error": null, "trials_reported": 4}}),
+    );
+    assert_eq!(done.status, 200, "{}", done.body);
+    assert_eq!(store.count_trials(&l.run_id).unwrap(), 4);
+}
+
+#[test]
+fn a_passed_run_that_holds_fewer_trials_than_its_budget_is_marked_incomplete() {
+    let (srv, _) = boot(0);
+    let owner = client(srv.addr(), RUN);
+    let run_id = owner
+        .post(
+            "/api/runs",
+            &json!({"target": "pubsub-atomic", "seed": 1,
+                "budget": {"max_steps": 1000, "max_trials": 10, "wall_secs": 30}}),
+        )
+        .json()["run"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (worker, secret) = register(&owner, "remote");
+    let job = owner
+        .post(
+            "/api/worker/lease",
+            &json!({"worker_id": worker, "worker_secret": secret}),
+        )
+        .json()["job_id"]
+        .as_str()
+        .expect("leased")
+        .to_string();
+    let l = Leased {
+        run_id: run_id.clone(),
+        job_id: job,
+        worker,
+        secret,
+    };
+    assert_eq!(post_trials(&owner, &l, &reports(3)).status, 200);
+    let done = owner.post(
+        &format!("/api/worker/jobs/{}/complete", l.job_id),
+        &json!({"worker_id": l.worker, "worker_secret": l.secret,
+            "outcome": {"status": "passed", "steps_executed": 3, "trials": 3, "elapsed_ms": 1,
+                "failure": null, "error": null, "trials_reported": 3}}),
+    );
+    assert_eq!(done.status, 200, "{}", done.body);
+    let run = owner.get(&format!("/api/runs/{run_id}")).json();
+    assert_eq!(
+        run["run"]["ingest_incomplete"], true,
+        "3 of 10 trials: {run}"
+    );
+    assert_eq!(run["properties"]["ingest_incomplete"], true);
+}
+
 #[test]
 fn worker_secrets_are_shown_once_and_never_listed() {
     let (srv, _) = boot(1);
@@ -351,7 +485,7 @@ fn worker_secrets_are_shown_once_and_never_listed() {
 fn a_leased_worker_posts_trials_and_the_run_shows_its_properties_as_unverified() {
     let (srv, store) = boot(0);
     let c = client(srv.addr(), RUN);
-    let l = lease_as_remote(&srv);
+    let l = lease_as_remote(&srv, 3);
     let r = post_trials(&c, &l, &reports(3));
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["inserted"], 3);
@@ -362,7 +496,7 @@ fn a_leased_worker_posts_trials_and_the_run_shows_its_properties_as_unverified()
     );
     let done = c.post(
         &format!("/api/worker/jobs/{}/complete", l.job_id),
-        &json!({"worker_id": l.worker, "outcome": {"status": "passed", "steps_executed": 3, "trials": 3, "elapsed_ms": 1, "failure": null, "error": null, "trials_reported": 3}}),
+        &json!({"worker_id": l.worker, "worker_secret": l.secret, "outcome": {"status": "passed", "steps_executed": 3, "trials": 3, "elapsed_ms": 1, "failure": null, "error": null, "trials_reported": 3}}),
     );
     assert_eq!(done.status, 200, "{}", done.body);
     let run = c.get(&format!("/api/runs/{}", l.run_id)).json();
@@ -383,7 +517,7 @@ fn a_leased_worker_posts_trials_and_the_run_shows_its_properties_as_unverified()
 fn the_ingest_endpoint_checks_who_is_calling_and_what_they_send() {
     let (srv, store) = boot(0);
     let run = client(srv.addr(), RUN);
-    let l = lease_as_remote(&srv);
+    let l = lease_as_remote(&srv, 3);
     let path = format!("/api/worker/jobs/{}/trials", l.job_id);
     let body = json!({"worker_id": l.worker, "trials": reports(1)});
     assert_eq!(

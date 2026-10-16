@@ -17,13 +17,23 @@ pub fn setup() -> (Service, Arc<dyn Store>, Engine) {
     (Service::new(store.clone()), store, engine)
 }
 
+/// A run with a budget of three trials, leased by `worker`.
 pub fn lease(svc: &Service, engine: &Engine, worker: &str) -> LeasedJob {
+    lease_with_budget(svc, engine, worker, 3)
+}
+
+/// A run with a budget of `trials` trials, leased by `worker`.
+pub fn lease_with_budget(svc: &Service, engine: &Engine, worker: &str, trials: u64) -> LeasedJob {
     svc.start_run(
         engine,
         &StartRun {
             target: "lock-lease".into(),
             seed: Some(1),
-            budget: None,
+            budget: Some(hairspring_engine::config::Budget {
+                max_steps: 1000,
+                max_trials: trials,
+                wall_secs: 30,
+            }),
         },
     )
     .unwrap();

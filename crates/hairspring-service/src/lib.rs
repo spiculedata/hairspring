@@ -13,7 +13,7 @@ pub use error::ServiceError;
 pub use types::*;
 
 use hairspring_core::bundle::Bundle;
-use hairspring_engine::config::{Budget, TargetKind};
+use hairspring_engine::config::TargetKind;
 use hairspring_engine::engine::Engine;
 use hairspring_engine::report::{FailureReport, ReplayOutcome, RunOutcome, RunStatus, Step};
 use hairspring_store::{
@@ -157,7 +157,8 @@ impl Service {
         let payload = JobPayload {
             target: req.target.clone(),
             seed: req.seed.unwrap_or_else(random_seed),
-            budget: req.budget.map(Budget::clamp),
+            // The budget the run is held to is recorded in full, so it does not depend on the target's default later.
+            budget: Some(req.budget.unwrap_or(spec.budget).clamp()),
         };
         let json = serde_json::to_string(&payload)
             .map_err(|e| ServiceError::InvalidRequest(e.to_string()))?;
@@ -292,7 +293,8 @@ impl Service {
         Ok(cancelled)
     }
 
-    pub fn register_worker(&self, name: &str, caps_json: &str) -> Result<WorkerRecord> {
+    /// Checks the name and that there is room for another worker; returns the time to register at.
+    fn admit_worker(&self, name: &str) -> Result<i64> {
         if name.is_empty() || name.len() > MAX_TARGET_LEN {
             return Err(ServiceError::InvalidRequest(
                 "worker name must be 1-64 characters".to_string(),
@@ -307,6 +309,13 @@ impl Service {
                 ));
             }
         }
+        Ok(now)
+    }
+
+    /// Registers a worker without a secret. It cannot reach the worker endpoints over HTTP; use
+    /// [`Service::register_remote_worker`] for a worker that does.
+    pub fn register_worker(&self, name: &str, caps_json: &str) -> Result<WorkerRecord> {
+        let now = self.admit_worker(name)?;
         Ok(self.store.register_worker(name, caps_json, now)?)
     }
 
@@ -319,9 +328,11 @@ impl Service {
         caps_json: &str,
     ) -> Result<(WorkerRecord, String)> {
         let secret = new_secret()?;
-        let worker = self.register_worker(name, caps_json)?;
-        self.store
-            .set_worker_secret_hash(&worker.id, &hairspring_store::sha256_hex(secret.as_bytes()))?;
+        let now = self.admit_worker(name)?;
+        let hash = hairspring_store::sha256_hex(secret.as_bytes());
+        let worker = self
+            .store
+            .register_worker_with_secret(name, caps_json, &hash, now)?;
         Ok((worker, secret))
     }
 

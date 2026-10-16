@@ -97,6 +97,7 @@ pub fn run_all_trials(make: &dyn Fn() -> std::sync::Arc<dyn Store>) {
     runs_do_not_see_each_others_rows(&*make());
     finishing_a_later_attempt_removes_the_earlier_attempts_rows(&*make());
     worker_secret_hashes_are_stored_apart_from_the_worker_record(&*make());
+    a_worker_and_its_secret_hash_are_registered_in_one_step(&*make());
     a_new_attempt_collects_the_blobs_only_its_discarded_rows_used(&*make());
 }
 
@@ -689,6 +690,19 @@ fn worker_secret_hashes_are_stored_apart_from_the_worker_record(s: &dyn Store) {
         !listed.contains("abc123"),
         "the hash is not part of the worker record"
     );
+}
+
+fn a_worker_and_its_secret_hash_are_registered_in_one_step(s: &dyn Store) {
+    let w = s
+        .register_worker_with_secret("remote", "{}", "feedface", 7)
+        .unwrap();
+    assert!(!w.trusted);
+    assert_eq!(w.registered_at, 7);
+    assert_eq!(
+        s.worker_secret_hash(&w.id).unwrap().as_deref(),
+        Some("feedface")
+    );
+    assert_eq!(s.list_workers().unwrap().len(), 1);
 }
 
 fn a_new_attempt_collects_the_blobs_only_its_discarded_rows_used(s: &dyn Store) {
