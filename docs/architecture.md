@@ -33,7 +33,7 @@ flowchart LR
 
 | Crate | Responsibility | Depends on |
 |---|---|---|
-| `hairspring-core` | `Sim`, explorer, shrinker, bundle format, doctor. Std only | nothing |
+| `hairspring-core` | `Sim`, explorer, shrinker, bundle format, point addresses and hashes, doctor. Std and `sha2` only | nothing |
 | `hairspring-engine` | Type-erased registry, `hairspring.toml`, `Backend` trait, sim backend, JUnit/SARIF/text | core |
 | `hairspring-store` | `Store` trait, SQLite, PostgreSQL, shared conformance suite | nothing |
 | `hairspring-service` | The only place that mutates run/job state; validates and sanitises worker results | engine, store |
@@ -107,6 +107,20 @@ to version 1**, and an older release refuses a version 2 database.
 A bundle is a small text file: `seed`, `build`, `target`, `backend`, `param.*` and `path` (hex action ids or
 recorded choices). Values are percent-escaped so they cannot inject fields. Replay refuses a bundle recorded
 against different code where it can tell (the WASM module hash, the Hermit output hash).
+
+## Point addresses and hashes
+
+`hairspring_core::point` is a pure library for naming a place inside a trial. An address is
+`p1~<run_id>~<seq>~<cut>`, where the cut is `end`, `s<k>` (sim, steps from the root) or `c<k>` (WASM, choices
+made). Parsing is strict: at most 64 bytes, numbers of 1 to 19 digits with no leading zero, no empty parts and
+no trailing text, and a cut kind that suits the run's backend.
+
+A run's identity is a canonical list of every input that can change execution (executable and target content
+hashes, run settings, and for Hermit the command line, environment, scheduler flags and loader hashes), one
+`key=value` line each with percent-escaped values. A run with any input not recorded has no identity and so no
+hash. The point hash is the SHA-256 of a version line, the identity text, the seed and the trace up to the cut;
+the run id is not part of it. The command hash is the SHA-256 of a version line, the point hash and the
+canonical JSON of the command (keys sorted, no spaces, integers as decimal strings).
 
 ## Determinism contract for targets
 

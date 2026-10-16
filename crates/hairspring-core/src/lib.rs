@@ -4,6 +4,7 @@ pub mod bundle;
 pub mod demo;
 pub mod doctor;
 pub mod explore;
+pub mod point;
 pub mod replay;
 pub mod rng;
 pub mod shrink;
