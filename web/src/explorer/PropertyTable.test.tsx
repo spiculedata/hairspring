@@ -97,6 +97,23 @@ describe('PropertyTable', () => {
     expect(body).toContain('clip-line');
   });
 
+  it('on a run stopped at its first failure, every row keeps its counts in the unclamped figure', () => {
+    const rows = [
+      row({ rate: { kind: 'not_a_rate', basis: 'TrialsFalse', k: 1, n: 3 } }),
+      row({ idx: 1, status: 'unrated', rate: { kind: 'unrated' }, guest: { id: 'b', msg: '', loc: null } }),
+      row({ idx: 2, status: 'pass', rate: { kind: 'not_a_rate', basis: 'TrialsFalse', k: 0, n: 3 }, guest: { id: 'c', msg: '', loc: null } }),
+    ];
+    const html = renderToString(<PropertyTable properties={rows} />);
+    expect(html).toContain('<span class="rate-figure">1 failure in 3 rated trials</span>');
+    expect(html).toContain('<span class="rate-figure">0 failures in 3 rated trials</span>');
+    expect(html).toContain('<span class="rate-figure">unrated (0 rated trials)</span>');
+  });
+
+  it('says how many characters of a long id were cut', () => {
+    const html = renderToString(<PropertyTable properties={[row({ guest: { id: 'i'.repeat(200), msg: '', loc: null } })]} />);
+    expect(html).toContain('… (104 more characters)');
+  });
+
   it('renders an empty list as a message, not an empty table', () => {
     const html = renderToString(<PropertyTable properties={[]} />);
     expect(html).toContain('No properties match.');

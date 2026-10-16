@@ -1,5 +1,5 @@
 import type { RateCellData } from '../types';
-import { formatPct, rateText } from '../wording';
+import { formatPct, rateParts, rateText } from '../wording';
 
 const PERCENT = 100;
 
@@ -19,14 +19,19 @@ function IntervalBar({ lower, upper }: { lower: number; upper: number }) {
 }
 
 /**
- * One property's rate. Always `k/n` with its interval; zero events show the exact one-sided bound; nothing rated is "unrated";
- * a run that stopped at its first failure shows counts and no rate. The wording is in wording.ts.
+ * One property's rate. Always `k/n` with its interval; zero events show the exact one-sided bound; nothing rated is
+ * "unrated"; a run that stopped at its first failure shows counts and no rate. The wording is in wording.ts.
+ *
+ * The cell is two lines: the figure (the counts, one line, never clipped) and the qualifier (which may wrap and is
+ * clamped in a fixed-height row). The title carries the whole text, so a clamped qualifier can still be read.
  */
 export function RateCell({ cell }: { cell: RateCellData }) {
+  const { figure, qualifier } = rateParts(cell);
   const showBar = cell.kind === 'rate' && cell.n > 0;
   return (
-    <span className={`rate-cell rate-${cell.kind}`}>
-      <span className="rate-text">{rateText(cell)}</span>
+    <span className={`rate-cell rate-${cell.kind}`} title={rateText(cell)}>
+      <span className="rate-figure">{figure}</span>
+      {qualifier !== undefined && <span className="rate-qualifier">{qualifier}</span>}
       {showBar && <IntervalBar lower={cell.lower} upper={cell.upper} />}
     </span>
   );

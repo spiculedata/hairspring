@@ -5,6 +5,7 @@ import {
   formatCount,
   formatPct,
   noFailuresText,
+  rateParts,
   rateText,
   statusLabel,
   truncationMarker,
@@ -120,5 +121,27 @@ describe('F16: the empty failures text is generated, never a fixed all-clear', (
     const text = noFailuresText({ live: false, headline: undefined });
     expect(text).toBe('No failure records for this run, and its property counts are not available.');
     expect(text).not.toMatch(/No property violations/i);
+  });
+});
+
+describe('rateParts: the figure is one short line, the qualifier is the rest', () => {
+  it('puts k/n (or the counts) in the figure for every kind of cell', () => {
+    const rate: RateCellData = { kind: 'rate', basis: 'TrialsFalse', k: 3, n: 4790, point: 0.000626, lower: 0.0002, upper: 0.0018 };
+    expect(rateParts(rate)).toEqual({ figure: '3/4,790 · 0.06%', qualifier: '[0.02%–0.18%]' });
+    const zero: RateCellData = { kind: 'zero_events', basis: 'TrialsFalse', n: 3, upper_bound: 1 - 0.05 ** (1 / 3) };
+    expect(rateParts(zero).figure).toBe('0/3');
+    expect(rateParts(zero).qualifier).toBe('exact one-sided 95% upper bound 63.16% (binomial, 0 of 3)');
+    expect(rateParts({ kind: 'unrated' })).toEqual({ figure: 'unrated (0 rated trials)', qualifier: undefined });
+    expect(rateParts({ kind: 'not_a_rate', basis: 'TrialsFalse', k: 1, n: 3 })).toEqual({
+      figure: '1 failure in 3 rated trials',
+      qualifier: 'not a rate (stopped at first failure)',
+    });
+  });
+
+  it('says the same thing as rateText', () => {
+    const cell: RateCellData = { kind: 'not_a_rate', basis: 'TrialsTrue', k: 2, n: 9 };
+    const { figure, qualifier } = rateParts(cell);
+    expect(rateText(cell)).toContain(figure);
+    expect(rateText(cell)).toContain(qualifier ?? '');
   });
 });

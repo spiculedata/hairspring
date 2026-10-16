@@ -5,7 +5,7 @@ import type { PropertyRow } from '../types';
 import { formatCount, seenInInconclusive, statusLabel, statusMark } from '../wording';
 
 /** Height of every row, which is what makes windowing a sum. */
-export const ROW_HEIGHT = 88;
+export const ROW_HEIGHT = 108;
 /** Vertical padding (2 x 8px) plus the 1px row border, set in explorer.css. */
 const ROW_CHROME = 17;
 /** Every cell's content sits in a block of exactly this height with overflow hidden, so no row can grow. */
@@ -68,7 +68,11 @@ export function PropertyRowView({ row, rowIndex }: { row: PropertyRow; rowIndex:
       <td>
         <Clip>
           <RateCell cell={row.rate} />
-          {row.unmet !== null && <span className="clip-line unmet-note">{row.unmet}</span>}
+          {row.unmet !== null && (
+            <span className="clip-line unmet-note" title={row.unmet}>
+              {row.unmet}
+            </span>
+          )}
           {row.failures_seen_in_inconclusive_trials > 0 && (
             <span className="clip-line inconclusive-note">{seenInInconclusive(row.failures_seen_in_inconclusive_trials)}</span>
           )}

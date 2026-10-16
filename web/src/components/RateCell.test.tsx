@@ -34,6 +34,29 @@ describe('RateCell', () => {
     expect(html).not.toContain('role="img"');
   });
 
+  it('keeps the counts in the unclamped figure and the qualifier in its own clamped line', () => {
+    const cells: RateCellData[] = [
+      { kind: 'not_a_rate', basis: 'TrialsFalse', k: 1, n: 3 },
+      { kind: 'zero_events', basis: 'TrialsFalse', n: 3, upper_bound: 0.63 },
+      { kind: 'rate', basis: 'TrialsFalse', k: 3, n: 4790, point: 0.000626, lower: 0.0002, upper: 0.0018 },
+    ];
+    for (const cell of cells) {
+      const html = renderToString(<RateCell cell={cell} />);
+      const figure = /<span class="rate-figure">(.*?)<\/span>/.exec(html)?.[1] ?? '';
+      expect(figure).toMatch(/\d/);
+      expect(html).toContain('rate-qualifier');
+      expect(html.indexOf('rate-figure')).toBeLessThan(html.indexOf('rate-qualifier'));
+    }
+    const stopped = renderToString(<RateCell cell={cells[0]} />);
+    expect(stopped).toContain('<span class="rate-figure">1 failure in 3 rated trials</span>');
+    expect(stopped).toContain('<span class="rate-qualifier">not a rate (stopped at first failure)</span>');
+  });
+
+  it('carries the full text in a title so a clipped qualifier can still be read', () => {
+    const html = renderToString(<RateCell cell={{ kind: 'not_a_rate', basis: 'TrialsFalse', k: 1, n: 3 }} />);
+    expect(html).toContain('title="not a rate (stopped at first failure) · 1 failure in 3 rated trials"');
+  });
+
   it('unrated says so and shows no percentage or bar', () => {
     const html = renderToString(<RateCell cell={{ kind: 'unrated' }} />);
     expect(html).toContain('unrated (0 rated trials)');

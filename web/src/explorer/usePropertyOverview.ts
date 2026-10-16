@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ApiError, api } from '../api';
+import { api } from '../api';
+import { isNotFound, retryDelay } from '../pollPolicy';
 import type { PropertyPage, PropertyQuery, PropertyRow } from '../types';
 
 /** Rows asked for per request; the server caps this, and the table windows what is loaded. */
@@ -21,11 +22,6 @@ export interface PropertyOverviewModel {
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-/** How long to wait before asking again: the usual interval, or longer if the server said so (429 Retry-After). */
-export function nextDelay(error: unknown): number {
-  return Math.max(LIVE_REFRESH_MS, error instanceof ApiError ? (error.retryAfterMs ?? 0) : 0);
-}
-
 /**
  * Loads a run's property table.
  *
@@ -34,7 +30,8 @@ export function nextDelay(error: unknown): number {
  *   run ends the table is reloaded from the start with the final figures.
  * - A response that belongs to an earlier filter, or that arrives after a refresh replaced the rows it would extend,
  *   is dropped, and a superseded request is aborted.
- * - A 429 delays the next refresh by Retry-After, and a 401 stops refreshing (the token prompt has been raised once).
+ * - A 429 delays the next refresh by Retry-After, a 401 stops refreshing (the token prompt has been raised once) and a
+ *   404 stops it for good (the run is gone); see pollPolicy.ts.
  */
 export function usePropertyOverview(runId: string, live: boolean): PropertyOverviewModel {
   const [query, setQuery] = useState<PropertyQuery>({});
@@ -66,9 +63,10 @@ export function usePropertyOverview(runId: string, live: boolean): PropertyOverv
           setError(undefined);
         } catch (e) {
           if (ctl.signal.aborted) return;
-          setError(messageOf(e));
-          if (e instanceof ApiError && e.status === UNAUTHORIZED) return;
-          delay = nextDelay(e);
+          setError(isNotFound(e) ? 'this run does not exist' : messageOf(e));
+          const wait = retryDelay(e, LIVE_REFRESH_MS, [UNAUTHORIZED]);
+          if (wait === undefined) return;
+          delay = wait;
         }
       }
       first = false;

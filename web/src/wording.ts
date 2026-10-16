@@ -66,6 +66,37 @@ export function rateText(cell: RateCellData): string {
   }
 }
 
+export interface RateParts {
+  /** The counts, short enough for one line: `k/n`, or the raw counts when there is no rate. Never clipped. */
+  readonly figure: string;
+  /** Everything that qualifies the figure (interval, bound, why there is no rate). May be long, so it may be clamped. */
+  readonly qualifier: string | undefined;
+}
+
+/** `rateText` split so the layout can keep the figure readable and clamp only the qualifier. */
+export function rateParts(cell: RateCellData): RateParts {
+  switch (cell.kind) {
+    case 'unrated':
+      return { figure: UNRATED_TEXT, qualifier: undefined };
+    case 'not_a_rate':
+      return {
+        figure: `${eventsPhrase(cell.basis, cell.k)} in ${plural(cell.n, 'rated trial', 'rated trials')}`,
+        qualifier: NOT_A_RATE_TEXT,
+      };
+    case 'zero_events': {
+      const n = formatCount(cell.n);
+      const note = cell.n >= THREE_OVER_N_NOTE_FROM ? `; about 3/${n}` : '';
+      return { figure: `0/${n}`, qualifier: `exact one-sided 95% upper bound ${formatPct(cell.upper_bound)} (binomial, 0 of ${n})${note}` };
+    }
+    case 'rate':
+      if (cell.n === 0) return { figure: UNRATED_TEXT, qualifier: undefined };
+      return {
+        figure: `${formatCount(cell.k)}/${formatCount(cell.n)}${SEP}${formatPct(cell.point)}`,
+        qualifier: `[${formatPct(cell.lower)}–${formatPct(cell.upper)}]`,
+      };
+  }
+}
+
 const STATUS_LABELS: Record<PropertyStatus, string> = {
   violation: 'VIOLATION',
   unmet: 'UNMET (coverage gap)',

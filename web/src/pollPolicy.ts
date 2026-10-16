@@ -1,0 +1,18 @@
+import { ApiError } from './api';
+
+const NOT_FOUND = 404;
+
+/**
+ * How long to wait before polling again after a failure, or `undefined` to stop.
+ *
+ * A 404 means the run is gone, so polling it again can only fail. A 429 waits at least as long as the server's
+ * Retry-After. Any status in `stopOn` (the property table passes 401, because the token prompt has already been raised)
+ * also stops; other failures retry at the usual interval.
+ */
+export function retryDelay(error: unknown, baseMs: number, stopOn: readonly number[] = []): number | undefined {
+  if (!(error instanceof ApiError)) return baseMs;
+  if (error.status === NOT_FOUND || stopOn.includes(error.status)) return undefined;
+  return Math.max(baseMs, error.retryAfterMs ?? 0);
+}
+
+export const isNotFound = (error: unknown): boolean => error instanceof ApiError && error.status === NOT_FOUND;

@@ -39,6 +39,7 @@ export function RunPage({ id }: { id: string }) {
   const live = run === undefined || !TERMINAL.has(run.state);
   const properties = usePropertyOverview(id, live);
 
+  if (detail.notFound) return <p className="error" role="alert">This run does not exist (it may have been removed).</p>;
   if (detail.error && !run) return <p className="error" role="alert">{detail.error}</p>;
   if (!run) return <p className="muted">Loading…</p>;
 
