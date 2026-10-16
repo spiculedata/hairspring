@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define HS_LINE_MAX 4096 /* one protocol line plus its newline: also PIPE_BUF on Linux and macOS */
+#define HS_LINE_MAX 4096 /* one protocol line plus its newline: PIPE_BUF on Linux, but 512 on macOS (see docs/c-sdk.md, pipe atomicity) */
 #define HS_NUM_WIDTH 20  /* counters are right-aligned in this many characters */
 #define HS_ID_MAX 128
 #define HS_THREAD_KEY_MAX 64
