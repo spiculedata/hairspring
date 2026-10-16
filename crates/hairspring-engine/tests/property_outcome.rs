@@ -152,10 +152,11 @@ fn a_run_that_stopped_at_its_first_failure_prints_no_rate_for_any_property() {
 }
 
 #[test]
-fn a_run_that_used_its_budget_prints_k_over_n_and_the_rule_of_three() {
+fn a_run_that_used_its_budget_prints_k_over_n_and_the_zero_failure_bound() {
     let outcome = outcome_with_one_rated_trial(hairspring_engine::report::RunStatus::Passed);
     let text = hairspring_engine::format::to_text("svc", &outcome);
     assert!(text.contains("0/1"), "{text}");
-    assert!(text.contains("approx. 95% upper bound"), "{text}");
+    assert!(text.contains("95% upper bound 95.00% (exact)"), "{text}");
+    assert!(!text.contains("at most"), "{text}");
     assert!(!text.contains("not a rate"), "{text}");
 }

@@ -5,6 +5,7 @@
 //! first confirmed failure has no rate at all, because the stop decided how many trials it ran.
 
 use crate::run::{PropertyStat, RateBasis};
+use crate::stats::{zero_event_upper_bound, EXACT_BOUND_BELOW};
 use serde::Serialize;
 
 /// One property's rate, as a page shows it.
@@ -44,7 +45,7 @@ pub fn rate_cell(stat: &PropertyStat, stopped_at_first_failure: bool) -> RateCel
             n: r.n,
         };
     }
-    match r.rule_of_three {
+    match zero_event_upper_bound(r.n) {
         Some(upper_bound) if r.k == 0 => RateCell::ZeroEvents {
             basis: r.basis,
             n: r.n,
@@ -88,8 +89,11 @@ impl RateCell {
                 upper,
                 ..
             } => format!("{k}/{n} ({}) [{}, {}]", pct(point), pct(lower), pct(upper)),
+            RateCell::ZeroEvents { n, upper_bound, .. } if n < EXACT_BOUND_BELOW => {
+                format!("0/{n}, 95% upper bound {} (exact)", pct(upper_bound))
+            }
             RateCell::ZeroEvents { n, upper_bound, .. } => format!(
-                "0/{n}, at most 3/{n} ({}) (approx. 95% upper bound)",
+                "0/{n}, <= 3/{n} ({}) (approx. 95% upper bound)",
                 pct(upper_bound)
             ),
             RateCell::Unrated => "unrated (0 rated trials)".to_owned(),
@@ -99,6 +103,19 @@ impl RateCell {
                 plural(n, "rated trial", "rated trials")
             ),
         }
+    }
+}
+
+/// The bound a zero-failure claim quotes after `rated` rated trials: exact for few trials, the rule of three after.
+pub(crate) fn zero_failure_bound_clause(rated: u64) -> String {
+    match zero_event_upper_bound(rated) {
+        Some(bound) if rated < EXACT_BOUND_BELOW => {
+            format!(
+                "95% upper bound on the failure rate: {} (exact)",
+                pct(bound)
+            )
+        }
+        _ => format!("approx. 95% upper bound on the failure rate: <= 3/{rated}"),
     }
 }
 

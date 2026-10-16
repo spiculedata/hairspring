@@ -19,14 +19,13 @@ fn clean(trues: u64, falses: u64) -> TrialProps {
 }
 
 #[test]
-fn zero_failures_show_k_over_n_and_the_rule_of_three_bound() {
+fn zero_failures_show_k_over_n_and_the_exact_bound_for_few_trials() {
     let stat = stat_of(&[(1, clean(3, 0)), (2, clean(3, 0)), (3, clean(3, 0))]);
     let cell = rate_cell(&stat, false);
     assert!(matches!(cell, RateCell::ZeroEvents { n: 3, .. }));
     let text = cell.text();
     assert!(text.starts_with("0/3"), "{text}");
-    assert!(text.contains("3/3"), "{text}");
-    assert!(text.contains("approx. 95% upper bound"), "{text}");
+    assert!(text.contains("95% upper bound 63.16% (exact)"), "{text}");
 }
 
 #[test]
@@ -154,4 +153,37 @@ fn nothing_the_headline_says_uses_the_words_the_explorer_never_generates() {
             assert!(!lower.contains(banned), "{text} contains {banned}");
         }
     }
+}
+
+fn zero_failure_text(trials: u64) -> String {
+    let all_clean: Vec<(u64, TrialProps)> = (1..=trials).map(|seed| (seed, clean(1, 0))).collect();
+    rate_cell(&stat_of(&all_clean), false).text()
+}
+
+#[test]
+fn a_single_clean_trial_is_not_given_a_bound_above_one() {
+    let text = zero_failure_text(1);
+    assert!(text.starts_with("0/1"), "{text}");
+    assert!(!text.contains("at most"), "{text}");
+    assert!(!text.contains("3/1"), "{text}");
+    assert!(
+        text.contains("95.00%"),
+        "the exact bound for one trial: {text}"
+    );
+}
+
+#[test]
+fn a_small_zero_failure_cell_states_the_exact_bound() {
+    let text = zero_failure_text(3);
+    assert!(text.contains("63.16%"), "1 - 0.05^(1/3) is 63.16%: {text}");
+    assert!(text.contains("exact"), "{text}");
+    assert!(!text.contains("at most") && !text.contains("3/3"), "{text}");
+}
+
+#[test]
+fn a_large_zero_failure_cell_uses_the_rule_of_three_without_saying_at_most() {
+    let text = zero_failure_text(300);
+    assert!(text.contains("<= 3/300"), "{text}");
+    assert!(text.contains("approx. 95%"), "{text}");
+    assert!(!text.contains("at most"), "{text}");
 }

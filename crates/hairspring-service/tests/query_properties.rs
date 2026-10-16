@@ -48,7 +48,8 @@ fn rows_sort_violation_then_unmet_then_unrated_then_pass_and_carry_honest_rate_c
         "{:?}",
         fine.rate
     );
-    assert!(fine.rate_text.contains("approx. 95% upper bound"));
+    assert!(fine.rate_text.contains("95% upper bound"));
+    assert!(!fine.rate_text.contains("at most"), "{}", fine.rate_text);
 }
 
 #[test]
