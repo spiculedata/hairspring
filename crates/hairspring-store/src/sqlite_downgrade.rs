@@ -140,12 +140,11 @@ fn downgrade_in_transaction(
         branch_runs: branches.clone(),
         ..DowngradeReport::default()
     };
-    if opts.dry_run {
-        return Ok((report, false));
-    }
+    // A dry run does the work for real inside the transaction (schema changes are transactional) so the counts are
+    // true, then the caller rolls it back.
     let (dropped_runs, dropped_blobs) = apply(conn, &branches, opts)?;
     report.dropped_runs = dropped_runs;
     report.dropped_blobs = dropped_blobs;
-    report.applied = true;
-    Ok((report, true))
+    report.applied = !opts.dry_run;
+    Ok((report, !opts.dry_run))
 }

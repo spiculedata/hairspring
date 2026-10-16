@@ -265,3 +265,28 @@ fn the_store_rule_is_the_recursive_form_for_every_tree_size_on_sqlite() {
     s.set_tree_query_rule(TreeQueryRule::StoreDefault);
     assert_eq!(s.tree_query_rule(), TreeQueryRule::StoreDefault);
 }
+
+fn raw_branch(s: &SqliteStore) -> impl Fn(&str, &str, u64) + '_ {
+    move |tree, run, source| {
+        s.with_connection(|c| {
+            c.execute(
+                "INSERT INTO tree_branches(run_id,tree_id,source_node,cut_kind,cut_at,point_hash,command_json,
+                   command_hash,seed_source,created_by,created_at)
+                 VALUES (?1,?2,?3,'step',3,'p','{}',?1,'server_random','k',1)",
+                rusqlite::params![run, tree, source as i64],
+            )
+            .unwrap()
+        });
+    }
+}
+
+#[test]
+fn a_run_with_dependants_cannot_start_a_new_attempt_even_if_a_branch_row_exists() {
+    let s = SqliteStore::open_in_memory().unwrap();
+    common::tree_attempts::a_root_run_with_branches_cannot_start_a_new_attempt(&s, &raw_branch(&s));
+    let s = SqliteStore::open_in_memory().unwrap();
+    common::tree_attempts::a_branch_run_with_dependants_cannot_start_a_new_attempt(
+        &s,
+        &raw_branch(&s),
+    );
+}

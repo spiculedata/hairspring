@@ -7,8 +7,6 @@ use std::sync::Arc;
 
 pub fn run_all_attempts(make: &dyn Fn() -> Arc<dyn Store>) {
     a_new_attempt_removes_lineage_before_trials(&*make());
-    a_root_run_with_branches_cannot_start_a_new_attempt(&*make());
-    a_branch_run_with_dependants_cannot_start_a_new_attempt(&*make());
     hostile_text_in_tree_rows_is_stored_verbatim(&*make());
 }
 
@@ -48,23 +46,31 @@ fn a_new_attempt_removes_lineage_before_trials(s: &dyn Store) {
     );
     assert_eq!(s.tree_node_of_trial(&run.id, 1).unwrap(), None);
     let t = s.get_tree(&tree.id).unwrap().unwrap();
-    assert_eq!(t.node_count, 0, "an emptied tree numbers from 0 again");
+    assert_eq!(
+        t.node_count, 3,
+        "the node cap counts numbers handed out, not rows: deleting nodes never lowers it"
+    );
     assert!(
         s.get_run_identity(&run.id).unwrap().is_some(),
         "the run's identity is not attempt data"
     );
-    // The tree takes nodes of the new attempt.
-    assert_eq!(add(s, &tree.id, &root(&run.id, 0)).node, 0);
+    // The new attempt's nodes are numbered after every earlier number, so a number never names two nodes.
+    let fresh = add(s, &tree.id, &root(&run.id, 0));
+    assert_eq!(fresh.node, 3);
+    assert!(
+        fresh.node > 2,
+        "greater than every node of the earlier attempt"
+    );
 }
 
-fn a_root_run_with_branches_cannot_start_a_new_attempt(s: &dyn Store) {
+/// Adds a branch row the way nothing but a test can (the store refuses a branch below a running run): the guard in
+/// `start_attempt` is a second line of defence and is exercised with this hook. Arguments: tree, run, source node.
+pub type RawBranch<'a> = &'a dyn Fn(&str, &str, u64);
+
+pub fn a_root_run_with_branches_cannot_start_a_new_attempt(s: &dyn Store, raw_branch: RawBranch) {
     let (run, job, tree) = tree_with_two_attempts(s);
     let b = run_with_identity(s, "a\n");
-    assert!(matches!(
-        s.add_tree_branch(&branch_for(&tree.id, &b.id, 2, &"c".repeat(64)), 9)
-            .unwrap(),
-        BranchOutcome::Added(_)
-    ));
+    raw_branch(&tree.id, &b.id, 2);
     let out = s
         .ingest_trials(&job.id, "w2", true, &batch(&passes(1), 0), 100_001)
         .unwrap();
@@ -77,7 +83,10 @@ fn a_root_run_with_branches_cannot_start_a_new_attempt(s: &dyn Store) {
     assert!(s.get_tree_node(&tree.id, 2).unwrap().is_some());
 }
 
-fn a_branch_run_with_dependants_cannot_start_a_new_attempt(s: &dyn Store) {
+pub fn a_branch_run_with_dependants_cannot_start_a_new_attempt(
+    s: &dyn Store,
+    raw_branch: RawBranch,
+) {
     let run = run_with_identity(s, "a\n");
     ingest_verdicts(s, &run.id, &passes(2));
     let tree = make_tree(s, &run, Some(sha256_hex(b"a\n")));
@@ -85,8 +94,7 @@ fn a_branch_run_with_dependants_cannot_start_a_new_attempt(s: &dyn Store) {
     add(s, &tree.id, &child(&run.id, 1, 0, 1));
 
     let b1 = run_with_identity(s, "a\n");
-    s.add_tree_branch(&branch_for(&tree.id, &b1.id, 1, &"1".repeat(64)), 9)
-        .unwrap();
+    raw_branch(&tree.id, &b1.id, 1);
     let job = s.enqueue_job(&b1.id, "run", "{}", 2).unwrap();
     s.lease_job("w1", 10, 1_000).unwrap().unwrap();
     s.ingest_trials(&job.id, "w1", true, &batch(&passes(2), 0), 1_100)
@@ -94,8 +102,7 @@ fn a_branch_run_with_dependants_cannot_start_a_new_attempt(s: &dyn Store) {
     let n = add(s, &tree.id, &child(&b1.id, 0, 1, 3));
     // A second branch starts at a node of the first branch run.
     let b2 = run_with_identity(s, "a\n");
-    s.add_tree_branch(&branch_for(&tree.id, &b2.id, n.node, &"2".repeat(64)), 9)
-        .unwrap();
+    raw_branch(&tree.id, &b2.id, n.node);
 
     s.lease_job("w2", 10, 100_000).unwrap().unwrap();
     let out = s
@@ -111,6 +118,7 @@ fn hostile_text_in_tree_rows_is_stored_verbatim(s: &dyn Store) {
     ingest_verdicts(s, &run.id, &passes(2));
     let tree = make_tree(s, &run, Some(sha256_hex(b"a\n")));
     add(s, &tree.id, &root(&run.id, 0));
+    finish(s, &run.id);
     let evil = "x'); DROP TABLE trial_lineage; -- \u{202e}<script>alert(1)</script>";
     let mut node = child(&run.id, 1, 0, 1);
     node.reporter_id = evil.into();

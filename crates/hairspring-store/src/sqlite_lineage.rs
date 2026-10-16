@@ -98,6 +98,16 @@ fn run_exists(conn: &Connection, run_id: &str) -> Result<bool> {
         .is_some())
 }
 
+fn run_finished(conn: &Connection, run_id: &str) -> Result<bool> {
+    let state: Option<String> = conn
+        .query_row("SELECT state FROM runs WHERE id=?", [run_id], |r| r.get(0))
+        .optional()?;
+    Ok(state
+        .as_deref()
+        .and_then(crate::types::RunState::parse)
+        .is_some_and(|s| s.is_terminal()))
+}
+
 // ---- run identity ------------------------------------------------------------------------------------------------
 
 pub(crate) fn get_identity(conn: &Connection, run_id: &str) -> Result<Option<RunIdentity>> {
@@ -177,6 +187,11 @@ pub(crate) fn create_tree(conn: &mut Connection, new: &NewTree, now: i64) -> Res
         } else {
             TreeOutcome::Rejected(TreeRejection::Conflict)
         });
+    }
+    if get_branch(&tx, &new.run_id)?.is_some() {
+        return Ok(TreeOutcome::Rejected(TreeRejection::Invalid(
+            "a branch run cannot root a tree",
+        )));
     }
     if backend != new.backend || target != new.target {
         return Ok(TreeOutcome::Rejected(TreeRejection::Invalid(
@@ -421,6 +436,11 @@ pub(crate) fn add_branch(
             "the root run cannot be a branch",
         )));
     }
+    if get_tree(&tx, &new.run_id)?.is_some() {
+        return Ok(Rejected(TreeRejection::Invalid(
+            "a run that roots a tree cannot be a branch",
+        )));
+    }
     if get_branch(&tx, &new.run_id)?.is_some() {
         return Ok(Rejected(TreeRejection::Conflict));
     }
@@ -428,8 +448,12 @@ pub(crate) fn add_branch(
     if let Err(why) = check_branch_identity(tree.identity_hash.as_deref(), identity.as_ref()) {
         return Ok(Rejected(why));
     }
-    if get_node(&tx, &new.tree_id, new.source_node)?.is_none() {
+    let Some(source) = get_node(&tx, &new.tree_id, new.source_node)? else {
         return Ok(Rejected(TreeRejection::SourceNotFound));
+    };
+    // Finished is final: a finished run never starts another attempt, so its nodes (and the source node) stay.
+    if !run_finished(&tx, &tree.id)? || !run_finished(&tx, &source.run_id)? {
+        return Ok(Rejected(TreeRejection::RunNotFinished));
     }
     let branches: i64 = tx.query_row(
         "SELECT COUNT(*) FROM tree_branches WHERE tree_id=?",
@@ -498,23 +522,14 @@ pub(crate) fn attempt_blocked(tx: &Transaction, run_id: &str) -> Result<Option<S
 }
 
 /// Deletes the run's nodes (they refer to its trial rows, which are deleted next) and returns the edge blobs they
-/// named. A tree left without nodes of its own is numbered from the highest node it still holds.
+/// named. `trees.node_count` is never lowered: it counts the numbers handed out, so a deleted node's number is never
+/// given to another node and the gap stays.
 pub(crate) fn drop_run_lineage(tx: &Transaction, run_id: &str) -> Result<Vec<String>> {
-    let mut stmt = tx.prepare("SELECT DISTINCT tree_id FROM trial_lineage WHERE run_id=?")?;
-    let trees = stmt
-        .query_map([run_id], |r| r.get::<_, String>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut stmt =
         tx.prepare("SELECT edge_ref FROM trial_lineage WHERE run_id=? AND edge_ref IS NOT NULL")?;
     let edges = stmt
         .query_map([run_id], |r| r.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     tx.execute("DELETE FROM trial_lineage WHERE run_id=?", [run_id])?;
-    for tree in trees {
-        tx.execute(
-            "UPDATE trees SET node_count=COALESCE((SELECT MAX(node)+1 FROM trial_lineage WHERE tree_id=?1), 0) WHERE id=?1",
-            [&tree],
-        )?;
-    }
     Ok(edges)
 }

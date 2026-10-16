@@ -22,7 +22,8 @@ pub struct DowngradeReport {
     pub branch_runs: Vec<String>,
     /// The branch runs that were deleted (empty unless `drop_branch_runs`).
     pub dropped_runs: Vec<String>,
-    /// Blobs no remaining row refers to, removed.
+    /// Blobs no remaining row refers to, removed. For a dry run, the counts of what would be deleted or removed
+    /// (worked out inside a transaction that is rolled back).
     pub dropped_blobs: u64,
     /// False for a dry run and for a database that was already at the target version.
     pub applied: bool,

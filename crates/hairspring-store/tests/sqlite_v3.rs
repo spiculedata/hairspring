@@ -322,6 +322,11 @@ fn downgrading_keeps_branch_runs_as_detached_runs_and_the_round_trip_works() {
         (table_dump(&c, "runs"), table_dump(&c, "trials"))
     };
     let report = downgrade_sqlite(&path, &DowngradeOptions::default()).unwrap();
+    assert!(report.dropped_blobs >= 1, "{report:?}");
+    assert_eq!(
+        dry.dropped_blobs, report.dropped_blobs,
+        "a dry run reports the real blob count"
+    );
     assert_eq!(
         (report.from_version, report.to_version, report.applied),
         (3, 2, true)

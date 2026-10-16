@@ -75,6 +75,7 @@ pub fn build(s: &dyn Store, mark_branch: &dyn Fn(&str)) -> DowngradeFixture {
     s.add_failure(&failure(&branch.id, &bundle), 7).unwrap();
     s.add_event(&branch.id, "progress", "{}", 8).unwrap();
     assert!(job.id.starts_with("job_"));
+    finish(s, &root_run.id);
     let out = s
         .add_tree_branch(&branch_for(&tree.id, &branch.id, 2, &"b".repeat(64)), 9)
         .unwrap();

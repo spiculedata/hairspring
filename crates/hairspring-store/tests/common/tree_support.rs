@@ -14,6 +14,13 @@ pub fn in_each_form(s: &dyn Store, check: &mut dyn FnMut(TreeQueryRule)) {
     s.set_tree_query_rule(TreeQueryRule::StoreDefault);
 }
 
+/// Finishes a run: a run that is finished never starts another attempt.
+pub fn finish(s: &dyn Store, run_id: &str) {
+    assert!(s
+        .finish_run(run_id, RunState::Passed, 1, 1, None, 3)
+        .unwrap());
+}
+
 pub fn new_run(s: &dyn Store, backend: &str) -> RunRecord {
     s.create_run(
         &NewRun {

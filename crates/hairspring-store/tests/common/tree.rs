@@ -14,6 +14,8 @@ pub fn run_all_trees(make: &dyn Fn() -> Arc<dyn Store>) {
     depth_and_fanout_caps(&*make());
     a_tree_without_point_identity_reads_but_takes_no_branches(&*make());
     branches_are_checked_and_deduplicated(&*make());
+    branches_attach_only_below_finished_runs(&*make());
+    a_run_cannot_be_a_root_and_a_branch(&*make());
     the_branch_cap_holds(&*make());
     tree_reads::run_all_reads(make);
     tree_attempts::run_all_attempts(make);
@@ -427,6 +429,7 @@ fn branches_are_checked_and_deduplicated(s: &dyn Store) {
     let tree = make_tree(s, &run, Some(sha256_hex(b"a\n")));
     add(s, &tree.id, &root(&run.id, 0));
     add(s, &tree.id, &child(&run.id, 1, 0, 1));
+    finish(s, &run.id);
     let hash = "c".repeat(64);
 
     let b1 = run_with_identity(s, "a\n");
@@ -531,11 +534,106 @@ fn branches_are_checked_and_deduplicated(s: &dyn Store) {
     assert!(s.record_branch_verify("run_none", true).is_err());
 }
 
+/// A finished run never starts a new attempt, so a branch may attach only below nodes that cannot be deleted: both the
+/// tree's root run and the run of the source node must have finished.
+fn branches_attach_only_below_finished_runs(s: &dyn Store) {
+    let root_run = run_with_identity(s, "a\n");
+    ingest_verdicts(s, &root_run.id, &passes(2));
+    let tree = make_tree(s, &root_run, Some(sha256_hex(b"a\n")));
+    add(s, &tree.id, &root(&root_run.id, 0));
+    add(s, &tree.id, &child(&root_run.id, 1, 0, 1));
+
+    // The root run is still running.
+    let b1 = run_with_identity(s, "a\n");
+    assert_eq!(
+        s.add_tree_branch(&branch_for(&tree.id, &b1.id, 1, &"1".repeat(64)), 9)
+            .unwrap(),
+        BranchOutcome::Rejected(TreeRejection::RunNotFinished)
+    );
+    assert_eq!(s.get_tree_branch(&b1.id).unwrap(), None);
+    assert_eq!(s.get_tree(&tree.id).unwrap().unwrap().run_count, 1);
+    finish(s, &root_run.id);
+    let BranchOutcome::Added(_) = s
+        .add_tree_branch(&branch_for(&tree.id, &b1.id, 1, &"1".repeat(64)), 9)
+        .unwrap()
+    else {
+        panic!("a branch below finished runs is accepted")
+    };
+
+    // The source node belongs to the first branch run, which is still running.
+    ingest_verdicts(s, &b1.id, &passes(1));
+    let n = add(s, &tree.id, &child(&b1.id, 0, 1, 3));
+    let b2 = run_with_identity(s, "a\n");
+    assert_eq!(
+        s.add_tree_branch(&branch_for(&tree.id, &b2.id, n.node, &"2".repeat(64)), 9)
+            .unwrap(),
+        BranchOutcome::Rejected(TreeRejection::RunNotFinished)
+    );
+    finish(s, &b1.id);
+    assert!(matches!(
+        s.add_tree_branch(&branch_for(&tree.id, &b2.id, n.node, &"2".repeat(64)), 9)
+            .unwrap(),
+        BranchOutcome::Added(_)
+    ));
+    // A finished root run cannot start another attempt, so its nodes stay.
+    let job = s.enqueue_job(&root_run.id, "run", "{}", 2).unwrap();
+    s.lease_job("w9", 10, 1_000).unwrap();
+    let out = s
+        .ingest_trials(&job.id, "w9", true, &batch(&passes(1), 0), 1_100)
+        .unwrap();
+    assert!(!matches!(out, IngestOutcome::Applied { .. }), "{out:?}");
+    assert!(s.get_tree_node(&tree.id, 1).unwrap().is_some());
+}
+
+/// A run is a tree's root or a branch of one tree, not both.
+fn a_run_cannot_be_a_root_and_a_branch(s: &dyn Store) {
+    let run = run_with_identity(s, "a\n");
+    ingest_verdicts(s, &run.id, &passes(1));
+    let tree = make_tree(s, &run, Some(sha256_hex(b"a\n")));
+    add(s, &tree.id, &root(&run.id, 0));
+    finish(s, &run.id);
+
+    // A branch run cannot become the root of a tree.
+    let b = run_with_identity(s, "a\n");
+    assert!(matches!(
+        s.add_tree_branch(&branch_for(&tree.id, &b.id, 0, &"1".repeat(64)), 9)
+            .unwrap(),
+        BranchOutcome::Added(_)
+    ));
+    assert_eq!(
+        s.create_tree(
+            &NewTree {
+                run_id: b.id.clone(),
+                backend: b.backend.clone(),
+                target: b.target.clone(),
+                identity_hash: Some(sha256_hex(b"a\n")),
+            },
+            5
+        )
+        .unwrap(),
+        TreeOutcome::Rejected(TreeRejection::Invalid("a branch run cannot root a tree"))
+    );
+    // A run that roots a tree cannot become a branch of another.
+    let other = run_with_identity(s, "a\n");
+    ingest_verdicts(s, &other.id, &passes(1));
+    let other_tree = make_tree(s, &other, Some(sha256_hex(b"a\n")));
+    add(s, &other_tree.id, &root(&other.id, 0));
+    finish(s, &other.id);
+    assert_eq!(
+        s.add_tree_branch(&branch_for(&tree.id, &other.id, 0, &"2".repeat(64)), 9)
+            .unwrap(),
+        BranchOutcome::Rejected(TreeRejection::Invalid(
+            "a run that roots a tree cannot be a branch"
+        ))
+    );
+}
+
 fn the_branch_cap_holds(s: &dyn Store) {
     let run = run_with_identity(s, "a\n");
     ingest_verdicts(s, &run.id, &passes(1));
     let tree = make_tree(s, &run, Some(sha256_hex(b"a\n")));
     add(s, &tree.id, &root(&run.id, 0));
+    finish(s, &run.id);
     for i in 0..MAX_BRANCH_RUNS {
         let b = run_with_identity(s, "a\n");
         let out = s

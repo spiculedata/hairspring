@@ -49,6 +49,9 @@ pub enum TreeRejection {
     RunNotInTree,
     ParentNotFound,
     SourceNotFound,
+    /// A branch attaches only below nodes that cannot be deleted: the tree's root run and the run of the source node
+    /// must both have finished (a finished run never starts a new attempt).
+    RunNotFinished,
     TrialAlreadyInTree,
     DepthCap,
     FanoutCap,

@@ -39,6 +39,7 @@ fn build(s: &dyn Store) -> Fixture {
     add(s, &tree.id, &root(&root_run.id, 0));
     add(s, &tree.id, &child(&root_run.id, 1, 0, 1));
     add(s, &tree.id, &child(&root_run.id, 2, 1, 1));
+    finish(s, &root_run.id);
     let mut branches = Vec::new();
     for (i, source) in [(0u64, 2u64), (1, 1)] {
         let b = run_with_identity(s, "a\n");

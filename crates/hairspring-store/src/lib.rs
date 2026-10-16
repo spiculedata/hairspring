@@ -193,8 +193,11 @@ pub trait Store: Send + Sync {
     /// The one mutable column of a node. Fails with `NotFound` for an unknown node.
     fn set_node_verified(&self, tree_id: &str, node: u64, verified: Verified) -> Result<()>;
     /// Chooses how subtree queries are answered (see [`TreeQueryRule`]). The answers do not depend on it; only the
-    /// cost does. The default is each store's own rule.
+    /// cost does. The default is each store's own rule. Process-wide tuning and tests only: **never wire this to a
+    /// route, tool or any request-driven path** (a caller could force the expensive form).
+    #[doc(hidden)]
     fn set_tree_query_rule(&self, rule: TreeQueryRule);
+    #[doc(hidden)]
     fn tree_query_rule(&self) -> TreeQueryRule;
     /// The descendants of a node (not the node), in node order. Every tree list uses one cursor rule: the cursor is a
     /// decimal node number and lists are in node order. In the recursive form (and for children) the next cursor is

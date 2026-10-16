@@ -129,12 +129,14 @@ pub fn downgrade_postgres(
         branch_runs: branches.clone(),
         ..DowngradeReport::default()
     };
-    if opts.dry_run {
-        return Ok(report);
-    }
+    // A dry run does the work for real inside the transaction (schema changes are transactional) so the counts are
+    // true, then drops the transaction without committing.
     let (dropped_runs, dropped_blobs) = apply(&mut tx, &branches, opts)?;
     report.dropped_runs = dropped_runs;
     report.dropped_blobs = dropped_blobs;
+    if opts.dry_run {
+        return Ok(report);
+    }
     report.applied = true;
     tx.commit()?;
     Ok(report)

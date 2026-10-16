@@ -259,3 +259,31 @@ fn the_store_rule_switches_to_the_path_form_at_the_tree_size_threshold() {
     s.set_tree_query_rule(TreeQueryRule::StoreDefault);
     assert_eq!(s.tree_query_rule(), TreeQueryRule::StoreDefault);
 }
+
+#[test]
+fn a_run_with_dependants_cannot_start_a_new_attempt_even_if_a_branch_row_exists() {
+    let Some(url) = url() else { return };
+    for which in 0..2 {
+        let schema = new_schema(&format!("ab{which}"));
+        let s = PgStore::connect_in_schema(&url, &schema, 2).unwrap();
+        let c = std::cell::RefCell::new(raw(&url, &schema));
+        // A branch row the way nothing but a test can add one: the store refuses a branch below a running run.
+        let hook = |tree: &str, run: &str, source: u64| {
+            c.borrow_mut()
+                .execute(
+                    "INSERT INTO tree_branches(run_id,tree_id,source_node,cut_kind,cut_at,point_hash,command_json,
+                       command_hash,seed_source,created_by,created_at)
+                     VALUES ($1,$2,$3,'step',3,'p','{}',$1,'server_random','k',1)",
+                    &[&run, &tree, &(source as i64)],
+                )
+                .unwrap();
+        };
+        if which == 0 {
+            common::tree_attempts::a_root_run_with_branches_cannot_start_a_new_attempt(&s, &hook);
+        } else {
+            common::tree_attempts::a_branch_run_with_dependants_cannot_start_a_new_attempt(
+                &s, &hook,
+            );
+        }
+    }
+}

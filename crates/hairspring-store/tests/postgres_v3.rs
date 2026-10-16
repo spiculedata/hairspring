@@ -97,6 +97,25 @@ fn table_exists(c: &mut Client, schema: &str, table: &str) -> bool {
 
 const NEW_TABLES: [&str; 4] = ["run_identity", "trees", "trial_lineage", "tree_branches"];
 
+/// The PostgreSQL tests return early without a URL, which looks like a pass. Setting `HAIRSPRING_REQUIRE_PG=1` turns
+/// a missing URL into a failure, and with a URL this proves a server answers.
+#[test]
+fn the_postgres_tests_really_connect() {
+    let Some(url) = url() else {
+        assert!(
+            std::env::var("HAIRSPRING_REQUIRE_PG").is_err(),
+            "HAIRSPRING_REQUIRE_PG is set but HAIRSPRING_TEST_PG_URL is not: the PostgreSQL tests would pass unrun"
+        );
+        return;
+    };
+    let version: String = admin(&url)
+        .query_one("SELECT version()", &[])
+        .unwrap()
+        .get(0);
+    eprintln!("connected to: {version}");
+    assert!(version.starts_with("PostgreSQL"), "{version}");
+}
+
 #[test]
 fn a_fresh_schema_is_at_version_three_with_the_tree_tables() {
     let Some(url) = url() else { return };
@@ -433,6 +452,11 @@ fn downgrading_keeps_branch_runs_as_detached_runs_and_the_round_trip_works() {
 
     let (runs_before, trials_before) = (table_dump(&mut c, "runs"), table_dump(&mut c, "trials"));
     let report = downgrade_postgres(&url, &schema, &DowngradeOptions::default()).unwrap();
+    assert!(report.dropped_blobs >= 1, "{report:?}");
+    assert_eq!(
+        dry.dropped_blobs, report.dropped_blobs,
+        "a dry run reports the real blob count"
+    );
     assert_eq!(
         (report.from_version, report.to_version, report.applied),
         (3, 2, true)

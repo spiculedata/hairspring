@@ -117,7 +117,12 @@ Nothing writes to them yet except through the store interface; the server routes
   CHECK keeps a TEXT value out of the path column. At most 512 levels, 1,024 children per parent and cut, 100,000
   nodes per tree and 1,000 branch runs per tree.
 - `tree_branches`: one row per branch run created from a point of a tree, with the stored command and its hash, so a
-  repeated command is answered from the stored branch.
+  repeated command is answered from the stored branch. A branch attaches only once both the tree's root run and the run
+  of the source node have finished (a finished run never starts another attempt, so those nodes cannot be deleted
+  under it). A run is a tree's root or a branch, not both.
+
+The node cap counts node numbers handed out, not rows: when a retried attempt deletes a run's nodes, the tree's counter
+does not go back, so a number never names two nodes and gaps in the numbering stand.
 
 Subtree queries (`subtree_descendants`, `subtree_tally`, `subtree_first_failing`) exist in two forms behind one query
 layer: a recursive query over `parent_node`, and a range scan of the path. Both return the same rows. SQLite always
