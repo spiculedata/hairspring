@@ -79,7 +79,7 @@ compiler instantiates that static once per instantiation, as a COMDAT (vague-lin
   function was placed correctly, so the difference is the template. Why g++ does not apply the section attribute to the
   template's static is **not established**: it is inferred, not verified, to be a compiler behaviour for statics in
   template instantiations. Other g++ versions are untested here.
-* **g++ 13.3 and mixed files** (observed on Linux x86-64, one layout): a file that has a call site in an `inline`
+* **g++ 13.3 and mixed files** (observed on Linux x86-64 in two layouts: the earlier fixture and `cxx_mixed.cc`): a file that has a call site in an `inline`
   function **and** a call site in an ordinary (non-inline, non-template) function does not compile; g++ reports
   `'hs__site' causes a section type conflict with 'hs__site'` (and the same for `hs__offline`). Template sites were
   not part of that error. Inference, not verified: g++ puts the static of an inline function into the named section as
@@ -87,8 +87,11 @@ compiler instantiates that static once per instantiation, as a COMDAT (vague-lin
   rejects one section name with different flags in a file. A file with only inline and template sites compiles, and
   so does a file with only ordinary sites. `make cxx-mixed` checks the observed behaviour per compiler (g++ must fail
   with that message, clang must compile and catalogue both sites); it is not part of `make test` because it asserts
-  compiler behaviour.
-* **Advice.** For C++ use clang, which catalogues every kind of site above. With g++, keep call sites in ordinary
+  compiler behaviour. Member functions defined inside a class body are implicitly `inline`, so a call site in a
+  non-template class's in-class member function that shares a file with a call site in an ordinary function is the
+  same mix and is expected to fail under g++ the same way (inference; not tested).
+* **Advice.** For C++ use clang, which catalogues every kind of site above. On Linux x86-64 with clang 18.1.3
+  the mixed file compiled and both sites were catalogued at `-O0` and `-O2` (also on Apple clang). With g++, keep call sites in ordinary
   (non-inline, non-template) functions; sites in templates compile (in a file without the inline/ordinary mix) but
   land outside the section, and the audit announces them once they are evaluated.
 * **What is detected.** Every evaluation made through a call-site macro adds one to the calling thread's `evals` and
@@ -128,8 +131,11 @@ compiler instantiates that static once per instantiation, as a COMDAT (vague-lin
     that were placed in the section.
 * **This is a detection, not a fix.** Registering a record from inside a function body would, as far as is known here,
   need a run-time initialisation check at the call site (for example a guarded function-local static with a dynamic
-  initialiser), which the cost argument above rules out; no such design was built or measured. Keep the assertions that must be reported in non-template code, or in a function the template
-  calls, or check the run for `end.dropped` / the diagnostic line.
+  initialiser), which the cost argument above rules out; no such design was built or measured. Another route, also
+  untried, is to emit the record from inline assembly with `.pushsection` / `.popsection` so the compiler's section
+  handling is bypassed; whether that would work for template and inline sites, and at what cost, is unknown. Keep the
+  assertions that must be reported in non-template code, or in a function the template calls, or check the run for
+  `end.dropped` / the diagnostic line.
 
 ## Environment
 
