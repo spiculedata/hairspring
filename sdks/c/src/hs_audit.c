@@ -34,37 +34,34 @@ static uint64_t evals_now(void) {
   return total;
 }
 
-/* How many threads can be inside a call site, between its two counter updates, while the audit reads. If no thread
-** evaluated anything during the reads (`quiet`), only the thread a signal interrupted can be. Otherwise any thread
-** but the reporting one can be, and the threads that have already finished are counted too: that makes a small loss
-** invisible in a busy multi-threaded exit, and it never makes a complete catalog look incomplete. */
-static uint64_t in_flight_bound(enum hs_end_reason reason, uint64_t threads, int quiet) {
-  if (quiet) return reason == HS_END_SIGNAL ? 1u : 0u;
+/* How many evaluations can be counted in a slot but not yet in a record: at most one per thread that is inside a call
+** site between its two updates. The reporting thread is not (at exit or in hs_report), so it is excluded; after a
+** fatal signal it may be (the signal can land between the two updates), so it is not. Finished threads are counted
+** too, because the SDK cannot tell them from running ones. The guarantee is therefore one-sided: a complete catalog
+** is not reported incomplete as long as only these evaluations are in flight (not covered: exit() called from a
+** signal handler that interrupted a call site), and in return a small loss in a run with several threads can go
+** unnoticed. With one thread the bound is 0 (1 after a signal) and every missing evaluation is reported. */
+static uint64_t in_flight_bound(enum hs_end_reason reason, uint64_t threads) {
   if (reason == HS_END_SIGNAL || threads == 0) return threads;
   return threads - 1u;
 }
 
 static void announce(uint64_t missing) {
-  char store[192];
+  char store[192]; /* the text is about 110 bytes with a 20-digit number: it always fits */
   struct hs_buf b;
   hs_buf_init(&b, store, sizeof store);
   hs_put_str(&b, "hairspring: incomplete catalog: ");
   hs_put_u64(&b, missing);
   hs_put_str(&b, " evaluation(s) ran at call sites that are missing from the catalog section\n");
-  if (b.over) {
-    __atomic_fetch_add(&hs_proc.dropped, 1u, __ATOMIC_RELAXED);
-    return;
-  }
   hs_emit_line(&b);
 }
 
 uint64_t hs_audit_run(enum hs_end_reason reason, uint64_t threads) {
   /* With more threads than slots the last slot is shared and its count is racy, so the comparison means nothing. */
   if (hs_slots_used() >= HS_MAX_THREADS) return 0;
-  uint64_t before = evals_now();
-  uint64_t counted = hs_catalog_counted(); /* read after `before`: a surplus here can only hide a loss, never invent one */
-  int quiet = evals_now() == before;
-  uint64_t missing = hs_audit_missing(before, counted, in_flight_bound(reason, threads, quiet));
+  uint64_t evals = evals_now();
+  uint64_t counted = hs_catalog_counted(); /* read after `evals`: a surplus here can only hide a loss, never invent one */
+  uint64_t missing = hs_audit_missing(evals, counted, in_flight_bound(reason, threads));
   if (missing == 0) return 0;
   __atomic_fetch_add(&hs_proc.dropped, 1u, __ATOMIC_RELAXED);
   announce(missing);

@@ -68,9 +68,10 @@ linker's collection of that section. For code in a C++ function template (or a m
 compiler instantiates that static once per instantiation, as a COMDAT (vague-linkage) entity.
 
 * **What is guaranteed.** With clang (Apple clang, clang++ 18 on Linux x86-64) the records of template call sites are
-  in the catalog section, and the tests hold it to that (`make cxx-templates`). With any compiler, an evaluation that
-  was counted at a call site whose record is *not* in the section is detected at report time (see below). A catalog
-  that is missing call sites is therefore announced, not silent.
+  in the catalog section, and the tests hold it to that (`make cxx-templates` requires it whenever `$(CC) --version`
+  names clang). With any compiler, an evaluation made at a call site whose record is *not* in the section is detected
+  at report time, unless one of the limits under "What is not detected" applies; it is not a guarantee against every
+  loss.
 * **What is observed with g++ 13.3 on Linux x86-64** (issue #23): at `-O0` and `-O2`, the records and
   offline strings of template call sites were emitted into per-instantiation COMDAT sections
   (`.data.rel.local.<mangled>`, `.rodata.<mangled>`) instead of `hs_catalog_v1` / `hs_catalog_str_v1`. Those sites were
@@ -82,15 +83,27 @@ compiler instantiates that static once per instantiation, as a COMDAT (vague-lin
   one to its record's `trues` or `falses`. At report time the SDK compares the sum of the threads' `evals` with the sum
   of the counters of the records it can find in the section. If the threads counted more, the difference is the number
   of evaluations that happened at call sites outside the catalog. The SDK then adds one to `end.dropped` and writes a
-  single plain-text line (no `HAIRSPRING_EVENT` prefix, so a protocol parser ignores it) to the events descriptor:
+  single plain-text line (no `HAIRSPRING_EVENT` prefix, so a protocol parser ignores it) to the events descriptor,
+  which is stderr unless `HAIRSPRING_EVENTS_FILE` names a file:
   `hairspring: incomplete catalog: <n> evaluation(s) ran at call sites that are missing from the catalog section`.
-* **What is not detected.** A call site that was never evaluated in the run, and whose record is outside the section,
-  leaves no trace: it is absent from the catalog and nothing counts it. The check is best effort under concurrency: a
-  thread caught between its two counter updates makes the threads' total run ahead by one, so while other threads are
-  still evaluating the SDK ignores a shortfall of up to the number of threads that have claimed a slot, and a small
-  loss in a busy multi-threaded exit can go unnoticed. It does not run once a process has more than 255 threads (the
-  shared last slot's count is not exact). The offline catalog (`hs_catalog_str_v1`) has no such check: a binary read
-  without running it shows only the sites that were placed in the section.
+  A program whose stderr is compared exactly therefore sees one extra line when this happens. Call sites inside a
+  shared object are in the same position (their records are in a section nobody reads), so the audit should flag them
+  too; shared objects remain unsupported and this was not tested.
+* **What is not detected.** The limits, all of which can hide a loss:
+  * A call site that was never evaluated in the run, and whose record is outside the section, leaves no trace: it is
+    absent from the catalog and nothing counts it.
+  * With several threads the check is deliberately lenient. A thread counts an evaluation in its slot a few
+    instructions before it counts it in the record, so the totals can differ by one per thread that is inside a call
+    site at that moment, and the SDK cannot tell finished threads from running ones. It therefore ignores a shortfall of
+    up to the number of claimed slots minus one at exit or after `hs_report` (the reporting thread is not inside a call
+    site), and up to the number of claimed slots after a fatal signal. With one thread every missing evaluation is
+    reported (after a signal, a single missing evaluation is forgiven). In a program that has used many threads, a
+    small loss can go unnoticed.
+  * The audit is skipped once 255 or more threads have claimed a slot (the shared last slot's count is not exact).
+  * With `HAIRSPRING_EVENTS=off` nothing is written, so there is no diagnostic line; `end.dropped` is still counted
+    in the process but is not reported either, since the `end` line is not written.
+  * The offline catalog (`hs_catalog_str_v1`) has no such check: a binary read without running it shows only the sites
+    that were placed in the section.
 * **This is a detection, not a fix.** Registering a record from inside a function body would, as far as is known here,
   need a run-time initialisation check at the call site (for example a guarded function-local static with a dynamic
   initialiser), which the cost argument above rules out; no such design was built or measured. Keep the assertions that must be reported in non-template code, or in a function the template

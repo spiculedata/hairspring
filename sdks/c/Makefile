@@ -94,14 +94,14 @@ cxx:
 
 # Call sites inside C++ templates must reach the catalog or be announced as missing, never vanish silently. clang places
 # them in the section, so it is held to that; any other compiler may do either (see docs/c-sdk.md).
-CXX_TEMPLATE_MODE := $(if $(findstring clang,$(CC)),strict,either)
+CXX_TEMPLATE_MODE := $(if $(filter 0,$(shell $(CC) --version 2>/dev/null | grep -c clang)),either,strict)
 
 $(BUILD)/cxx_templates: tests/fixtures/cxx_templates.cc $(LIB) $(SDK_HDR) | $(BUILD)
 	$(CXXC) -std=gnu++17 $(OPT) -g $(WARN) -pthread $(EXTRA) -o $@ $< $(LIB) $(LDFLAGS)
 
 cxx-templates:
 	@if command -v $(CXXC) >/dev/null 2>&1; then $(MAKE) $(BUILD)/cxx_templates && \
-	  $(BUILD)/cxx_templates 2>$(BUILD)/cxx_templates.events && \
+	  env -u HAIRSPRING_EVENTS -u HAIRSPRING_EVENTS_FILE $(BUILD)/cxx_templates 2>$(BUILD)/cxx_templates.events && \
 	  sh tests/check_cxx_templates.sh $(BUILD)/cxx_templates.events $(CXX_TEMPLATE_MODE) ; \
 	else echo "skip: $(CXXC) not installed"; fi
 
