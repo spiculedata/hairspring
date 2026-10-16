@@ -305,6 +305,75 @@ int main(void) {
   return 0;
 }
 
+#elif defined(HS_SCENARIO_forklock)
+
+#include <time.h>
+
+static volatile int g_stop;
+
+static void *claimer(void *arg) {
+  (void)arg;
+  HS_WORK(1);
+  return NULL;
+}
+
+static void *renamer(void *arg) {
+  (void)arg;
+  for (unsigned i = 0; !g_stop; i++) hs_thread("spin", i % 1000);
+  return NULL;
+}
+
+/* Fork while another thread is inside hs_thread (its key scan is long once 200 slots are claimed). A child that
+** inherits a held lock would spin forever; its alarm turns that into a signal death. */
+int main(void) {
+  for (int i = 0; i < 200; i++) {
+    pthread_t t;
+    pthread_create(&t, NULL, claimer, NULL);
+    pthread_join(t, NULL);
+  }
+  pthread_t spinner;
+  pthread_create(&spinner, NULL, renamer, NULL);
+  int failures = 0;
+  for (int i = 0; i < 300; i++) {
+    pid_t pid = fork();
+    if (pid == 0) {
+      alarm(2);
+      hs_thread("child", 0);
+      _exit(0);
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) failures++;
+  }
+  g_stop = 1;
+  pthread_join(spinner, NULL);
+  return failures ? 1 : 0;
+}
+
+#elif defined(HS_SCENARIO_execself)
+
+/* Usage: hs_sample_execself <image>. Execs without forking: the old image has already announced itself. */
+int main(int argc, char **argv) {
+  if (argc < 2) return 2;
+  HS_REACHABLE("execself.before", "reached before the exec");
+  execl(argv[1], argv[1], (char *)NULL);
+  return 127;
+}
+
+#elif defined(HS_SCENARIO_dup2fd)
+
+#include <fcntl.h>
+
+/* Usage: hs_sample_dup2fd <data-file>. Overwrites descriptor 200 (where the events descriptor lives) with a file. */
+int main(int argc, char **argv) {
+  if (argc < 2) return 2;
+  HS_REACHABLE("dup2fd.reach", "reached");
+  int fd = open(argv[1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0 || dup2(fd, 200) < 0) return 3;
+  close(fd);
+  return 0;
+}
+
 #elif defined(HS_SCENARIO_alarm)
 
 #include <sys/time.h>

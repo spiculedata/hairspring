@@ -233,7 +233,8 @@ fn two_processes_on_one_pipe_fold_cleanly() {
     for round in 0..10 {
         build_samples();
         let bin = build_dir().join("hs_sample_big");
-        let events = std::env::temp_dir().join(format!("hs_c_sdk_{}_{round}.events", std::process::id()));
+        let events =
+            std::env::temp_dir().join(format!("hs_c_sdk_{}_{round}.events", std::process::id()));
         let _ = std::fs::remove_file(&events);
         let use_file = !cfg!(target_os = "linux");
         let file_env = if use_file {
@@ -378,4 +379,39 @@ fn a_fault_in_a_worker_thread_with_handlers_on_folds_cleanly() {
     let trial = fold(&bytes);
     assert!(!trial.is_degraded(), "{:?}", trial.health);
     assert!(trial.report_missing().is_empty());
+}
+
+// ---- second review ---------------------------------------------------------------------------------------------
+
+#[test]
+fn an_image_that_execs_without_forking_does_not_announce_the_same_tag_twice() {
+    let trial = run_trial("execself", &[&sample_path("merge")]);
+    assert_eq!(trial.health.duplicates, 0, "{:?}", trial.health);
+    assert_eq!(tags(&trial), ["p1", "p1.x1"]);
+    // The first image is gone (an exec runs no exit handler), so only it lacks an `end`.
+    assert_eq!(trial.report_missing(), ["p1"]);
+}
+
+fn hello_lines(bytes: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .filter(|l| l.contains("\"kind\":\"hello\""))
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn spawned_tags_and_their_descendants_say_they_are_not_stable() {
+    let mut cmd = sample("spawn");
+    cmd.arg(sample_path("fork"));
+    let (bytes, _) = stderr_of(cmd);
+    let trial = fold(&bytes);
+    assert!(!trial.is_degraded(), "{:?}", trial.health);
+    assert_eq!(trial.health.malformed, 0);
+    let hellos = hello_lines(&bytes);
+    assert_eq!(hellos.len(), 4, "{hellos:?}"); // p1, p1.s<pid>, and its two fork children
+    for h in &hellos {
+        let spawned = h.contains("\"proc\":\"p1.s");
+        assert_eq!(h.contains("\"tag_stable\":false"), spawned, "{h}");
+    }
 }

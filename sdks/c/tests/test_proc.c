@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -56,6 +57,12 @@ static pid_t spawn(const char *scenario, const char *arg, const char *const *env
   }
   char path[512];
   snprintf(path, sizeof path, "%s/hs_sample_%s", g_dir, scenario);
+  const char *nofile = getenv("HS_TEST_NOFILE"); /* test hook: shrink the descriptor limit before the exec */
+  if (nofile) {
+    struct rlimit lim = {(rlim_t)atoi(nofile), (rlim_t)atoi(nofile)};
+    setrlimit(RLIMIT_NOFILE, &lim);
+    unsetenv("HS_TEST_NOFILE");
+  }
   execl(path, path, arg, (char *)NULL);
   _exit(127);
 }
@@ -504,6 +511,36 @@ static void test_empty_catalog_reports_work_and_end(void) {
   free_capture(c);
 }
 
+static void test_fork_while_another_thread_holds_the_key_lock_does_not_hang_the_child(void) {
+  struct capture *c = run_capture("forklock", NULL, NULL);
+  CHECK(WIFEXITED(c->status) && WEXITSTATUS(c->status) == 0);
+  free_capture(c);
+}
+
+static void test_a_lost_events_descriptor_is_dropped_not_redirected(void) {
+  char path[] = "/tmp/hs_dup2_XXXXXX";
+  int tmp = mkstemp(path);
+  CHECK(tmp >= 0);
+  close(tmp);
+  struct capture *c = run_capture("dup2fd", path, NULL);
+  struct capture data = {0};
+  data.buf = malloc(MAX_OUT);
+  read_file_into(&data, path);
+  CHECK(!any_line_has(&data, "HAIRSPRING_EVENT")); /* the program's file never receives events */
+  free(data.buf);
+  unlink(path);
+  free_capture(c);
+}
+
+static void test_falling_back_to_the_original_descriptor_is_counted(void) {
+  const char *env[] = {"HS_TEST_NOFILE=10", NULL}; /* no room for a descriptor numbered 20 or 200 */
+  struct capture *c = run_capture("basic", NULL, env);
+  check_all_lines_wellformed(c);
+  CHECK_U64(count(c, "end", "p1"), 1);
+  CHECK(field(find_line(c, "end", "p1", NULL), "dropped") >= 1);
+  free_capture(c);
+}
+
 static void test_reserved_and_malformed_root_tags_are_refused_not_shortened(void) {
   const char *bad_tags[] = {"HAIRSPRING_PROC=_eval", "HAIRSPRING_PROC=has space",
                             "HAIRSPRING_PROC=0123456789012345678901234567890123456789012345678901234567890123456789"};
@@ -564,6 +601,9 @@ int main(int argc, char **argv) {
   RUN(test_real_faults_are_reported_when_handlers_are_on);
   RUN(test_report_survives_a_timer_signal_during_the_write);
   RUN(test_empty_catalog_reports_work_and_end);
+  RUN(test_fork_while_another_thread_holds_the_key_lock_does_not_hang_the_child);
+  RUN(test_a_lost_events_descriptor_is_dropped_not_redirected);
+  RUN(test_falling_back_to_the_original_descriptor_is_counted);
   RUN(test_reserved_and_malformed_root_tags_are_refused_not_shortened);
   RUN(test_a_long_root_tag_gets_a_readable_hashed_child_tag);
   RUN(test_thread_lines_have_one_length_whatever_the_key);
