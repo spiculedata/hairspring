@@ -13,7 +13,7 @@
 //! 4. `targeted_workload` and `bug_shaped_invariant` always appear next to the claim, with every other declared flag.
 //! 5. A label with no declared knowledge list produces no claim, and says why.
 
-use crate::honesty::plural;
+use crate::honesty::{plural, zero_failure_bound_clause};
 use serde::{Deserialize, Serialize};
 
 /// How much the build differs from the program as shipped.
@@ -224,8 +224,9 @@ pub fn generate(label: &Label, subject: &Subject) -> ClaimOutput {
     let note = label.knowledge_note();
     out.text = Some(match *subject {
         Subject::NoFailure { rated } => format!(
-            "No trial failed a property in {} (approx. 95% upper bound on the failure rate: 3/{rated}); {how}; {note}.",
-            plural(rated, "rated trial", "rated trials")
+            "No trial failed a property in {}; {}; {how}; {note}.",
+            plural(rated, "rated trial", "rated trials"),
+            zero_failure_bound_clause(rated)
         ),
         Subject::Failure { seed, state } => {
             let status = match state {

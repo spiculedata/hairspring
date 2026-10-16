@@ -677,3 +677,97 @@ fn a_cancelled_running_run_is_stopped_by_the_embedded_worker() {
         "worker was freed by cancellation"
     );
 }
+
+fn boot_with_register_limit(limit: u32) -> RunningServer {
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut cfg = ServerConfig::new("127.0.0.1:0".parse().unwrap(), tokens());
+    cfg.embedded_workers = 0;
+    cfg.rate_limit_per_min = 0;
+    cfg.register_limit = limit;
+    start(cfg, Service::new(store), engine()).expect("server starts")
+}
+
+#[test]
+fn one_token_can_register_only_so_many_workers() {
+    let srv = boot_with_register_limit(2);
+    let run = client(srv.addr(), Some(RUN));
+    let register = |n: u32| run.post("/api/worker/register", &json!({ "name": format!("w{n}") }));
+    assert_eq!(register(1).status, 200);
+    assert_eq!(register(2).status, 200);
+    let refused = register(3);
+    assert_eq!(refused.status, 429, "{}", refused.body);
+    assert_eq!(
+        refused.header("retry-after"),
+        Some("3600"),
+        "the default window is an hour"
+    );
+    assert!(
+        refused.body.contains("registration limit"),
+        "{}",
+        refused.body
+    );
+}
+
+#[test]
+fn the_registration_limit_is_counted_per_token() {
+    let other = "other-run-token-0123456789";
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let auth = Auth::from_spec(&format!("{RUN}:run,{other}:run")).unwrap();
+    let mut cfg = ServerConfig::new("127.0.0.1:0".parse().unwrap(), auth);
+    cfg.embedded_workers = 0;
+    cfg.rate_limit_per_min = 0;
+    cfg.register_limit = 1;
+    let srv = start(cfg, Service::new(store), engine()).unwrap();
+    let post = |t: &str| {
+        client(srv.addr(), Some(t))
+            .post("/api/worker/register", &json!({"name": "w"}))
+            .status
+    };
+    assert_eq!(post(RUN), 200);
+    assert_eq!(post(RUN), 429);
+    assert_eq!(post(other), 200, "another token has its own allowance");
+}
+
+#[test]
+fn a_zero_registration_limit_means_unlimited() {
+    let srv = boot_with_register_limit(0);
+    let run = client(srv.addr(), Some(RUN));
+    for n in 0..5 {
+        let r = run.post("/api/worker/register", &json!({ "name": format!("w{n}") }));
+        assert_eq!(r.status, 200);
+    }
+}
+
+#[test]
+fn whitespace_variants_of_one_token_share_one_registration_allowance() {
+    let srv = boot_with_register_limit(2);
+    let statuses: Vec<u16> = [
+        RUN.to_string(),
+        format!(" {RUN}"),
+        format!("  {RUN}"),
+        format!("\t {RUN}"),
+    ]
+    .iter()
+    .map(|t| {
+        client(srv.addr(), Some(t))
+            .post("/api/worker/register", &json!({"name": "w"}))
+            .status
+    })
+    .collect();
+    assert_eq!(statuses, vec![200, 200, 429, 429]);
+}
+
+#[test]
+fn whitespace_variants_of_one_token_share_one_request_allowance() {
+    let (srv, _) = boot(tokens(), 0, 3);
+    let statuses: Vec<u16> = [
+        RUN.to_string(),
+        format!(" {RUN}"),
+        format!("  {RUN}"),
+        format!("   {RUN}"),
+    ]
+    .iter()
+    .map(|t| client(srv.addr(), Some(t)).get("/api/targets").status)
+    .collect();
+    assert_eq!(statuses, vec![200, 200, 200, 429]);
+}

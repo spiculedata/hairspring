@@ -10,6 +10,7 @@ pub struct ApiError {
     pub status: StatusCode,
     pub message: String,
     www_authenticate: bool,
+    retry_after_secs: Option<u64>,
 }
 
 impl ApiError {
@@ -18,6 +19,7 @@ impl ApiError {
             status,
             message: message.into(),
             www_authenticate: false,
+            retry_after_secs: None,
         }
     }
     pub fn bad_request(message: impl Into<String>) -> ApiError {
@@ -30,6 +32,13 @@ impl ApiError {
         ApiError {
             www_authenticate: true,
             ..ApiError::new(StatusCode::UNAUTHORIZED, "a valid bearer token is required")
+        }
+    }
+    /// A 429 that tells the caller when to try again.
+    pub fn too_many_requests(message: impl Into<String>, retry_after_secs: u64) -> ApiError {
+        ApiError {
+            retry_after_secs: Some(retry_after_secs),
+            ..ApiError::new(StatusCode::TOO_MANY_REQUESTS, message)
         }
     }
     pub fn forbidden(needed: &str) -> ApiError {
@@ -66,6 +75,10 @@ impl IntoResponse for ApiError {
                 header::WWW_AUTHENTICATE,
                 header::HeaderValue::from_static("Bearer"),
             );
+        }
+        if let Some(secs) = self.retry_after_secs {
+            res.headers_mut()
+                .insert(header::RETRY_AFTER, header::HeaderValue::from(secs));
         }
         res
     }

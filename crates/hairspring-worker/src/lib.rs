@@ -2,6 +2,7 @@
 //! (which may have backends the server lacks, such as Hermit on a Linux box) and
 //! reports progress and results back.
 mod completion;
+mod reregister;
 mod trials;
 
 use completion::completion_body;
@@ -9,6 +10,7 @@ use hairspring_engine::backend::Progress;
 use hairspring_engine::engine::{Engine, RunRequest};
 use hairspring_engine::report::RunOutcome;
 use hairspring_service::LeasedJob;
+use reregister::ReregisterBackoff;
 use serde_json::{json, Value};
 use std::cell::Cell;
 use std::fmt;
@@ -350,11 +352,16 @@ pub fn run_loop(engine: &Engine, cfg: &WorkerConfig, stop: &AtomicBool) -> Resul
     let api = Api::new(cfg)?;
     let (mut worker_id, mut secret) = register(&api, cfg, stop)?;
     let mut backoff = Duration::from_millis(200);
+    let mut reregister = ReregisterBackoff::default();
     while !stop.load(Ordering::SeqCst) {
-        match api.post(
+        let leased = api.post(
             "/api/worker/lease",
             &json!({ "worker_id": worker_id, "worker_secret": secret }),
-        ) {
+        );
+        if leased.is_ok() {
+            reregister = reregister.reset();
+        }
+        match leased {
             Ok((204, _)) => sleep_unless_stopped(stop, cfg.poll),
             Ok((_, body)) => match serde_json::from_str::<LeasedJob>(&body) {
                 Ok(job) => {
@@ -368,8 +375,11 @@ pub fn run_loop(engine: &Engine, cfg: &WorkerConfig, stop: &AtomicBool) -> Resul
             },
             Err(e) if e.is_unknown_worker() => {
                 eprintln!(
-                    "hairspring-worker: the server no longer knows this worker; registering again"
+                    "hairspring-worker: the server no longer knows this worker; registering again in {:?}",
+                    reregister.delay()
                 );
+                sleep_unless_stopped(stop, reregister.delay());
+                reregister = reregister.after_attempt();
                 (worker_id, secret) = register(&api, cfg, stop)?;
             }
             Err(e) => {

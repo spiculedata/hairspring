@@ -1,4 +1,5 @@
 //! The property table of a run and the detail of one property.
+use crate::completion::{headline_qualifier, WorkerData};
 use crate::properties::{status_name, stored_summary};
 use crate::query::*;
 use crate::scan::{presence, Flow};
@@ -9,6 +10,14 @@ use hairspring_props::honesty::{headline, rate_cell, unmet_text};
 use hairspring_props::{PropertyStat, PropertyStatus, TrialDigest};
 use hairspring_store::RunRecord;
 use std::collections::BTreeMap;
+
+/// The headline with its qualifier, if the run needs one, after it.
+fn qualified(headline: String, qualifier: Option<String>) -> String {
+    match qualifier {
+        Some(q) => format!("{headline} {q}"),
+        None => headline,
+    }
+}
 
 fn status_rank(s: PropertyStatus) -> u8 {
     match s {
@@ -183,9 +192,19 @@ impl Service {
         let trust = self.run_trust(run_id)?;
         let workers = trust.as_ref().map(|t| t.workers.as_slice()).unwrap_or(&[]);
         let claim = self.claim_view(&run, &all, &completion, counts.rated_trials, label)?;
+        let unverified_worker_data = !trust.as_ref().is_some_and(|t| t.all_trusted);
+        let data = match trust.as_ref() {
+            Some(t) if t.workers.is_empty() => WorkerData::NoTrialData,
+            _ if unverified_worker_data => WorkerData::Unverified,
+            _ => WorkerData::Trusted,
+        };
+        let headline = qualified(
+            headline(counts.rated_trials, violations, first_seed),
+            headline_qualifier(&completion, data),
+        );
         Ok(Some(PropertyPage {
             run_id: run.id.clone(),
-            headline: headline(counts.rated_trials, violations, first_seed),
+            headline,
             header: RunHeader {
                 trials_judged: self.store.count_trials(run_id)?,
                 trials_rated: counts.rated_trials,
@@ -203,7 +222,7 @@ impl Service {
                 ingest_incomplete: run.ingest_incomplete,
                 workers_contributing: workers.len() as u64,
                 workers_untrusted: workers.iter().filter(|w| !w.trusted).count() as u64,
-                unverified_worker_data: !trust.as_ref().is_some_and(|t| t.all_trusted),
+                unverified_worker_data,
             },
             claim,
             notes: notes(&run, &completion, &summary),

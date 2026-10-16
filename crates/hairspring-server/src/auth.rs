@@ -62,7 +62,17 @@ impl Auth {
     }
 
     pub fn authenticate(&self, header: Option<&str>) -> Option<Role> {
-        let presented = digest(header?.strip_prefix("Bearer ")?.trim());
+        self.identify(header).map(|(role, _)| role)
+    }
+
+    /// The role of the presented token and a key naming that token for per-caller limits. Every header spelling that
+    /// authenticates as one token (extra spaces, tabs) gets the same key, so a limit cannot be dodged or flooded by
+    /// varying the whitespace.
+    pub fn identify(&self, header: Option<&str>) -> Option<(Role, String)> {
+        let raw = header?;
+        let token = raw.strip_prefix("Bearer ")?.trim();
+        let presented = digest(token);
+        let key = format!("t:{}", crate::digest_prefix(token));
         let mut found = None;
         for (stored, role) in &self.tokens {
             // No early exit: timing must not reveal which token matched.
@@ -70,13 +80,15 @@ impl Auth {
                 found = Some(*role);
             }
         }
-        found
+        found.map(|role| (role, key))
     }
 }
 
 /// The authenticated caller of a request.
 pub struct Caller {
     pub role: Role,
+    /// Who this caller is for per-caller limits: the presented token (as a digest prefix), or `open` without tokens.
+    pub key: String,
 }
 
 impl Caller {
@@ -94,16 +106,66 @@ impl FromRequestParts<AppState> for Caller {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
         if state.auth.is_open() {
-            return Ok(Caller { role: Role::Admin });
+            return Ok(Caller {
+                role: Role::Admin,
+                key: "open".to_string(),
+            });
         }
         let header = parts
             .headers
             .get(AUTHORIZATION)
             .and_then(|v| v.to_str().ok());
-        state
+        let (role, key) = state
             .auth
-            .authenticate(header)
-            .map(|role| Caller { role })
-            .ok_or_else(ApiError::unauthorized)
+            .identify(header)
+            .ok_or_else(ApiError::unauthorized)?;
+        Ok(Caller { role, key })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TOKEN: &str = "run-token-0123456789abcdef";
+
+    fn auth() -> Auth {
+        Auth::from_spec(&format!("{TOKEN}:run,other-token-0123456789abc:read")).unwrap()
+    }
+
+    #[test]
+    fn every_spelling_of_one_token_has_one_key() {
+        let a = auth();
+        let (_, plain) = a.identify(Some(&format!("Bearer {TOKEN}"))).unwrap();
+        for variant in [
+            format!("Bearer  {TOKEN}"),
+            format!("Bearer {TOKEN} "),
+            format!("Bearer \t {TOKEN}\t"),
+            format!("Bearer      {TOKEN}"),
+        ] {
+            let (role, key) = a.identify(Some(&variant)).expect("still authenticates");
+            assert_eq!(
+                (role, key.as_str()),
+                (Role::Run, plain.as_str()),
+                "{variant:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn different_tokens_have_different_keys() {
+        let a = auth();
+        let (_, one) = a.identify(Some(&format!("Bearer {TOKEN}"))).unwrap();
+        let (_, two) = a
+            .identify(Some("Bearer other-token-0123456789abc"))
+            .unwrap();
+        assert_ne!(one, two);
+    }
+
+    #[test]
+    fn an_unknown_token_has_no_key() {
+        assert!(auth()
+            .identify(Some("Bearer nope-nope-nope-nope-nope"))
+            .is_none());
     }
 }

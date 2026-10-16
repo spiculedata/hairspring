@@ -34,3 +34,19 @@ fn property_data_from_a_worker_is_dropped_not_passed_through() {
         "the rest survives"
     );
 }
+
+#[test]
+fn a_workers_stopped_at_first_failure_flag_is_replaced_by_one_derived_from_the_status() {
+    let claims_stop = RunOutcome {
+        stopped_at_first_failure: true,
+        ..RunOutcome::passed(1, 1, 1)
+    };
+    let kept = hairspring_service::sanitize::outcome(&claims_stop, "svc").unwrap();
+    assert!(
+        !kept.stopped_at_first_failure,
+        "a passed run did not stop at a failure"
+    );
+    let denies_stop = RunOutcome::error("x");
+    let kept = hairspring_service::sanitize::outcome(&denies_stop, "svc").unwrap();
+    assert!(!kept.stopped_at_first_failure);
+}

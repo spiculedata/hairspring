@@ -1,4 +1,4 @@
-use hairspring_props::stats::{rule_of_three, wilson, Z_95};
+use hairspring_props::stats::{rule_of_three, wilson, zero_event_upper_bound, Z_95};
 
 fn close(a: f64, b: f64, tol: f64) -> bool {
     (a - b).abs() <= tol
@@ -66,4 +66,28 @@ fn rule_of_three_is_three_over_n() {
     assert!(close(rule_of_three(3000).unwrap(), 1e-3, 1e-12));
     assert!(close(rule_of_three(90).unwrap(), 3.0 / 90.0, 1e-12));
     assert_eq!(rule_of_three(0), None);
+}
+
+#[test]
+fn the_zero_event_bound_is_exact_for_every_n() {
+    assert!(close(zero_event_upper_bound(1).unwrap(), 0.95, 1e-12));
+    for n in [2u64, 10, 29, 30, 31, 300, 3000] {
+        let exact = 1.0 - 0.05f64.powf(1.0 / n as f64);
+        assert!(
+            close(zero_event_upper_bound(n).unwrap(), exact, 1e-12),
+            "n={n}"
+        );
+    }
+    assert_eq!(zero_event_upper_bound(0), None);
+}
+
+#[test]
+fn the_zero_event_bound_is_a_valid_rate_that_shrinks_as_trials_grow() {
+    let mut prev = f64::INFINITY;
+    for n in 1..=500u64 {
+        let b = zero_event_upper_bound(n).unwrap();
+        assert!(b > 0.0 && b <= 1.0, "n={n}: {b}");
+        assert!(b < prev, "n={n}: {b} is not below {prev}");
+        prev = b;
+    }
 }

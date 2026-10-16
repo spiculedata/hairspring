@@ -146,6 +146,8 @@ pub async fn trial_output(
                 format!("attachment; filename=\"{run}-{seq}-{name}.txt\""),
             ),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_owned()),
+            // The text is the program's own output. If a browser ever renders it, it gets no scripts and no origin.
+            (header::CONTENT_SECURITY_POLICY, "sandbox".to_owned()),
         ],
         text,
     )
