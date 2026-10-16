@@ -22,7 +22,7 @@ The seed strip, single objects (a run, a property, a trial), downloads, and ever
 as before. The response is JSON unless NDJSON is asked for more strongly than JSON: `application/json, application/x-ndjson`
 (a tie), `*/*`, another type, `q=0`, or a malformed header all give JSON, never `406`.
 
-A successful NDJSON response has `Content-Type: application/x-ndjson; charset=utf-8`, `X-Content-Type-Options: nosniff`
+List responses, in either form, carry `Vary: Accept`. A successful NDJSON response has `Content-Type: application/x-ndjson; charset=utf-8`, `X-Content-Type-Options: nosniff`
 and `Cache-Control: no-store`. Authentication, roles, validation, rate limits and page limits are the JSON form's: the
 same query parameters (`limit`, `cursor`, filters) apply, a page never holds more than the JSON form's page would, and
 an error is a JSON body with its usual status (`401`, `403`, `404`, `400`, `429`) even when NDJSON was asked for.
@@ -31,7 +31,11 @@ an error is a JSON body with its usual status (`401`, `403`, `404`, `400`, `429`
 
 Each line is one complete JSON object followed by `\n`. Split on `\n` only. Item lines are exactly the objects the JSON
 form lists, in the same order, with the same keys (sorted). Text that came from the program under test is under `guest`
-in an item line, as in the JSON form; it is JSON-escaped, so it cannot contain a line break or start a line of its own.
+in an item line, as in the JSON form. JSON escapes `\n`, `\r` and every other control character inside strings, and the
+NDJSON encoder additionally writes U+2028, U+2029 and U+0085 (which JSON leaves raw, but Python's `str.splitlines()` and
+JavaScript line-splitting regexes treat as line breaks) as the escapes ` `, ` ` and `\u0085`. The same
+character results when the line is parsed. So the body contains no raw `\n`, `\r`, U+2028, U+2029 or U+0085 except the
+`\n` that ends each line, and guest text cannot split an item or start a line of its own.
 
 The **last line is always the control line**, which has the key `_next`:
 
@@ -48,8 +52,10 @@ Fields of the JSON form that describe the page rather than an item (a property t
 `counts_by_status`, `total`, `guest_note`; a trial page's `run_id` and `scanned_trials`; a coverage report's `trials` and
 `downsampled`) are kept, under `page` on the control line, so that labels such as "unverified worker data" are not lost:
 
+Abbreviated example (`...` stands for fields left out here; real lines are complete JSON):
+
 ```
-$ curl -s -H 'Authorization: Bearer $TOKEN' -H 'Accept: application/x-ndjson' \
+$ curl -s -H "Authorization: Bearer $TOKEN" -H 'Accept: application/x-ndjson' \
     'http://localhost:8080/api/runs/run_0123456789abcdef/trials?limit=2'
 {"class":"...","guest":{...},"seed":"10","seq":0,"verdict":"pass", ...}
 {"class":"...","guest":{...},"seed":"11","seq":1,"verdict":"violation", ...}
@@ -72,6 +78,9 @@ then `{"_next":null}`. With no runs, only the control line is printed.
    fields under `page`.
 2. One line per property with `"_kind":"property"`, in table order (the same objects as the REST `properties` items).
 3. `{"_next":null}`. The CLI follows every page, so the list is always complete.
+
+The `run` line carries `failures` (including each failure's `message`) as the same object `GET /api/runs/{id}` already
+serves; those messages are not under `guest` there either. Treat them as untrusted text. Abbreviated example:
 
 ```
 {"_kind":"run","failures":[],"page":{"claim":{...},"total":1,...},"properties":{...},"run":{"id":"run_...","seed":1,...}}

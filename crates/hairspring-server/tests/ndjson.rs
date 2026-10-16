@@ -213,6 +213,12 @@ fn every_list_endpoint_answers_ndjson_items_then_a_control_line() {
         assert!(r.is_ndjson(), "{path}: {:?}", r.header("content-type"));
         assert_eq!(r.header("x-content-type-options"), Some("nosniff"));
         assert_eq!(r.header("cache-control"), Some("no-store"));
+        assert_eq!(r.header("vary"), Some("Accept"), "{path}");
+        assert_eq!(
+            get(server.addr(), Some(READ), None, &path).header("vary"),
+            Some("Accept"),
+            "{path}: the JSON form varies on Accept too"
+        );
         let lines = r.lines();
         let (control, items) = lines.split_last().expect("a control line");
         assert_eq!(

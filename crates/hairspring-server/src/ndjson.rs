@@ -57,19 +57,25 @@ pub fn list_response(
     value: Value,
     items_key: &str,
 ) -> Result<Response, ApiError> {
-    if !wants_ndjson(headers) {
-        return Ok(Json(value).into_response());
-    }
-    let listing = Listing::from_json(value, items_key)
-        .ok_or_else(|| ApiError::internal(format!("`{items_key}` is not a list")))?;
-    Ok((
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static(NDJSON_CONTENT_TYPE),
-        )],
-        listing.encode(),
-    )
-        .into_response())
+    let mut response = if wants_ndjson(headers) {
+        let listing = Listing::from_json(value, items_key)
+            .ok_or_else(|| ApiError::internal(format!("`{items_key}` is not a list")))?;
+        (
+            [(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static(NDJSON_CONTENT_TYPE),
+            )],
+            listing.encode(),
+        )
+            .into_response()
+    } else {
+        Json(value).into_response()
+    };
+    // Either form depends on the request's Accept header, so a cache must key on it.
+    response
+        .headers_mut()
+        .insert(header::VARY, HeaderValue::from_static("Accept"));
+    Ok(response)
 }
 
 #[cfg(test)]

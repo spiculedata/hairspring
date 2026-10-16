@@ -58,9 +58,18 @@ impl Listing {
         self.items
             .iter()
             .chain(std::iter::once(&self.control_line()))
-            .map(|line| format!("{line}\n"))
+            .map(|line| format!("{}\n", escape_separators(&line.to_string())))
             .collect()
     }
+}
+
+/// JSON leaves U+2028, U+2029 and U+0085 raw, but common line splitters (Python `splitlines`, JavaScript regexes)
+/// treat them as line breaks. They can only occur inside JSON strings, where `\uXXXX` is the same character, so the
+/// escaped line parses to an identical value and has no raw line terminator in it.
+fn escape_separators(line: &str) -> String {
+    line.replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029")
+        .replace('\u{85}', "\\u0085")
 }
 
 #[cfg(test)]
@@ -102,10 +111,25 @@ mod tests {
 
     #[test]
     fn guest_text_with_line_breaks_stays_on_one_line() {
-        let v = json!({"trials": [{"guest": {"reason": "a\nb\r\u{2028}{\"_next\":1}"}}]});
+        let v = json!({"trials": [{"guest": {"reason": "a\nb\r{\"_next\":1}"}}]});
         let body = Listing::from_json(v, "trials").unwrap().encode();
         assert_eq!(body.matches('\n').count(), 2);
         assert!(!body.contains('\r'));
+    }
+
+    #[test]
+    fn unicode_line_separators_are_escaped_and_round_trip() {
+        let text = "a\u{2028}b\u{2029}c\u{85}d";
+        let v = json!({"trials": [{"guest": {"reason": text}}]});
+        let body = Listing::from_json(v, "trials").unwrap().encode();
+        for raw in ['\u{2028}', '\u{2029}', '\u{85}', '\r'] {
+            assert!(!body.contains(raw), "raw {raw:?} in {body:?}");
+        }
+        let want = ["a", "\\", "u2028b", "\\", "u2029c", "\\", "u0085d"].concat();
+        assert!(body.contains(&want), "{body}");
+        assert_eq!(body.matches('\n').count(), 2);
+        let first: Value = serde_json::from_str(body.split('\n').next().unwrap()).unwrap();
+        assert_eq!(first["guest"]["reason"], text);
     }
 
     #[test]
