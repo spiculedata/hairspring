@@ -133,20 +133,20 @@ int hs_line_work(struct hs_buf *b, uint64_t ops) {
   return finish(b);
 }
 
-int hs_line_thread(struct hs_buf *b, const struct hs_slot *sl) {
+int hs_line_thread(struct hs_buf *b, const struct hs_thread_totals *t) {
   open_line(b, "thread");
   put_proc(b);
   hs_put_str(b, ",\"thread\":");
-  hs_put_thread_key(b, sl->key, HS_THREAD_KEY_MAX);
+  hs_put_thread_key_padded(b, t->slot->key);
   hs_put_str(b, ",\"evals\":");
-  hs_put_u64_w(b, sl->evals);
+  hs_put_u64_w(b, t->evals);
   hs_put_str(b, ",\"tape_consumed\":");
-  hs_put_u64_w(b, sl->tape_consumed);
-  hs_put_str(b, sl->is_stable ? ",\"key_stable\":true " : ",\"key_stable\":false");
+  hs_put_u64_w(b, t->tape_consumed);
+  hs_put_str(b, t->is_stable ? ",\"key_stable\":true " : ",\"key_stable\":false");
   return finish(b);
 }
 
-int hs_line_end(struct hs_buf *b, enum hs_end_reason reason, int64_t status, uint64_t evals) {
+int hs_line_end(struct hs_buf *b, enum hs_end_reason reason, int64_t status, uint64_t evals, uint64_t threads) {
   static const char *const names[] = {"exit", "signal", "explicit"};
   open_line(b, "end");
   put_proc(b);
@@ -155,13 +155,13 @@ int hs_line_end(struct hs_buf *b, enum hs_end_reason reason, int64_t status, uin
   hs_put_str(b, "\",\"status\":");
   hs_put_i64_w(b, status);
   hs_put_str(b, ",\"sites\":");
-  hs_put_u64(b, hs_proc.n_ids);
+  hs_put_u64(b, hs_proc.n_ids < HS_MAX_IDS ? hs_proc.n_ids : HS_MAX_IDS); /* what a parser can accept */
   hs_put_str(b, ",\"evals\":");
   hs_put_u64_w(b, evals);
   hs_put_str(b, ",\"dropped\":");
   hs_put_u64_w(b, hs_proc.dropped);
   hs_put_str(b, ",\"threads\":");
-  hs_put_u64(b, hs_slots_used());
+  hs_put_u64(b, threads);
   return finish(b);
 }
 

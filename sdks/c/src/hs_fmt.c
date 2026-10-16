@@ -114,6 +114,13 @@ void hs_put_thread_key(struct hs_buf *b, const char *s, size_t max) {
   put_char(b, '"');
 }
 
+void hs_put_thread_key_padded(struct hs_buf *b, const char *s) {
+  size_t start = b->len;
+  hs_put_thread_key(b, s, HS_THREAD_KEY_MAX);
+  size_t used = b->len - start - 2u; /* the quotes */
+  hs_put_pad(b, used < HS_THREAD_KEY_MAX ? HS_THREAD_KEY_MAX - used : 0u);
+}
+
 int hs_ident_equal(const char *a, const char *b, size_t max) {
   for (size_t i = 0; i < max; i++) {
     if (a[i] == 0 || b[i] == 0) return a[i] == b[i];

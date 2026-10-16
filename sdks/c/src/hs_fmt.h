@@ -39,6 +39,9 @@ void hs_put_ident(struct hs_buf *b, const char *s, size_t max);
 /* A quoted thread key: like an id, but '#' is allowed (claim-order keys are "t#<n>"). */
 void hs_put_thread_key(struct hs_buf *b, const char *s, size_t max);
 
+/* The same, followed by spaces up to 64 key bytes, so a line's length does not depend on which key a slot got. */
+void hs_put_thread_key_padded(struct hs_buf *b, const char *s);
+
 int hs_ident_char(unsigned char c);
 /* Compare two ids as they would be sent (after replacement and truncation). */
 int hs_ident_equal(const char *a, const char *b, size_t max);

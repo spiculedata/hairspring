@@ -3,13 +3,14 @@
 ** Everything here runs at startup, at exit or in a fatal-signal handler, never at a call site. The report path uses
 ** no allocation and no stdio, so it can run from a signal handler. */
 #include <errno.h>
+#include <sched.h>
 #include <signal.h>
 #include <string.h>
 #include <unistd.h>
 
 #include "hs_internal.h"
 
-#define EINTR_RETRIES 16
+#define RETRY_LIMIT 1000 /* EINTR and EAGAIN retries per line */
 #define ALT_STACK_BYTES (64 * 1024)
 #define HS_EVAL_LINE_MAX 512 /* prefix, a 128-byte id, a kind name and the fixed members */
 
@@ -18,9 +19,62 @@ static int report_done;              /* set by the first report; hs_report_rearm
 
 void hs_test_set_sink(hs_sink_fn fn) { hs_proc.sink = fn; }
 
-/* One write(2) per line. A write of at most PIPE_BUF bytes to a pipe is atomic (PIPE_BUF is 4096 on Linux and 512
-** on macOS, where larger pipe writes may still interleave: see docs/c-sdk.md), and O_APPEND keeps each write to
-** the events file contiguous. */
+/* ---- the write path ------------------------------------------------------------------------------------------- */
+
+struct out_guard {
+  sigset_t old;
+  int saw_epipe;
+};
+
+/* A report to a closed pipe must not kill the process with SIGPIPE: block it while writing. */
+static void out_begin(struct out_guard *g) {
+  sigset_t pipe_only;
+  sigemptyset(&pipe_only);
+  sigaddset(&pipe_only, SIGPIPE);
+  pthread_sigmask(SIG_BLOCK, &pipe_only, &g->old);
+  g->saw_epipe = 0;
+}
+
+/* Restore the mask. If our own write raised a SIGPIPE, consume it first so it is not delivered on unblocking. */
+static void out_end(struct out_guard *g) {
+  if (g->saw_epipe && !sigismember(&g->old, SIGPIPE)) {
+    sigset_t pipe_only, pending;
+    sigemptyset(&pipe_only);
+    sigaddset(&pipe_only, SIGPIPE);
+    sigpending(&pending);
+    int sig = 0;
+    if (sigismember(&pending, SIGPIPE)) sigwait(&pipe_only, &sig);
+  }
+  pthread_sigmask(SIG_SETMASK, &g->old, NULL);
+}
+
+static __thread struct out_guard *current_guard; /* per thread: SIGPIPE from a write is delivered to that thread */
+
+/* Write all of [p, p+len). Returns 0, or the number of bytes written before a failure, negated, minus one. */
+static long write_all(int fd, const char *p, size_t len) {
+  size_t done = 0;
+  int retries = 0;
+  while (done < len) {
+    ssize_t w = write(fd, p + done, len - done);
+    if (w > 0) {
+      done += (size_t)w;
+      continue;
+    }
+    if (w < 0 && retries++ < RETRY_LIMIT) {
+      if (errno == EINTR) continue;
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        sched_yield();
+        continue;
+      }
+    }
+    if (w < 0 && errno == EPIPE && current_guard) current_guard->saw_epipe = 1;
+    return -(long)done - 1;
+  }
+  return 0;
+}
+
+/* One write(2) per line in the normal case. A short write (a signal, a full pipe) is completed; a line that still
+** fails after part of it went out is closed with a newline so the next line does not glue onto the fragment. */
 void hs_emit_line(const struct hs_buf *b) {
   if (hs_proc.sink) {
     hs_proc.sink(b->p, b->len);
@@ -28,12 +82,11 @@ void hs_emit_line(const struct hs_buf *b) {
   }
   if (hs_proc.fd < 0) return;
   int saved_errno = errno;
-  ssize_t w = -1;
-  for (int tries = 0; tries < EINTR_RETRIES; tries++) {
-    w = write(hs_proc.fd, b->p, b->len);
-    if (w >= 0 || errno != EINTR) break;
+  long failed = write_all(hs_proc.fd, b->p, b->len);
+  if (failed != 0) {
+    __atomic_fetch_add(&hs_proc.dropped, 1, __ATOMIC_RELAXED);
+    if (failed < -1) (void)!write(hs_proc.fd, "\n", 1);
   }
-  if (w != (ssize_t)b->len) __atomic_fetch_add(&hs_proc.dropped, 1, __ATOMIC_RELAXED);
   errno = saved_errno;
 }
 
@@ -45,21 +98,20 @@ static void send_built(int built, struct hs_buf *b) {
 
 static void fresh(struct hs_buf *b) { hs_buf_init(b, line_store, sizeof line_store); }
 
-/* A catalog line goes out once per (id, kind): the canonical record, plus any record that disagrees on kind. */
-static int wants_catalog_line(const struct hs_site *s) {
-  return s->canon && (s->canon == s || s->canon->kind != s->kind);
-}
+/* ---- startup catalog ------------------------------------------------------------------------------------------ */
 
 void hs_emit_startup(void) {
   struct hs_buf b;
   fresh(&b);
   send_built(hs_line_hello(&b), &b);
   for (const struct hs_site *s = hs_sites_begin(); s < hs_sites_end(); s++) {
-    if (!hs_site_live(s) || !wants_catalog_line(s)) continue;
+    if (!hs_site_live(s) || !s->canon || !(s->flags & HS_SITE_EMIT)) continue;
     fresh(&b);
     send_built(hs_line_catalog(&b, s), &b);
   }
 }
+
+/* ---- the report ----------------------------------------------------------------------------------------------- */
 
 static void emit_asserts(void) {
   struct hs_buf b;
@@ -70,33 +122,58 @@ static void emit_asserts(void) {
   }
 }
 
-static void emit_threads(uint64_t *evals_out, uint64_t *work_out) {
-  struct hs_buf b;
-  uint64_t evals = 0, work = 0;
+/* Read every thread's totals once. A slot counts only once its key is published (claims are lock-free, so a slot
+** can be claimed a moment before its key is written); the thread lines and `end` all come from this one reading. */
+static size_t snapshot_threads(struct hs_thread_totals *out) {
+  size_t n = 0;
   size_t used = hs_slots_used();
   for (size_t i = 0; i < used; i++) {
-    evals += __atomic_load_n(&hs_slots[i].evals, __ATOMIC_RELAXED);
-    work += __atomic_load_n(&hs_slots[i].work, __ATOMIC_RELAXED);
+    const struct hs_slot *sl = &hs_slots[i];
+    if (__atomic_load_n(&sl->key[0], __ATOMIC_ACQUIRE) == 0) continue;
+    out[n].slot = sl;
+    out[n].evals = __atomic_load_n(&sl->evals, __ATOMIC_RELAXED);
+    out[n].work = __atomic_load_n(&sl->work, __ATOMIC_RELAXED);
+    out[n].tape_consumed = __atomic_load_n(&sl->tape_consumed, __ATOMIC_RELAXED);
+    out[n].is_stable = __atomic_load_n(&sl->is_stable, __ATOMIC_RELAXED);
+    n++;
   }
+  return n;
+}
+
+static void report_body(enum hs_end_reason reason, int64_t status) {
+  if (hs_proc.startup_pending) { /* a fork child announces itself only now, so an exec into another image leaves nothing */
+    hs_proc.startup_pending = 0;
+    hs_emit_startup();
+  }
+  hs_catalog_sum();
+  emit_asserts();
+  struct hs_thread_totals totals[HS_MAX_THREADS];
+  size_t n = snapshot_threads(totals);
+  uint64_t evals = 0, work = 0;
+  for (size_t i = 0; i < n; i++) {
+    evals += totals[i].evals;
+    work += totals[i].work;
+  }
+  struct hs_buf b;
   fresh(&b);
   send_built(hs_line_work(&b, work), &b);
-  for (size_t i = 0; i < used; i++) {
+  for (size_t i = 0; i < n; i++) {
     fresh(&b);
-    send_built(hs_line_thread(&b, &hs_slots[i]), &b);
+    send_built(hs_line_thread(&b, &totals[i]), &b);
   }
-  *evals_out = evals;
-  *work_out = work;
+  fresh(&b);
+  send_built(hs_line_end(&b, reason, status, evals, n), &b);
 }
 
 void hs_report_now(enum hs_end_reason reason, int64_t status) {
   if (__atomic_exchange_n(&report_done, 1, __ATOMIC_ACQ_REL)) return;
-  hs_catalog_sum();
-  emit_asserts();
-  uint64_t evals = 0, work = 0;
-  emit_threads(&evals, &work);
-  struct hs_buf b;
-  fresh(&b);
-  send_built(hs_line_end(&b, reason, status, evals), &b);
+  struct out_guard guard;
+  out_begin(&guard);
+  current_guard = &guard;
+  report_body(reason, status);
+  current_guard = NULL;
+  /* After a fatal signal the process is about to die: keep SIGPIPE blocked rather than risk dying of it first. */
+  if (reason != HS_END_SIGNAL) out_end(&guard);
 }
 
 void hs_report_rearm(void) { __atomic_store_n(&report_done, 0, __ATOMIC_RELEASE); }
@@ -110,12 +187,13 @@ static void on_fatal_signal(int sig) {
   raise(sig); /* SA_RESETHAND restored the default action, so this ends the process as it would have ended */
 }
 
-void hs_install_signal_handlers(void) {
+int hs_install_signal_handlers(void) {
+  int failures = 0;
   stack_t ss;
   memset(&ss, 0, sizeof ss);
   ss.ss_sp = alt_stack;
   ss.ss_size = sizeof alt_stack;
-  sigaltstack(&ss, NULL);
+  if (sigaltstack(&ss, NULL) != 0) failures++;
   static const int signals[] = {SIGSEGV, SIGBUS, SIGABRT, SIGFPE, SIGILL, SIGTERM};
   for (size_t i = 0; i < sizeof signals / sizeof signals[0]; i++) {
     struct sigaction sa;
@@ -123,8 +201,9 @@ void hs_install_signal_handlers(void) {
     sa.sa_handler = on_fatal_signal;
     sa.sa_flags = SA_ONSTACK | SA_RESETHAND | SA_NODEFER;
     sigemptyset(&sa.sa_mask);
-    sigaction(signals[i], &sa, NULL);
+    if (sigaction(signals[i], &sa, NULL) != 0) failures++;
   }
+  return failures;
 }
 
 /* ---- eval lines (perturbing) ---------------------------------------------------------------------------------- */
@@ -146,6 +225,11 @@ int hs_eval_line(const char *id, const char *type, int ok) {
   char local[HS_EVAL_LINE_MAX]; /* its own buffer: eval lines may come from several threads at once */
   hs_buf_init(&b, local, sizeof local);
   if (hs_line_eval(&b, id, type, ok) != 0) return -1;
+  struct out_guard guard;
+  out_begin(&guard);
+  current_guard = &guard;
   hs_emit_line(&b);
+  current_guard = NULL;
+  out_end(&guard);
   return 0;
 }

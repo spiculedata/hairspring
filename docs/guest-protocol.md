@@ -59,6 +59,10 @@ disagrees with the lines that arrived, or `end.sites` with the catalog, or a cat
 `end` arrived, the trial is marked degraded. `key_stable` defaults to true and is false for keys assigned by claim
 order (`t#1`), which may differ between schedules.
 
+`end.status` is advisory: it is what the SDK could learn about the exit status (a signal number for `reason:
+signal`, the value passed to `exit` where the runtime shows it, otherwise 0). The engine always uses the operating
+system's wait status to decide how a process ended.
+
 `tape_consumed` is the number of bytes read from that thread's tape stream, counting reads past the end of the tape
 (an exhausted tape returns zeros and keeps counting).
 

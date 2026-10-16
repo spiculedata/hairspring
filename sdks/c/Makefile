@@ -11,18 +11,19 @@ OPT ?= -O2
 BUILD ?= build/$(notdir $(CC))$(subst -,,$(OPT))
 
 WARN := -Wall -Wextra -Werror
-CFLAGS += -std=gnu11 $(OPT) -g $(WARN) -pthread
+EXTRA ?=
+CFLAGS += -std=gnu11 $(OPT) -g $(WARN) -pthread $(EXTRA)
 LDFLAGS += -pthread
 
-SDK_SRC := src/hairspring.c src/hs_catalog.c src/hs_fmt.c src/hs_lines.c src/hs_report.c
+SDK_SRC := src/hairspring.c src/hs_catalog.c src/hs_fmt.c src/hs_identity.c src/hs_lines.c src/hs_report.c
 SDK_OBJ := $(SDK_SRC:src/%.c=$(BUILD)/%.o)
 SDK_HDR := include/hairspring.h $(wildcard src/*.h)
 LIB := $(BUILD)/libhairspring.a
 
-SCENARIOS := basic merge fork threads crash exit_status eval big small
+SCENARIOS := basic merge fork threads crash exit_status eval big forkexec spawn closefd manyids conflict empty limits plain_exit segv abort threadsegv alive alarm
 SAMPLES := $(SCENARIOS:%=$(BUILD)/hs_sample_%)
 
-.PHONY: all lib fixtures test unit proc nosyscall disasm conformance clean
+.PHONY: all lib fixtures test unit proc nosyscall nosyscall-pic cxx staticfail disasm conformance clean
 
 all: lib
 
@@ -69,7 +70,28 @@ disasm: $(BUILD)/callsite.o
 $(BUILD)/callsite.o: tests/fixtures/callsite.c $(SDK_HDR) | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-test: unit proc nosyscall
+# The same test with everything built position-independent (a static archive linked into a PIE or a shared object).
+nosyscall-pic:
+	$(MAKE) nosyscall BUILD=$(BUILD)-pic EXTRA=-fPIC
+
+# The macros must compile and report from C++ (needs a C++ compiler of the same family; skipped if absent).
+CXXC := $(if $(findstring clang,$(CC)),clang++,$(if $(findstring gcc,$(CC)),g++,c++))
+
+$(BUILD)/cxx_sample: tests/fixtures/cxx_sample.cc $(LIB) $(SDK_HDR) | $(BUILD)
+	$(CXXC) -std=gnu++17 $(OPT) -g $(WARN) -pthread -o $@ $< $(LIB) $(LDFLAGS)
+
+cxx:
+	@if command -v $(CXXC) >/dev/null 2>&1; then $(MAKE) $(BUILD)/cxx_sample && \
+	  out=$$($(BUILD)/cxx_sample 2>&1) && echo "$$out" | grep -q '"kind":"end"' && echo "ok   C++ sample reports" ; \
+	else echo "skip: $(CXXC) not installed"; fi
+
+# These must be rejected at compile time.
+staticfail:
+	@for f in tests/fixtures/fail_*.c; do \
+	  if $(CC) $(CFLAGS) -fsyntax-only $$f 2>/dev/null; then echo "FAIL $$f compiled"; exit 1; \
+	  else echo "ok   $$f is rejected"; fi; done
+
+test: unit proc nosyscall nosyscall-pic staticfail cxx
 
 conformance: $(SAMPLES)
 	cd ../.. && HS_C_SDK_BUILD=$(abspath $(BUILD)) cargo test -p hairspring-props --test c_sdk

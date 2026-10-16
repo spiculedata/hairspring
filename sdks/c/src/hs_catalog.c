@@ -34,7 +34,7 @@ struct hs_site *hs_sites_end(void) { return SEC_STOP; }
 const char *hs_offline_begin(void) { return STR_START; }
 const char *hs_offline_end(void) { return STR_STOP; }
 
-#define TABLE_SIZE 16384u /* open addressing; a power of two comfortably above 2 * HS_MAX_IDS */
+#define TABLE_SIZE 32768u /* open addressing at most half full: a power of two above 2 * HS_MAX_DISTINCT */
 #define KIND_SHIFT 56
 #define HASH_MIX 0x9e3779b97f4a7c15ULL
 
@@ -50,8 +50,18 @@ static struct hs_site *lookup(const struct hs_site *s, size_t *free_slot) {
     }
     if (t->id_hash == s->id_hash && hs_ident_equal(t->id, s->id, HS_ID_MAX)) return t;
   }
-  *free_slot = TABLE_SIZE; /* full: cannot happen below HS_MAX_IDS entries */
+  *free_slot = TABLE_SIZE; /* full: cannot happen below HS_MAX_DISTINCT entries */
   return NULL;
+}
+
+static uint64_t pair_hash(const struct hs_site *s) { return (s->id_hash ^ ((uint64_t)s->kind << KIND_SHIFT)) * HASH_MIX; }
+
+/* Is there an earlier record with the same id and kind as `s`? Only asked for records whose kind differs from the
+** canonical one, which is rare, so the scan costs nothing in practice. */
+static int earlier_same_pair(const struct hs_site *s) {
+  for (const struct hs_site *t = hs_sites_begin(); t < s; t++)
+    if (hs_site_live(t) && t->canon == s->canon && t->kind == s->kind) return 1;
+  return 0;
 }
 
 uint64_t hs_catalog_build(void) {
@@ -59,20 +69,30 @@ uint64_t hs_catalog_build(void) {
   uint64_t ids = 0, excess = 0, hash = 0;
   for (struct hs_site *s = hs_sites_begin(); s < hs_sites_end(); s++) {
     if (!hs_site_live(s)) continue;
+    s->flags = 0;
     s->id_hash = hs_ident_hash(s->id, HS_ID_MAX);
     size_t free_slot = 0;
     struct hs_site *found = lookup(s, &free_slot);
     if (found) {
       s->canon = found;
-    } else if (ids < HS_MAX_IDS && free_slot < TABLE_SIZE) {
+    } else if (ids < HS_MAX_DISTINCT && free_slot < TABLE_SIZE) {
       table[free_slot] = s;
       s->canon = s;
+      s->flags = HS_SITE_EMIT;
       ids++;
-      hash += (s->id_hash ^ ((uint64_t)s->kind << KIND_SHIFT)) * HASH_MIX;
+      hash += pair_hash(s);
     } else {
       s->canon = NULL;
       excess++;
     }
+  }
+  /* A record that declares the id with a different kind is a conflict the engine must see: it gets its own catalog
+  ** line (once per kind) and its pair joins the hash. */
+  for (struct hs_site *s = hs_sites_begin(); s < hs_sites_end(); s++) {
+    if (!hs_site_live(s) || !s->canon || s->canon == s || s->canon->kind == s->kind) continue;
+    if (earlier_same_pair(s)) continue;
+    s->flags = HS_SITE_EMIT;
+    hash += pair_hash(s);
   }
   hs_proc.n_ids = ids;
   hs_proc.catalog_hash = hash;
@@ -80,6 +100,14 @@ uint64_t hs_catalog_build(void) {
 }
 
 static const struct hs_witness *witness_if_set(const struct hs_witness *w) { return w->ord != 0 ? w : NULL; }
+
+/* Keep `cur` unless `cand` is an earlier evaluation by the same thread. Witnesses of different threads cannot be
+** ordered (ordinals are per thread), so the first in section order stands. */
+static const struct hs_witness *prefer(const struct hs_witness *cur, const struct hs_witness *cand) {
+  if (!cand) return cur;
+  if (!cur) return cand;
+  return (cand->slot == cur->slot && cand->ord < cur->ord) ? cand : cur;
+}
 
 void hs_catalog_sum(void) {
   for (struct hs_site *s = hs_sites_begin(); s < hs_sites_end(); s++) {
@@ -90,12 +118,13 @@ void hs_catalog_sum(void) {
     s->pick_false = s->sum_falses ? witness_if_set(&s->first_false) : NULL;
   }
   for (struct hs_site *s = hs_sites_begin(); s < hs_sites_end(); s++) {
-    if (!hs_site_live(s) || !s->canon || s->canon == s) continue;
+    /* Records of another kind keep their counts to themselves: folding them in would hide the conflict's size. */
+    if (!hs_site_live(s) || !s->canon || s->canon == s || s->canon->kind != s->kind) continue;
     struct hs_site *c = s->canon;
     c->sum_trues += __atomic_load_n(&s->trues, __ATOMIC_RELAXED);
     c->sum_falses += __atomic_load_n(&s->falses, __ATOMIC_RELAXED);
-    if (!c->pick_true && s->trues) c->pick_true = witness_if_set(&s->first_true);
-    if (!c->pick_false && s->falses) c->pick_false = witness_if_set(&s->first_false);
+    if (s->trues) c->pick_true = prefer(c->pick_true, witness_if_set(&s->first_true));
+    if (s->falses) c->pick_false = prefer(c->pick_false, witness_if_set(&s->first_false));
   }
 }
 

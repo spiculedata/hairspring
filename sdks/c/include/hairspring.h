@@ -53,12 +53,15 @@ struct hs_witness {
 };
 
 /* One record per call site, living in the `hs_catalog_v1` section. The fields after `kind` are the live counters. */
+#define HS_SITE_EMIT 1u /* flags: this record is the first of its (id, kind) pair and gets a catalog line */
+
 struct hs_site {
   const char *id;
   const char *msg;
   const char *file;
   uint32_t line;
-  uint32_t kind;
+  uint16_t kind;
+  uint16_t flags;
   uint64_t trues;
   uint64_t falses;
   struct hs_witness first_true;
@@ -68,9 +71,17 @@ struct hs_site {
   uint64_t id_hash;
   uint64_t sum_trues;
   uint64_t sum_falses;
-  const struct hs_witness *pick_true;  /* first witness among the records that share this id, or NULL */
+  const struct hs_witness *pick_true;  /* the witness chosen among the records that share this id, or NULL */
   const struct hs_witness *pick_false;
-};
+} __attribute__((aligned(64))); /* one cache line boundary per record: sites of different hot loops do not share */
+
+#ifdef __cplusplus
+#define HS__STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+#else
+#define HS__STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+#endif
+
+HS__STATIC_ASSERT(sizeof(struct hs_site) % 64 == 0, "records must tile the catalog section without padding");
 
 /* Per-thread state. Call sites touch only `evals`, `index` and `scratch`. */
 struct hs_slot {
@@ -85,7 +96,16 @@ struct hs_slot {
 
 /* Claim the calling thread's slot (slow path, first call per thread). Never returns NULL. */
 struct hs_slot *hs__claim(void);
-extern __thread struct hs_slot *hs__tls;
+
+/* The thread's slot pointer. initial-exec keeps the access a single load from the thread pointer on Linux, with no
+** __tls_get_addr call (which could allocate on first use in a dlopen'd object). The price: the SDK must be part of the
+** executable or of a library loaded at startup, not dlopen'd. Not available on Mach-O. */
+#if defined(__linux__)
+#define HS__TLS_MODEL __attribute__((tls_model("initial-exec")))
+#else
+#define HS__TLS_MODEL
+#endif
+extern __thread struct hs_slot *hs__tls HS__TLS_MODEL;
 
 #if defined(__APPLE__)
 #define HS__SECTION "__DATA,__hs_catalog"
@@ -159,24 +179,36 @@ HS__ALWAYS_INLINE void hs__hit(struct hs_site *s, const int64_t *v) {
 
 /* The record (live counters) and its offline JSON twin. `id_` and `msg_` must be string literals. */
 #define HS__SITE(kind_, kind_name_, must_, id_, msg_)                                                          \
+  HS__STATIC_ASSERT(sizeof(id_) > 1 && sizeof(id_) <= 129, "an id is 1 to 128 bytes");                         \
+  HS__STATIC_ASSERT(sizeof(msg_) <= 513, "a message is at most 512 bytes");                                    \
   static struct hs_site hs__site __attribute__((used, section(HS__SECTION))) HS__RETAIN = {                    \
-      (id_), (msg_), __FILE__, __LINE__, (kind_), 0, 0, {0, 0, {0, 0, 0, 0}}, {0, 0, {0, 0, 0, 0}}, 0, 0, 0, 0, 0, 0}; \
+      (id_), (msg_), __FILE__, __LINE__, (kind_), 0, 0, 0, {0, 0, {0, 0, 0, 0}}, {0, 0, {0, 0, 0, 0}},        \
+      0, 0, 0, 0, 0, 0};                                                                                       \
   static const char hs__offline[] __attribute__((used, section(HS__STR_SECTION))) HS__RETAIN =                 \
       "{\"v\":1,\"kind\":\"catalog\",\"id\":\"" id_ "\",\"type\":\"" kind_name_ "\",\"must_hit\":" must_       \
       ",\"msg\":\"" msg_ "\",\"loc\":{\"file\":\"" __FILE__ "\",\"line\":" HS__STR(__LINE__) "}}"
 
 /* Up to four integer values; missing ones are zero. */
+#ifdef __cplusplus
+#define HS__VALS(...) (hs__make_vals(__VA_ARGS__).v)
+#define HS__CHECK_VALS(...) /* hs__make_vals counts them */
+#else
 #define HS__VALS(...) ((const int64_t[4]){__VA_ARGS__})
+#define HS__CHECK_VALS(...) \
+  HS__STATIC_ASSERT(sizeof((const int64_t[]){0, ##__VA_ARGS__}) <= 5 * sizeof(int64_t), "at most 4 values")
+#endif
 
 #define HS__COND(kind_, kind_name_, must_, cond_, id_, msg_, ...) \
   do {                                                            \
     HS__SITE(kind_, kind_name_, must_, id_, msg_);                \
+    HS__CHECK_VALS(__VA_ARGS__);                                  \
     hs__eval(&hs__site, (uint64_t)!!(cond_), HS__VALS(__VA_ARGS__)); \
   } while (0)
 
 #define HS__POINT(kind_, kind_name_, must_, id_, msg_, ...) \
   do {                                                      \
     HS__SITE(kind_, kind_name_, must_, id_, msg_);          \
+    HS__CHECK_VALS(__VA_ARGS__);                            \
     hs__hit(&hs__site, HS__VALS(__VA_ARGS__));              \
   } while (0)
 
@@ -220,6 +252,19 @@ void hs_report(void);
 void hs_exit(int status) __attribute__((noreturn));
 
 #ifdef __cplusplus
+}
+
+/* C++: the values of any integer or enum types, converted to int64_t; fewer than four are zero-filled. */
+template <typename... T>
+struct hs__vals_t {
+  static_assert(sizeof...(T) <= 4, "at most 4 values");
+  int64_t v[4];
+  explicit hs__vals_t(T... t) : v{static_cast<int64_t>(t)...} {}
+};
+
+template <typename... T>
+inline hs__vals_t<T...> hs__make_vals(T... t) {
+  return hs__vals_t<T...>(t...);
 }
 #endif
 
