@@ -7,8 +7,8 @@ a v2.
 
 ## Status
 
-M1 partial: the protocol and the parser are done; the C SDK (C1) is outstanding. The wire format is frozen once the
-M1 review findings are closed.
+Status: the protocol and the parser are done; the C SDK is outstanding. The wire format is frozen once the review
+findings are closed.
 
 ## Transport
 
@@ -148,8 +148,8 @@ handlers off.
 
 ## Tape v1
 
-Stub. Only the layout is still open: how a thread's stream is carved from the tape file. It is to be agreed with W2
-before `hs_choice` ships at M2. The unit of `tape_consumed` is already fixed: bytes (see Messages).
+Stub. Only the layout is still open: how a thread's stream is carved from the tape file. It is to be agreed with the
+search component before `hs_choice` ships. The unit of `tape_consumed` is already fixed: bytes (see Messages).
 
 ## Legacy
 
