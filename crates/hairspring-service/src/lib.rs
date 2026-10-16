@@ -1,18 +1,31 @@
 //! Service layer: the single place that turns "start a run / lease a job /
 //! record an outcome / replay a bundle" into store and engine calls. The CLI,
 //! the REST server, remote workers and the MCP server all go through it.
+mod claim_view;
 pub mod claims;
 mod completion;
 mod error;
 mod ingest;
 mod jobs;
 mod properties;
+mod property_query;
+mod query;
 pub mod sanitize;
+mod scan;
+mod trial_query;
 mod types;
+pub mod view;
 
+pub use claim_view::ClaimView;
 pub use completion::{completion_of, RunCompletion};
 pub use error::ServiceError;
+pub use query::{
+    PropertyQuery, SeedQuery, TrialQuery, DEFAULT_PAGE, MAX_PAGE, MAX_PREFIX_BYTES, MAX_SEED_PAGE,
+};
 pub use types::*;
+pub use view::{
+    Coverage, PropertyDetail, PropertyPage, PropertyRow, TrialDetail, TrialPage, TrialRow,
+};
 
 use hairspring_core::bundle::Bundle;
 use hairspring_engine::config::TargetKind;

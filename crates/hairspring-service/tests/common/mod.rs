@@ -10,6 +10,8 @@ use hairspring_service::{LeasedJob, Service, StartRun};
 use hairspring_store::{SqliteStore, Store};
 use std::sync::Arc;
 
+pub mod fixture;
+
 pub fn setup() -> (Service, Arc<dyn Store>, Engine) {
     let registry = Arc::new(default_registry());
     let engine = Engine::new(registry.clone(), Config::from_registry(&registry));
@@ -58,6 +60,30 @@ pub fn props(id: &str, kind: AssertKind, trues: u64, falses: u64) -> TrialProps 
     ]
     .concat();
     TrialEvents::from_output(text.as_bytes()).fold()
+}
+
+/// One id of a multi-id trial: `(id, kind, msg, trues, falses)`.
+pub type IdSpec<'a> = (&'a str, AssertKind, &'a str, u64, u64);
+
+/// A trial in which one process reports several ids, each with its own message.
+pub fn props_multi(ids: &[IdSpec<'_>]) -> TrialProps {
+    let ev = |j: String| format!("HAIRSPRING_EVENT {j}\n");
+    let witness = |on: bool| {
+        if on {
+            r#"{"thread":"w-0","ord":5,"vals":[1,2,3,4]}"#
+        } else {
+            "null"
+        }
+    };
+    let mut lines = vec![ev(r#"{"v":1,"kind":"hello","sdk":"c","sdk_version":"0.1.0","proc":"p1","catalog_hash":"x","signal_handlers":false}"#.to_string())];
+    for (id, kind, msg, _, _) in ids {
+        lines.push(ev(format!(r#"{{"v":1,"kind":"catalog","proc":"p1","id":"{id}","type":"{}","must_hit":{},"msg":{},"loc":{{"file":"f.c","line":7,"func":"fn"}}}}"#, kind.as_str(), kind.must_hit(), serde_json::to_string(msg).unwrap())));
+    }
+    for (id, _, _, trues, falses) in ids {
+        lines.push(ev(format!(r#"{{"v":1,"kind":"assert","proc":"p1","id":"{id}","hits":{},"trues":{trues},"falses":{falses},"first_false":{},"first_true":{}}}"#, trues + falses, witness(*falses > 0), witness(*trues > 0))));
+    }
+    lines.push(ev(format!(r#"{{"v":1,"kind":"end","proc":"p1","reason":"exit","status":0,"sites":{},"evals":1,"dropped":0,"threads":0}}"#, ids.len())));
+    TrialEvents::from_output(lines.concat().as_bytes()).fold()
 }
 
 /// Builds trial reports the way a worker does.

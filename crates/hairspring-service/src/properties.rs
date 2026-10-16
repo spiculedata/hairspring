@@ -24,9 +24,13 @@ pub(crate) struct Folded {
     pub stats: Vec<PropertyStat>,
     pub summary: RunSummary,
     pub catalog: RunCatalog,
+    /// Trials that reported cleanly: the denominator of every rate.
+    pub rated_trials: u64,
+    /// Rated trials that were not perturbing: the trials a must-hit claim is made over.
+    pub claimable_trials: u64,
 }
 
-fn status_name(s: PropertyStatus) -> &'static str {
+pub(crate) fn status_name(s: PropertyStatus) -> &'static str {
     match s {
         PropertyStatus::Pass => "pass",
         PropertyStatus::Violation => "violation",
@@ -35,7 +39,7 @@ fn status_name(s: PropertyStatus) -> &'static str {
     }
 }
 
-fn parse_status(s: &str) -> Option<PropertyStatus> {
+pub(crate) fn parse_status(s: &str) -> Option<PropertyStatus> {
     Some(match s {
         "pass" => PropertyStatus::Pass,
         "violation" => PropertyStatus::Violation,
@@ -168,6 +172,7 @@ impl Service {
         let catalog =
             RunCatalog::from_rows(rows).map_err(|e| ServiceError::Internal(e.to_string()))?;
         let mut run = RunProps::with_id_cap(MAX_IDS_PER_RUN);
+        let (mut rated_trials, mut claimable_trials) = (0u64, 0u64);
         let mut after = None;
         loop {
             let page = self.store.list_trial_digests(run_id, after, PAGE)?;
@@ -176,6 +181,10 @@ impl Service {
             for row in &page {
                 let digest = TrialDigest::decode(&row.digest)
                     .map_err(|e| ServiceError::Internal(format!("trial {}: {e}", row.seq)))?;
+                let f = digest.flags;
+                let rated = !f.excluded && !f.inconclusive && !f.degraded && !f.report_missing;
+                rated_trials += u64::from(rated);
+                claimable_trials += u64::from(rated && !f.perturbing);
                 run = run.add_digest(row.seed, &digest, &catalog);
             }
         }
@@ -184,6 +193,8 @@ impl Service {
             stats: run.finish(),
             summary,
             catalog,
+            rated_trials,
+            claimable_trials,
         })
     }
 
@@ -202,20 +213,34 @@ impl Service {
             .iter()
             .filter_map(|s| folded.catalog.index_of(&s.id).map(|idx| to_row(s, idx)))
             .collect();
-        (rows, summary_json(&folded.summary))
+        (rows, summary_json(folded))
     }
 
     /// The statistics stored for a run, with intervals recomputed from the stored counts.
     pub fn property_stats(&self, run_id: &str) -> Result<Vec<PropertyStat>> {
+        Ok(self
+            .indexed_stats(run_id)?
+            .into_iter()
+            .map(|(_, s)| s)
+            .collect())
+    }
+
+    /// The same statistics paired with their catalog index, sorted by id.
+    pub(crate) fn indexed_stats(&self, run_id: &str) -> Result<Vec<(u32, PropertyStat)>> {
         let catalog = self.store.get_catalog(run_id)?;
         let by_idx: BTreeMap<u32, &CatalogRowRecord> = catalog.iter().map(|c| (c.idx, c)).collect();
-        let mut stats: Vec<PropertyStat> = self
+        let mut stats: Vec<(u32, PropertyStat)> = self
             .store
             .list_run_properties(run_id)?
             .iter()
-            .filter_map(|row| by_idx.get(&row.idx).and_then(|c| from_row(row, c)))
+            .filter_map(|row| {
+                by_idx
+                    .get(&row.idx)
+                    .and_then(|c| from_row(row, c))
+                    .map(|s| (row.idx, s))
+            })
             .collect();
-        stats.sort_by(|a, b| a.id.cmp(&b.id));
+        stats.sort_by(|a, b| a.1.id.cmp(&b.1.id));
         Ok(stats)
     }
 
@@ -275,15 +300,107 @@ impl Service {
     }
 }
 
-/// The run summary as JSON. The kind-mismatch details are left out: they carry ids and failure text from the program
-/// under test, and nothing that reads a stored run should meet that text outside a marked `guest` object. The count
-/// of mismatches is kept.
-fn summary_json(summary: &RunSummary) -> Option<String> {
-    let plain = RunSummary {
-        kind_mismatch_details: Vec::new(),
-        ..summary.clone()
+/// The run summary as JSON, with the rated and claimable trial counts beside it (the stored summary is still a valid
+/// [`RunSummary`]: readers that do not know the extra fields ignore them). The kind-mismatch details are left out:
+/// they carry ids and failure text from the program under test, and nothing that reads a stored run should meet that
+/// text outside a marked `guest` object. The count of mismatches is kept.
+fn summary_json(folded: &Folded) -> Option<String> {
+    let plain = StoredSummary {
+        summary: RunSummary {
+            kind_mismatch_details: Vec::new(),
+            ..folded.summary.clone()
+        },
+        counts: StoredCounts {
+            rated_trials: Some(folded.rated_trials),
+            claimable_trials: Some(folded.claimable_trials),
+        },
     };
     serde_json::to_string(&plain)
         .ok()
         .filter(|s| s.len() <= MAX_SUMMARY_BYTES)
+}
+
+/// The counts a run summary written before they were recorded does not have.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct StoredCounts {
+    #[serde(default)]
+    pub rated_trials: Option<u64>,
+    #[serde(default)]
+    pub claimable_trials: Option<u64>,
+}
+
+#[derive(serde::Serialize)]
+struct StoredSummary {
+    #[serde(flatten)]
+    summary: RunSummary,
+    #[serde(flatten)]
+    counts: StoredCounts,
+}
+
+/// A stored run's summary and the counts beside it. Both are `None`/default for a run with no stored summary.
+pub(crate) fn stored_summary(run: &RunRecord) -> (RunSummary, StoredCounts) {
+    let Some(json) = run.property_summary_json.as_deref() else {
+        return Default::default();
+    };
+    (
+        serde_json::from_str(json).unwrap_or_default(),
+        serde_json::from_str(json).unwrap_or_default(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_with(json: Option<&str>) -> RunRecord {
+        RunRecord {
+            id: "run_0000000000000000".into(),
+            target: "t".into(),
+            backend: "sim".into(),
+            state: hairspring_store::RunState::Passed,
+            seed: 1,
+            config_json: "{}".into(),
+            created_at: 0,
+            started_at: None,
+            finished_at: None,
+            steps: 0,
+            trials: 0,
+            error: None,
+            inconclusive: 0,
+            distinct_schedules: 0,
+            work: 0,
+            mode: "search".into(),
+            stopped_at_first_failure: false,
+            property_summary_json: json.map(str::to_owned),
+            catalog_size: 0,
+            ingest_incomplete: false,
+            ingest_attempt: 0,
+            build_id: None,
+        }
+    }
+
+    #[test]
+    fn counts_beside_a_summary_are_read_back() {
+        let json = r#"{"trials":6,"perturbing_trials":0,"degraded_trials":1,"report_missing_trials":0,"conflict_trials":0,"kind_mismatches":0,"kind_mismatch_details":[],"rated_trials":5,"claimable_trials":4}"#;
+        let (summary, counts) = stored_summary(&run_with(Some(json)));
+        assert_eq!(summary.trials, 6);
+        assert_eq!(counts.rated_trials, Some(5));
+        assert_eq!(counts.claimable_trials, Some(4));
+    }
+
+    #[test]
+    fn a_summary_stored_before_the_counts_existed_reports_them_as_unknown_not_zero() {
+        let json = r#"{"trials":6,"perturbing_trials":0,"degraded_trials":1,"report_missing_trials":0,"conflict_trials":0,"kind_mismatches":0,"kind_mismatch_details":[]}"#;
+        let (summary, counts) = stored_summary(&run_with(Some(json)));
+        assert_eq!(summary.trials, 6);
+        assert_eq!(counts, StoredCounts::default());
+        assert_eq!(counts.rated_trials, None);
+    }
+
+    #[test]
+    fn a_run_with_no_stored_summary_has_unknown_counts() {
+        let (summary, counts) = stored_summary(&run_with(None));
+        assert_eq!(summary, RunSummary::default());
+        assert_eq!(counts.rated_trials, None);
+    }
 }

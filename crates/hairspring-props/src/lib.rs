@@ -4,10 +4,12 @@
 //! input can make it panic.
 
 pub mod catalog;
+pub mod claim_text;
 mod decode;
 pub mod digest;
 pub mod event;
 mod fold;
+pub mod honesty;
 mod json;
 pub mod limits;
 pub mod line;
