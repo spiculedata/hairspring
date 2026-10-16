@@ -79,6 +79,18 @@ compiler instantiates that static once per instantiation, as a COMDAT (vague-lin
   function was placed correctly, so the difference is the template. Why g++ does not apply the section attribute to the
   template's static is **not established**: it is inferred, not verified, to be a compiler behaviour for statics in
   template instantiations. Other g++ versions are untested here.
+* **g++ 13.3 and mixed files** (observed on Linux x86-64, one layout): a file that has a call site in an `inline`
+  function **and** a call site in an ordinary (non-inline, non-template) function does not compile; g++ reports
+  `'hs__site' causes a section type conflict with 'hs__site'` (and the same for `hs__offline`). Template sites were
+  not part of that error. Inference, not verified: g++ puts the static of an inline function into the named section as
+  a COMDAT-group member and the static of an ordinary function into the same-named section without a group, and
+  rejects one section name with different flags in a file. A file with only inline and template sites compiles, and
+  so does a file with only ordinary sites. `make cxx-mixed` checks the observed behaviour per compiler (g++ must fail
+  with that message, clang must compile and catalogue both sites); it is not part of `make test` because it asserts
+  compiler behaviour.
+* **Advice.** For C++ use clang, which catalogues every kind of site above. With g++, keep call sites in ordinary
+  (non-inline, non-template) functions; sites in templates compile (in a file without the inline/ordinary mix) but
+  land outside the section, and the audit announces them once they are evaluated.
 * **What is detected.** Every evaluation made through a call-site macro adds one to the calling thread's `evals` and
   one to its record's `trues` or `falses`. At report time the SDK compares the sum of the threads' `evals` with the sum
   of the counters of the records it can find in the section. If the threads counted more, the difference is the number
@@ -611,8 +623,11 @@ On aarch64 Linux, gcc 13.3 and clang 18 produce the same structure with `bl __aa
 * `tests/test_audit.c`: the evaluation audit, with a call-site record deliberately placed outside the catalog section
   (the comparison, no false alarm with several threads, the diagnostic and `end.dropped` after an `exit` report and a
   signal report). `make cxx-templates` builds `tests/fixtures/cxx_templates.cc` (function templates, a class template
-  member, an inline function) and checks that each id is catalogued (clang: required) or announced as missing (other
-  compilers).
+  member, an inline function; no ordinary-function site) with its harness `cxx_templates_main.cc`, and checks that each
+  id is catalogued (clang: required) or announced as missing, with the right count (other compilers).
+  `make audit-control` builds the same fixture against a copy of the header whose records go to a section nobody
+  reads and checks that all 7 evaluations are announced. `make cxx-mixed` is the compiler-specific check described
+  above; it is not part of `make test`.
 * `tests/test_proc.c` with the programs in `tests/fixtures/hs_sample.c` (one binary per scenario, because a binary's
   catalog holds every assertion compiled into it): report shape, the same id at two call sites, fork tags and fresh
   child counters, 100 and 300 threads, crash with and without `HAIRSPRING_SIGNAL_REPORT` (also a null dereference,
