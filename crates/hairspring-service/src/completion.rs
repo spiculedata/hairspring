@@ -50,6 +50,23 @@ impl RunCompletion {
     }
 }
 
+/// The parenthesised qualifier a headline carries when the run did not simply finish with trusted data: the
+/// completion label, and "unverified worker data" when any contributing worker is not trusted. `None` for a complete
+/// run on trusted data, whose headline needs none.
+pub(crate) fn headline_qualifier(
+    completion: &RunCompletion,
+    unverified_worker_data: bool,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    if *completion != RunCompletion::Complete {
+        parts.push(completion.label());
+    }
+    if unverified_worker_data {
+        parts.push("unverified worker data".to_owned());
+    }
+    (!parts.is_empty()).then(|| format!("({})", parts.join("; ")))
+}
+
 /// The trial budget a run was started with, if it was recorded.
 fn budget_of(run: &RunRecord) -> Option<Budget> {
     #[derive(serde::Deserialize)]
@@ -112,6 +129,46 @@ mod tests {
         max_trials: 10,
         wall_secs: 30,
     };
+
+    #[test]
+    fn a_complete_run_on_trusted_data_has_no_headline_qualifier() {
+        assert_eq!(headline_qualifier(&RunCompletion::Complete, false), None);
+    }
+
+    #[test]
+    fn an_incomplete_run_is_qualified_by_its_completion_label() {
+        for completion in [
+            RunCompletion::EndedEarly,
+            RunCompletion::Aborted,
+            RunCompletion::StoppedAtFirstFailure,
+            RunCompletion::Running,
+            RunCompletion::TimeOrStepLimited {
+                trials_run: 3,
+                trials_budget: 10,
+            },
+        ] {
+            assert_eq!(
+                headline_qualifier(&completion, false),
+                Some(format!("({})", completion.label()))
+            );
+        }
+    }
+
+    #[test]
+    fn untrusted_data_is_named_on_an_otherwise_complete_run() {
+        assert_eq!(
+            headline_qualifier(&RunCompletion::Complete, true).as_deref(),
+            Some("(unverified worker data)")
+        );
+    }
+
+    #[test]
+    fn both_qualifiers_share_one_pair_of_parentheses() {
+        assert_eq!(
+            headline_qualifier(&RunCompletion::EndedEarly, true).as_deref(),
+            Some("(ended early: trial data is incomplete; unverified worker data)")
+        );
+    }
 
     #[test]
     fn the_wall_clock_limit_is_reached_at_exactly_wall_secs() {

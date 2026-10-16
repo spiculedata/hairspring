@@ -521,3 +521,64 @@ fn the_never_hit_list_holds_the_usable_trials_that_did_not_reach_the_property() 
         ["2"]
     );
 }
+
+#[test]
+fn the_headline_of_a_clean_run_on_untrusted_data_says_so() {
+    let (svc, run) = clean_run(false);
+    let p = svc
+        .property_page(&run, &PropertyQuery::default(), None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        p.headline,
+        "No trial failed a property in 3 rated trials (unverified worker data)"
+    );
+}
+
+#[test]
+fn the_headline_of_a_clean_run_on_trusted_data_has_no_qualifier() {
+    let (svc, run) = clean_run(true);
+    let p = svc
+        .property_page(&run, &PropertyQuery::default(), None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(p.headline, "No trial failed a property in 3 rated trials");
+}
+
+#[test]
+fn the_headline_of_a_run_ended_early_carries_its_completion_label() {
+    let (svc, _store, engine) = setup();
+    let job = lease_with_budget(&svc, &engine, &local(), 10);
+    let reports = trial_set(&mut Recorder::new());
+    svc.ingest_trials(&job.job_id, &local(), &reports).unwrap();
+    finish(&svc, &job, &local(), passed(6, Some(6)));
+    let p = svc
+        .property_page(&job.run_id, &PropertyQuery::default(), None)
+        .unwrap()
+        .unwrap();
+    assert!(
+        p.headline
+            .ends_with("(ended early: trial data is incomplete)"),
+        "{}",
+        p.headline
+    );
+}
+
+#[test]
+fn the_headline_of_a_run_stopped_at_its_first_failure_says_so() {
+    let (svc, _store, engine) = setup();
+    let job = lease_with_budget(&svc, &engine, &local(), 6);
+    let reports = trial_set(&mut Recorder::new());
+    svc.ingest_trials(&job.job_id, &local(), &reports[..3])
+        .unwrap();
+    finish(&svc, &job, &local(), failed_outcome(3));
+    let p = svc
+        .property_page(&job.run_id, &PropertyQuery::default(), None)
+        .unwrap()
+        .unwrap();
+    assert!(
+        p.headline.ends_with("(stopped at first failure)"),
+        "{}",
+        p.headline
+    );
+}
