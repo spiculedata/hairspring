@@ -5,7 +5,7 @@
 //! first confirmed failure has no rate at all, because the stop decided how many trials it ran.
 
 use crate::run::{PropertyStat, RateBasis};
-use crate::stats::{zero_event_upper_bound, EXACT_BOUND_BELOW};
+use crate::stats::zero_event_upper_bound;
 use serde::Serialize;
 
 /// One property's rate, as a page shows it.
@@ -21,7 +21,7 @@ pub enum RateCell {
         lower: f64,
         upper: f64,
     },
-    /// No events in `n` rated trials, with the approximate 95% upper bound `3/n`.
+    /// No events in `n` rated trials, with the exact one-sided 95% upper bound `1 - 0.05^(1/n)`.
     ZeroEvents {
         basis: RateBasis,
         n: u64,
@@ -89,12 +89,10 @@ impl RateCell {
                 upper,
                 ..
             } => format!("{k}/{n} ({}) [{}, {}]", pct(point), pct(lower), pct(upper)),
-            RateCell::ZeroEvents { n, upper_bound, .. } if n < EXACT_BOUND_BELOW => {
-                format!("0/{n}, 95% upper bound {} (exact)", pct(upper_bound))
-            }
             RateCell::ZeroEvents { n, upper_bound, .. } => format!(
-                "0/{n}, <= 3/{n} ({}) (approx. 95% upper bound)",
-                pct(upper_bound)
+                "0/{n}, exact one-sided 95% upper bound {} (binomial, 0 of {n}){}",
+                pct(upper_bound),
+                three_over_n_note(n)
             ),
             RateCell::Unrated => "unrated (0 rated trials)".to_owned(),
             RateCell::NotARate { basis, k, n } => format!(
@@ -106,17 +104,25 @@ impl RateCell {
     }
 }
 
-/// The bound a zero-failure claim quotes after `rated` rated trials: exact for few trials, the rule of three after.
-pub(crate) fn zero_failure_bound_clause(rated: u64) -> String {
-    match zero_event_upper_bound(rated) {
-        Some(bound) if rated < EXACT_BOUND_BELOW => {
-            format!(
-                "95% upper bound on the failure rate: {} (exact)",
-                pct(bound)
-            )
-        }
-        _ => format!("approx. 95% upper bound on the failure rate: <= 3/{rated}"),
+/// From this many trials the rule of three is close enough to the exact bound to be worth mentioning beside it.
+const THREE_OVER_N_NOTE_FROM: u64 = 30;
+
+/// The rule of three, as a note on the exact bound and never as the bound itself.
+fn three_over_n_note(n: u64) -> String {
+    if n >= THREE_OVER_N_NOTE_FROM {
+        format!("; about 3/{n}")
+    } else {
+        String::new()
     }
+}
+
+/// The bound a zero-failure claim quotes after `rated` rated trials.
+pub(crate) fn zero_failure_bound_clause(rated: u64) -> String {
+    let bound = zero_event_upper_bound(rated).unwrap_or(1.0);
+    format!(
+        "exact one-sided 95% upper bound on the failure rate: {} (binomial, 0 of {rated})",
+        pct(bound)
+    )
 }
 
 /// The sentence at the top of a run's property section. It is built from counts only.

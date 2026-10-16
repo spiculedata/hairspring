@@ -696,6 +696,11 @@ fn one_token_can_register_only_so_many_workers() {
     assert_eq!(register(2).status, 200);
     let refused = register(3);
     assert_eq!(refused.status, 429, "{}", refused.body);
+    assert_eq!(
+        refused.header("retry-after"),
+        Some("3600"),
+        "the default window is an hour"
+    );
     assert!(
         refused.body.contains("registration limit"),
         "{}",

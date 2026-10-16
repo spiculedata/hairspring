@@ -1,5 +1,5 @@
 //! The property table of a run and the detail of one property.
-use crate::completion::headline_qualifier;
+use crate::completion::{headline_qualifier, WorkerData};
 use crate::properties::{status_name, stored_summary};
 use crate::query::*;
 use crate::scan::{presence, Flow};
@@ -193,9 +193,14 @@ impl Service {
         let workers = trust.as_ref().map(|t| t.workers.as_slice()).unwrap_or(&[]);
         let claim = self.claim_view(&run, &all, &completion, counts.rated_trials, label)?;
         let unverified_worker_data = !trust.as_ref().is_some_and(|t| t.all_trusted);
+        let data = match trust.as_ref() {
+            Some(t) if t.workers.is_empty() => WorkerData::NoTrialData,
+            _ if unverified_worker_data => WorkerData::Unverified,
+            _ => WorkerData::Trusted,
+        };
         let headline = qualified(
             headline(counts.rated_trials, violations, first_seed),
-            headline_qualifier(&completion, unverified_worker_data),
+            headline_qualifier(&completion, data),
         );
         Ok(Some(PropertyPage {
             run_id: run.id.clone(),

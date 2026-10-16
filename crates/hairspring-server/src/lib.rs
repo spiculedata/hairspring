@@ -51,9 +51,11 @@ pub struct ServerConfig {
     /// Concurrent server-sent-event streams allowed in total.
     pub max_sse_streams: usize,
     /// Workers one token may register per [`ServerConfig::register_window`]; 0 disables the limit. A token that
-    /// can register without bound could fill the server's worker cap.
+    /// can register without bound could fill the server's worker cap. Refused registrations get a 429 with
+    /// `Retry-After` set to the window.
     pub register_limit: u32,
-    /// The span `register_limit` is counted over.
+    /// The span `register_limit` is counted over. Counts are held in memory, so they start again when the server
+    /// restarts.
     pub register_window: Duration,
     /// Shut down on Ctrl-C (for the CLI).
     pub handle_ctrl_c: bool,
@@ -94,6 +96,8 @@ pub struct AppState {
     limiter: Arc<RateLimiter>,
     /// Counts worker registrations per token.
     pub register_limiter: Arc<RateLimiter>,
+    /// What a refused registration is told to wait: the whole window, the longest it can take to clear.
+    pub register_retry_after_secs: u64,
     pub sse_slots: Arc<tokio::sync::Semaphore>,
 }
 
@@ -354,6 +358,7 @@ pub fn start(config: ServerConfig, svc: Service, engine: Engine) -> io::Result<R
             config.register_limit,
             config.register_window,
         )),
+        register_retry_after_secs: config.register_window.as_secs().max(1),
         sse_slots: Arc::new(tokio::sync::Semaphore::new(config.max_sse_streams)),
     };
     let workers = spawn_workers(config.embedded_workers, &svc, &engine, &stopping);

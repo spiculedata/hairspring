@@ -50,19 +50,29 @@ impl RunCompletion {
     }
 }
 
+/// Who the trial data of a run came from, as far as a headline is concerned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkerData {
+    /// Every contributing worker is trusted.
+    Trusted,
+    /// At least one contributing worker is not trusted.
+    Unverified,
+    /// No worker contributed trial data (a run that never produced trial rows).
+    NoTrialData,
+}
+
 /// The parenthesised qualifier a headline carries when the run did not simply finish with trusted data: the
 /// completion label, and "unverified worker data" when any contributing worker is not trusted. `None` for a complete
 /// run on trusted data, whose headline needs none.
-pub(crate) fn headline_qualifier(
-    completion: &RunCompletion,
-    unverified_worker_data: bool,
-) -> Option<String> {
+pub(crate) fn headline_qualifier(completion: &RunCompletion, data: WorkerData) -> Option<String> {
     let mut parts = Vec::new();
     if *completion != RunCompletion::Complete {
         parts.push(completion.label());
     }
-    if unverified_worker_data {
-        parts.push("unverified worker data".to_owned());
+    match data {
+        WorkerData::Trusted => {}
+        WorkerData::Unverified => parts.push("unverified worker data".to_owned()),
+        WorkerData::NoTrialData => parts.push("no worker trial data".to_owned()),
     }
     (!parts.is_empty()).then(|| format!("({})", parts.join("; ")))
 }
@@ -132,7 +142,10 @@ mod tests {
 
     #[test]
     fn a_complete_run_on_trusted_data_has_no_headline_qualifier() {
-        assert_eq!(headline_qualifier(&RunCompletion::Complete, false), None);
+        assert_eq!(
+            headline_qualifier(&RunCompletion::Complete, WorkerData::Trusted),
+            None
+        );
     }
 
     #[test]
@@ -148,7 +161,7 @@ mod tests {
             },
         ] {
             assert_eq!(
-                headline_qualifier(&completion, false),
+                headline_qualifier(&completion, WorkerData::Trusted),
                 Some(format!("({})", completion.label()))
             );
         }
@@ -157,15 +170,27 @@ mod tests {
     #[test]
     fn untrusted_data_is_named_on_an_otherwise_complete_run() {
         assert_eq!(
-            headline_qualifier(&RunCompletion::Complete, true).as_deref(),
+            headline_qualifier(&RunCompletion::Complete, WorkerData::Unverified).as_deref(),
             Some("(unverified worker data)")
+        );
+    }
+
+    #[test]
+    fn a_run_with_no_worker_trial_data_is_not_called_unverified() {
+        assert_eq!(
+            headline_qualifier(&RunCompletion::Complete, WorkerData::NoTrialData).as_deref(),
+            Some("(no worker trial data)")
+        );
+        assert_eq!(
+            headline_qualifier(&RunCompletion::Aborted, WorkerData::NoTrialData).as_deref(),
+            Some("(aborted; no worker trial data)")
         );
     }
 
     #[test]
     fn both_qualifiers_share_one_pair_of_parentheses() {
         assert_eq!(
-            headline_qualifier(&RunCompletion::EndedEarly, true).as_deref(),
+            headline_qualifier(&RunCompletion::EndedEarly, WorkerData::Unverified).as_deref(),
             Some("(ended early: trial data is incomplete; unverified worker data)")
         );
     }

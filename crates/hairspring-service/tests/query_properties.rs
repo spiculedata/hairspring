@@ -48,7 +48,7 @@ fn rows_sort_violation_then_unmet_then_unrated_then_pass_and_carry_honest_rate_c
         "{:?}",
         fine.rate
     );
-    assert!(fine.rate_text.contains("95% upper bound"));
+    assert!(fine.rate_text.contains("exact one-sided 95% upper bound"));
     assert!(!fine.rate_text.contains("at most"), "{}", fine.rate_text);
 }
 
@@ -581,4 +581,21 @@ fn the_headline_of_a_run_stopped_at_its_first_failure_says_so() {
         "{}",
         p.headline
     );
+}
+
+#[test]
+fn the_headline_of_a_run_with_no_trial_rows_does_not_call_it_unverified_worker_data() {
+    let (svc, _store, engine) = setup();
+    let job = lease_with_budget(&svc, &engine, &local(), 3);
+    finish(&svc, &job, &local(), passed(3, None));
+    let p = svc
+        .property_page(&job.run_id, &PropertyQuery::default(), None)
+        .unwrap()
+        .unwrap();
+    assert!(
+        p.headline.contains("no worker trial data"),
+        "{}",
+        p.headline
+    );
+    assert!(!p.headline.contains("unverified"), "{}", p.headline);
 }

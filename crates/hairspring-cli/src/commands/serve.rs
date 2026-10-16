@@ -18,7 +18,7 @@ pub struct ServeArgs {
     /// Requests per minute per caller (0 disables the limit).
     #[arg(long, default_value_t = 1200)]
     pub rate_limit: u32,
-    /// Workers one token may register per hour (0 disables the limit).
+    /// Workers one token may register per hour (0 disables the limit). Counted in memory: a restart resets the count.
     #[arg(long, default_value_t = 100)]
     pub register_limit: u32,
     /// File with one `token:role` per line (alternative to the HAIRSPRING_TOKENS environment variable).

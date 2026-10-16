@@ -224,7 +224,7 @@ pub fn generate(label: &Label, subject: &Subject) -> ClaimOutput {
     let note = label.knowledge_note();
     out.text = Some(match *subject {
         Subject::NoFailure { rated } => format!(
-            "No trial failed a property in {} ({}); {how}; {note}.",
+            "No trial failed a property in {}; {}; {how}; {note}.",
             plural(rated, "rated trial", "rated trials"),
             zero_failure_bound_clause(rated)
         ),

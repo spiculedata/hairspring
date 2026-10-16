@@ -265,16 +265,21 @@ fn a_zero_failure_claim_states_the_trial_count_and_the_upper_bound() {
         text.starts_with("No trial failed a property in 300 rated trials"),
         "{text}"
     );
-    assert!(text.contains("<= 3/300"), "{text}");
-    assert!(text.contains("approx. 95% upper bound"), "{text}");
-    assert!(!text.contains("at most"), "{text}");
+    assert!(
+        text.contains(
+            "exact one-sided 95% upper bound on the failure rate: 0.99% (binomial, 0 of 300)"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("at most") && !text.contains("<="), "{text}");
+    assert!(!text.contains("(("), "no nested parentheses: {text}");
 }
 
 #[test]
 fn a_zero_failure_claim_over_few_trials_states_the_exact_bound() {
     let l = label(PLAIN, &[], SeedSelection::Blind);
     let text = generate(&l, &Subject::NoFailure { rated: 1 }).text.unwrap();
-    assert!(text.contains("95.00%"), "{text}");
+    assert!(text.contains("95.00% (binomial, 0 of 1)"), "{text}");
     assert!(!text.contains("3/1") && !text.contains("at most"), "{text}");
 }
 

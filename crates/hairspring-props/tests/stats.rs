@@ -69,41 +69,25 @@ fn rule_of_three_is_three_over_n() {
 }
 
 #[test]
-fn the_zero_event_bound_is_exact_for_small_n() {
+fn the_zero_event_bound_is_exact_for_every_n() {
     assert!(close(zero_event_upper_bound(1).unwrap(), 0.95, 1e-12));
-    assert!(close(
-        zero_event_upper_bound(2).unwrap(),
-        1.0 - 0.05f64.sqrt(),
-        1e-12
-    ));
-    assert!(close(
-        zero_event_upper_bound(10).unwrap(),
-        1.0 - 0.05f64.powf(0.1),
-        1e-12
-    ));
-    assert!(close(
-        zero_event_upper_bound(29).unwrap(),
-        1.0 - 0.05f64.powf(1.0 / 29.0),
-        1e-12
-    ));
-}
-
-#[test]
-fn the_zero_event_bound_is_the_rule_of_three_from_thirty_trials() {
-    assert!(close(zero_event_upper_bound(30).unwrap(), 0.1, 1e-12));
-    assert!(close(zero_event_upper_bound(3000).unwrap(), 1e-3, 1e-12));
+    for n in [2u64, 10, 29, 30, 31, 300, 3000] {
+        let exact = 1.0 - 0.05f64.powf(1.0 / n as f64);
+        assert!(
+            close(zero_event_upper_bound(n).unwrap(), exact, 1e-12),
+            "n={n}"
+        );
+    }
     assert_eq!(zero_event_upper_bound(0), None);
 }
 
 #[test]
-fn the_zero_event_bound_is_a_valid_rate_that_shrinks_as_trials_grow_within_each_regime() {
-    for range in [1..=29u64, 30..=300u64] {
-        let mut prev = f64::INFINITY;
-        for n in range {
-            let b = zero_event_upper_bound(n).unwrap();
-            assert!(b > 0.0 && b <= 1.0, "n={n}: {b}");
-            assert!(b < prev, "n={n}: {b} is not below {prev}");
-            prev = b;
-        }
+fn the_zero_event_bound_is_a_valid_rate_that_shrinks_as_trials_grow() {
+    let mut prev = f64::INFINITY;
+    for n in 1..=500u64 {
+        let b = zero_event_upper_bound(n).unwrap();
+        assert!(b > 0.0 && b <= 1.0, "n={n}: {b}");
+        assert!(b < prev, "n={n}: {b} is not below {prev}");
+        prev = b;
     }
 }

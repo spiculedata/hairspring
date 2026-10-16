@@ -133,7 +133,7 @@ Per id, evidence counts and rate counts are kept separately.
 * `trials`: trials that catalogued the id. `trials_hit`, `trials_true`, `trials_false`, `trials_conflicted` come from
   all of them, because a failure seen in a crashed or degraded trial is still a failure (and decides `Violation`).
 * `trials_rated`: trials in which every process sent `end` and no event data was dropped or contradictory. The Wilson 95%
-  interval and the rule of three (3/N, when the count is zero) are computed over these only, so a trial that died before
+  interval and the exact zero-event bound (1 - 0.05^(1/N), when the count is zero; about 3/N for large N) are computed over these only, so a trial that died before
   reporting is not mistaken for a trial in which nothing went wrong. `trials_unreported`, `trials_degraded` and
   `trials_perturbing` say how many trials were excluded or flagged.
 * A property with no rated trial has **no rate**: `PropertyStat.rate` is `None`, `unrated_reason` is
