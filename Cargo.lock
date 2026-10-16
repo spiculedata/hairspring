@@ -816,6 +816,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hairspring-props"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "hairspring-pubsub"
 version = "0.1.0"
 dependencies = [
