@@ -12,7 +12,7 @@
 #define HIGH_FD_FIRST 200 /* the private events descriptor lives well above the ones a program numbers itself */
 #define HIGH_FD_SECOND 20 /* used when RLIMIT_NOFILE is too low for the first */
 
-struct hs_proc hs_proc = {.tag = "p1", .fd = -1};
+struct hs_proc hs_proc = {.tag = "p1", .tag_stable = 1, .fd = -1};
 struct hs_slot hs_slots[HS_MAX_THREADS];
 uint64_t hs_claims;
 __thread struct hs_slot *hs__tls HS__TLS_MODEL;
@@ -110,7 +110,9 @@ static int private_copy(int fd) {
   int copy = fcntl(fd, F_DUPFD_CLOEXEC, HIGH_FD_FIRST);
   if (copy < 0) copy = fcntl(fd, F_DUPFD_CLOEXEC, HIGH_FD_SECOND);
   if (copy >= 0) return copy;
-  return fcntl(fd, F_GETFD) >= 0 ? fd : -1;
+  if (fcntl(fd, F_GETFD) < 0) return -1;
+  hs_proc.dropped++; /* no room for a private copy: the original stays exposed to the program, and this says so */
+  return fd;
 }
 
 static void open_events(void) {
@@ -131,11 +133,18 @@ static void open_events(void) {
   hs_proc.fd = private_copy(2);
 }
 
-static void atfork_prepare(void) { hs_proc.forks++; }
+/* The key lock is held across fork, so the child cannot inherit it held by a thread that no longer exists. */
+static void atfork_prepare(void) {
+  lock_keys();
+  hs_proc.forks++;
+}
+
+static void atfork_parent(void) { unlock_keys(); }
 
 /* In the child: a new process with its own tag, empty counters and only the forking thread. It announces itself
 ** (hello and catalog) when it reports, not now: if it execs an uninstrumented image it leaves nothing behind. */
 static void atfork_child(void) {
+  unlock_keys();
   struct hs_slot *mine = hs__tls;
   char key[sizeof mine->key];
   uint64_t stable = 0;
@@ -183,8 +192,10 @@ void hs_init(void) {
   const char *signals = getenv("HAIRSPRING_SIGNAL_REPORT");
   if (signals && strcmp(signals, "1") == 0 && hs_install_signal_handlers() == 0) hs_proc.signal_handlers = 1;
   REGISTER_EXIT_HANDLER();
-  pthread_atfork(atfork_prepare, NULL, atfork_child);
+  pthread_atfork(atfork_prepare, atfork_parent, atfork_child);
+  hs_events_fd_remember();
   hs_emit_startup();
+  hs_identity_announced();
   errno = saved_errno;
 }
 

@@ -46,6 +46,7 @@ int hs_line_hello(struct hs_buf *b) {
   hs_put_str(b, ",\"catalog_hash\":\"");
   hs_put_hex64(b, hs_proc.catalog_hash);
   hs_put_str(b, hs_proc.signal_handlers ? "\",\"signal_handlers\":true" : "\",\"signal_handlers\":false");
+  if (!hs_proc.tag_stable) hs_put_str(b, ",\"tag_stable\":false"); /* additive: a tag derived from a pid */
   return finish(b);
 }
 

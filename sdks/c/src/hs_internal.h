@@ -22,6 +22,7 @@ struct hs_proc {
   int fd;                   /* private descriptor for events; -1 when output is off or unavailable */
   int signal_handlers;      /* 1 when HAIRSPRING_SIGNAL_REPORT=1 installed every handler */
   int status;               /* recorded by hs_exit or on_exit, 0 otherwise */
+  int tag_stable;           /* 0 for a tag derived from a pid (spawned child) and everything below it */
   int startup_pending;      /* a fork child sends hello and catalog when it reports, not before */
   uint64_t dropped;         /* threads without a slot of their own, ids lost, refused settings, failed lines */
   uint64_t catalog_hash;    /* order-independent hash of the distinct (id, kind) pairs */
@@ -41,6 +42,7 @@ size_t hs_slots_used(void);
 /* Process identity (hs_identity.c). */
 void hs_identity_init(void);
 void hs_identity_child(uint32_t n);
+void hs_identity_announced(void); /* hello has gone out: an exec without fork must take a new tag */
 
 /* Catalog: the records in the hs_catalog_v1 section, plus one sentinel with kind HS_KIND_NONE. */
 struct hs_site *hs_sites_begin(void);
@@ -80,6 +82,7 @@ const char *hs_kind_name(uint32_t kind);
 void hs_emit_line(const struct hs_buf *b);
 void hs_emit_startup(void);
 void hs_report_now(enum hs_end_reason reason, int64_t status);
+void hs_events_fd_remember(void); /* note which file the events descriptor refers to */
 void hs_report_rearm(void); /* the fork child may report again */
 /* Returns how many handlers could not be installed (0 = all installed). */
 int hs_install_signal_handlers(void);

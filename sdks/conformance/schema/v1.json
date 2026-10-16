@@ -65,7 +65,12 @@
         "sdk": { "type": "string", "maxLength": 64, "x-max-bytes": 64 },
         "sdk_version": { "type": "string", "maxLength": 64, "x-max-bytes": 64 },
         "catalog_hash": { "type": "string", "maxLength": 128, "x-max-bytes": 128 },
-        "signal_handlers": { "type": "boolean" }
+        "signal_handlers": { "type": "boolean" },
+        "tag_stable": {
+          "description": "Optional, default true. False when `proc` was derived from a pid (an SDK child that was spawned rather than forked), so the tag may differ between runs of the same schedule; like `key_stable` for thread keys. Additive: parsers that do not know it ignore and count it.",
+          "type": "boolean",
+          "default": true
+        }
       }
     },
     "catalog": {

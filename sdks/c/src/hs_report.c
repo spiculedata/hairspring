@@ -6,6 +6,7 @@
 #include <sched.h>
 #include <signal.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "hs_internal.h"
@@ -18,6 +19,29 @@ static char line_store[HS_LINE_MAX]; /* the one line buffer: startup and the gua
 static int report_done;              /* set by the first report; hs_report_rearm clears it in a fork child */
 
 void hs_test_set_sink(hs_sink_fn fn) { hs_proc.sink = fn; }
+
+/* The events descriptor can be lost to the program (dup2 onto it, or closing everything) and then name some other
+** file. Remember what it referred to at startup; the report checks once, with one fstat, before writing. */
+static dev_t events_dev;
+static ino_t events_ino;
+
+void hs_events_fd_remember(void) {
+  struct stat st;
+  if (hs_proc.fd >= 0 && fstat(hs_proc.fd, &st) == 0) {
+    events_dev = st.st_dev;
+    events_ino = st.st_ino;
+  } else {
+    hs_proc.fd = -1;
+  }
+}
+
+static void verify_events_fd(void) {
+  if (hs_proc.fd < 0 || hs_proc.sink) return;
+  struct stat st;
+  if (fstat(hs_proc.fd, &st) == 0 && st.st_dev == events_dev && st.st_ino == events_ino) return;
+  hs_proc.dropped++; /* nothing is written: the descriptor no longer leads where it did */
+  hs_proc.fd = -1;
+}
 
 /* ---- the write path ------------------------------------------------------------------------------------------- */
 
@@ -35,7 +59,9 @@ static void out_begin(struct out_guard *g) {
   g->saw_epipe = 0;
 }
 
-/* Restore the mask. If our own write raised a SIGPIPE, consume it first so it is not delivered on unblocking. */
+/* Restore the mask. If our own write raised a SIGPIPE, consume it first so it is not delivered on unblocking.
+** sigwait is not on POSIX's async-signal-safe list; this function is never reached from the signal path (the fatal
+** handler leaves the mask alone and returns without calling it). */
 static void out_end(struct out_guard *g) {
   if (g->saw_epipe && !sigismember(&g->old, SIGPIPE)) {
     sigset_t pipe_only, pending;
@@ -141,13 +167,14 @@ static size_t snapshot_threads(struct hs_thread_totals *out) {
 }
 
 static void report_body(enum hs_end_reason reason, int64_t status) {
+  verify_events_fd();
   if (hs_proc.startup_pending) { /* a fork child announces itself only now, so an exec into another image leaves nothing */
     hs_proc.startup_pending = 0;
     hs_emit_startup();
   }
   hs_catalog_sum();
   emit_asserts();
-  struct hs_thread_totals totals[HS_MAX_THREADS];
+  static struct hs_thread_totals totals[HS_MAX_THREADS]; /* off the stack; single-writer behind report_done */
   size_t n = snapshot_threads(totals);
   uint64_t evals = 0, work = 0;
   for (size_t i = 0; i < n; i++) {
