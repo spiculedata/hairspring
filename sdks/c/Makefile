@@ -15,7 +15,7 @@ EXTRA ?=
 CFLAGS += -std=gnu11 $(OPT) -g $(WARN) -pthread $(EXTRA)
 LDFLAGS += -pthread
 
-SDK_SRC := src/hairspring.c src/hs_catalog.c src/hs_fmt.c src/hs_identity.c src/hs_lines.c src/hs_report.c
+SDK_SRC := src/hairspring.c src/hs_audit.c src/hs_catalog.c src/hs_fmt.c src/hs_identity.c src/hs_lines.c src/hs_report.c
 SDK_OBJ := $(SDK_SRC:src/%.c=$(BUILD)/%.o)
 SDK_HDR := include/hairspring.h $(wildcard src/*.h)
 LIB := $(BUILD)/libhairspring.a
@@ -23,7 +23,7 @@ LIB := $(BUILD)/libhairspring.a
 SCENARIOS := basic merge fork threads crash exit_status eval big forkexec spawn closefd forklock execself dup2fd manyids conflict empty limits plain_exit segv abort threadsegv alive alarm evalfd sigign
 SAMPLES := $(SCENARIOS:%=$(BUILD)/hs_sample_%)
 
-.PHONY: all lib fixtures test unit proc nosyscall nosyscall-pic cxx staticfail gnusource disasm conformance clean
+.PHONY: all lib fixtures test unit audit proc nosyscall nosyscall-pic cxx cxx-templates staticfail gnusource disasm conformance clean
 
 all: lib
 
@@ -46,6 +46,13 @@ $(BUILD)/hs_sample_%: tests/fixtures/hs_sample.c $(LIB) $(SDK_HDR) | $(BUILD)
 
 $(BUILD)/test_unit: tests/test_unit.c tests/hs_test.h $(LIB) $(SDK_HDR) | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $< $(LIB) $(LDFLAGS)
+
+$(BUILD)/test_audit: tests/test_audit.c tests/hs_test.h $(LIB) $(SDK_HDR) | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $< $(LIB) $(LDFLAGS)
+
+# A call site outside the catalog section must be reported, not silently absent.
+audit: $(BUILD)/test_audit
+	HAIRSPRING_EVENTS=off $(BUILD)/test_audit
 
 $(BUILD)/test_proc: tests/test_proc.c tests/hs_test.h | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $<
@@ -85,6 +92,19 @@ cxx:
 	  out=$$($(BUILD)/cxx_sample 2>&1) && echo "$$out" | grep -q '"kind":"end"' && echo "ok   C++ sample reports" ; \
 	else echo "skip: $(CXXC) not installed"; fi
 
+# Call sites inside C++ templates must reach the catalog or be announced as missing, never vanish silently. clang places
+# them in the section, so it is held to that; any other compiler may do either (see docs/c-sdk.md).
+CXX_TEMPLATE_MODE := $(if $(findstring clang,$(CC)),strict,either)
+
+$(BUILD)/cxx_templates: tests/fixtures/cxx_templates.cc $(LIB) $(SDK_HDR) | $(BUILD)
+	$(CXXC) -std=gnu++17 $(OPT) -g $(WARN) -pthread $(EXTRA) -o $@ $< $(LIB) $(LDFLAGS)
+
+cxx-templates:
+	@if command -v $(CXXC) >/dev/null 2>&1; then $(MAKE) $(BUILD)/cxx_templates && \
+	  $(BUILD)/cxx_templates 2>$(BUILD)/cxx_templates.events && \
+	  sh tests/check_cxx_templates.sh $(BUILD)/cxx_templates.events $(CXX_TEMPLATE_MODE) ; \
+	else echo "skip: $(CXXC) not installed"; fi
+
 # These must be rejected at compile time.
 staticfail:
 	@for f in tests/fixtures/fail_*.c; do \
@@ -95,7 +115,7 @@ staticfail:
 gnusource: | $(BUILD)
 	$(CC) $(CFLAGS) -D_GNU_SOURCE -c -o $(BUILD)/gnusource.o src/hairspring.c && echo "ok   builds with -D_GNU_SOURCE"
 
-test: unit proc nosyscall nosyscall-pic staticfail cxx gnusource
+test: unit audit proc nosyscall nosyscall-pic staticfail cxx cxx-templates gnusource
 
 conformance: $(SAMPLES)
 	cd ../.. && HS_C_SDK_BUILD=$(abspath $(BUILD)) cargo test -p hairspring-props --test c_sdk

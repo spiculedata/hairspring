@@ -43,7 +43,7 @@ hs_thread("writer", 0);           /* stable thread key "writer-0" */
   itself inside the call site's slow path (`hs__claim` calls `hs_init`); that first call is therefore not syscall-free.
 * The macros are checked at compile time: an id of 129 bytes or more, a message over 512 bytes and more than four
   values are errors (`tests/fixtures/fail_*.c`). They work from C++ (`-std=gnu++11` or later; values of any integer or
-  enum type).
+  enum type). Call sites in C++ templates need care: see "C++ templates and the catalog section".
 * `HS_EVAL_ALWAYS(cond, id)`, `HS_EVAL_SOMETIMES`, `HS_EVAL_ALWAYS_OR_UNREACHABLE`, `HS_EVAL_REACHABLE`,
   `HS_EVAL_UNREACHABLE` write one protocol `eval` line per call. That is a `write(2)` at the call site, so the engine
   marks the trial `perturbing` and excludes it from tier claims. They record nothing in memory and need no catalog.
@@ -60,6 +60,41 @@ second constructor finds the SDK already initialised, and the call sites inside 
 nobody reads: they count, but are never catalogued or reported. Nothing detects this at run time. For the same reason
 the thread-local slot pointer is declared `initial-exec` on Linux (one load from the thread pointer, no
 `__tls_get_addr`), which a library loaded with `dlopen` cannot use.
+
+### C++ templates and the catalog section
+
+Each call site declares its record as a function-local `static` with a section attribute, and the catalog is the
+linker's collection of that section. For code in a C++ function template (or a member of a class template) the
+compiler instantiates that static once per instantiation, as a COMDAT (vague-linkage) entity.
+
+* **What is guaranteed.** With clang (Apple clang, clang++ 18 on Linux x86-64) the records of template call sites are
+  in the catalog section, and the tests hold it to that (`make cxx-templates`). With any compiler, an evaluation that
+  was counted at a call site whose record is *not* in the section is detected at report time (see below). A catalog
+  that is missing call sites is therefore announced, not silent.
+* **What is observed with g++ 13.3 on Linux x86-64** (issue #23): at `-O0` and `-O2`, the records and
+  offline strings of template call sites were emitted into per-instantiation COMDAT sections
+  (`.data.rel.local.<mangled>`, `.rodata.<mangled>`) instead of `hs_catalog_v1` / `hs_catalog_str_v1`. Those sites were
+  absent from the `catalog` and `assert` lines and from the offline catalog. A call site in a non-template `inline`
+  function was placed correctly, so the difference is the template. Why g++ does not apply the section attribute to the
+  template's static is **not established**: it is inferred, not verified, to be a compiler behaviour for statics in
+  template instantiations. Other g++ versions are untested here.
+* **What is detected.** Every evaluation made through a call-site macro adds one to the calling thread's `evals` and
+  one to its record's `trues` or `falses`. At report time the SDK compares the sum of the threads' `evals` with the sum
+  of the counters of the records it can find in the section. If the threads counted more, the difference is the number
+  of evaluations that happened at call sites outside the catalog. The SDK then adds one to `end.dropped` and writes a
+  single plain-text line (no `HAIRSPRING_EVENT` prefix, so a protocol parser ignores it) to the events descriptor:
+  `hairspring: incomplete catalog: <n> evaluation(s) ran at call sites that are missing from the catalog section`.
+* **What is not detected.** A call site that was never evaluated in the run, and whose record is outside the section,
+  leaves no trace: it is absent from the catalog and nothing counts it. The check is best effort under concurrency: a
+  thread caught between its two counter updates makes the threads' total run ahead by one, so while other threads are
+  still evaluating the SDK ignores a shortfall of up to the number of threads that have claimed a slot, and a small
+  loss in a busy multi-threaded exit can go unnoticed. It does not run once a process has more than 255 threads (the
+  shared last slot's count is not exact). The offline catalog (`hs_catalog_str_v1`) has no such check: a binary read
+  without running it shows only the sites that were placed in the section.
+* **This is a detection, not a fix.** Registering a record from inside a function body would, as far as is known here,
+  need a run-time initialisation check at the call site (for example a guarded function-local static with a dynamic
+  initialiser), which the cost argument above rules out; no such design was built or measured. Keep the assertions that must be reported in non-template code, or in a function the template
+  calls, or check the run for `end.dropped` / the diagnostic line.
 
 ## Environment
 
@@ -185,6 +220,9 @@ Where the parser can notice a loss without that, the SDK makes it:
   the parser accepted. In practice the per-trial event budget trips first (see above).
 * Beyond 16384 distinct ids the extra records are not catalogued at all; only `end.dropped` shows it.
 * An id outside the alphabet is sent with `_` in place of each bad byte; two such ids can merge.
+* Evaluations at call sites that are not in the catalog section (some C++ template sites under g++, see "C++ templates
+  and the catalog section") are counted in `end.dropped` by one and announced by a plain-text line; the sites
+  themselves cannot be listed.
 
 ### Limits and caveats
 
@@ -547,6 +585,11 @@ On aarch64 Linux, gcc 13.3 and clang 18 produce the same structure with `bl __aa
   `assert` per id, `end.sites`, `end.threads`, every line within 4096 bytes), a **contention stress** (8 threads x
   100,000 evaluations: exact sums, no torn witness), simultaneous first calls getting distinct slots, and `errno`
   unchanged by a failed write.
+* `tests/test_audit.c`: the evaluation audit, with a call-site record deliberately placed outside the catalog section
+  (the comparison, no false alarm with several threads, the diagnostic and `end.dropped` after an `exit` report and a
+  signal report). `make cxx-templates` builds `tests/fixtures/cxx_templates.cc` (function templates, a class template
+  member, an inline function) and checks that each id is catalogued (clang: required) or announced as missing (other
+  compilers).
 * `tests/test_proc.c` with the programs in `tests/fixtures/hs_sample.c` (one binary per scenario, because a binary's
   catalog holds every assertion compiled into it): report shape, the same id at two call sites, fork tags and fresh
   child counters, 100 and 300 threads, crash with and without `HAIRSPRING_SIGNAL_REPORT` (also a null dereference,
@@ -581,6 +624,8 @@ instead of a pipe. Use the events file for multi-process runs on macOS.
 
 * Rust SDK, `hs_choice` and the tape (layout not agreed), `hairspring catalog <binary>` (C2), shared objects.
 * Plan T2 (perf counters) and T3 (schedule perturbation under Hermit): need the Linux runner with perf and Hermit.
+* Verification of the C++ template behaviour under g++ on Linux after this change (the detection is tested with clang
+  on macOS, with the section deliberately bypassed; the g++ run is pending).
 * The full test run on real x86-64 Linux. x86-64 was compiled and disassembled only (an emulated container); the tests
   ran natively on aarch64 Linux.
 * The engine treating `end.dropped > 0` as degradation (a follow-up in `hairspring-props`).
