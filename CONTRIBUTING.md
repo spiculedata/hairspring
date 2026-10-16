@@ -46,7 +46,7 @@ CI does not run these.
 - **Say what you verified.** A claim in docs or a PR ("works on Linux", "deterministic") should name how it was checked.
 - **Small, immutable-leaning code.** Functions under ~50 lines, files under ~400 (800 hard limit), early returns, named constants, no mutation where a new value is as clear. Handle errors explicitly; never swallow them.
 - **No secrets in the repo, logs or error messages.** Treat anything from a worker, a target or a network client as untrusted.
-- **Dependencies are a cost.** `hairspring-core` is std-only on purpose. Before adding a crate or npm package, check it is maintained, has no known advisories (`cargo audit`), and that the standard library cannot do the job in a few lines.
+- **Dependencies are a cost.** `hairspring-core` is std-only on purpose. Before adding a crate or npm package, check it is maintained, has no known advisories (`cargo audit`), and that the standard library cannot do the job in a few lines. The dependency list in `NOTICE` is maintained by hand: update it when you add or remove a direct dependency, and treat `cargo metadata --locked` as authoritative.
 - **Commits:** `type: description` with types `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`.
 
 ## Where things go

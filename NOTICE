@@ -8,6 +8,10 @@ source packages that Cargo and npm download, and can be listed with
 `cargo metadata` and `npm ls --all`. Versions are those pinned in Cargo.lock
 and web/package-lock.json at the time of writing.
 
+This file covers source distributions. Release binaries and the Docker image
+must ship the third-party attribution texts with them, in a bundle generated
+at release time.
+
 Rust crates (direct dependencies of the workspace)
 
   axum 0.8              MIT
@@ -46,8 +50,10 @@ test tooling. Transitive packages are recorded in web/package-lock.json.
 Hermit
 
 Hairspring's process backend runs programs under Hermit
-(https://github.com/rrnewton/hermit, BSD-3-Clause upstream). Hermit is a
-separate program that the user installs and that Hairspring invokes as an
-external command. No Hermit source code is included in this repository or in
-Hairspring's binaries. The helper script experiments/linux-hermit-fork.sh
-clones it from the upstream repository at run time.
+(https://github.com/facebookexperimental/hermit, BSD-3-Clause, Copyright Meta
+Platforms, Inc. and affiliates); the helper script
+experiments/linux-hermit-fork.sh clones the fork
+https://github.com/rrnewton/hermit at run time. Hermit is not included: it is
+a separate program that the user installs and that Hairspring invokes as an
+external command. No Hermit source code is in this repository or in
+Hairspring's binaries.
