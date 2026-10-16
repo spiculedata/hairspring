@@ -48,6 +48,22 @@ impl Lines {
         }
     }
 
+    /// A non-empty text value that must also be in its canonical form; another spelling of the
+    /// same value is rejected, not rewritten.
+    fn checked_text(
+        &mut self,
+        key: &'static str,
+        input: &Recorded<String>,
+        is_canonical: fn(&str) -> bool,
+        reason: &'static str,
+    ) {
+        match input.value().filter(|v| !v.is_empty()) {
+            Some(v) if is_canonical(v) => self.push(key, &escape_value(v)),
+            Some(_) => self.reject(key, reason),
+            None => self.miss(key),
+        }
+    }
+
     fn number<T: Display>(&mut self, key: &'static str, input: &Recorded<T>) {
         match input.value() {
             Some(v) => self.push(key, &v.to_string()),
@@ -114,6 +130,60 @@ pub(super) fn render(draft: &IdentityDraft) -> Result<String, IdentityError> {
     lines.finish()
 }
 
+const EPOCH_REASON: &str = "epoch must be `YYYY-MM-DDTHH:MM:SSZ` (RFC 3339, UTC, no fraction)";
+const CWD_REASON: &str =
+    "cwd must be an absolute path with no `.`, `..`, empty or trailing segment";
+const TRANSPORT_REASON: &str = "events transport must be `file` or `stream`";
+const KNOWN_TRANSPORTS: [&str; 2] = ["file", "stream"];
+
+fn is_known_transport(text: &str) -> bool {
+    KNOWN_TRANSPORTS.contains(&text)
+}
+
+/// Absolute, with every segment a real name: no `.`, `..`, empty segment or trailing slash.
+fn is_resolved_absolute_path(text: &str) -> bool {
+    let Some(rest) = text.strip_prefix('/') else {
+        return false;
+    };
+    rest.is_empty()
+        || rest
+            .split('/')
+            .all(|s| !s.is_empty() && s != "." && s != "..")
+}
+
+/// `YYYY-MM-DDTHH:MM:SSZ`: fixed width, uppercase `T` and `Z`, in-range fields, no fraction.
+fn is_utc_timestamp(text: &str) -> bool {
+    let b = text.as_bytes();
+    if b.len() != 20 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' {
+        return false;
+    }
+    if b[13] != b':' || b[16] != b':' || b[19] != b'Z' {
+        return false;
+    }
+    let field = |from: usize, to: usize| -> Option<u32> {
+        let digits = &b[from..to];
+        digits
+            .iter()
+            .all(u8::is_ascii_digit)
+            .then(|| digits.iter().fold(0, |n, d| n * 10 + u32::from(d - b'0')))
+    };
+    let (Some(month), Some(day), Some(hour), Some(minute), Some(second)) = (
+        field(5, 7),
+        field(8, 10),
+        field(11, 13),
+        field(14, 16),
+        field(17, 19),
+    ) else {
+        return false;
+    };
+    field(0, 4).is_some()
+        && (1..=12).contains(&month)
+        && (1..=31).contains(&day)
+        && hour < 24
+        && minute < 60
+        && second < 60
+}
+
 /// Each scheme is the backend name and its identity format version.
 fn common_lines(lines: &mut Lines, backend: &str, common: &CommonInputs) {
     lines.push("scheme", &format!("{backend}/1"));
@@ -133,7 +203,7 @@ fn hermit_lines(lines: &mut Lines, h: &HermitInputs) {
     lines.sha("hermit_sha", &h.hermit_sha);
     lines.list("target_argv", &h.target_argv, true);
     lines.sha("target_exe_sha", &h.target_exe_sha);
-    lines.text("epoch", &h.epoch);
+    lines.checked_text("epoch", &h.epoch, is_utc_timestamp, EPOCH_REASON);
     lines.optional_text("sched_heuristic", &h.sched_heuristic);
     lines.optional_number("sched_sticky_permille", &h.sched_sticky_permille);
     lines.flag("sched_chaos", &h.sched_chaos);
@@ -142,13 +212,20 @@ fn hermit_lines(lines: &mut Lines, h: &HermitInputs) {
     lines.flag("sched_rbc_overshoot", &h.sched_rbc_overshoot);
     lines.list("hermit_args", &h.hermit_args, false);
     guest_env_line(lines, &h.guest_env);
-    lines.text("cwd", &h.cwd);
+    lines.checked_text("cwd", &h.cwd, is_resolved_absolute_path, CWD_REASON);
     tmp_policy_line(lines, &h.tmp_policy);
-    lines.text("events_transport", &h.events_transport);
+    lines.checked_text(
+        "events_transport",
+        &h.events_transport,
+        is_known_transport,
+        TRANSPORT_REASON,
+    );
     lines.sha("loader_ld_so_cache_sha", &h.loader_ld_so_cache_sha);
     lines.sha("loader_libc_sha", &h.loader_libc_sha);
     lines.sha("loader_ld_linux_sha", &h.loader_ld_linux_sha);
     lines.flag("hang_is_violation", &h.hang_is_violation);
+    lines.optional_number("trial_timeout_secs", &h.trial_timeout_secs);
+    lines.number("parallelism", &h.parallelism);
 }
 
 /// The environment in the order given, as `KEY=VALUE` items. Keys must be usable and unique, and

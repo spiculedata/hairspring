@@ -118,7 +118,7 @@ no trailing text, and a cut kind that suits the run's backend.
 A run's identity is a canonical list of every input that can change execution (executable and target content
 hashes, run settings, and for Hermit the command line, environment, scheduler flags and loader hashes), one
 `key=value` line each with percent-escaped values. A run with any input not recorded has no identity and so no
-hash. The point hash is the SHA-256 of a version line, the identity text, the seed and the trace up to the cut;
+hash. The point hash is the SHA-256 of a version line, the identity text, the seed, the cut and the trace up to the cut;
 the run id is not part of it. The command hash is the SHA-256 of a version line, the point hash and the
 canonical JSON of the command (keys sorted, no spaces, integers as decimal strings).
 

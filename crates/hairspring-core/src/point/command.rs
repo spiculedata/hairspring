@@ -16,7 +16,8 @@ pub const COMMAND_HASH_HEADER: &str = "hairspring-command v1\n";
 pub enum CommandValue {
     Null,
     Bool(bool),
-    /// Any integer that fits a `u64` or an `i64`; written as a decimal string.
+    /// Any integer from `i64::MIN` to `u64::MAX`; others are refused when written. Written as a
+    /// decimal string.
     Int(i128),
     Text(String),
     List(Vec<CommandValue>),
@@ -28,6 +29,8 @@ pub enum CommandError {
     DuplicateKey(String),
     TooDeep,
     BadPointHash,
+    /// An integer outside `i64::MIN..=u64::MAX`.
+    IntOutOfRange,
 }
 
 impl std::fmt::Display for CommandError {
@@ -41,6 +44,9 @@ impl std::fmt::Display for CommandError {
                 )
             }
             CommandError::BadPointHash => f.write_str("point hash must be 64 lowercase hex digits"),
+            CommandError::IntOutOfRange => {
+                f.write_str("command integer is outside the i64 and u64 range")
+            }
         }
     }
 }
@@ -75,7 +81,12 @@ fn write_value(value: &CommandValue, depth: usize, out: &mut String) -> Result<(
     match value {
         CommandValue::Null => out.push_str("null"),
         CommandValue::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        CommandValue::Int(n) => write_text(&n.to_string(), out),
+        CommandValue::Int(n) => {
+            if !(i128::from(i64::MIN)..=i128::from(u64::MAX)).contains(n) {
+                return Err(CommandError::IntOutOfRange);
+            }
+            write_text(&n.to_string(), out)
+        }
         CommandValue::Text(s) => write_text(s, out),
         CommandValue::List(items) => {
             out.push('[');

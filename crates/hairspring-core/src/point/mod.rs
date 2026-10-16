@@ -20,7 +20,7 @@ mod identity_text;
 pub use address::{AddressError, BackendKind, Cut, PointAddress};
 pub use command::{command_hash, CommandError, CommandValue};
 pub use encoding::Recorded;
-pub use hash::{point_hash, HashError, Prefix};
+pub use hash::{point_hash, seed_from_stored, HashError, Prefix};
 pub use identity::{
     CommonInputs, HermitInputs, Identity, IdentityDraft, IdentityError, SimInputs, TmpPolicy,
     WasmInputs,

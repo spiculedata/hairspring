@@ -58,9 +58,9 @@ fn a_run_missing_any_input_has_no_identity() {
     let Err(IdentityError::Incomplete { missing }) = hermit.finish() else {
         panic!("an empty hermit record must be incomplete");
     };
-    assert_eq!(missing.len(), 19);
+    assert_eq!(missing.len(), 21);
     assert_eq!(missing.first(), Some(&"hermit_sha"));
-    assert_eq!(missing.last(), Some(&"hang_is_violation"));
+    assert_eq!(missing.last(), Some(&"parallelism"));
 }
 
 #[test]
@@ -226,7 +226,7 @@ fn list_items_cannot_merge_or_split() {
 
 #[test]
 fn a_value_cannot_start_a_new_line() {
-    let injected = "x\nhang_is_violation=true";
+    let injected = "/x\nhang_is_violation=true";
     let draft = IdentityDraft::Hermit(
         common("queue"),
         HermitInputs {
@@ -235,13 +235,17 @@ fn a_value_cannot_start_a_new_line() {
         },
     );
     let identity = draft.finish().unwrap();
-    assert!(identity.text().contains("cwd=x%0Ahang_is_violation=true\n"));
+    assert!(identity
+        .text()
+        .contains("cwd=/x%0Ahang_is_violation=true\n"));
     let own_lines = identity
         .text()
         .lines()
         .filter(|l| l.starts_with("hang_is_violation="));
     assert_eq!(own_lines.count(), 1);
-    assert!(identity.text().ends_with("hang_is_violation=false\n"));
+    assert!(identity
+        .text()
+        .contains("\nhang_is_violation=false\ntrial_timeout_secs="));
     let carriage = IdentityDraft::Sim(common("a\rb%")).finish().unwrap();
     assert!(carriage.text().contains("target=a%0Db%25\n"));
 }

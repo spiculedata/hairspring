@@ -2,40 +2,71 @@ mod point_common;
 
 use hairspring_core::point::hash::HashError;
 use hairspring_core::point::{
-    point_hash, BackendKind, CommonInputs, Cut, HermitInputs, IdentityDraft, Prefix, WasmInputs,
+    point_hash, seed_from_stored, BackendKind, CommonInputs, Cut, HermitInputs, IdentityDraft,
+    Prefix, WasmInputs,
 };
 use point_common::*;
 use std::collections::HashSet;
 
-const SIM_PATH_HASH: &str = "107baabb4434970617d69291598e3ee50e883b14a3d57bc77894fbd968e98d65";
-const SIM_EMPTY_PATH_HASH: &str =
-    "19c2edb585681b26398b9344b9485e03c2d5ee9fc8753b8309576e9460adc029";
-const WASM_CHOICES_HASH: &str = "50107c5e51ec99bf4d8a4533cf2af5e16a1bed9d59dda785c0972469bec351ce";
-const HERMIT_END_HASH: &str = "80c6a223c1ff0bee23090342aa87d33ab894540fb49217058c26fa482c6d2367";
+const SIM_END_HASH: &str = "57dea784b44b3feb66998d72fe5f527b160500291aaf0094c95a1ac066e772b7";
+const SIM_S2_HASH: &str = "2ebbd5902badba426e4c7f9f4a6b3da9adce871d14f443fcdd08f0ece4ed994b";
+const SIM_S0_HASH: &str = "eb03ccee64f634be705a9da321bd8b406aa80ae9ee59ab8846d5eae988d12966";
+const WASM_END_HASH: &str = "61650b38c593144475adb81771a3f39ad078d7e6049274de6771e03cc86bd595";
+const WASM_C3_HASH: &str = "e1b8ec84c52f77ddbcdd391f14acd4a6cdee1a04c246a56913dfcfaa91a509ec";
+const HERMIT_END_HASH: &str = "72924af9a328acea940737dcd632d1d488572d5e44cb3636b5a5df979e778cf2";
+const SIM_TOP_BIT_SEED_HASH: &str =
+    "74003ee27ac7ec1742f68e25229c397f4e92ff47598bb0172d1b3294647377a9";
+const SIM_MAX_SEED_HASH: &str = "683c437e71206022a3e88a4bfd994717dc8e02b265df389269f19f112eaae12f";
 
-fn hash(draft: &IdentityDraft, seed: u64, prefix: Prefix<'_>) -> String {
-    point_hash(&draft.finish().unwrap(), seed, &prefix).unwrap()
+fn hash(draft: &IdentityDraft, seed: u64, cut: Cut, trace: &[u64]) -> String {
+    point_hash(&draft.finish().unwrap(), seed, cut, trace).unwrap()
 }
 
 #[test]
 fn golden_point_hashes() {
     let sim = sim_draft();
-    assert_eq!(hash(&sim, 42, Prefix::Sim(&[1, 255])), SIM_PATH_HASH);
-    assert_eq!(hash(&sim, 42, Prefix::Sim(&[])), SIM_EMPTY_PATH_HASH);
+    assert_eq!(hash(&sim, 42, Cut::End, &[1, 255]), SIM_END_HASH);
+    assert_eq!(hash(&sim, 42, Cut::Step(2), &[1, 255]), SIM_S2_HASH);
+    assert_eq!(hash(&sim, 42, Cut::Step(0), &[1, 255]), SIM_S0_HASH);
     let wasm = wasm_draft();
-    assert_eq!(
-        hash(&wasm, 7, Prefix::Wasm(&[3, 0, u64::MAX])),
-        WASM_CHOICES_HASH
-    );
-    assert_eq!(
-        hash(&hermit_draft(), 99, Prefix::HermitEnd),
-        HERMIT_END_HASH
-    );
+    let choices = [3, 0, u64::MAX];
+    assert_eq!(hash(&wasm, 7, Cut::End, &choices), WASM_END_HASH);
+    assert_eq!(hash(&wasm, 7, Cut::Choice(3), &choices), WASM_C3_HASH);
+    assert_eq!(hash(&hermit_draft(), 99, Cut::End, &[]), HERMIT_END_HASH);
+}
+
+#[test]
+fn end_differs_from_a_cut_at_the_same_length() {
+    let sim = sim_draft();
+    let path = [1, 255];
+    let end = hash(&sim, 42, Cut::End, &path);
+    let step = hash(&sim, 42, Cut::Step(2), &path);
+    assert_ne!(end, step);
+    let wasm = wasm_draft();
+    let choices = [3, 0, 9];
+    let end = hash(&wasm, 7, Cut::End, &choices);
+    let choice = hash(&wasm, 7, Cut::Choice(3), &choices);
+    assert_ne!(end, choice);
+}
+
+#[test]
+fn the_seed_is_the_decimal_u64_of_the_stored_bit_pattern() {
+    assert_eq!(seed_from_stored(0), 0);
+    assert_eq!(seed_from_stored(42), 42);
+    assert_eq!(seed_from_stored(-1), u64::MAX);
+    assert_eq!(seed_from_stored(i64::MIN), 1 << 63);
+    assert_eq!(seed_from_stored(i64::MIN + 1), (1 << 63) + 1);
+    let sim = sim_draft();
+    let stored = i64::MIN + 1;
+    let top_bit = hash(&sim, seed_from_stored(stored), Cut::End, &[1, 255]);
+    assert_eq!(top_bit, SIM_TOP_BIT_SEED_HASH);
+    let max = hash(&sim, seed_from_stored(-1), Cut::End, &[1, 255]);
+    assert_eq!(max, SIM_MAX_SEED_HASH);
 }
 
 #[test]
 fn the_hash_is_lowercase_hex_of_a_sha256() {
-    let h = hash(&sim_draft(), 1, Prefix::Sim(&[1]));
+    let h = hash(&sim_draft(), 1, Cut::End, &[1]);
     assert_eq!(h.len(), 64);
     assert!(h
         .bytes()
@@ -45,16 +76,17 @@ fn the_hash_is_lowercase_hex_of_a_sha256() {
 #[test]
 fn changing_the_seed_or_the_prefix_changes_the_hash() {
     let sim = sim_draft();
-    let base = hash(&sim, 42, Prefix::Sim(&[1, 255]));
+    let base = hash(&sim, 42, Cut::End, &[1, 255]);
     let variants = [
-        hash(&sim, 43, Prefix::Sim(&[1, 255])),
-        hash(&sim, 42, Prefix::Sim(&[1])),
-        hash(&sim, 42, Prefix::Sim(&[1, 255, 0])),
-        hash(&sim, 42, Prefix::Sim(&[255, 1])),
-        hash(&sim, 42, Prefix::Sim(&[1, 254])),
-        hash(&sim, 42, Prefix::Sim(&[2, 255])),
-        hash(&sim, 42, Prefix::Sim(&[0x10, 255])),
-        hash(&sim, 42, Prefix::Sim(&[1, 0x1ff])),
+        hash(&sim, 43, Cut::End, &[1, 255]),
+        hash(&sim, 42, Cut::End, &[1]),
+        hash(&sim, 42, Cut::End, &[1, 255, 0]),
+        hash(&sim, 42, Cut::End, &[255, 1]),
+        hash(&sim, 42, Cut::End, &[1, 254]),
+        hash(&sim, 42, Cut::End, &[2, 255]),
+        hash(&sim, 42, Cut::End, &[0x10, 255]),
+        hash(&sim, 42, Cut::End, &[1, 0x1ff]),
+        hash(&sim, 42, Cut::Step(1), &[1, 255]),
     ];
     let mut seen = HashSet::from([base]);
     for v in variants {
@@ -65,9 +97,9 @@ fn changing_the_seed_or_the_prefix_changes_the_hash() {
 #[test]
 fn choice_values_are_unambiguous() {
     let wasm = wasm_draft();
-    let split = hash(&wasm, 7, Prefix::Wasm(&[1, 23]));
-    let joined = hash(&wasm, 7, Prefix::Wasm(&[12, 3]));
-    let single = hash(&wasm, 7, Prefix::Wasm(&[123]));
+    let split = hash(&wasm, 7, Cut::End, &[1, 23]);
+    let joined = hash(&wasm, 7, Cut::End, &[12, 3]);
+    let single = hash(&wasm, 7, Cut::End, &[123]);
     assert_ne!(split, joined);
     assert_ne!(split, single);
     assert_ne!(joined, single);
@@ -76,48 +108,60 @@ fn choice_values_are_unambiguous() {
 #[test]
 fn changing_any_one_identity_input_changes_the_point_hash() {
     let seed = 5;
-    let sim_base = hash(&sim_draft(), seed, Prefix::Sim(&[1]));
+    let sim_base = hash(&sim_draft(), seed, Cut::End, &[1]);
     let other_sim = IdentityDraft::Sim(CommonInputs {
         target: v("other".to_string()),
         ..common("x")
     });
-    assert_ne!(sim_base, hash(&other_sim, seed, Prefix::Sim(&[1])));
+    assert_ne!(sim_base, hash(&other_sim, seed, Cut::End, &[1]));
 
-    let wasm_base = hash(&wasm_draft(), seed, Prefix::Wasm(&[1]));
+    let wasm_base = hash(&wasm_draft(), seed, Cut::End, &[1]);
     let fuel = WasmInputs {
         fuel: v(7),
         ..wasm_inputs()
     };
     let other_wasm = IdentityDraft::Wasm(common("counter"), fuel);
-    assert_ne!(wasm_base, hash(&other_wasm, seed, Prefix::Wasm(&[1])));
+    assert_ne!(wasm_base, hash(&other_wasm, seed, Cut::End, &[1]));
 
-    let hermit_base = hash(&hermit_draft(), seed, Prefix::HermitEnd);
+    let hermit_base = hash(&hermit_draft(), seed, Cut::End, &[]);
     let chaos = HermitInputs {
         sched_chaos: v(false),
         ..hermit_inputs()
     };
     let other_hermit = IdentityDraft::Hermit(common("queue"), chaos);
-    assert_ne!(hermit_base, hash(&other_hermit, seed, Prefix::HermitEnd));
+    assert_ne!(hermit_base, hash(&other_hermit, seed, Cut::End, &[]));
 }
 
 #[test]
 fn the_same_inputs_give_one_hash_whichever_run_they_came_from() {
     // The hash takes no run id: two runs built from equal inputs share it.
-    let first = hash(&hermit_draft(), 3, Prefix::HermitEnd);
-    let second = hash(&hermit_draft(), 3, Prefix::HermitEnd);
+    let first = hash(&hermit_draft(), 3, Cut::End, &[]);
+    let second = hash(&hermit_draft(), 3, Cut::End, &[]);
     assert_eq!(first, second);
 }
 
 #[test]
-fn a_prefix_of_the_wrong_backend_is_refused() {
+fn a_cut_the_backend_cannot_have_is_refused() {
     let sim = sim_draft().finish().unwrap();
     let wasm = wasm_draft().finish().unwrap();
     let hermit = hermit_draft().finish().unwrap();
-    let mismatch = Err(HashError::BackendMismatch);
-    assert_eq!(point_hash(&sim, 1, &Prefix::Wasm(&[])), mismatch);
-    assert_eq!(point_hash(&sim, 1, &Prefix::HermitEnd), mismatch);
-    assert_eq!(point_hash(&wasm, 1, &Prefix::Sim(&[])), mismatch);
-    assert_eq!(point_hash(&hermit, 1, &Prefix::Sim(&[])), mismatch);
+    let bad = Err(HashError::CutNotValidForBackend);
+    assert_eq!(point_hash(&sim, 1, Cut::Choice(0), &[]), bad);
+    assert_eq!(point_hash(&wasm, 1, Cut::Step(0), &[]), bad);
+    assert_eq!(point_hash(&hermit, 1, Cut::Step(0), &[]), bad);
+    assert_eq!(point_hash(&hermit, 1, Cut::Choice(0), &[]), bad);
+}
+
+#[test]
+fn a_cut_beyond_the_trace_is_refused() {
+    let sim = sim_draft().finish().unwrap();
+    assert_eq!(
+        point_hash(&sim, 1, Cut::Step(3), &[1, 2]),
+        Err(HashError::CutBeyondTrace {
+            cut: 3,
+            available: 2
+        })
+    );
 }
 
 #[test]
@@ -168,13 +212,6 @@ fn for_cut_refuses_cut_kinds_the_backend_cannot_have() {
         Prefix::for_cut(BackendKind::Hermit, Cut::End, &trace),
         Ok(Prefix::HermitEnd)
     );
-}
-
-#[test]
-fn a_cut_at_step_zero_equals_an_empty_path() {
-    let sim = sim_draft();
-    let cut = Prefix::for_cut(BackendKind::Sim, Cut::Step(0), &[9, 9]).unwrap();
-    assert_eq!(hash(&sim, 42, cut), SIM_EMPTY_PATH_HASH);
 }
 
 #[test]

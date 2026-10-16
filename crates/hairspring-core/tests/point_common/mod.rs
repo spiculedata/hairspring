@@ -56,6 +56,8 @@ pub fn hermit_inputs() -> HermitInputs {
         loader_libc_sha: v(sha('f')),
         loader_ld_linux_sha: v(sha('1')),
         hang_is_violation: v(false),
+        trial_timeout_secs: v(Some(60)),
+        parallelism: v(4),
     }
 }
 
@@ -107,7 +109,9 @@ events_transport=file\n\
 loader_ld_so_cache_sha=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n\
 loader_libc_sha=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\n\
 loader_ld_linux_sha=1111111111111111111111111111111111111111111111111111111111111111\n\
-hang_is_violation=false\n";
+hang_is_violation=false\n\
+trial_timeout_secs=some:60\n\
+parallelism=4\n";
 
 /// SHA-256 of the texts above, computed with `shasum -a 256` independently of the library.
 pub const SIM_IDENTITY_HASH: &str =
@@ -115,4 +119,4 @@ pub const SIM_IDENTITY_HASH: &str =
 pub const WASM_IDENTITY_HASH: &str =
     "b7154302c6fb9e7de2d74941cda7666958f9c2110b58be6d5766816a707b73d6";
 pub const HERMIT_IDENTITY_HASH: &str =
-    "10003883b77c4daaa3c70d941c0d2f10afe7180b7bc804ea730d80a42e70b43b";
+    "910de9cd76f719c837da53a172ebe2bbdf5e613e22720f0b7c5fa4a49e065f8c";
