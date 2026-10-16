@@ -77,6 +77,8 @@ impl Auth {
 /// The authenticated caller of a request.
 pub struct Caller {
     pub role: Role,
+    /// Who this caller is for per-caller limits: the presented token (as a digest prefix), or `open` without tokens.
+    pub key: String,
 }
 
 impl Caller {
@@ -94,16 +96,22 @@ impl FromRequestParts<AppState> for Caller {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
         if state.auth.is_open() {
-            return Ok(Caller { role: Role::Admin });
+            return Ok(Caller {
+                role: Role::Admin,
+                key: "open".to_string(),
+            });
         }
         let header = parts
             .headers
             .get(AUTHORIZATION)
             .and_then(|v| v.to_str().ok());
-        state
+        let role = state
             .auth
             .authenticate(header)
-            .map(|role| Caller { role })
-            .ok_or_else(ApiError::unauthorized)
+            .ok_or_else(ApiError::unauthorized)?;
+        Ok(Caller {
+            role,
+            key: format!("t:{}", crate::digest_prefix(header.unwrap_or_default())),
+        })
     }
 }

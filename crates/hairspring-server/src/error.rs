@@ -32,6 +32,9 @@ impl ApiError {
             ..ApiError::new(StatusCode::UNAUTHORIZED, "a valid bearer token is required")
         }
     }
+    pub fn too_many_requests(message: impl Into<String>) -> ApiError {
+        ApiError::new(StatusCode::TOO_MANY_REQUESTS, message)
+    }
     pub fn forbidden(needed: &str) -> ApiError {
         ApiError::new(
             StatusCode::FORBIDDEN,
