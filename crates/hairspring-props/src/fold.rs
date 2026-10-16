@@ -8,7 +8,8 @@ use crate::event::*;
 use crate::limits::*;
 use crate::line::{is_event_candidate, parse_line, IgnoreReason, LineOutcome, RejectReason};
 use crate::trial::{
-    CatalogConflict, EndReport, EventHealth, ProcReport, TrialProperty, TrialProps, Witness,
+    CatalogConflict, DroppedCounts, EndReport, EventHealth, ProcReport, TrialProperty, TrialProps,
+    Witness,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -75,6 +76,10 @@ struct Accumulator {
     asserted: HashSet<ProcId>,
     conflicted: HashSet<ProcId>,
     conflicts: Vec<CatalogConflict>,
+    /// `catalog` entries in stream order, applied once the kept kind of every id is known.
+    catalogs: Vec<CatalogEntry>,
+    /// The kind each catalogued id keeps when declarations disagree.
+    kept: HashMap<String, AssertKind>,
     /// `assert` and `eval` events, applied after all declarations.
     deferred: Vec<Event>,
     perturbing: bool,
@@ -83,6 +88,16 @@ struct Accumulator {
 
 impl Accumulator {
     fn finish(mut self) -> TrialProps {
+        self.resolve_kept_kinds();
+        for entry in std::mem::take(&mut self.catalogs) {
+            self.declare(
+                &entry.proc,
+                &entry.id,
+                entry.kind,
+                &entry.msg,
+                entry.loc.as_ref(),
+            );
+        }
         for event in std::mem::take(&mut self.deferred) {
             match event {
                 Event::Assert(a) => self.apply_assert(a),
@@ -91,6 +106,8 @@ impl Accumulator {
             }
         }
         self.check_reports();
+        self.conflicts
+            .sort_by(|a, b| (&a.id, &a.proc).cmp(&(&b.id, &b.proc)));
         TrialProps {
             procs: self.procs,
             properties: self.props.into_values().collect(),
@@ -98,6 +115,33 @@ impl Accumulator {
             perturbing: self.perturbing,
             health: self.health,
         }
+    }
+
+    /// When declarations of one id disagree, the kind declared by the process with the lowest tag wins, so the
+    /// outcome does not depend on which process spoke first. Within one process the first declaration in stream
+    /// order wins.
+    fn resolve_kept_kinds(&mut self) {
+        let mut best: HashMap<&str, (&str, AssertKind)> = HashMap::new();
+        for c in &self.catalogs {
+            let entry = best
+                .entry(c.id.as_str())
+                .or_insert((c.proc.as_str(), c.kind));
+            if c.proc.as_str() < entry.0 {
+                *entry = (c.proc.as_str(), c.kind);
+            }
+        }
+        self.kept = best
+            .into_iter()
+            .map(|(id, (_, kind))| (id.to_owned(), kind))
+            .collect();
+    }
+
+    /// The kind an id currently has: the resolved catalog kind, else whatever created it (an `eval`).
+    fn kind_of(&self, id: &str) -> Option<AssertKind> {
+        self.kept
+            .get(id)
+            .copied()
+            .or_else(|| self.props.get(id).map(|p| p.kind))
     }
 
     /// Cross-checks between what `end` promised and what arrived.
@@ -187,7 +231,7 @@ impl Accumulator {
             Event::End(e) => self.apply_end(e),
             Event::Catalog(c) => {
                 if self.proc_slot(&c.proc).is_some() {
-                    self.declare(&c.proc, &c.id, c.kind, &c.msg, c.loc.as_ref());
+                    self.catalogs.push(c);
                 }
             }
             Event::Assert(_) | Event::Eval(_) => {
@@ -267,9 +311,9 @@ impl Accumulator {
         loc: Option<&Loc>,
     ) -> bool {
         let key = (proc.to_owned(), id.to_owned());
-        if let Some(existing) = self.props.get(id) {
-            if existing.kind != kind {
-                self.record_conflict(&key, existing.kind, kind);
+        if let Some(kept) = self.kind_of(id) {
+            if kept != kind {
+                self.record_conflict(&key, kept, kind);
                 return false;
             }
         }
@@ -307,6 +351,7 @@ impl Accumulator {
                 kept,
                 rejected,
                 proc: key.0.clone(),
+                dropped: DroppedCounts::default(),
             });
         }
     }
@@ -315,6 +360,17 @@ impl Accumulator {
         let key = (a.proc.clone(), a.id.clone());
         if self.conflicted.contains(&key) {
             self.health.dropped_asserts += 1;
+            if let Some(c) = self
+                .conflicts
+                .iter_mut()
+                .find(|c| c.id == a.id && c.proc == a.proc)
+            {
+                c.dropped = DroppedCounts {
+                    hits: c.dropped.hits.saturating_add(a.hits),
+                    trues: c.dropped.trues.saturating_add(a.trues),
+                    falses: c.dropped.falses.saturating_add(a.falses),
+                };
+            }
             return;
         }
         if !self.declared.contains(&key) {

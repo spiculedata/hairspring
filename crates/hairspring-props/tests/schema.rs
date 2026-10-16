@@ -8,6 +8,7 @@ const SCHEMA: &str = include_str!("../../../sdks/conformance/schema/v1.json");
 const VALID: &str = include_str!("../../../sdks/conformance/goldens/valid.events");
 const INVALID: &str = include_str!("../../../sdks/conformance/goldens/invalid.events");
 const MANY_THREADS: &str = include_str!("../../../sdks/conformance/goldens/many_threads.events");
+const MERGED_SITES: &str = include_str!("../../../sdks/conformance/goldens/merged_sites.events");
 const IGNORED: &str = include_str!("../../../sdks/conformance/goldens/ignored.events");
 
 fn schema() -> Value {
@@ -187,4 +188,22 @@ fn a_realistic_trial_with_more_threads_than_one_line_could_hold_parses() {
     assert_eq!(t.thread_reports().len(), 100);
     assert!(t.report_missing().is_empty());
     assert!(t.verdict().is_empty());
+}
+
+#[test]
+fn the_same_id_at_two_call_sites_folds_to_one_clean_site() {
+    let t = TrialEvents::from_output(MERGED_SITES.as_bytes()).fold();
+    assert!(!t.is_degraded(), "{:?}", t.health);
+    assert_eq!(t.properties.len(), 1);
+    assert_eq!(t.properties[0].hits, 8);
+    assert_eq!(t.health.sites_mismatch, 0);
+}
+
+#[test]
+fn eval_lines_in_the_schema_are_pinned_to_the_reserved_tag() {
+    let s = schema();
+    assert_eq!(
+        s["$defs"]["eval"]["properties"]["proc"]["const"],
+        DEFAULT_EVAL_PROC
+    );
 }

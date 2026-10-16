@@ -63,8 +63,10 @@ order (`t#1`), which may differ between schedules.
 
 A trial that contains any `eval` line is marked `perturbing`: each such line is a write syscall during the run, so the
 schedule differs from an uninstrumented one. Perturbing trials are counted separately and excluded from tier claims.
-`ok` is ignored on `eval` lines for `reachable` and `unreachable`, which have no condition. `eval` lines never create a
-process entry, so an eval-only trial does not look like a lost report.
+`ok` is ignored on `eval` lines for `reachable` and `unreachable`, which have no condition. An `eval` line always
+belongs to the reserved tag `_eval`: its `proc` field may be omitted or be `_eval`, and any other value (a real
+process's tag) is rejected, so `eval` can never merge into an SDK process. `eval` lines never create a process entry,
+so an eval-only trial does not look like a lost report.
 
 ### Process tags
 
@@ -73,7 +75,8 @@ parent's deterministically (`<parent>.f<n>`, `n` counting the parent's forks). T
 lines. Duplicate `hello`, `work` and `end` lines for one tag, and duplicate `thread` lines for one thread key, keep
 the first and are counted as duplicates.
 
-SDKs MUST send exactly one `assert` per `(proc, id)`, merging call sites that were inlined or duplicated. If a second
+SDKs MUST send exactly one `assert` per `(proc, id)`, merging call sites that were inlined or duplicated (the same id
+at two call sites is one catalogued id: `catalog` may be repeated, and `end.sites` counts distinct ids after merging). If a second
 `assert` for the same pair does arrive, its counts are **added** (nothing that could be a failure is discarded) and
 the trial is marked degraded.
 
@@ -82,7 +85,8 @@ the trial is marked degraded.
 Within a process, `catalog` is declared before `assert` in stream order, but the engine does not depend on it: it
 applies `hello`, `catalog`, `thread`, `work` and `end` as they arrive and applies `assert` and `eval` after the stream
 ends, so an `assert` that precedes its `catalog` line is still counted. If the same id is declared with different
-kinds, the first declaration in stream order is kept.
+kinds, the kind declared by the process with the lowest `proc` tag is kept (so the outcome does not depend on which
+process spoke first); within one process the first declaration in stream order is kept.
 
 ## Assertion kinds
 
@@ -105,7 +109,8 @@ for them; engines use only `hits`.
 The same id declared with two different kinds, within one process or across processes, is a catalog conflict. It is a
 **trial-level error**: `TrialProps::verdict()` reports it as a `CatalogConflict` failure, the trial is degraded, and
 the run-level status of the id is `Violation`, never `Unmet`. Counts from the conflicting declaration are not merged
-into the kept one; any `assert` line dropped for that reason is counted in `dropped_asserts`.
+into the kept one; any `assert` line dropped for that reason is counted in `dropped_asserts`, and its counts (hits, trues, falses) are
+attached to the conflict failure for diagnosis.
 
 ## Run-level statistics
 
@@ -117,6 +122,9 @@ Per id, evidence counts and rate counts are kept separately.
   interval and the rule of three (3/N, when the count is zero) are computed over these only, so a trial that died before
   reporting is not mistaken for a trial in which nothing went wrong. `trials_unreported`, `trials_degraded` and
   `trials_perturbing` say how many trials were excluded or flagged.
+* A property with no rated trial has **no rate**: `PropertyStat.rate` is `None`, `unrated_reason` is
+  `NoRatedTrials`, and `rate_text()` reads `unrated (0 rated trials)`. This is not a rate of 0%. Degraded trials are
+  never rated, though their failures still count as evidence.
 * The rate is of trials false (always-type), trials true (`sometimes`) or trials hit (`reachable`, `unreachable`).
 * `first_failure` is the lowest failing seed, whatever order trials were added in.
 * If a trial declares an id with a different kind from the first trial that did, its data for that id is not merged;
@@ -140,9 +148,8 @@ handlers off.
 
 ## Tape v1
 
-Stub. The layout of the tape that `hs_choice` reads (how a thread's stream is carved from the tape file, and the
-unit of `tape_consumed`) is to be agreed with W2 before `hs_choice` ships at M2. Until then only the meaning of
-`tape_consumed` above is fixed.
+Stub. Only the layout is still open: how a thread's stream is carved from the tape file. It is to be agreed with W2
+before `hs_choice` ships at M2. The unit of `tape_consumed` is already fixed: bytes (see Messages).
 
 ## Legacy
 

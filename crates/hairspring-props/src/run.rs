@@ -48,6 +48,13 @@ pub struct Rate {
     pub rule_of_three: Option<f64>,
 }
 
+/// Why a property has no rate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnratedReason {
+    /// No trial that catalogued the id reported cleanly. This is not a rate of 0%.
+    NoRatedTrials,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FirstFailure {
     /// The lowest seed among the failing trials, whatever order trials were added in.
@@ -81,8 +88,9 @@ pub struct PropertyStat {
     pub evals_true: u64,
     pub evals_false: u64,
     pub status: PropertyStatus,
-    /// Computed over rated trials only.
+    /// Computed over rated trials only. `None` exactly when `unrated_reason` is `Some`.
     pub rate: Option<Rate>,
+    pub unrated_reason: Option<UnratedReason>,
     pub first_failure: Option<FirstFailure>,
 }
 
@@ -288,9 +296,34 @@ impl IdAcc {
             evals_true: self.evals_true,
             evals_false: self.evals_false,
             status,
+            unrated_reason: rate.is_none().then_some(UnratedReason::NoRatedTrials),
             rate,
             first_failure: self.first_failure,
         }
+    }
+}
+
+impl PropertyStat {
+    /// The rate as text: `k/n (p%) [lower%, upper%]`, with `3/N` when `k` is zero, or
+    /// `unrated (0 rated trials)` when no clean trial exists (which is not the same as 0%).
+    pub fn rate_text(&self) -> String {
+        let Some(r) = self.rate else {
+            return "unrated (0 rated trials)".to_owned();
+        };
+        let pct = |x: f64| format!("{:.1}%", x * 100.0);
+        let bound = r
+            .rule_of_three
+            .map(|b| format!(", 3/N bound {}", pct(b)))
+            .unwrap_or_default();
+        format!(
+            "{}/{} ({}) [{}, {}]{}",
+            r.k,
+            r.n,
+            pct(r.point),
+            pct(r.lower),
+            pct(r.upper),
+            bound
+        )
     }
 }
 

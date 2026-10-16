@@ -165,7 +165,9 @@ fn text(v: &Json, name: &'static str, max: usize) -> Res<String> {
     Ok(s.clone())
 }
 
-/// Format (Cf) and line/paragraph separator (Zl, Zp) characters, which can reorder or hide text in a terminal or UI.
+/// Format (Cf) and line/paragraph separator (Zl, Zp) characters. The list follows the Unicode 15.1 general
+/// categories (Cf, Zl, Zp); characters added to those categories in later versions are not covered.
+/// which can reorder or hide text in a terminal or UI.
 fn is_invisible(c: char) -> bool {
     matches!(
         c,
@@ -381,12 +383,20 @@ fn decode_end(obj: &Obj) -> Res<Event> {
     }))
 }
 
+/// Eval lines always belong to the reserved tag, so they can never merge into an SDK process.
+fn eval_proc(obj: &Obj) -> Res<String> {
+    match optional(obj, "proc") {
+        None => Ok(DEFAULT_EVAL_PROC.to_owned()),
+        Some(v) => match ident(v, "proc", MAX_PROC_BYTES)? {
+            tag if tag == DEFAULT_EVAL_PROC => Ok(tag),
+            _ => Err(RejectReason::InvalidField("proc")),
+        },
+    }
+}
+
 fn decode_eval(obj: &Obj) -> Res<Event> {
     Ok(Event::Eval(Eval {
-        proc: optional(obj, "proc")
-            .map(|p| ident(p, "proc", MAX_PROC_BYTES))
-            .transpose()?
-            .unwrap_or_else(|| DEFAULT_EVAL_PROC.to_owned()),
+        proc: eval_proc(obj)?,
         id: ident(field(obj, "id")?, "id", MAX_ID_BYTES)?,
         kind: kind_of(field(obj, "type")?)?,
         ok: boolean(field(obj, "ok")?, "ok")?,

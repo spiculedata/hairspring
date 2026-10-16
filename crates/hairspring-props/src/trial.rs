@@ -107,9 +107,19 @@ pub struct ProcReport {
     pub threads: Vec<ThreadReport>,
 }
 
+/// Counts of an `assert` line that was dropped because of a kind conflict, kept for diagnosis.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DroppedCounts {
+    pub hits: u64,
+    pub trues: u64,
+    pub falses: u64,
+}
+
 /// The same id declared with two different kinds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogConflict {
+    /// Counts of the conflicting process's dropped `assert` line (zero if it sent none).
+    pub dropped: DroppedCounts,
     pub id: String,
     pub kept: AssertKind,
     pub rejected: AssertKind,
@@ -137,6 +147,8 @@ pub struct PropertyFailure {
     /// Number of false evaluations (`AlwaysFalse`) or hits (`UnreachableHit`).
     pub count: u64,
     pub witness: Option<Witness>,
+    /// For a `CatalogConflict`: the counts that were dropped. `None` for other failures.
+    pub dropped: Option<DroppedCounts>,
 }
 
 impl PropertyFailure {
@@ -157,14 +169,24 @@ impl PropertyFailure {
         } else {
             format!(": {}", self.msg)
         };
+        let dropped = self
+            .dropped
+            .map(|d| {
+                format!(
+                    " [dropped assert: hits {}, trues {}, falses {}]",
+                    d.hits, d.trues, d.falses
+                )
+            })
+            .unwrap_or_default();
         format!(
-            "{} '{}' {} {} time(s){}{}",
+            "{} '{}' {} {} time(s){}{}{}",
             self.kind.as_str(),
             self.id,
             what,
             self.count,
             place,
-            msg
+            msg,
+            dropped
         )
     }
 }
@@ -237,6 +259,7 @@ impl TrialProps {
             loc: known.and_then(|p| p.loc.clone()),
             count: 1,
             witness: None,
+            dropped: Some(c.dropped),
         }
     }
 }
@@ -264,6 +287,7 @@ impl TrialProperty {
             loc: p.loc.clone(),
             count,
             witness,
+            dropped: None,
         })
     }
 }

@@ -127,10 +127,10 @@
       }
     },
     "eval": {
-      "description": "Per-evaluation form for scripts and languages without an SDK. Each line is a write syscall during the run, so any trial containing one is marked perturbing. `proc` defaults to the reserved tag \"_eval\", which no real process may use. `ok` is ignored for `reachable` and `unreachable`.",
+      "description": "Per-evaluation form for scripts and languages without an SDK. Each line is a write syscall during the run, so any trial containing one is marked perturbing. `proc`, if present, must be the reserved tag \"_eval\" (the default), which no real process may use, so an `eval` line can never merge into an SDK process. `ok` is ignored for `reachable` and `unreachable`.",
       "required": ["id", "type", "ok"],
       "properties": {
-        "proc": { "$ref": "#/$defs/proc" },
+        "proc": { "const": "_eval" },
         "id": { "$ref": "#/$defs/id" },
         "type": { "$ref": "#/$defs/assert_kind" },
         "ok": { "type": "boolean" }
