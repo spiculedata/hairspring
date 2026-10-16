@@ -28,7 +28,22 @@ struct Found<'a> {
     seed: u64,
     trial: &'a Trial,
     reason: &'a str,
-    confirmed: u32,
+    confirmed: Confirmation,
+}
+
+/// How the confirmation reruns of a violating seed went.
+#[derive(Clone, Copy)]
+struct Confirmation {
+    reproduced: u32,
+    /// Reruns that could not be judged (a timeout, a host or events fault): they say nothing about the program.
+    inconclusive: u32,
+}
+
+/// What one confirmation rerun showed.
+enum Rerun {
+    Reproduced,
+    Different,
+    Inconclusive,
 }
 
 /// One finished trial and everything needed to judge it.
@@ -168,21 +183,38 @@ impl HermitBackend {
         run_trial(&self.settings, p, seed, timeout, self.dirs())
     }
 
-    /// Re-runs a violating seed and counts how many runs reproduce it: the same behaviour hash (which includes the
-    /// guest's reported events) and the same failing properties, by id and kind. A rerun that fails a different
-    /// property is a different bug, not a reproduction.
-    fn confirm(&self, p: &ProcessSpec, seed: u64, reference: &Trial, timeout: Duration) -> u32 {
+    /// Re-runs a violating seed. A rerun reproduces it when it is a violation with the same behaviour hash (which
+    /// includes the guest's reported events) and the same failing properties, by id, kind and reason. A rerun that
+    /// fails a different property is a different bug, not a reproduction. A rerun that could not be judged is counted
+    /// apart, because it says nothing about whether the program is deterministic.
+    fn confirm(
+        &self,
+        p: &ProcessSpec,
+        seed: u64,
+        reference: &Trial,
+        timeout: Duration,
+    ) -> Confirmation {
         let hash = behaviour_hash(reference);
         let failing = property_verdict::failing_keys(reference);
-        (0..self.settings.repro_runs)
-            .filter(|_| {
-                self.trial(p, seed, timeout).is_ok_and(|t| {
-                    matches!(self.verdict(p, &t, timeout), Verdict::Violation(_))
-                        && behaviour_hash(&t) == hash
-                        && property_verdict::failing_keys(&t) == failing
-                })
+        let reruns: Vec<Rerun> = (0..self.settings.repro_runs)
+            .map(|_| match self.trial(p, seed, timeout) {
+                Err(_) => Rerun::Inconclusive,
+                Ok(t) => match self.verdict(p, &t, timeout) {
+                    Verdict::Violation(_) if property_verdict::reproduces(&hash, &failing, &t) => {
+                        Rerun::Reproduced
+                    }
+                    Verdict::Violation(_) | Verdict::Pass => Rerun::Different,
+                    Verdict::Hang(_) | Verdict::Inconclusive(_) | Verdict::Infra(_) => {
+                        Rerun::Inconclusive
+                    }
+                },
             })
-            .count() as u32
+            .collect();
+        let count = |want: fn(&Rerun) -> bool| reruns.iter().filter(|r| want(r)).count() as u32;
+        Confirmation {
+            reproduced: count(|r| matches!(r, Rerun::Reproduced)),
+            inconclusive: count(|r| matches!(r, Rerun::Inconclusive)),
+        }
     }
 
     /// Runs the trials for the seeds `base + range` at the same time, returning results in range order.
@@ -244,7 +276,7 @@ impl HermitBackend {
                 let ms = j.started.elapsed().as_millis() as u64;
                 let (distinct, work) = tally.schedule_stats();
                 Some(
-                    tally.with_properties(
+                    tally.with_partial_properties(
                         RunOutcome::failed(j.index + 1, j.index + 1, ms, failure)
                             .with_inconclusive(tally.inconclusive)
                             .with_schedule_stats(distinct, work),
@@ -270,10 +302,20 @@ impl HermitBackend {
         } = *found;
         let hash = behaviour_hash(t);
         let total = self.settings.repro_runs;
+        let Confirmation {
+            reproduced,
+            inconclusive,
+        } = confirmed;
         let mut message = format!(
-            "property violated at sched-seed {seed} ({reason}); reproduced {confirmed}/{total}"
+            "property violated at sched-seed {seed} ({reason}); reproduced {reproduced}/{total}"
         );
-        if confirmed < total {
+        if inconclusive > 0 {
+            let reruns = if inconclusive == 1 { "rerun" } else { "reruns" };
+            message.push_str(&format!(
+                "; {inconclusive} {reruns} inconclusive (host or infrastructure, not the program)"
+            ));
+        }
+        if reproduced + inconclusive < total {
             message.push_str(" - not reproducible: the program or its environment is non-deterministic under hermit");
         }
         let mut bundle = Bundle::new(seed, BUILD, vec![])
@@ -294,7 +336,8 @@ impl HermitBackend {
             // What replay must see fail again; bundles without these (older ones, legacy violations) skip the check.
             bundle = bundle
                 .with_param("property", key.id)
-                .with_param("property_kind", key.kind.as_str());
+                .with_param("property_kind", key.kind.as_str())
+                .with_param("property_reason", property_verdict::reason_name(key.reason));
         }
         let steps = steps(
             p.command,
@@ -359,19 +402,25 @@ fn replay_notes(
 }
 
 /// Whether the rerun failed the property the bundle recorded; `None` for bundles that recorded none (older ones, and
-/// failures that were an exit status or a legacy violation line).
+/// failures that were an exit status or a legacy violation line). A kind or reason this build cannot parse matches
+/// nothing: replay would rather say "not reproduced" than confirm a property it cannot identify. Bundles from before
+/// `property_reason` existed match on id and kind alone.
 fn property_matches(bundle: &Bundle, trial: &Trial) -> Option<bool> {
     let id = bundle.params.get("property")?;
-    let kind = bundle
-        .params
-        .get("property_kind")
-        .and_then(|k| AssertKind::from_wire(k));
+    let kind = match bundle.params.get("property_kind") {
+        Some(k) => match AssertKind::from_wire(k) {
+            Some(kind) => Some(kind),
+            None => return Some(false),
+        },
+        None => None,
+    };
+    let reason = bundle.params.get("property_reason");
     let failing = property_verdict::failing_keys(trial);
-    Some(
-        failing
-            .iter()
-            .any(|k: &FailureKey| k.id == *id && kind.is_none_or(|expected| expected == k.kind)),
-    )
+    Some(failing.iter().any(|k: &FailureKey| {
+        k.id == *id
+            && kind.is_none_or(|expected| expected == k.kind)
+            && reason.is_none_or(|r| r == property_verdict::reason_name(k.reason))
+    }))
 }
 
 /// Replay is only meaningful under the scheduling strategy the bundle was recorded with. Bundles from before scheduler

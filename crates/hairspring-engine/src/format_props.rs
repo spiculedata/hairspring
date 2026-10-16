@@ -24,14 +24,22 @@ fn first_failure_text(stat: &PropertyStat) -> String {
     }
 }
 
+fn inconclusive_text(stat: &PropertyStat) -> String {
+    match stat.trials_inconclusive_with_failures {
+        0 => String::new(),
+        n => format!("; failure seen in an inconclusive trial ({n}x), not counted as a finding"),
+    }
+}
+
 fn row(stat: &PropertyStat) -> String {
     format!(
-        "    {:<9} {} '{}'  {}{}\n",
+        "    {:<9} {} '{}'  {}{}{}\n",
         label(stat.status),
         stat.kind.as_str(),
         stat.id,
         stat.rate_text(),
-        first_failure_text(stat)
+        first_failure_text(stat),
+        inconclusive_text(stat)
     )
 }
 

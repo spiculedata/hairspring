@@ -51,7 +51,22 @@ fn a_false_in_a_degraded_trial_is_still_a_violation() {
 fn property_stats_round_trip_through_json() {
     let stat = stat_of(&[(1, fold(&single(AssertKind::Always, 2, 1)))]);
     let json = serde_json::to_string(&stat).unwrap();
-    assert_eq!(serde_json::from_str::<PropertyStat>(&json).unwrap(), stat);
+    let back = serde_json::from_str::<PropertyStat>(&json).unwrap();
+    // serde_json's default float parsing may differ from the printed value in the last bit, so the interval is
+    // compared with a tolerance and everything else exactly.
+    let (want, got) = (stat.rate.unwrap(), back.rate.unwrap());
+    for (a, b) in [
+        (want.point, got.point),
+        (want.lower, got.lower),
+        (want.upper, got.upper),
+    ] {
+        assert!((a - b).abs() < 1e-12, "{a} vs {b}");
+    }
+    let strip = |s: &PropertyStat| PropertyStat {
+        rate: None,
+        ..s.clone()
+    };
+    assert_eq!(strip(&back), strip(&stat));
 }
 
 #[test]
@@ -62,7 +77,10 @@ fn a_false_in_an_inconclusive_trial_is_not_a_finding_but_stays_visible() {
     let stat = run.finish().remove(0);
     assert_eq!(stat.status, PropertyStatus::Unrated);
     assert_eq!(stat.trials_inconclusive_with_failures, 1);
-    assert_eq!((stat.trials, stat.trials_false, stat.trials_rated), (1, 0, 0));
+    assert_eq!(
+        (stat.trials, stat.trials_false, stat.trials_rated),
+        (1, 0, 0)
+    );
     assert!(stat.first_failure.is_none());
 }
 
