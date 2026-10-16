@@ -41,5 +41,55 @@ fn property_statistics_round_trip_and_unmet_lists_only_unmet_properties() {
     assert_eq!(outcome.properties[0].status, PropertyStatus::Unmet);
     let json = serde_json::to_string(&outcome).unwrap();
     let back: RunOutcome = serde_json::from_str(&json).unwrap();
-    assert_eq!(back, outcome);
+    // serde_json's default float parsing may differ in the last bit, so intervals are compared with a tolerance and
+    // everything else exactly.
+    let (want, got) = (
+        outcome.properties[0].rate.unwrap(),
+        back.properties[0].rate.unwrap(),
+    );
+    assert!((want.upper - got.upper).abs() < 1e-12 && (want.lower - got.lower).abs() < 1e-12);
+    let strip = |o: &RunOutcome| {
+        let mut o = o.clone();
+        o.properties[0].rate = None;
+        o
+    };
+    assert_eq!(strip(&back), strip(&outcome));
+}
+
+#[test]
+fn without_properties_drops_exactly_the_property_fields() {
+    let trial = TrialEvents::from_output(report(AssertKind::Sometimes).as_bytes()).fold();
+    let run = RunProps::new().add(1, &trial);
+    let summary = run.summary();
+    let full = RunOutcome::passed(4, 3, 9).with_properties(run.finish(), summary);
+    assert_eq!(
+        full.clone().without_properties(),
+        RunOutcome::passed(4, 3, 9)
+    );
+}
+
+#[test]
+fn a_run_whose_only_trials_are_perturbing_reports_unrated_and_no_unmet_section() {
+    let mut trial = TrialEvents::from_output(report(AssertKind::Sometimes).as_bytes()).fold();
+    trial.perturbing = true;
+    let run = RunProps::new().add(1, &trial);
+    let summary = run.summary();
+    let outcome = RunOutcome::passed(1, 1, 1).with_properties(run.finish(), summary);
+    assert!(outcome.unmet().is_empty());
+    let text = hairspring_engine::format::to_text("svc", &outcome);
+    assert!(
+        text.contains("UNRATED") && !text.contains("UNMET"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_failed_outcome_never_prints_an_unmet_section_even_if_statuses_say_unmet() {
+    let trial = TrialEvents::from_output(report(AssertKind::Sometimes).as_bytes()).fold();
+    let run = RunProps::new().add(1, &trial);
+    let summary = run.summary();
+    let mut outcome = RunOutcome::passed(1, 1, 1).with_properties(run.finish(), summary);
+    outcome.status = hairspring_engine::report::RunStatus::Failed;
+    let text = hairspring_engine::format::to_text("svc", &outcome);
+    assert!(!text.contains("UNMET (run-level"), "{text}");
 }

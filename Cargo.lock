@@ -859,6 +859,7 @@ version = "0.1.0"
 dependencies = [
  "hairspring-core",
  "hairspring-engine",
+ "hairspring-props",
  "hairspring-store",
  "serde",
  "serde_json",
@@ -890,6 +891,7 @@ name = "hairspring-worker"
 version = "0.1.0"
 dependencies = [
  "hairspring-engine",
+ "hairspring-props",
  "hairspring-service",
  "serde",
  "serde_json",

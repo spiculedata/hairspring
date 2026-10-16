@@ -147,9 +147,14 @@ In this order, the first rule that applies decides:
 
 UNMET (`sometimes`, `reachable`, `always` never evaluated) is a run-level finding over claimable trials only (rated and
 not perturbing). It never fails a trial, and it is listed in its own section of the report. A run that stops at its first
-failure makes no UNMET claim. `confirm` reruns count only when they fail the same property ids and kinds and reproduce
-the behaviour hash (which includes the reported events). Replay of a bundle with a `property` also requires that
-property to fail again.
+failure, or tested nothing, makes no UNMET claim: such a property is `Unrated` in the data. `confirm` reruns count only
+when they fail the same property ids, kinds and reasons and reproduce the behaviour hash (which includes the reported
+events); reruns that could not be judged (a timeout, a host or events fault) are counted as inconclusive, not as
+non-reproduction. Replay of a bundle with a `property` also requires that property to fail again.
+
+A trial that timed out is inconclusive: the report of a killed process decides nothing. A failure it shows is not a
+finding and is not recorded in the bundle; the run counts it in `trials_inconclusive_with_failures` and the report says
+"seen in an inconclusive trial".
 
 ## Versioning and unknowns
 

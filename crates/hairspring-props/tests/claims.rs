@@ -95,7 +95,7 @@ fn an_inconclusive_trial_never_backs_a_must_hit_claim() {
 #[test]
 fn a_conflict_and_an_always_false_on_one_id_are_different_failure_reasons() {
     assert_ne!(FailureReason::AlwaysFalse, FailureReason::CatalogConflict);
-    let mut reasons = vec![FailureReason::CatalogConflict, FailureReason::AlwaysFalse];
+    let mut reasons = [FailureReason::CatalogConflict, FailureReason::AlwaysFalse];
     reasons.sort();
     assert_eq!(reasons[0], FailureReason::AlwaysFalse);
 }

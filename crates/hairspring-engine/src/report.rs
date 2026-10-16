@@ -76,6 +76,17 @@ impl RunOutcome {
         }
     }
 
+    /// The outcome without its property statistics. Used where the statistics must not travel: a worker posting a
+    /// result (thousands of ids would exceed the server's body limit) and the service receiving one (worker data is
+    /// untrusted until the property checks of E6 exist). Remove its callers when E4 and E6 land.
+    pub fn without_properties(self) -> Self {
+        RunOutcome {
+            properties: Vec::new(),
+            property_run: None,
+            ..self
+        }
+    }
+
     /// Properties that are must-hit and were never satisfied in any claimable trial. A run-level finding: it never
     /// fails an individual trial or turns a passing run into a failed one.
     pub fn unmet(&self) -> Vec<&PropertyStat> {
