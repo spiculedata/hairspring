@@ -155,6 +155,39 @@ fn several_processes_opening_a_version_one_database_at_once_all_succeed() {
     assert!(errors.is_empty(), "concurrent opens failed: {errors:?}");
 }
 
+/// Opens `path` from `threads` threads released together; returns every error message.
+fn open_together(path: &std::path::Path, threads: usize) -> Vec<String> {
+    let barrier = Arc::new(std::sync::Barrier::new(threads));
+    let handles: Vec<_> = (0..threads)
+        .map(|_| {
+            let (p, b) = (path.to_path_buf(), barrier.clone());
+            std::thread::spawn(move || {
+                b.wait();
+                SqliteStore::open(&p).err().map(|e| e.to_string())
+            })
+        })
+        .collect();
+    handles
+        .into_iter()
+        .filter_map(|h| h.join().unwrap())
+        .collect()
+}
+
+#[test]
+fn many_threads_opening_old_and_new_databases_repeatedly_all_succeed() {
+    for round in 0..25 {
+        let old = temp_db(&format!("stress-old-{round}"));
+        make_v1_database(&old);
+        let fresh = temp_db(&format!("stress-new-{round}"));
+        for path in [&old, &fresh] {
+            let errors = open_together(path, 12);
+            assert!(errors.is_empty(), "round {round}: {errors:?}");
+            let store = SqliteStore::open(path).unwrap();
+            assert!(store.list_workers().is_ok());
+        }
+    }
+}
+
 #[test]
 fn a_database_from_the_future_is_refused_untouched() {
     let path = temp_db("future");

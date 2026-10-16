@@ -134,6 +134,35 @@ fn concurrent_startup_on_a_version_one_schema_migrates_exactly_once() {
 }
 
 #[test]
+fn concurrent_startup_on_a_schema_missing_the_worker_secret_column_succeeds() {
+    let Some(url) = url() else { return };
+    let schema = new_id("c").replace('-', "_");
+    drop(PgStore::connect_in_schema(&url, &schema, 1).unwrap());
+    let mut c = postgres::Client::connect(&url, postgres::NoTls).unwrap();
+    c.batch_execute(&format!(
+        "ALTER TABLE \"{schema}\".workers DROP COLUMN secret_hash"
+    ))
+    .unwrap();
+    let barrier = Arc::new(std::sync::Barrier::new(6));
+    let handles: Vec<_> = (0..6)
+        .map(|_| {
+            let (url, schema, b) = (url.clone(), schema.clone(), barrier.clone());
+            std::thread::spawn(move || {
+                b.wait();
+                PgStore::connect_in_schema(&url, &schema, 2)
+                    .err()
+                    .map(|e| e.to_string())
+            })
+        })
+        .collect();
+    let errors: Vec<String> = handles
+        .into_iter()
+        .filter_map(|h| h.join().unwrap())
+        .collect();
+    assert!(errors.is_empty(), "concurrent connects failed: {errors:?}");
+}
+
+#[test]
 fn a_schema_from_the_future_is_refused_untouched() {
     let Some(url) = url() else { return };
     let schema = new_id("f").replace('-', "_");

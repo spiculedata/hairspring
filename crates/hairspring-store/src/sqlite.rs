@@ -13,6 +13,39 @@ impl From<rusqlite::Error> for StoreError {
     }
 }
 
+/// How long a connection waits for another writer before giving up with `SQLITE_BUSY`.
+const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Pause between attempts to switch the journal mode while another connection holds the file.
+const WAL_RETRY_PAUSE: std::time::Duration = std::time::Duration::from_millis(5);
+
+/// Puts the database in WAL mode. Changing the journal mode takes locks for which SQLite does not always call the busy
+/// handler, so concurrent first opens can see `SQLITE_BUSY` even with a busy timeout set; retry for up to
+/// [`BUSY_TIMEOUT`]. A database already in WAL mode needs no change, which keeps later opens off the lock entirely.
+fn enable_wal(conn: &Connection) -> Result<()> {
+    let deadline = std::time::Instant::now() + BUSY_TIMEOUT;
+    loop {
+        let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0))?;
+        if mode.eq_ignore_ascii_case("wal") {
+            return Ok(());
+        }
+        match conn.pragma_update(None, "journal_mode", "WAL") {
+            Ok(()) => return Ok(()),
+            Err(e) if is_busy(&e) && std::time::Instant::now() < deadline => {
+                std::thread::sleep(WAL_RETRY_PAUSE)
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+fn is_busy(e: &rusqlite::Error) -> bool {
+    matches!(
+        e.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+    )
+}
+
 pub struct SqliteStore {
     conn: Mutex<Connection>,
 }
@@ -78,7 +111,10 @@ fn job_from_row(r: &Row<'_>) -> rusqlite::Result<Job> {
 impl SqliteStore {
     pub fn open(path: &Path) -> Result<SqliteStore> {
         let conn = Connection::open(path)?;
-        conn.pragma_update(None, "journal_mode", "WAL")?;
+        // The timeout must be in place before the first statement that takes a lock: switching to WAL needs one, and
+        // without a busy handler it fails at once with "database is locked" when another process is opening the file.
+        conn.busy_timeout(BUSY_TIMEOUT)?;
+        enable_wal(&conn)?;
         SqliteStore::init(conn)
     }
 
@@ -87,7 +123,7 @@ impl SqliteStore {
     }
 
     fn init(conn: Connection) -> Result<SqliteStore> {
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         sqlite_schema::migrate(&conn)?;
         Ok(SqliteStore {
