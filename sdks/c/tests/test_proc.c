@@ -27,9 +27,6 @@
 #endif
 #endif
 
-/* Under TSan the SIGSEGV tests do not get a plain SIGSEGV death by default; the cause is not established (see PR #30).
-** `make tsan-signals` (HS_TEST_TSAN_SIGNALS=1) runs them with TSan's own handlers for the fatal signals switched off,
-** so the SDK installs its handlers and reports; without it they skip. */
 #if defined(__SANITIZE_THREAD__)
 #define HS_T_TSAN 1
 #elif defined(__has_feature)
@@ -38,13 +35,27 @@
 #endif
 #endif
 
-/* The SDK reports "signal_handlers":true only if it could install all of SEGV, BUS, ABRT, FPE, ILL and TERM, and it
-** leaves a signal alone when a handler is already there, so every signal TSan handles by default is switched off. */
-#define HS_T_TSAN_NO_HANDLERS "TSAN_OPTIONS=handle_segv=0:handle_sigbus=0:handle_sigfpe=0:handle_sigill=0"
+/* Under a sanitizer the SIGSEGV tests do not get a plain SIGSEGV death by default: the runtime owns the fatal signals
+** (for TSan the cause is not established, see PR #30). `make tsan-signals` and `make asan-signals`
+** (HS_TEST_SANITIZER_SIGNALS=1) run them with the runtime's own handlers for the fatal signals switched off, so the SDK
+** installs its handlers and reports; without it they skip.
+** The SDK reports "signal_handlers":true only if it could install all of SEGV, BUS, ABRT, FPE, ILL and TERM, and it
+** leaves a signal alone when a handler is already there, so every signal the runtime handles by default is switched
+** off. ASan does not handle SIGABRT unless asked to; handle_abort=0 states that rather than relying on the default. */
+#if defined(HS_T_ASAN)
+#define HS_T_SAN_NAME "AddressSanitizer"
+#define HS_T_SAN_TARGET "asan-signals"
+#define HS_T_SAN_NO_HANDLERS \
+  "ASAN_OPTIONS=handle_segv=0:handle_sigbus=0:handle_sigfpe=0:handle_sigill=0:handle_abort=0"
+#elif defined(HS_T_TSAN)
+#define HS_T_SAN_NAME "ThreadSanitizer"
+#define HS_T_SAN_TARGET "tsan-signals"
+#define HS_T_SAN_NO_HANDLERS "TSAN_OPTIONS=handle_segv=0:handle_sigbus=0:handle_sigfpe=0:handle_sigill=0"
+#endif
 
-#ifdef HS_T_TSAN
-static int tsan_signals_enabled(void) {
-  const char *v = getenv("HS_TEST_TSAN_SIGNALS");
+#ifdef HS_T_SAN_NAME
+static int sanitizer_signals_enabled(void) {
+  const char *v = getenv("HS_TEST_SANITIZER_SIGNALS");
   return v && strcmp(v, "1") == 0;
 }
 #endif
@@ -307,7 +318,6 @@ static void test_threads_beyond_the_table_are_capped_and_counted(void) {
   free_capture(c);
 }
 
-#ifndef HS_T_ASAN
 /* `sanitizer_env` is NULL, or one NAME=VALUE that stops a sanitizer from owning the fatal signals. */
 static void check_signal_report_is_opt_in(const char *sanitizer_env) {
   const char *on[] = {"HAIRSPRING_SIGNAL_REPORT=1", sanitizer_env, NULL};
@@ -331,15 +341,11 @@ static void check_signal_report_is_opt_in(const char *sanitizer_env) {
   CHECK_U64(count(c, "assert", "p1"), 0);
   free_capture(c);
 }
-#endif
 
 static void test_signal_report_is_opt_in(void) {
-#ifdef HS_T_ASAN
-  /* ASan owns SIGSEGV: the SDK leaves that handler alone, and without the opt-in ASan ends the run itself. */
-  printf("skip: SIGSEGV opt-in report under AddressSanitizer\n");
-#elif defined(HS_T_TSAN)
-  if (tsan_signals_enabled()) check_signal_report_is_opt_in(HS_T_TSAN_NO_HANDLERS);
-  else printf("skip: SIGSEGV opt-in report under ThreadSanitizer (run `make tsan-signals` for the variant with TSan's handlers off)\n");
+#ifdef HS_T_SAN_NAME
+  if (sanitizer_signals_enabled()) check_signal_report_is_opt_in(HS_T_SAN_NO_HANDLERS);
+  else printf("skip: SIGSEGV opt-in report under " HS_T_SAN_NAME " (run `make " HS_T_SAN_TARGET "` for the variant with its handlers off)\n");
 #else
   check_signal_report_is_opt_in(NULL);
 #endif
@@ -543,14 +549,12 @@ static void crash_reports(const char *scenario, int expected_signal, const char 
 }
 
 static void test_real_faults_are_reported_when_handlers_are_on(void) {
-#ifdef HS_T_ASAN
-  printf("skip: SIGSEGV reports under AddressSanitizer\n");
-#elif defined(HS_T_TSAN)
-  if (tsan_signals_enabled()) {
-    crash_reports_with("segv", SIGSEGV, "segv.before", HS_T_TSAN_NO_HANDLERS);
-    crash_reports_with("threadsegv", SIGSEGV, "threadsegv.worker", HS_T_TSAN_NO_HANDLERS);
+#ifdef HS_T_SAN_NAME
+  if (sanitizer_signals_enabled()) {
+    crash_reports_with("segv", SIGSEGV, "segv.before", HS_T_SAN_NO_HANDLERS);
+    crash_reports_with("threadsegv", SIGSEGV, "threadsegv.worker", HS_T_SAN_NO_HANDLERS);
   } else {
-    printf("skip: SIGSEGV reports under ThreadSanitizer (run `make tsan-signals` for the variant with TSan's handlers off)\n");
+    printf("skip: SIGSEGV reports under " HS_T_SAN_NAME " (run `make " HS_T_SAN_TARGET "` for the variant with its handlers off)\n");
   }
 #else
   crash_reports("segv", SIGSEGV, "segv.before");

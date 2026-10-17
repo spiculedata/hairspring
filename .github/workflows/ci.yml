@@ -34,6 +34,35 @@ jobs:
       # System-level (Hermit) tests need performance counters and are run separately on bare metal:
       #   HAIRSPRING_HERMIT_REAL=1 cargo test -p hairspring-hermit --test real_hermit
 
+  c-sdk:
+    name: C SDK (${{ matrix.cc }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { cc: gcc, cxx: g++ }
+          - { cc: clang, cxx: clang++ }
+    defaults:
+      run:
+        working-directory: sdks/c
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compiler versions
+        run: ${{ matrix.cc }} --version && ${{ matrix.cxx }} --version
+      # Includes audit-control, the positive control for the call-site audit, and the seccomp no-syscall test.
+      - name: Test
+        run: make test CC=${{ matrix.cc }}
+      # Compiler-specific placement behaviour for C++ call sites in files that mix inline and ordinary functions;
+      # not part of make test.
+      - name: C++ mixed inline and ordinary call sites
+        run: make cxx-mixed CC=${{ matrix.cc }}
+      - name: Signal reports under ThreadSanitizer
+        run: make tsan-signals CC=${{ matrix.cc }}
+      - name: Signal reports under AddressSanitizer and UBSan
+        run: make asan-signals CC=${{ matrix.cc }}
+
   web:
     name: Web UI
     runs-on: ubuntu-latest

@@ -14,6 +14,16 @@
 
 #include "../../include/hairspring.h"
 
+#if defined(HS_SCENARIO_segv) || defined(HS_SCENARIO_threadsegv)
+/* The deliberate fault. Not instrumented for UBSan, whose null-store diagnostic would otherwise be printed (on the
+** events stream) before the signal arrives. The pointer is read from a volatile object so the compiler cannot see the
+** null and replace the store with a trap instruction (gcc does that for a constant null: SIGILL instead of SIGSEGV). */
+static void __attribute__((noinline, no_sanitize("undefined"))) fault_null_store(void) {
+  volatile int *volatile target = NULL;
+  *target = 1;
+}
+#endif
+
 #if defined(HS_SCENARIO_basic)
 
 int main(int argc, char **argv) {
@@ -237,7 +247,7 @@ int main(void) {
 
 int main(void) {
   HS_REACHABLE("segv.before", "reached before the fault");
-  *(volatile int *)0 = 1;
+  fault_null_store();
   return 0;
 }
 
@@ -254,7 +264,7 @@ static void *faulting(void *arg) {
   (void)arg;
   hs_thread("faulty", 0);
   HS_REACHABLE("threadsegv.worker", "reached in the worker");
-  *(volatile int *)0 = 1;
+  fault_null_store();
   return NULL;
 }
 
