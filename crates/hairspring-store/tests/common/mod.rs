@@ -9,6 +9,7 @@ pub mod terminal_events;
 pub mod tree;
 pub mod tree_attempts;
 pub mod tree_downgrade;
+pub mod tree_fields;
 pub mod tree_gc_spec;
 pub mod tree_identity;
 pub mod tree_oracle;

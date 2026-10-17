@@ -126,13 +126,15 @@ fn hostile_text_in_tree_rows_is_stored_verbatim(s: &dyn Store) {
     assert_eq!(n.reporter_id, evil);
     let b = run_with_identity(s, "a\n");
     let mut br = branch_for(&tree.id, &b.id, 0, &"9".repeat(64));
-    br.command_json = evil.into();
+    // The command must be JSON, so the hostile text goes in a string; it has no quote, backslash or control character.
+    let command = format!("{{\"v\":\"{evil}\"}}");
+    br.command_json = command.clone();
     br.created_by = evil.into();
     s.add_tree_branch(&br, 9).unwrap();
     let got = s.get_tree_branch(&b.id).unwrap().unwrap();
     assert_eq!(
         (got.command_json.as_str(), got.created_by.as_str()),
-        (evil, evil)
+        (command.as_str(), evil)
     );
     assert_eq!(
         s.get_tree_node(&tree.id, 1).unwrap().unwrap().reporter_id,

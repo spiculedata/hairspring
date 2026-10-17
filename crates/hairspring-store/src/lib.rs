@@ -8,6 +8,7 @@ mod types;
 mod downgrade;
 #[macro_use]
 mod lineage;
+mod lineage_fields;
 #[cfg(feature = "postgres")]
 mod pg;
 #[cfg(feature = "postgres")]
@@ -203,7 +204,8 @@ pub trait Store: Send + Sync {
     /// The tree a run roots or branches from.
     fn tree_of_run(&self, run_id: &str) -> Result<Option<String>>;
     /// Attaches a stored trial to the tree. Number, depth, path and verdict are derived here, never taken from the
-    /// caller; the depth, fan-out and node caps are enforced.
+    /// caller; the depth, fan-out and node caps are enforced. An `edge_ref`, when given, is a SHA-256 digest in
+    /// lower-case hexadecimal (64 characters); anything else is `Rejected(Invalid)`.
     fn add_tree_node(&self, tree_id: &str, new: &NewNode, now: i64) -> Result<NodeOutcome>;
     fn get_tree_node(&self, tree_id: &str, node: u64) -> Result<Option<NodeRecord>>;
     fn tree_node_of_trial(&self, run_id: &str, seq: u64) -> Result<Option<NodeRecord>>;
@@ -244,7 +246,10 @@ pub trait Store: Send + Sync {
     ) -> Result<NodePage>;
     /// The nodes above a node, root first (not the node itself).
     fn tree_ancestors(&self, tree_id: &str, node: u64) -> Result<Vec<NodeRecord>>;
-    /// Registers a branch run of a tree. A command already stored for the tree answers `Existing`.
+    /// Registers a branch run of a tree. A command already stored for the tree answers `Existing`. `point_hash` and
+    /// `command_hash` are SHA-256 digests in lower-case hexadecimal (64 characters); `command_json` is one
+    /// well-formed JSON document of at most [`MAX_COMMAND_JSON_BYTES`] bytes and [`MAX_COMMAND_JSON_DEPTH`] levels of
+    /// nesting. Anything else is `Rejected(Invalid)` and nothing is written.
     fn add_tree_branch(&self, new: &NewBranch, now: i64) -> Result<BranchOutcome>;
     fn get_tree_branch(&self, run_id: &str) -> Result<Option<BranchRecord>>;
     fn find_tree_branch(&self, tree_id: &str, command_hash: &str) -> Result<Option<BranchRecord>>;
