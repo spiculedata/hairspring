@@ -9,6 +9,7 @@
 mod cli;
 mod commands;
 mod ctx;
+mod host;
 mod timefmt;
 
 use clap::Parser;
