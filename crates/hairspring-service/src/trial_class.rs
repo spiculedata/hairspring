@@ -2,7 +2,7 @@
 //!
 //! A trial that was not judged a clean, rated pass is never shown as a pass. A `pass` verdict whose trial was degraded,
 //! left out of the statistics or reported nothing is `Excluded`, and the strip gives it a code of its own.
-use hairspring_store::{TrialRecord, TrialVerdict};
+use hairspring_store::{TrialRecord, TrialStripRow, TrialVerdict};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrialClass {
@@ -28,12 +28,26 @@ pub const ALL_CLASSES: [TrialClass; 6] = [
 
 impl TrialClass {
     pub fn of(t: &TrialRecord) -> TrialClass {
-        match t.verdict {
+        TrialClass::from_parts(t.verdict, t.rated, t.degraded, t.report_missing)
+    }
+
+    /// The class of a trial read for the strip: the same rule as [`TrialClass::of`] over the same fields.
+    pub fn of_strip(t: &TrialStripRow) -> TrialClass {
+        TrialClass::from_parts(t.verdict, t.rated, t.degraded, t.report_missing)
+    }
+
+    fn from_parts(
+        verdict: TrialVerdict,
+        rated: bool,
+        degraded: bool,
+        report_missing: bool,
+    ) -> TrialClass {
+        match verdict {
             TrialVerdict::Violation => TrialClass::Violation,
             TrialVerdict::Inconclusive => TrialClass::Inconclusive,
             TrialVerdict::Unusable => TrialClass::Unusable,
             TrialVerdict::Infra => TrialClass::Infra,
-            TrialVerdict::Pass if t.rated && !t.degraded && !t.report_missing => TrialClass::Pass,
+            TrialVerdict::Pass if rated && !degraded && !report_missing => TrialClass::Pass,
             TrialVerdict::Pass => TrialClass::Excluded,
         }
     }
@@ -94,6 +108,37 @@ mod tests {
             detail_ref: None,
             output_ref: None,
             digest: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_strip_row_gets_the_class_its_full_row_gets() {
+        let verdicts = [
+            TrialVerdict::Pass,
+            TrialVerdict::Violation,
+            TrialVerdict::Inconclusive,
+            TrialVerdict::Unusable,
+            TrialVerdict::Infra,
+        ];
+        for verdict in verdicts {
+            for bits in 0..8u8 {
+                let (rated, degraded, report_missing) =
+                    (bits & 1 != 0, bits & 2 != 0, bits & 4 != 0);
+                let full = TrialRecord {
+                    rated,
+                    degraded,
+                    report_missing,
+                    ..trial(verdict)
+                };
+                let strip = hairspring_store::TrialStripRow {
+                    seq: 0,
+                    verdict,
+                    rated,
+                    degraded,
+                    report_missing,
+                };
+                assert_eq!(TrialClass::of_strip(&strip), TrialClass::of(&full));
+            }
         }
     }
 

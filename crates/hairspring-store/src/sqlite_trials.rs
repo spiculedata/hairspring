@@ -491,6 +491,31 @@ pub(crate) fn list_trial_digests(
     Ok(rows)
 }
 
+pub(crate) fn list_trial_strip_rows(
+    conn: &Connection,
+    run_id: &str,
+    after: Option<u64>,
+    limit: u32,
+) -> Result<Vec<TrialStripRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT seq, verdict, rated, degraded, report_missing FROM trials \
+         WHERE run_id=? AND seq>? ORDER BY seq LIMIT ?",
+    )?;
+    let rows = stmt
+        .query_map(params![run_id, after_bound(after), limit], |r| {
+            let verdict: String = r.get(1)?;
+            Ok(TrialStripRow {
+                seq: r.get::<_, i64>(0)? as u64,
+                verdict: TrialVerdict::parse(&verdict).unwrap_or(TrialVerdict::Infra),
+                rated: r.get(2)?,
+                degraded: r.get(3)?,
+                report_missing: r.get(4)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 pub(crate) fn get_catalog(conn: &Connection, run_id: &str) -> Result<Vec<CatalogRowRecord>> {
     let mut stmt = conn.prepare("SELECT * FROM run_catalog WHERE run_id=? ORDER BY idx")?;
     let rows = stmt

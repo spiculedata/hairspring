@@ -152,6 +152,16 @@ pub struct TrialDigestRow {
     pub digest: Vec<u8>,
 }
 
+/// The part of a trial the seed strip needs: its verdict and the flags that decide its class. No digest, no text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrialStripRow {
+    pub seq: u64,
+    pub verdict: TrialVerdict,
+    pub rated: bool,
+    pub degraded: bool,
+    pub report_missing: bool,
+}
+
 /// What an ingest request did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IngestOutcome {
