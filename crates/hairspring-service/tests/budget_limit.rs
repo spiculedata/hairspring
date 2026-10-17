@@ -143,7 +143,10 @@ fn an_untrusted_limited_run_does_not_state_that_nothing_is_missing() {
         status: Some("unmet".into()),
         ..Default::default()
     };
-    let filtered = svc.property_page(&run_id, &only_unmet, None).unwrap().unwrap();
+    let filtered = svc
+        .property_page(&run_id, &only_unmet, None)
+        .unwrap()
+        .unwrap();
     assert!(filtered.properties.is_empty());
     let summary = svc.get_run(&run_id).unwrap().unwrap().properties.unwrap();
     assert!(summary.guest.unmet_ids.is_empty());

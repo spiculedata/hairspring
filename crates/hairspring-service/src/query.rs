@@ -217,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fingerprint_is_letters_and_digits_only() {
+    fn a_fingerprint_is_16_to_64_hex_digits_and_a_filter_folds_case() {
         assert!(parse_fingerprint(Some("4c16a90b4c16a90b"))
             .unwrap()
             .is_some());

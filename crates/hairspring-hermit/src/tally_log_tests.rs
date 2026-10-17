@@ -30,7 +30,7 @@ fn trial(props: TrialProps) -> Trial {
         stderr: "hermit: noise\nerr line\n".to_string(),
         elapsed_ms: 17,
         schedule: Some(Summary {
-            fingerprint: "00ff".to_string(),
+            fingerprint: "00ff00ff00ff00ff".to_string(),
             syscalls: 99,
             ..Summary::default()
         }),
@@ -100,7 +100,7 @@ fn a_row_carries_the_trials_schedule_hash_and_timing() {
     pass(&mut tally, 0, 5, &t);
     let r = &rows(&tally)[0];
     assert_eq!(r.exit_code, Some(0));
-    assert_eq!(r.schedule_fp.as_deref(), Some("00ff"));
+    assert_eq!(r.schedule_fp.as_deref(), Some("00ff00ff00ff00ff"));
     assert_eq!((r.syscalls, r.elapsed_ms), (99, 17));
     assert!(r.behaviour_hash.is_some());
 }
