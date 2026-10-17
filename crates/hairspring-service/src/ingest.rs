@@ -3,6 +3,7 @@
 //! A worker is a separate process, possibly remote and possibly compromised, and the text in its records is later shown
 //! to people and to AI agents. Every field is therefore re-checked here against the protocol's own limits, the digest
 //! is decoded and checked against the catalog the server holds, and a batch is stored all or nothing.
+use crate::query::is_schedule_fingerprint;
 use crate::types::IngestReceipt;
 use crate::{Result, Service, ServiceError};
 use hairspring_engine::config::MAX_TRIALS_CAP;
@@ -56,6 +57,16 @@ fn hash_field(value: &Option<String>, what: &str) -> Result<()> {
                 "{what} must be 1-{MAX_HASH_CHARS} letters and digits"
             )))
         }
+        _ => Ok(()),
+    }
+}
+
+/// A schedule fingerprint must be one the `fp` filter can name: 16 to 64 lower case hex digits.
+fn fingerprint_field(value: &Option<String>) -> Result<()> {
+    match value {
+        Some(f) if !is_schedule_fingerprint(f) => Err(invalid(
+            "schedule fingerprint must be 16-64 lower case hex digits",
+        )),
         _ => Ok(()),
     }
 }
@@ -156,7 +167,7 @@ fn check_report(r: &TrialReport, catalog: RunCatalog) -> Result<(Checked, RunCat
         ));
     }
     hash_field(&r.behaviour_hash, "behaviour hash").map_err(|e| label(&e.to_string()))?;
-    hash_field(&r.schedule_fp, "schedule fingerprint").map_err(|e| label(&e.to_string()))?;
+    fingerprint_field(&r.schedule_fp).map_err(|e| label(&e.to_string()))?;
     let limit = i64::MAX as u64;
     if r.syscalls > limit || r.work_ops > limit || r.elapsed_ms > limit {
         return Err(label("a counter is out of range"));

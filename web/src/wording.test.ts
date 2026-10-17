@@ -100,6 +100,10 @@ describe('fixed phrases', () => {
     expect(unmetSuppressedReason({ kind: 'stopped_at_first_failure' }, false)).toMatch(/stopped at its first failure/);
     expect(unmetSuppressedReason({ kind: 'complete' }, true)).toMatch(/incomplete/);
     expect(unmetSuppressedReason({ kind: 'running' }, false)).toMatch(/not finished/);
+    expect(
+      unmetSuppressedReason({ kind: 'time_or_step_limited', trials_run: 3, trials_budget: 10 }, false, true),
+    ).toMatch(/unverified worker data/);
+    expect(unmetSuppressedReason({ kind: 'complete' }, false, true)).toBe('no trial could claim it');
   });
   it('marks truncation visibly with the count', () => {
     expect(truncationMarker(88)).toBe('… (88 more characters)');

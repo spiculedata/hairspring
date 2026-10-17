@@ -554,6 +554,15 @@ impl Store for PgStore {
         trials::list_trial_digests(&mut *self.client()?, run_id, after_seq, limit)
     }
 
+    fn list_trial_strip_rows(
+        &self,
+        run_id: &str,
+        after_seq: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<TrialStripRow>> {
+        trials::list_trial_strip_rows(&mut *self.client()?, run_id, after_seq, limit)
+    }
+
     fn get_catalog(&self, run_id: &str) -> Result<Vec<CatalogRowRecord>> {
         trials::get_catalog(&mut *self.client()?, run_id)
     }

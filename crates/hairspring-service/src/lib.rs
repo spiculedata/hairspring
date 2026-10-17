@@ -4,6 +4,7 @@
 mod claim_view;
 pub mod claims;
 mod completion;
+mod coverage_cache;
 mod error;
 mod ingest;
 mod jobs;
@@ -87,6 +88,7 @@ pub struct Service {
     store: Arc<dyn Store>,
     cfg: Arc<ServiceConfig>,
     progress_seen: Arc<Mutex<HashMap<String, Instant>>>,
+    coverage_cache: Arc<coverage_cache::CoverageCache>,
 }
 
 /// 256 random bits from the operating system, as hex.
@@ -126,6 +128,7 @@ impl Service {
             store,
             cfg: Arc::new(ServiceConfig::default()),
             progress_seen: Arc::new(Mutex::new(HashMap::new())),
+            coverage_cache: Arc::default(),
         }
     }
 

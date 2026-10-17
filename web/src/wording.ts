@@ -181,7 +181,14 @@ export function noFailuresText(args: { live: boolean; headline: string | undefin
 }
 
 /** Why an UNMET result is not stated for a run. */
-export function unmetSuppressedReason(completion: RunCompletion, ingestIncomplete: boolean): string {
+export function unmetSuppressedReason(
+  completion: RunCompletion,
+  ingestIncomplete: boolean,
+  unverifiedWorkerData = false,
+): string {
+  if (completion.kind === 'time_or_step_limited' && unverifiedWorkerData) {
+    return 'the run ended on a limit reported by unverified worker data';
+  }
   if (completion.kind === 'stopped_at_first_failure') return 'the run stopped at its first failure, which fixed how many trials ran';
   if (completion.kind === 'running') return 'the run has not finished';
   if (completion.kind === 'aborted') return 'the run ended in an error or was cancelled';

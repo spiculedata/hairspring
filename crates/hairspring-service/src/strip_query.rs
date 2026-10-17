@@ -1,7 +1,7 @@
 //! The seed strip: one code per judged trial, in judging order, for drawing a whole run in a few pixels.
 //!
 //! The strip reads the same rows as the trial list and classifies each with [`TrialClass`], so a trial is a pass on the
-//! strip exactly when it is a pass in the list. It needs no digest, only the row.
+//! strip exactly when it is a pass in the list. It needs no digest: the store hands it only the verdict and flags.
 use crate::query::*;
 use crate::scan::Flow;
 use crate::trial_class::{TrialClass, ALL_CLASSES};
@@ -21,7 +21,7 @@ impl Service {
         let mut codes = String::new();
         let (mut first_seq, mut last_seq): (Option<u64>, Option<u64>) = (None, None);
         let mut more = false;
-        let end = self.scan_trials(run_id, after, |t| {
+        let end = self.scan_strip_rows(run_id, after, |t| {
             let gap = last_seq.is_some_and(|prev| t.seq != prev + 1);
             if gap || codes.len() == limit {
                 more = true;
@@ -29,7 +29,7 @@ impl Service {
             }
             first_seq.get_or_insert(t.seq);
             last_seq = Some(t.seq);
-            codes.push(TrialClass::of(t).code());
+            codes.push(TrialClass::of_strip(t).code());
             Ok(Flow::Continue)
         })?;
         let next_cursor = if more {

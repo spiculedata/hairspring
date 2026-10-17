@@ -34,9 +34,10 @@ fn property_row(
     s: &PropertyStat,
     run: &RunRecord,
     completion: &RunCompletion,
+    all_workers_trusted: bool,
 ) -> PropertyRow {
     let cell = rate_cell(s, run.stopped_at_first_failure);
-    let unmet = (s.status == PropertyStatus::Unmet && completion.allows_unmet())
+    let unmet = (s.status == PropertyStatus::Unmet && completion.allows_unmet(all_workers_trusted))
         .then(|| unmet_text(s.trials_claimable));
     PropertyRow {
         idx,
@@ -97,6 +98,7 @@ fn notes(
     run: &RunRecord,
     completion: &RunCompletion,
     summary: &hairspring_props::RunSummary,
+    all_workers_trusted: bool,
 ) -> Vec<String> {
     let mut out = Vec::new();
     match completion {
@@ -108,8 +110,12 @@ fn notes(
             "The run ended early or its trial rows do not match what the worker reported: its trial data is incomplete, so no UNMET result is stated."
                 .to_owned(),
         ),
-        RunCompletion::TimeOrStepLimited { .. } => out.push(format!(
+        RunCompletion::TimeOrStepLimited { .. } if all_workers_trusted => out.push(format!(
             "The run was {}: results are for the trials it ran, and UNMET is stated for those trials.",
+            completion.label()
+        )),
+        RunCompletion::TimeOrStepLimited { .. } => out.push(format!(
+            "The run was {}, but its worker data is unverified: the limit rests on what a worker reported, so no UNMET result is stated.",
             completion.label()
         )),
         RunCompletion::Running => out.push(
@@ -160,6 +166,8 @@ impl Service {
         };
         let completion = completion_of(&run);
         let (summary, counts) = stored_summary(&run);
+        let trust = self.run_trust(run_id)?;
+        let unverified_worker_data = !trust.as_ref().is_some_and(|t| t.all_trusted);
         let mut indexed = self.indexed_stats(run_id)?;
         let all: Vec<PropertyStat> = indexed.iter().map(|(_, s)| s.clone()).collect();
         let mut counts_by_status: BTreeMap<String, u64> = BTreeMap::new();
@@ -179,7 +187,7 @@ impl Service {
             .iter()
             .skip(offset)
             .take(limit)
-            .map(|(idx, s)| property_row(*idx, s, &run, &completion))
+            .map(|(idx, s)| property_row(*idx, s, &run, &completion, !unverified_worker_data))
             .collect();
         let next_cursor = (offset + limit < total).then(|| (offset + limit).to_string());
 
@@ -189,10 +197,8 @@ impl Service {
             .filter(|s| s.status == PropertyStatus::Violation)
             .filter_map(|s| s.first_failure.as_ref().map(|f| f.seed))
             .min();
-        let trust = self.run_trust(run_id)?;
         let workers = trust.as_ref().map(|t| t.workers.as_slice()).unwrap_or(&[]);
         let claim = self.claim_view(&run, &all, &completion, counts.rated_trials, label)?;
-        let unverified_worker_data = !trust.as_ref().is_some_and(|t| t.all_trusted);
         let data = match trust.as_ref() {
             Some(t) if t.workers.is_empty() => WorkerData::NoTrialData,
             _ if unverified_worker_data => WorkerData::Unverified,
@@ -225,7 +231,7 @@ impl Service {
                 unverified_worker_data,
             },
             claim,
-            notes: notes(&run, &completion, &summary),
+            notes: notes(&run, &completion, &summary, !unverified_worker_data),
             counts_by_status,
             total: total as u64,
             next_cursor,
@@ -258,6 +264,7 @@ impl Service {
             return Ok(None);
         };
         let completion = completion_of(&run);
+        let all_trusted = self.run_trust(run_id)?.is_some_and(|t| t.all_trusted);
         let Some((_, stat)) = self
             .indexed_stats(run_id)?
             .into_iter()
@@ -268,7 +275,7 @@ impl Service {
         if seeds_kind == "none" {
             return Ok(Some(PropertyDetail {
                 run_id: run.id.clone(),
-                property: property_row(idx, &stat, &run, &completion),
+                property: property_row(idx, &stat, &run, &completion, all_trusted),
                 seeds_kind,
                 seeds: Vec::new(),
                 next_cursor: None,
@@ -309,7 +316,7 @@ impl Service {
         };
         Ok(Some(PropertyDetail {
             run_id: run.id.clone(),
-            property: property_row(idx, &stat, &run, &completion),
+            property: property_row(idx, &stat, &run, &completion, all_trusted),
             seeds_kind,
             seeds,
             next_cursor,

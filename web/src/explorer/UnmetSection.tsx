@@ -23,7 +23,7 @@ export function UnmetSection({ rows, unmetTotal, header }: Props) {
     <section className="unmet" aria-labelledby="unmet-title">
       <h2 id="unmet-title">{COVERAGE_GAPS_TITLE}</h2>
       <p className="muted">{COVERAGE_GAPS_NOTE}</p>
-      {suppressed && <p>{unmetNotStated(unmetSuppressedReason(header.completion, header.ingest_incomplete))}</p>}
+      {suppressed && <p>{unmetNotStated(unmetSuppressedReason(header.completion, header.ingest_incomplete, header.unverified_worker_data))}</p>}
       <ul>
         {unmet.map((r) => (
           <li key={r.idx}>

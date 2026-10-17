@@ -147,16 +147,17 @@ fn from_row(row: &RunPropertyRow, cat: &CatalogRowRecord) -> Option<PropertyStat
 
 /// A run that did not complete its trials makes no must-hit claim: UNMET becomes unrated.
 pub(crate) fn withhold_unmet(stats: Vec<PropertyStat>) -> Vec<PropertyStat> {
-    stats
-        .into_iter()
-        .map(|s| match s.status {
-            PropertyStatus::Unmet => PropertyStat {
-                status: PropertyStatus::Unrated,
-                ..s
-            },
-            _ => s,
-        })
-        .collect()
+    stats.into_iter().map(unmet_to_unrated).collect()
+}
+
+fn unmet_to_unrated(s: PropertyStat) -> PropertyStat {
+    match s.status {
+        PropertyStatus::Unmet => PropertyStat {
+            status: PropertyStatus::Unrated,
+            ..s
+        },
+        _ => s,
+    }
 }
 
 impl Service {
@@ -241,7 +242,28 @@ impl Service {
             })
             .collect();
         stats.sort_by(|a, b| a.1.id.cmp(&b.1.id));
+        if self.unmet_is_unverified(run_id)? {
+            stats = stats
+                .into_iter()
+                .map(|(idx, s)| (idx, unmet_to_unrated(s)))
+                .collect();
+        }
         Ok(stats)
+    }
+
+    /// Whether the run's UNMET results must be withheld: it ended on its time or step limit and not every
+    /// contributing worker is trusted (the trust each trial row recorded when it was ingested). Decided on every
+    /// read rather than when the run finished, so runs stored before this rule existed are withheld too.
+    fn unmet_is_unverified(&self, run_id: &str) -> Result<bool> {
+        let Some(run) = self.store.get_run(run_id)? else {
+            return Ok(false);
+        };
+        let completion = completion_of(&run);
+        if !matches!(completion, crate::RunCompletion::TimeOrStepLimited { .. }) {
+            return Ok(false);
+        }
+        let trusted = self.run_trust(run_id)?.is_some_and(|t| t.all_trusted);
+        Ok(!completion.allows_unmet(trusted))
     }
 
     /// Who reported the run's trials, and whether all of them were trusted. `None` for an unknown run.

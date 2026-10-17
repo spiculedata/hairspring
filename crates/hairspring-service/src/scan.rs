@@ -3,7 +3,7 @@ use crate::query::SCAN_CAP;
 use crate::{Result, Service};
 use hairspring_props::trial::failure_basis;
 use hairspring_props::TrialDigest;
-use hairspring_store::TrialRecord;
+use hairspring_store::{TrialRecord, TrialStripRow};
 
 /// Trial rows read from the store per call.
 const STORE_PAGE: u32 = 500;
@@ -82,39 +82,75 @@ impl Service {
         &self,
         run_id: &str,
         after: Option<u64>,
-        mut visit: impl FnMut(&TrialRecord) -> Result<Flow>,
+        visit: impl FnMut(&TrialRecord) -> Result<Flow>,
     ) -> Result<ScanEnd> {
-        let (mut cursor, mut scanned, mut last_seq) = (after, 0usize, None);
-        loop {
-            let page = self.store.list_trials(run_id, cursor, STORE_PAGE)?;
-            let exhausted = page.len() < STORE_PAGE as usize;
-            for trial in &page {
-                scanned += 1;
-                last_seq = Some(trial.seq);
-                if matches!(visit(trial)?, Flow::Stop) {
-                    return Ok(ScanEnd {
-                        last_seq,
-                        scanned: scanned as u64,
-                        exhausted: false,
-                    });
-                }
-                if scanned >= SCAN_CAP {
-                    let at_end = exhausted && trial.seq == page[page.len() - 1].seq;
-                    return Ok(ScanEnd {
-                        last_seq,
-                        scanned: scanned as u64,
-                        exhausted: at_end,
-                    });
-                }
-            }
-            if exhausted || page.is_empty() {
+        scan_pages(
+            after,
+            |t: &TrialRecord| t.seq,
+            |cursor| Ok(self.store.list_trials(run_id, cursor, STORE_PAGE)?),
+            visit,
+        )
+    }
+
+    /// The same walk as [`Service::scan_trials`] over the verdict and flags of each trial only. No digest or text is
+    /// read, so what a request costs does not depend on what a worker stored.
+    pub(crate) fn scan_strip_rows(
+        &self,
+        run_id: &str,
+        after: Option<u64>,
+        visit: impl FnMut(&TrialStripRow) -> Result<Flow>,
+    ) -> Result<ScanEnd> {
+        scan_pages(
+            after,
+            |t: &TrialStripRow| t.seq,
+            |cursor| {
+                Ok(self
+                    .store
+                    .list_trial_strip_rows(run_id, cursor, STORE_PAGE)?)
+            },
+            visit,
+        )
+    }
+}
+
+/// Pages through rows in sequence order: `fetch` returns up to [`STORE_PAGE`] rows after a cursor, `seq_of` names a
+/// row's sequence number. The walk ends at `Stop`, at the end of the run, or after [`SCAN_CAP`] rows.
+fn scan_pages<T>(
+    after: Option<u64>,
+    seq_of: impl Fn(&T) -> u64,
+    fetch: impl Fn(Option<u64>) -> Result<Vec<T>>,
+    mut visit: impl FnMut(&T) -> Result<Flow>,
+) -> Result<ScanEnd> {
+    let (mut cursor, mut scanned, mut last_seq) = (after, 0usize, None);
+    loop {
+        let page = fetch(cursor)?;
+        let exhausted = page.len() < STORE_PAGE as usize;
+        for row in &page {
+            scanned += 1;
+            last_seq = Some(seq_of(row));
+            if matches!(visit(row)?, Flow::Stop) {
                 return Ok(ScanEnd {
                     last_seq,
                     scanned: scanned as u64,
-                    exhausted: true,
+                    exhausted: false,
                 });
             }
-            cursor = last_seq;
+            if scanned >= SCAN_CAP {
+                let at_end = exhausted && page.last().map(&seq_of) == last_seq;
+                return Ok(ScanEnd {
+                    last_seq,
+                    scanned: scanned as u64,
+                    exhausted: at_end,
+                });
+            }
         }
+        if exhausted || page.is_empty() {
+            return Ok(ScanEnd {
+                last_seq,
+                scanned: scanned as u64,
+                exhausted: true,
+            });
+        }
+        cursor = last_seq;
     }
 }

@@ -93,6 +93,7 @@ pub fn run_all_trials(make: &dyn Fn() -> std::sync::Arc<dyn Store>) {
     kept_detail_goes_to_blobs_under_a_per_run_cap(&*make());
     worker_trust_defaults_to_untrusted_and_is_reported_per_run(&*make());
     trial_digests_page_in_sequence_order(&*make());
+    strip_rows_carry_the_verdict_and_flags_in_sequence_order(&*make());
     hostile_text_in_trials_and_catalog_is_stored_verbatim(&*make());
     runs_do_not_see_each_others_rows(&*make());
     finishing_a_later_attempt_removes_the_earlier_attempts_rows(&*make());
@@ -603,6 +604,48 @@ fn trial_digests_page_in_sequence_order(s: &dyn Store) {
     let last = s.list_trial_digests(&r.id, Some(5), 3).unwrap();
     assert_eq!(last.len(), 1);
     assert!(s.list_trial_digests(&r.id, Some(6), 3).unwrap().is_empty());
+}
+
+fn strip_rows_carry_the_verdict_and_flags_in_sequence_order(s: &dyn Store) {
+    let (r, job) = leased(s, "w1");
+    let mut degraded = trial(1);
+    degraded.degraded = true;
+    let mut unreported = trial(2);
+    unreported.report_missing = true;
+    let mut unrated = trial(3);
+    unrated.rated = false;
+    let mut failed = trial(4);
+    failed.verdict = TrialVerdict::Violation;
+    let trials = vec![trial(0), degraded, unreported, unrated, failed];
+    s.ingest_trials(
+        &job.id,
+        "w1",
+        true,
+        &batch(vec![row(0, "a.b", true)], trials),
+        20,
+    )
+    .unwrap();
+    let rows = s.list_trial_strip_rows(&r.id, None, 10).unwrap();
+    let got: Vec<_> = rows
+        .iter()
+        .map(|t| (t.seq, t.verdict, t.rated, t.degraded, t.report_missing))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (0, TrialVerdict::Pass, true, false, false),
+            (1, TrialVerdict::Pass, true, true, false),
+            (2, TrialVerdict::Pass, true, false, true),
+            (3, TrialVerdict::Pass, false, false, false),
+            (4, TrialVerdict::Violation, true, false, false),
+        ]
+    );
+    let after = s.list_trial_strip_rows(&r.id, Some(2), 2).unwrap();
+    assert_eq!(after.iter().map(|t| t.seq).collect::<Vec<_>>(), vec![3, 4]);
+    assert!(s
+        .list_trial_strip_rows(&r.id, Some(4), 2)
+        .unwrap()
+        .is_empty());
 }
 
 fn hostile_text_in_trials_and_catalog_is_stored_verbatim(s: &dyn Store) {

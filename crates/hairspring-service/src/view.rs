@@ -135,10 +135,14 @@ pub struct TrialRow {
     pub verdict: &'static str,
     /// How the trial is shown: `pass` only for a rated, clean pass; a degraded or unreported pass is `excluded`.
     pub class: &'static str,
-    /// How many properties failed in this trial (zero when its data could not be used).
+    /// How many properties failed in this trial, judged by the kind this trial itself declared for each (zero when
+    /// its data could not be used). The property table judges each property by the kind the run saw first, so the
+    /// two can differ for a property whose declared kind changed or that only reported a conflict.
     pub failing_count: u32,
     /// Catalog indexes of the first failing properties, at most [`MAX_FAILING_SHOWN`].
     pub failing_idx: Vec<u32>,
+    /// The stored digest could not be read, so `failing_count` and the failing ids are unknown, not zero.
+    pub digest_unreadable: bool,
     pub timed_out: bool,
     pub degraded: bool,
     pub perturbing: bool,

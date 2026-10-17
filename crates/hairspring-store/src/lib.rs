@@ -188,6 +188,14 @@ pub trait Store: Send + Sync {
         after_seq: Option<u64>,
         limit: u32,
     ) -> Result<Vec<TrialDigestRow>>;
+    /// Only the verdict and flags of each trial, in sequence order, after `after_seq` when given. It never reads the
+    /// digest, so its cost does not depend on how large the stored digests are.
+    fn list_trial_strip_rows(
+        &self,
+        run_id: &str,
+        after_seq: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<TrialStripRow>>;
     fn get_catalog(&self, run_id: &str) -> Result<Vec<CatalogRowRecord>>;
     fn list_run_properties(&self, run_id: &str) -> Result<Vec<RunPropertyRow>>;
     /// The workers that reported trials for the run, with whether all of their rows were from a trusted worker.

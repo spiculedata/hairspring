@@ -100,17 +100,18 @@ pub(crate) fn parse_seed(s: Option<&str>) -> Result<Option<u64>> {
     .transpose()
 }
 
-/// A schedule fingerprint: hex digits, at least [`MIN_FP_CHARS`] and at most [`MAX_FP_CHARS`] of them. Stored
-/// fingerprints are lower case, so the filter is too.
+/// Whether `f` is a schedule fingerprint as stored: [`MIN_FP_CHARS`] to [`MAX_FP_CHARS`] lower case hex digits.
+/// Ingest and the `fp` filter both use this rule, so a stored fingerprint is always one a filter can name.
+pub(crate) fn is_schedule_fingerprint(f: &str) -> bool {
+    (MIN_FP_CHARS..=MAX_FP_CHARS).contains(&f.len())
+        && f.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// A schedule fingerprint filter. The filter accepts upper case and folds it to the stored lower case.
 pub(crate) fn parse_fingerprint(s: Option<&str>) -> Result<Option<String>> {
-    match s {
+    match s.map(str::to_ascii_lowercase) {
         None => Ok(None),
-        Some(f)
-            if (MIN_FP_CHARS..=MAX_FP_CHARS).contains(&f.len())
-                && f.bytes().all(|b| b.is_ascii_hexdigit()) =>
-        {
-            Ok(Some(f.to_ascii_lowercase()))
-        }
+        Some(f) if is_schedule_fingerprint(&f) => Ok(Some(f)),
         Some(_) => Err(invalid("fp")),
     }
 }
@@ -216,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fingerprint_is_letters_and_digits_only() {
+    fn a_fingerprint_is_16_to_64_hex_digits_and_a_filter_folds_case() {
         assert!(parse_fingerprint(Some("4c16a90b4c16a90b"))
             .unwrap()
             .is_some());

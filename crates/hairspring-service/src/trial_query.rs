@@ -9,6 +9,7 @@ use hairspring_props::record::TrialRecord as KeptRecord;
 use hairspring_props::TrialDigest;
 use hairspring_store::{KeptState, TrialRecord};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 /// The properties that failed in one trial, named for a row.
 #[derive(Default)]
@@ -16,6 +17,17 @@ struct Failing {
     count: u32,
     idx: Vec<u32>,
     ids: Vec<String>,
+    /// The digest could not be read, so nothing is known about the trial's properties.
+    unreadable: bool,
+}
+
+impl Failing {
+    fn unreadable() -> Failing {
+        Failing {
+            unreadable: true,
+            ..Failing::default()
+        }
+    }
 }
 
 /// The run's catalog ids by index, read from the store the first time a row needs one.
@@ -54,6 +66,7 @@ impl<'a> CatalogNames<'a> {
             count: all.len() as u32,
             idx,
             ids,
+            unreadable: false,
         })
     }
 }
@@ -66,6 +79,7 @@ fn trial_row(t: &TrialRecord, failing: Failing) -> TrialRow {
         class: TrialClass::of(t).as_str(),
         failing_count: failing.count,
         failing_idx: failing.idx,
+        digest_unreadable: failing.unreadable,
         timed_out: t.timed_out,
         degraded: t.degraded,
         perturbing: t.perturbing,
@@ -181,15 +195,23 @@ impl Service {
             if !filter.matches_row(t) {
                 return Ok(Flow::Continue);
             }
-            let digest = decode(t)?;
-            if filter.needs_digest() && !filter.matches_digest(&digest) {
+            // A digest that cannot be read costs that row its failing ids, as on the detail page, and no more. It
+            // matches no filter that needs the digest.
+            let digest = decode(t)
+                .map_err(|e| eprintln!("hairspring: {e}; its failing ids are left out of {run_id}"))
+                .ok();
+            if filter.needs_digest() && !digest.as_ref().is_some_and(|d| filter.matches_digest(d)) {
                 return Ok(Flow::Continue);
             }
             if rows.len() == limit {
                 more = true;
                 return Ok(Flow::Stop);
             }
-            rows.push(trial_row(t, names.failing(&digest)?));
+            let failing = match &digest {
+                Some(d) => names.failing(d)?,
+                None => Failing::unreadable(),
+            };
+            rows.push(trial_row(t, failing));
             Ok(Flow::Continue)
         })?;
         let next_cursor = if more {
@@ -223,11 +245,11 @@ impl Service {
         let meta = blob_text(self, t.output_ref.as_deref())?
             .map(|bytes| OutputMeta::read(&bytes))
             .unwrap_or_default();
-        // A digest that cannot be read leaves the failing list empty; the detail page does not depend on it.
-        let failing = decode(&t)
-            .ok()
-            .and_then(|d| CatalogNames::new(self, run_id).failing(&d).ok())
-            .unwrap_or_default();
+        // A digest that cannot be read leaves the failing list empty and says so; the page does not depend on it.
+        let failing = match decode(&t) {
+            Ok(d) => CatalogNames::new(self, run_id).failing(&d)?,
+            Err(_) => Failing::unreadable(),
+        };
         Ok(Some(TrialDetail {
             run_id: run_id.to_owned(),
             trial: trial_row(&t, failing),
@@ -263,20 +285,47 @@ impl Service {
     }
 
     /// Cumulative distinct properties reached (and true) and distinct schedules, by trial. `None` for an unknown run.
+    ///
+    /// The series of a finished run is worked out once and kept, since its trial rows no longer change. A run that
+    /// is still open is scanned on every call.
     pub fn coverage(&self, run_id: &str) -> Result<Option<Coverage>> {
-        if self.store.get_run(run_id)?.is_none() {
+        let Some(run) = self.store.get_run(run_id)? else {
             return Ok(None);
+        };
+        if !run.state.is_terminal() {
+            return self.scan_coverage(run_id).map(Some);
         }
+        if let Some(cached) = self.coverage_cache.get(run_id) {
+            return Ok(Some(Coverage::clone(&cached)));
+        }
+        let fresh = Arc::new(self.scan_coverage(run_id)?);
+        self.coverage_cache.insert(run_id, fresh.clone());
+        Ok(Some(Coverage::clone(&fresh)))
+    }
+
+    /// How many coverage series have been worked out from stored trials (not served from the cache). For tests.
+    #[doc(hidden)]
+    pub fn coverage_scans(&self) -> u64 {
+        self.coverage_cache.scans()
+    }
+
+    fn scan_coverage(&self, run_id: &str) -> Result<Coverage> {
+        self.coverage_cache.note_scan();
         let (mut hit, mut tru, mut fps): (BTreeSet<u32>, BTreeSet<u32>, BTreeSet<String>) =
             Default::default();
         let (mut points, mut trials) = (Vec::new(), 0u64);
         let mut last: Option<CoveragePoint> = None;
         self.scan_all(run_id, |t| {
             trials += 1;
-            let digest = decode(t)?;
-            let usable = !digest.flags.excluded && !digest.flags.inconclusive;
+            // A row whose digest cannot be read adds no properties but is still a trial of the run.
+            let digest = decode(t)
+                .map_err(|e| eprintln!("hairspring: {e}; skipped in the coverage of {run_id}"))
+                .ok();
+            let usable = digest
+                .as_ref()
+                .is_some_and(|d| !d.flags.excluded && !d.flags.inconclusive);
             let before = (hit.len(), tru.len(), fps.len());
-            if usable {
+            if let Some(digest) = digest.as_ref().filter(|_| usable) {
                 for e in digest.entries.iter().filter(|e| e.catalogued) {
                     if e.hits > 0 {
                         hit.insert(e.idx);
@@ -306,12 +355,12 @@ impl Service {
             points.push(p);
         }
         let (points, downsampled) = downsample(points);
-        Ok(Some(Coverage {
+        Ok(Coverage {
             run_id: run_id.to_owned(),
             trials,
             downsampled,
             points,
-        }))
+        })
     }
 
     /// Every trial of the run, in order, with no cap. Used only where the answer is one small series.
