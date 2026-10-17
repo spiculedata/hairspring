@@ -182,15 +182,21 @@ impl Service {
             if !filter.matches_row(t) {
                 return Ok(Flow::Continue);
             }
-            let digest = decode(t)?;
-            if filter.needs_digest() && !filter.matches_digest(&digest) {
+            // A digest that cannot be read costs that row its failing ids, as on the detail page, and no more. It
+            // matches no filter that needs the digest.
+            let digest = decode(t).ok();
+            if filter.needs_digest() && !digest.as_ref().is_some_and(|d| filter.matches_digest(d)) {
                 return Ok(Flow::Continue);
             }
             if rows.len() == limit {
                 more = true;
                 return Ok(Flow::Stop);
             }
-            rows.push(trial_row(t, names.failing(&digest)?));
+            let failing = match &digest {
+                Some(d) => names.failing(d)?,
+                None => Failing::default(),
+            };
+            rows.push(trial_row(t, failing));
             Ok(Flow::Continue)
         })?;
         let next_cursor = if more {
