@@ -5,10 +5,13 @@ use std::sync::Arc;
 
 #[cfg(feature = "postgres")]
 pub mod pg_support;
+pub mod terminal_events;
 pub mod tree;
 pub mod tree_attempts;
 pub mod tree_downgrade;
+pub mod tree_fields;
 pub mod tree_gc_spec;
+pub mod tree_identity;
 pub mod tree_oracle;
 pub mod tree_reads;
 pub mod tree_support;
@@ -47,6 +50,7 @@ pub fn run_all(make: &dyn Fn() -> Arc<dyn Store>) {
     counts_for_admission_control(&*make());
     stale_workers_can_be_pruned(&*make());
     concurrent_leases_never_duplicate(make());
+    terminal_events::run_all_terminal_events(make);
     trials::run_all_trials(make);
     tree::run_all_trees(make);
 }

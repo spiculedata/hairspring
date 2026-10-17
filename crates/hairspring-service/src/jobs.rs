@@ -8,7 +8,7 @@ use hairspring_engine::config::Budget;
 use hairspring_engine::engine::{Engine, RunRequest};
 use hairspring_engine::report::{RunOutcome, RunStatus};
 use hairspring_store::{
-    now_ms, FinishOutcome, JobResult, JobStatus, NewFailure, RunState, RunStats,
+    now_ms, FinishOutcome, JobResult, JobStatus, NewEvent, NewFailure, RunState, RunStats,
 };
 use std::cell::Cell;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -310,17 +310,13 @@ impl Service {
 
     fn finalise_run_as_error(&self, run_id: &str, reason: &str) -> Result<()> {
         let now = now_ms();
-        if self
-            .store
-            .finish_run(run_id, RunState::Error, 0, 0, Some(reason), now)?
-        {
-            self.store.add_event(
-                run_id,
-                "finished",
-                &finished_payload(RunState::Error, None),
-                now,
-            )?;
-        }
+        let payload = finished_payload(RunState::Error, None);
+        let event = NewEvent {
+            kind: "finished",
+            payload_json: &payload,
+        };
+        self.store
+            .finish_run_as_error(run_id, reason, &event, now)?;
         Ok(())
     }
 

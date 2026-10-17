@@ -37,7 +37,7 @@ use hairspring_engine::config::TargetKind;
 use hairspring_engine::engine::Engine;
 use hairspring_engine::report::{FailureReport, ReplayOutcome, RunOutcome, RunStatus, Step};
 use hairspring_store::{
-    now_ms, random_seed, EventRecord, FailureRecord, NewRun, RunRecord, RunState, Store,
+    now_ms, random_seed, EventRecord, FailureRecord, NewEvent, NewRun, RunRecord, RunState, Store,
     WorkerRecord,
 };
 use std::collections::HashMap;
@@ -307,11 +307,11 @@ impl Service {
 
     pub fn cancel_run(&self, id: &str) -> Result<bool> {
         let now = now_ms();
-        let cancelled = self.store.cancel_run(id, now)?;
-        if cancelled {
-            self.store.add_event(id, "cancelled", "{}", now)?;
-        }
-        Ok(cancelled)
+        let event = NewEvent {
+            kind: "cancelled",
+            payload_json: "{}",
+        };
+        Ok(self.store.cancel_run_with_event(id, &event, now)?)
     }
 
     /// Checks the name and that there is room for another worker; returns the time to register at.

@@ -180,7 +180,7 @@ pub fn branch_for(tree: &str, run_id: &str, source_node: u64, hash: &str) -> New
         source_node,
         cut_kind: CutKind::Step,
         cut_at: 3,
-        point_hash: "p".repeat(64),
+        point_hash: "a".repeat(64),
         command_json: "{\"verb\":\"step\"}".into(),
         command_hash: hash.into(),
         seed_source: SeedSource::ServerRandom,

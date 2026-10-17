@@ -5,6 +5,7 @@
 //! A node's `path` is the concatenation of the unsigned LEB128 encodings of the node numbers from the root to the
 //! node. LEB128 is prefix-free, so the descendants of a node are exactly the rows whose path lies strictly between
 //! the node's path and its successor (the same bytes with the last one increased by one).
+use crate::lineage_fields::{is_bounded_json, is_sha256_hex};
 use crate::trials::TrialVerdict;
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +30,8 @@ pub const MAX_PAGE_LIMIT: u32 = 500;
 pub const MAX_IDENTITY_TEXT_BYTES: usize = 16 * 1024;
 /// The most text a stored command holds.
 pub const MAX_COMMAND_JSON_BYTES: usize = 64 * 1024;
+/// The deepest nesting a stored command may have (arrays and objects inside one another).
+pub const MAX_COMMAND_JSON_DEPTH: usize = 32;
 const MAX_SHORT_TEXT_BYTES: usize = 128;
 
 string_enum!(Operator { Root => "root", Explore => "explore", Step => "step", Walk => "walk" });
@@ -81,6 +84,8 @@ pub struct RunIdentity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdentityOutcome {
     Stored,
+    /// An incomplete identity was replaced by a complete one.
+    Completed,
     /// The same identity was already stored; nothing changed.
     Duplicate,
     Rejected(TreeRejection),
@@ -336,11 +341,6 @@ fn text_ok(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max && !s.contains('\0')
 }
 
-fn opt_text_ok(s: &Option<String>) -> bool {
-    s.as_deref()
-        .is_none_or(|s| text_ok(s, MAX_SHORT_TEXT_BYTES))
-}
-
 pub(crate) fn check_identity(id: &RunIdentity) -> std::result::Result<(), TreeRejection> {
     if !IDENTITY_SCHEMES.contains(&id.scheme.as_str()) {
         return Err(TreeRejection::Invalid("unknown identity scheme"));
@@ -367,6 +367,18 @@ pub(crate) fn check_identity(id: &RunIdentity) -> std::result::Result<(), TreeRe
 pub(crate) fn same_identity(a: &RunIdentity, b: &RunIdentity) -> bool {
     (&a.scheme, &a.identity_text, &a.identity_hash, a.complete)
         == (&b.scheme, &b.identity_text, &b.identity_hash, b.complete)
+}
+
+/// The identity to store when `offered` completes `stored`, or `None` when it may not. An incomplete identity is the
+/// only one that may be replaced, only by a complete one, and only by the reporter that wrote it. The stored trust
+/// flag is never raised: the result is trusted only if both were. (The store also checks that no tree depends on the
+/// run.)
+pub(crate) fn completed(stored: &RunIdentity, offered: &RunIdentity) -> Option<RunIdentity> {
+    let allowed = !stored.complete && offered.complete && stored.reporter_id == offered.reporter_id;
+    allowed.then(|| RunIdentity {
+        reporter_trusted: stored.reporter_trusted && offered.reporter_trusted,
+        ..offered.clone()
+    })
 }
 
 /// A tree has point identity exactly when its root run has a complete identity, and then they must agree.
@@ -399,9 +411,14 @@ pub(crate) fn check_branch_identity(
 
 /// The fields a node must have before any lookup is made.
 pub(crate) fn check_node_shape(new: &NewNode) -> std::result::Result<(), TreeRejection> {
-    if !text_ok(&new.reporter_id, MAX_SHORT_TEXT_BYTES) || !opt_text_ok(&new.edge_ref) {
+    if !text_ok(&new.reporter_id, MAX_SHORT_TEXT_BYTES) {
         return Err(TreeRejection::Invalid(
-            "reporter id or edge reference is empty, too long or has a NUL",
+            "reporter id is empty, too long or has a NUL",
+        ));
+    }
+    if !new.edge_ref.as_deref().is_none_or(is_sha256_hex) {
+        return Err(TreeRejection::Invalid(
+            "an edge reference is a SHA-256 digest in lower-case hexadecimal",
         ));
     }
     if new.cut_kind == CutKind::None && new.cut_at != 0 {
@@ -422,16 +439,24 @@ pub(crate) fn check_node_shape(new: &NewNode) -> std::result::Result<(), TreeRej
 }
 
 pub(crate) fn check_branch_shape(new: &NewBranch) -> std::result::Result<(), TreeRejection> {
-    let hashes_ok = text_ok(&new.point_hash, MAX_SHORT_TEXT_BYTES)
-        && text_ok(&new.command_hash, MAX_SHORT_TEXT_BYTES);
-    if !hashes_ok || !text_ok(&new.created_by, MAX_SHORT_TEXT_BYTES) {
+    if !text_ok(&new.created_by, MAX_SHORT_TEXT_BYTES) {
         return Err(TreeRejection::Invalid(
-            "a hash or the creator is empty, too long or has a NUL",
+            "the creator is empty, too long or has a NUL",
+        ));
+    }
+    if !is_sha256_hex(&new.point_hash) || !is_sha256_hex(&new.command_hash) {
+        return Err(TreeRejection::Invalid(
+            "a point or command hash is a SHA-256 digest in lower-case hexadecimal",
         ));
     }
     if !text_ok(&new.command_json, MAX_COMMAND_JSON_BYTES) {
         return Err(TreeRejection::Invalid(
             "the command is empty, too long or has a NUL",
+        ));
+    }
+    if !is_bounded_json(&new.command_json) {
+        return Err(TreeRejection::Invalid(
+            "the command is not one well-formed JSON document within the nesting bound",
         ));
     }
     if new.cut_kind == CutKind::None && new.cut_at != 0 {

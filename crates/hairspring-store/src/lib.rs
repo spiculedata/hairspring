@@ -8,12 +8,15 @@ mod types;
 mod downgrade;
 #[macro_use]
 mod lineage;
+mod lineage_fields;
 #[cfg(feature = "postgres")]
 mod pg;
 #[cfg(feature = "postgres")]
 mod pg_downgrade;
 #[cfg(feature = "postgres")]
 mod pg_lineage;
+#[cfg(feature = "postgres")]
+mod pg_run_end;
 #[cfg(feature = "postgres")]
 mod pg_schema;
 #[cfg(feature = "postgres")]
@@ -23,6 +26,7 @@ mod pg_trials;
 mod sqlite;
 mod sqlite_downgrade;
 mod sqlite_lineage;
+mod sqlite_run_end;
 mod sqlite_schema;
 mod sqlite_tree_query;
 mod sqlite_trials;
@@ -104,8 +108,23 @@ pub trait Store: Send + Sync {
         error: Option<&str>,
         now: i64,
     ) -> Result<bool>;
-    /// Cancels a queued or running run. Returns false if it was already terminal.
+    /// Cancels a queued or running run. Returns false if it was already terminal. This writes no event: callers that
+    /// report the cancellation to readers of the run's event log must use [`Store::cancel_run_with_event`], so the
+    /// state and the `cancelled` event become visible together.
     fn cancel_run(&self, id: &str, now: i64) -> Result<bool>;
+    /// [`Store::cancel_run`] and the run's `event`, committed together: a reader that sees the run cancelled also sees
+    /// the event. The event is written only when the run was cancelled. Returns false for an unknown or final run.
+    fn cancel_run_with_event(&self, id: &str, event: &NewEvent<'_>, now: i64) -> Result<bool>;
+    /// Moves a queued or running run to the error state with `reason`, and appends `event`, in one transaction. The
+    /// event is written only when the run was moved. Returns false (changing nothing) if it was already final, and
+    /// `NotFound` for an unknown run.
+    fn finish_run_as_error(
+        &self,
+        id: &str,
+        reason: &str,
+        event: &NewEvent<'_>,
+        now: i64,
+    ) -> Result<bool>;
 
     // failures and blobs
     fn add_failure(&self, new: &NewFailure, now: i64) -> Result<FailureRecord>;
@@ -175,8 +194,11 @@ pub trait Store: Send + Sync {
     fn run_contributors(&self, run_id: &str) -> Result<Vec<Contributor>>;
 
     // run identity and trial trees (schema version 3)
-    /// Records the execution inputs of a run. Written once: the same identity again is a duplicate, a different one is
-    /// refused.
+    /// Records the execution inputs of a run. The same identity again is a duplicate and a different one is refused,
+    /// with one exception: an incomplete identity is replaced by a complete one (`Completed`) while no tree is rooted
+    /// at, or branches from, the run. A complete identity never changes. Completion is accepted only from the
+    /// reporter that wrote the incomplete identity (another reporter's offer is a conflict), and the stored trust
+    /// flag is never raised: the completed row is trusted only if both the stored and the offered report were.
     fn put_run_identity(&self, identity: &RunIdentity) -> Result<IdentityOutcome>;
     fn get_run_identity(&self, run_id: &str) -> Result<Option<RunIdentity>>;
     /// Creates the tree rooted at a run. `identity_hash` must be the root run's identity hash, or `None` when the run
@@ -186,7 +208,8 @@ pub trait Store: Send + Sync {
     /// The tree a run roots or branches from.
     fn tree_of_run(&self, run_id: &str) -> Result<Option<String>>;
     /// Attaches a stored trial to the tree. Number, depth, path and verdict are derived here, never taken from the
-    /// caller; the depth, fan-out and node caps are enforced.
+    /// caller; the depth, fan-out and node caps are enforced. An `edge_ref`, when given, is a SHA-256 digest in
+    /// lower-case hexadecimal (64 characters); anything else is `Rejected(Invalid)`.
     fn add_tree_node(&self, tree_id: &str, new: &NewNode, now: i64) -> Result<NodeOutcome>;
     fn get_tree_node(&self, tree_id: &str, node: u64) -> Result<Option<NodeRecord>>;
     fn tree_node_of_trial(&self, run_id: &str, seq: u64) -> Result<Option<NodeRecord>>;
@@ -227,7 +250,10 @@ pub trait Store: Send + Sync {
     ) -> Result<NodePage>;
     /// The nodes above a node, root first (not the node itself).
     fn tree_ancestors(&self, tree_id: &str, node: u64) -> Result<Vec<NodeRecord>>;
-    /// Registers a branch run of a tree. A command already stored for the tree answers `Existing`.
+    /// Registers a branch run of a tree. A command already stored for the tree answers `Existing`. `point_hash` and
+    /// `command_hash` are SHA-256 digests in lower-case hexadecimal (64 characters); `command_json` is one
+    /// well-formed JSON document of at most [`MAX_COMMAND_JSON_BYTES`] bytes and [`MAX_COMMAND_JSON_DEPTH`] levels of
+    /// nesting. Anything else is `Rejected(Invalid)` and nothing is written.
     fn add_tree_branch(&self, new: &NewBranch, now: i64) -> Result<BranchOutcome>;
     fn get_tree_branch(&self, run_id: &str) -> Result<Option<BranchRecord>>;
     fn find_tree_branch(&self, tree_id: &str, command_hash: &str) -> Result<Option<BranchRecord>>;

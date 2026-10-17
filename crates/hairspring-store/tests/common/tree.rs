@@ -19,6 +19,8 @@ pub fn run_all_trees(make: &dyn Fn() -> Arc<dyn Store>) {
     the_branch_cap_holds(&*make());
     tree_reads::run_all_reads(make);
     tree_attempts::run_all_attempts(make);
+    super::tree_identity::run_all_identity(make);
+    super::tree_fields::run_all_fields(make);
 }
 
 fn rejected<T: std::fmt::Debug>(r: Result<T>) -> T {

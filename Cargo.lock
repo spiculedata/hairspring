@@ -882,6 +882,7 @@ dependencies = [
  "r2d2_postgres",
  "rusqlite",
  "serde",
+ "serde_json",
  "sha2 0.11.1",
 ]
 

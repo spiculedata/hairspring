@@ -4,6 +4,7 @@
 //! Leasing uses `FOR UPDATE SKIP LOCKED`, so any number of workers can pull jobs concurrently.
 use crate::lineage::*;
 use crate::pg_lineage as lineage;
+use crate::pg_run_end as run_end;
 use crate::pg_schema;
 use crate::pg_tree_query as query;
 use crate::pg_trials as trials;
@@ -276,16 +277,21 @@ impl Store for PgStore {
     }
 
     fn cancel_run(&self, id: &str, now: i64) -> Result<bool> {
-        let mut c = self.client()?;
-        let mut tx = c.transaction()?;
-        // Same order as finish_job (jobs, then runs), so the two can never deadlock.
-        tx.execute("SELECT id FROM jobs WHERE run_id=$1 FOR UPDATE", &[&id])?;
-        let n = tx.execute("UPDATE runs SET state='cancelled', finished_at=$1 WHERE id=$2 AND state IN ('queued','running')", &[&now, &id])?;
-        if n > 0 {
-            tx.execute("UPDATE jobs SET status='failed', last_error='cancelled' WHERE run_id=$1 AND status='queued'", &[&id])?;
-        }
-        tx.commit()?;
-        Ok(n > 0)
+        run_end::cancel(&mut *self.client()?, id, None, now)
+    }
+
+    fn cancel_run_with_event(&self, id: &str, event: &NewEvent<'_>, now: i64) -> Result<bool> {
+        run_end::cancel(&mut *self.client()?, id, Some(event), now)
+    }
+
+    fn finish_run_as_error(
+        &self,
+        id: &str,
+        reason: &str,
+        event: &NewEvent<'_>,
+        now: i64,
+    ) -> Result<bool> {
+        run_end::finish_as_error(&mut *self.client()?, id, reason, event, now)
     }
 
     fn add_failure(&self, new: &NewFailure, now: i64) -> Result<FailureRecord> {
