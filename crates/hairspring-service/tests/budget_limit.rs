@@ -7,7 +7,7 @@ use hairspring_engine::config::Budget;
 use hairspring_engine::engine::Engine;
 use hairspring_engine::report::RunOutcome;
 use hairspring_props::{AssertKind, PropertyStatus};
-use hairspring_service::{LeasedJob, RunCompletion, Service, StartRun};
+use hairspring_service::{LeasedJob, PropertyQuery, RunCompletion, Service, StartRun};
 use hairspring_store::Store;
 use std::sync::Arc;
 
@@ -135,6 +135,24 @@ fn an_untrusted_limited_run_does_not_state_that_nothing_is_missing() {
     let notes = page.notes.join(" ");
     assert!(!notes.contains("UNMET is stated"), "{notes}");
     assert!(notes.contains("unverified"), "{notes}");
+
+    // The status itself is withheld, not only the wording, everywhere it is read.
+    assert!(page.properties.iter().all(|p| p.status != "unmet"));
+    assert!(!page.counts_by_status.contains_key("unmet"));
+    let only_unmet = PropertyQuery {
+        status: Some("unmet".into()),
+        ..Default::default()
+    };
+    let filtered = svc.property_page(&run_id, &only_unmet, None).unwrap().unwrap();
+    assert!(filtered.properties.is_empty());
+    let summary = svc.get_run(&run_id).unwrap().unwrap().properties.unwrap();
+    assert!(summary.guest.unmet_ids.is_empty());
+    assert!(!summary.counts.contains_key("unmet"));
+    assert!(svc
+        .property_stats(&run_id)
+        .unwrap()
+        .iter()
+        .all(|s| s.status != PropertyStatus::Unmet));
 }
 
 #[test]

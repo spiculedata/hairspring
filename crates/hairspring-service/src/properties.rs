@@ -147,16 +147,17 @@ fn from_row(row: &RunPropertyRow, cat: &CatalogRowRecord) -> Option<PropertyStat
 
 /// A run that did not complete its trials makes no must-hit claim: UNMET becomes unrated.
 pub(crate) fn withhold_unmet(stats: Vec<PropertyStat>) -> Vec<PropertyStat> {
-    stats
-        .into_iter()
-        .map(|s| match s.status {
-            PropertyStatus::Unmet => PropertyStat {
-                status: PropertyStatus::Unrated,
-                ..s
-            },
-            _ => s,
-        })
-        .collect()
+    stats.into_iter().map(unmet_to_unrated).collect()
+}
+
+fn unmet_to_unrated(s: PropertyStat) -> PropertyStat {
+    match s.status {
+        PropertyStatus::Unmet => PropertyStat {
+            status: PropertyStatus::Unrated,
+            ..s
+        },
+        _ => s,
+    }
 }
 
 impl Service {
@@ -241,7 +242,30 @@ impl Service {
             })
             .collect();
         stats.sort_by(|a, b| a.1.id.cmp(&b.1.id));
+        if self.unmet_is_unverified(run_id)? {
+            stats = stats
+                .into_iter()
+                .map(|(idx, s)| (idx, unmet_to_unrated(s)))
+                .collect();
+        }
         Ok(stats)
+    }
+
+    /// Whether the run's UNMET results rest on worker-reported limits nobody has verified: it ended on its time or
+    /// step limit and not every contributing worker is trusted. Decided when read, since trust can change after a
+    /// run ends.
+    fn unmet_is_unverified(&self, run_id: &str) -> Result<bool> {
+        let Some(run) = self.store.get_run(run_id)? else {
+            return Ok(false);
+        };
+        let limited = matches!(
+            completion_of(&run),
+            crate::RunCompletion::TimeOrStepLimited { .. }
+        );
+        if !limited {
+            return Ok(false);
+        }
+        Ok(!self.run_trust(run_id)?.is_some_and(|t| t.all_trusted))
     }
 
     /// Who reported the run's trials, and whether all of them were trusted. `None` for an unknown run.
