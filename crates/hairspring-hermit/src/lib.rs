@@ -7,7 +7,7 @@
 //!
 //! Verdicts: the guest violates a property if it exits non-zero or prints a line starting with
 //! `HAIRSPRING_VIOLATION:`. A trial that hits its time limit is inconclusive (counted separately, never a pass) unless the
-//! target sets `hang_is_violation`. When Hermit itself reports `Deadlock detected` and the guest exits non-zero, the
+//! target sets `hang_is_violation`. When Hermit itself reports a line beginning `Deadlock detected: ` on stderr and the guest exits non-zero, the
 //! trial is a deadlock finding of its own (not an exit-code violation and not a timeout), whatever `hang_is_violation`
 //! says; a run where every trial timed out is an error. Trials run in batches of `parallelism`
 //! seeds, so a cancel takes effect at the next batch boundary. Lines starting with `HAIRSPRING_EVENT ` (the guest event

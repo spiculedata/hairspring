@@ -14,8 +14,9 @@ const USAGE: &str = "Usage: hermit";
 const SKID_OVERSHOOT: &str = "SKID_OVERSHOOT";
 const PANICKED: &str = "panicked";
 const OVERSHOOT: &str = "overshoot";
-/// What Hermit prints when every guest thread is blocked and no timer can wake one.
-const DEADLOCK: &str = "Deadlock detected";
+/// How the line begins that Hermit prints on stderr when every guest thread is blocked and no timer can wake one, as
+/// `Deadlock detected: <what the threads wait on>, but no runnable threads left.`, followed by exit status 1.
+const DEADLOCK: &str = "Deadlock detected: ";
 const ERROR_UPPER: &str = "Error:";
 const ERROR_LOWER: &str = "error:";
 
@@ -61,10 +62,8 @@ const HAS_ERROR_LOWER: u8 = 1 << 3;
 const HAS_SKID: u8 = 1 << 4;
 const HAS_PANICKED: u8 = 1 << 5;
 const HAS_OVERSHOOT: u8 = 1 << 6;
-const HAS_DEADLOCK: u8 = 1 << 7;
 
-const NEEDLES: [(&str, u8); 8] = [
-    (DEADLOCK, HAS_DEADLOCK),
+const NEEDLES: [(&str, u8); 7] = [
     (INTERNAL_FAILURE, HAS_INTERNAL_FAILURE),
     (ERROR_UPPER, HAS_ERROR_UPPER),
     (USAGE, HAS_USAGE),
@@ -149,7 +148,9 @@ impl LineScan {
         if found.lower_error_line.is_none() && seen & HAS_ERROR_LOWER != 0 {
             found.lower_error_line = Some(line.trim().to_string());
         }
-        if found.deadlock_line.is_none() && seen & HAS_DEADLOCK != 0 {
+        // Hermit's report is a whole line that begins `Deadlock detected: `; the same words inside another line are
+        // not it.
+        if found.deadlock_line.is_none() && line.trim_start().starts_with(DEADLOCK) {
             found.deadlock_line = Some(line.trim().to_string());
         }
     }
@@ -236,15 +237,26 @@ mod tests {
 
     #[test]
     fn hermits_deadlock_report_is_found_with_its_line_wherever_the_reads_end() {
-        let input = b"hermit: starting\nERROR: Deadlock detected\nlater\n";
+        let input = b"hermit: starting\nDeadlock detected: thread(s) waiting on futex, but no runnable threads left.\nlater\n";
         let whole = scan(&[input]);
         assert_eq!(
             whole.deadlock_line.as_deref(),
-            Some("ERROR: Deadlock detected")
+            Some("Deadlock detected: thread(s) waiting on futex, but no runnable threads left.")
         );
         for i in 0..=input.len() {
             assert_eq!(scan(&[&input[..i], &input[i..]]), whole, "split at {i}");
         }
+    }
+
+    #[test]
+    fn the_report_must_start_the_line_to_count() {
+        let f = scan(&[b"log: Deadlock detected: x\nERROR: Deadlock detected\n"]);
+        assert_eq!(f.deadlock_line, None);
+        let indented = scan(&[b"  Deadlock detected: x, but no runnable threads left.\r\n"]);
+        assert_eq!(
+            indented.deadlock_line.as_deref(),
+            Some("Deadlock detected: x, but no runnable threads left.")
+        );
     }
 
     #[test]

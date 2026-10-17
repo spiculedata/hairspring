@@ -89,7 +89,7 @@ fn exit_status_still_decides_when_no_property_failed() {
 fn deadlocked(code: Option<i32>) -> Trial {
     Trial {
         exit_code: code,
-        stderr: "hermit: start\nERROR: Deadlock detected\n".into(),
+        stderr: "hermit: start\nDeadlock detected: thread(s) waiting on futex, but no runnable threads left.\n".into(),
         ..Trial::default()
     }
 }
@@ -119,7 +119,7 @@ fn a_timeout_or_a_property_failure_outranks_a_deadlock_report() {
         ..with_false()
     };
     let both = Trial {
-        stderr: "Deadlock detected\n".into(),
+        stderr: "Deadlock detected: x, but no runnable threads left.\n".into(),
         ..failed
     };
     assert!(matches!(classify(&both, 5), Verdict::Violation(m) if m.contains("x.id")));
