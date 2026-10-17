@@ -246,10 +246,10 @@ impl Service {
             .map(|bytes| OutputMeta::read(&bytes))
             .unwrap_or_default();
         // A digest that cannot be read leaves the failing list empty and says so; the page does not depend on it.
-        let failing = decode(&t)
-            .ok()
-            .and_then(|d| CatalogNames::new(self, run_id).failing(&d).ok())
-            .unwrap_or_else(Failing::unreadable);
+        let failing = match decode(&t) {
+            Ok(d) => CatalogNames::new(self, run_id).failing(&d)?,
+            Err(_) => Failing::unreadable(),
+        };
         Ok(Some(TrialDetail {
             run_id: run_id.to_owned(),
             trial: trial_row(&t, failing),

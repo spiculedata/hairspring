@@ -74,6 +74,16 @@ fn an_unreadable_digest_leaves_its_row_listed_with_no_failing_ids() {
 }
 
 #[test]
+fn the_trial_detail_page_flags_an_unreadable_digest_and_only_then() {
+    let (svc, run_id) = run_with_a_corrupt_digest();
+    let bad = svc.trial_detail(&run_id, 1).unwrap().unwrap();
+    assert!(bad.trial.digest_unreadable);
+    assert_eq!(bad.trial.failing_count, 0);
+    let good = svc.trial_detail(&run_id, 0).unwrap().unwrap();
+    assert!(!good.trial.digest_unreadable);
+}
+
+#[test]
 fn an_unreadable_digest_does_not_fail_the_coverage_series() {
     let (svc, run_id) = run_with_a_corrupt_digest();
     let coverage = svc

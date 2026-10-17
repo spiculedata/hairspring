@@ -251,21 +251,19 @@ impl Service {
         Ok(stats)
     }
 
-    /// Whether the run's UNMET results rest on worker-reported limits nobody has verified: it ended on its time or
-    /// step limit and not every contributing worker is trusted. Decided when read, since trust can change after a
-    /// run ends.
+    /// Whether the run's UNMET results must be withheld: it ended on its time or step limit and not every
+    /// contributing worker is trusted (the trust each trial row recorded when it was ingested). Decided on every
+    /// read rather than when the run finished, so runs stored before this rule existed are withheld too.
     fn unmet_is_unverified(&self, run_id: &str) -> Result<bool> {
         let Some(run) = self.store.get_run(run_id)? else {
             return Ok(false);
         };
-        let limited = matches!(
-            completion_of(&run),
-            crate::RunCompletion::TimeOrStepLimited { .. }
-        );
-        if !limited {
+        let completion = completion_of(&run);
+        if !matches!(completion, crate::RunCompletion::TimeOrStepLimited { .. }) {
             return Ok(false);
         }
-        Ok(!self.run_trust(run_id)?.is_some_and(|t| t.all_trusted))
+        let trusted = self.run_trust(run_id)?.is_some_and(|t| t.all_trusted);
+        Ok(!completion.allows_unmet(trusted))
     }
 
     /// Who reported the run's trials, and whether all of them were trusted. `None` for an unknown run.

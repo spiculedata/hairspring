@@ -151,6 +151,13 @@ fn an_untrusted_limited_run_does_not_state_that_nothing_is_missing() {
     let summary = svc.get_run(&run_id).unwrap().unwrap().properties.unwrap();
     assert!(summary.guest.unmet_ids.is_empty());
     assert!(!summary.counts.contains_key("unmet"));
+    let idx = page.properties[0].idx;
+    let detail = svc
+        .property_detail(&run_id, idx, &Default::default())
+        .unwrap()
+        .unwrap();
+    assert_ne!(detail.property.status, "unmet");
+    assert!(detail.property.unmet.is_none());
     assert!(svc
         .property_stats(&run_id)
         .unwrap()
