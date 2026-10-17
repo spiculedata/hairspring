@@ -1,5 +1,6 @@
 use crate::lineage::*;
 use crate::sqlite_lineage as lineage;
+use crate::sqlite_run_end as run_end;
 use crate::sqlite_schema;
 use crate::sqlite_tree_query as query;
 use crate::sqlite_trials as trials;
@@ -260,14 +261,21 @@ impl Store for SqliteStore {
     }
 
     fn cancel_run(&self, id: &str, now: i64) -> Result<bool> {
-        let mut conn = self.conn();
-        let tx = conn.transaction()?;
-        let n = tx.execute("UPDATE runs SET state='cancelled', finished_at=? WHERE id=? AND state IN ('queued','running')", params![now, id])?;
-        if n > 0 {
-            tx.execute("UPDATE jobs SET status='failed', last_error='cancelled' WHERE run_id=? AND status='queued'", [id])?;
-        }
-        tx.commit()?;
-        Ok(n > 0)
+        run_end::cancel(&mut self.conn(), id, None, now)
+    }
+
+    fn cancel_run_with_event(&self, id: &str, event: &NewEvent<'_>, now: i64) -> Result<bool> {
+        run_end::cancel(&mut self.conn(), id, Some(event), now)
+    }
+
+    fn finish_run_as_error(
+        &self,
+        id: &str,
+        reason: &str,
+        event: &NewEvent<'_>,
+        now: i64,
+    ) -> Result<bool> {
+        run_end::finish_as_error(&mut self.conn(), id, reason, event, now)
     }
 
     fn add_failure(&self, new: &NewFailure, now: i64) -> Result<FailureRecord> {

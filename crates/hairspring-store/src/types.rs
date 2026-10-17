@@ -144,6 +144,13 @@ pub struct EventRecord {
     pub payload_json: String,
 }
 
+/// An event to append to a run's log in the same transaction as another write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NewEvent<'a> {
+    pub kind: &'a str,
+    pub payload_json: &'a str,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkerRecord {
     pub id: String,

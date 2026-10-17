@@ -15,6 +15,8 @@ mod pg_downgrade;
 #[cfg(feature = "postgres")]
 mod pg_lineage;
 #[cfg(feature = "postgres")]
+mod pg_run_end;
+#[cfg(feature = "postgres")]
 mod pg_schema;
 #[cfg(feature = "postgres")]
 mod pg_tree_query;
@@ -23,6 +25,7 @@ mod pg_trials;
 mod sqlite;
 mod sqlite_downgrade;
 mod sqlite_lineage;
+mod sqlite_run_end;
 mod sqlite_schema;
 mod sqlite_tree_query;
 mod sqlite_trials;
@@ -106,6 +109,19 @@ pub trait Store: Send + Sync {
     ) -> Result<bool>;
     /// Cancels a queued or running run. Returns false if it was already terminal.
     fn cancel_run(&self, id: &str, now: i64) -> Result<bool>;
+    /// [`Store::cancel_run`] and the run's `event`, committed together: a reader that sees the run cancelled also sees
+    /// the event. The event is written only when the run was cancelled. Returns false for an unknown or final run.
+    fn cancel_run_with_event(&self, id: &str, event: &NewEvent<'_>, now: i64) -> Result<bool>;
+    /// Moves a queued or running run to the error state with `reason`, and appends `event`, in one transaction. The
+    /// event is written only when the run was moved. Returns false (changing nothing) if it was already final, and
+    /// `NotFound` for an unknown run.
+    fn finish_run_as_error(
+        &self,
+        id: &str,
+        reason: &str,
+        event: &NewEvent<'_>,
+        now: i64,
+    ) -> Result<bool>;
 
     // failures and blobs
     fn add_failure(&self, new: &NewFailure, now: i64) -> Result<FailureRecord>;
