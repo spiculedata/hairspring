@@ -147,6 +147,18 @@ fn hostile_row_fields_are_refused() {
             Box::new(|r| r.schedule_fp = Some("a".repeat(65))),
         ),
         (
+            "a fingerprint too short for a filter to find",
+            Box::new(|r| r.schedule_fp = Some("a".repeat(15))),
+        ),
+        (
+            "a fingerprint that is not hex",
+            Box::new(|r| r.schedule_fp = Some("g".repeat(16))),
+        ),
+        (
+            "an upper case fingerprint",
+            Box::new(|r| r.schedule_fp = Some("A".repeat(16))),
+        ),
+        (
             "counters past the signed range",
             Box::new(|r| r.syscalls = u64::MAX),
         ),
