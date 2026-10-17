@@ -85,6 +85,72 @@ fn a_run_that_ran_out_of_time_keeps_its_unmet_result_and_is_labelled_time_limite
     assert_eq!(completion.label(), "time- or step-limited (3 of 10 trials)");
 }
 
+/// A limited run reported entirely by an untrusted remote worker.
+fn untrusted_limited_run(svc: &Service, store: &Arc<dyn Store>, engine: &Engine) -> String {
+    let (remote, secret) = svc.register_remote_worker("remote", "{}").unwrap();
+    let run = svc
+        .start_run(
+            engine,
+            &StartRun {
+                target: "lock-lease".into(),
+                seed: Some(1),
+                budget: Some(Budget {
+                    max_steps: BUDGET_STEPS,
+                    max_trials: BUDGET_TRIALS,
+                    wall_secs: WALL_SECS,
+                }),
+            },
+        )
+        .unwrap();
+    let past = hairspring_store::now_ms() - (WALL_SECS as i64 + 5) * MS_PER_SEC;
+    store.mark_running(&run.id, past).unwrap();
+    let job = svc.lease(&remote.id).unwrap().expect("a job");
+    let never = props("s.id", AssertKind::Sometimes, 0, 4);
+    let mut rec = Recorder::new();
+    let reports = vec![
+        rec.pass(1, &never),
+        rec.pass(2, &never),
+        rec.pass(3, &never),
+    ];
+    svc.ingest_trials_with_secret(&job.job_id, &remote.id, Some(&secret), &reports)
+        .unwrap();
+    svc.complete(&job.job_id, &remote.id, &outcome(3)).unwrap();
+    job.run_id
+}
+
+#[test]
+fn an_untrusted_limited_run_does_not_state_that_nothing_is_missing() {
+    let (svc, store, engine) = setup();
+    let run_id = untrusted_limited_run(&svc, &store, &engine);
+
+    let page = svc
+        .property_page(&run_id, &Default::default(), None)
+        .unwrap()
+        .unwrap();
+    assert!(page.header.unverified_worker_data);
+    assert!(
+        page.properties.iter().all(|p| p.unmet.is_none()),
+        "no UNMET wording for worker-reported limits"
+    );
+    let notes = page.notes.join(" ");
+    assert!(!notes.contains("UNMET is stated"), "{notes}");
+    assert!(notes.contains("unverified"), "{notes}");
+}
+
+#[test]
+fn a_trusted_limited_run_still_states_unmet() {
+    let (svc, store, engine) = setup();
+    let job = lease_started(&svc, &store, &engine, (WALL_SECS as i64 + 5) * MS_PER_SEC);
+    ingest_unmet(&svc, &job);
+    finish(&svc, &job, &local(), outcome(3));
+    let page = svc
+        .property_page(&job.run_id, &Default::default(), None)
+        .unwrap()
+        .unwrap();
+    assert!(page.properties.iter().any(|p| p.unmet.is_some()));
+    assert!(page.notes.join(" ").contains("UNMET is stated"));
+}
+
 #[test]
 fn a_run_that_reached_its_step_limit_is_labelled_limited_too() {
     let (svc, store, engine) = setup();

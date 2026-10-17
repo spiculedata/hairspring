@@ -42,11 +42,15 @@ impl RunCompletion {
     }
 
     /// Whether a must-hit result (UNMET) may be stated for this run.
-    pub fn allows_unmet(&self) -> bool {
-        matches!(
-            self,
-            RunCompletion::Complete | RunCompletion::TimeOrStepLimited { .. }
-        )
+    ///
+    /// A time- or step-limited run is "nothing is missing" only on the strength of its step count and of how long it
+    /// ran, and a worker can influence both, so that statement needs every contributing worker to be trusted.
+    pub fn allows_unmet(&self, all_workers_trusted: bool) -> bool {
+        match self {
+            RunCompletion::Complete => true,
+            RunCompletion::TimeOrStepLimited { .. } => all_workers_trusted,
+            _ => false,
+        }
     }
 }
 
