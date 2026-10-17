@@ -42,7 +42,7 @@ fn run_with_host(
         }
     }
     if host::involves_process_target(ctx.engine.config(), &args.targets) {
-        host::write_warnings(out, facts)?;
+        host::write_report(out, facts)?;
     }
     Ok(code)
 }
@@ -50,6 +50,7 @@ fn run_with_host(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::{AutoUpdates, LoaderHashes};
     use hairspring_engine::erased::Registry;
 
     static NEXT_DIR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -70,6 +71,45 @@ mod tests {
     fn kernel(release: &str) -> HostFacts {
         HostFacts {
             kernel_release: Some(release.into()),
+            ..HostFacts::default()
+        }
+    }
+
+    #[test]
+    fn enabled_updates_and_loader_hashes_show_up_in_the_report_without_failing_it() {
+        let facts = HostFacts {
+            auto_updates: AutoUpdates::Enabled,
+            loader: LoaderHashes {
+                cache: Some("c0ffee".into()),
+                ..LoaderHashes::default()
+            },
+            ..kernel("6.17.0-42-generic")
+        };
+        let mut out = Vec::new();
+        let code = run_with_host(&ctx_with(PROCESS), &args(), &mut out, &facts).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(code, crate::EXIT_OK);
+        assert!(text.contains("ld.so.cache sha256 c0ffee"), "{text}");
+        assert!(
+            text.contains("warning: automatic package updates"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn disabled_missing_or_unreadable_update_state_adds_no_warning() {
+        for state in [
+            AutoUpdates::Disabled,
+            AutoUpdates::NotPresent,
+            AutoUpdates::Unreadable,
+        ] {
+            let facts = HostFacts {
+                auto_updates: state,
+                ..kernel("6.17.0-42-generic")
+            };
+            let mut out = Vec::new();
+            run_with_host(&ctx_with(PROCESS), &args(), &mut out, &facts).unwrap();
+            assert!(out.is_empty(), "{state:?}");
         }
     }
 

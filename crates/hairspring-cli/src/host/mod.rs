@@ -1,6 +1,11 @@
 //! Read-only checks of the machine a process target runs on. They only ever produce warnings: determinism does not
 //! depend on them, so they never fail a command.
+mod autoupdate;
 mod kernel;
+mod loader;
+
+pub use autoupdate::AutoUpdates;
+pub use loader::LoaderHashes;
 
 use hairspring_engine::config::{Config, TargetKind};
 use std::io::Write;
@@ -14,6 +19,10 @@ const KERNEL_RELEASE_FILE: &str = "/proc/sys/kernel/osrelease";
 pub struct HostFacts {
     /// The kernel release, when this host reports one.
     pub kernel_release: Option<String>,
+    /// Whether the host installs package updates unattended.
+    pub auto_updates: AutoUpdates,
+    /// Hashes of the dynamic loader's files.
+    pub loader: LoaderHashes,
 }
 
 impl HostFacts {
@@ -22,6 +31,8 @@ impl HostFacts {
     pub fn probe() -> HostFacts {
         HostFacts {
             kernel_release: read_trimmed(Path::new(KERNEL_RELEASE_FILE)),
+            auto_updates: autoupdate::probe(Path::new(autoupdate::APT_CONF_DIR)),
+            loader: LoaderHashes::probe(),
         }
     }
 }
@@ -34,12 +45,17 @@ fn read_trimmed(path: &Path) -> Option<String> {
 
 /// Every warning the facts call for, in a fixed order.
 pub fn warnings(facts: &HostFacts) -> Vec<String> {
-    facts
-        .kernel_release
-        .as_deref()
-        .and_then(kernel::warning)
-        .into_iter()
-        .collect()
+    let kernel = facts.kernel_release.as_deref().and_then(kernel::warning);
+    let updates = autoupdate::warning(facts.auto_updates);
+    kernel.into_iter().chain(updates).collect()
+}
+
+/// The lines doctor prints for the host: the loader state to compare across sessions, then the warnings.
+pub fn write_report(out: &mut dyn Write, facts: &HostFacts) -> std::io::Result<()> {
+    if let Some(line) = facts.loader.describe() {
+        writeln!(out, "{line}")?;
+    }
+    write_warnings(out, facts)
 }
 
 /// Whether any of the named targets (all configured targets when `names` is empty) is a process target, the only
@@ -100,7 +116,40 @@ mod tests {
     fn facts(release: &str) -> HostFacts {
         HostFacts {
             kernel_release: Some(release.to_string()),
+            ..HostFacts::default()
         }
+    }
+
+    #[test]
+    fn enabled_updates_add_a_warning_after_the_kernel_one() {
+        let both = HostFacts {
+            auto_updates: AutoUpdates::Enabled,
+            ..facts("6.8.0-146-generic")
+        };
+        let found = warnings(&both);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(found[0].starts_with("kernel"), "{found:?}");
+        assert!(
+            found[1].starts_with("automatic package updates"),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn the_report_shows_loader_hashes_even_with_nothing_to_warn_about() {
+        let facts = HostFacts {
+            loader: LoaderHashes {
+                cache: Some("ab".into()),
+                ..LoaderHashes::default()
+            },
+            ..facts("6.17.0-42-generic")
+        };
+        let mut out = Vec::new();
+        write_report(&mut out, &facts).unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "loader state: ld.so.cache sha256 ab\n"
+        );
     }
 
     #[test]
