@@ -69,6 +69,19 @@ fn an_unreadable_digest_leaves_its_row_listed_with_no_failing_ids() {
     assert_eq!(seeds, ["1", "2"]);
     assert_eq!(page.trials[1].failing_count, 0);
     assert!(page.trials[1].guest.failing_ids.is_empty());
+    assert!(page.trials[1].digest_unreadable, "the gap is flagged");
+    assert!(!page.trials[0].digest_unreadable);
+}
+
+#[test]
+fn an_unreadable_digest_does_not_fail_the_coverage_series() {
+    let (svc, run_id) = run_with_a_corrupt_digest();
+    let coverage = svc
+        .coverage(&run_id)
+        .expect("the series is served")
+        .unwrap();
+    assert_eq!(coverage.trials, 2, "the row still counts as a trial");
+    assert_eq!(coverage.points.last().unwrap().ids_hit, 1);
 }
 
 #[test]

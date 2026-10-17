@@ -141,6 +141,8 @@ pub struct TrialRow {
     pub failing_count: u32,
     /// Catalog indexes of the first failing properties, at most [`MAX_FAILING_SHOWN`].
     pub failing_idx: Vec<u32>,
+    /// The stored digest could not be read, so `failing_count` and the failing ids are unknown, not zero.
+    pub digest_unreadable: bool,
     pub timed_out: bool,
     pub degraded: bool,
     pub perturbing: bool,

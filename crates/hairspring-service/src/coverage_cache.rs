@@ -4,6 +4,7 @@
 //! worked out once and served from memory afterwards. Runs that are still open are never cached.
 use crate::view::Coverage;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Most series held at once. A series is at most a few thousand small points, so this bounds the cache to a
@@ -13,9 +14,19 @@ pub(crate) const MAX_CACHED_SERIES: usize = 64;
 #[derive(Default)]
 pub(crate) struct CoverageCache {
     series: Mutex<HashMap<String, Arc<Coverage>>>,
+    scans: AtomicU64,
 }
 
 impl CoverageCache {
+    /// Records that a series was worked out from the stored trials rather than served from memory.
+    pub(crate) fn note_scan(&self) {
+        self.scans.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn scans(&self) -> u64 {
+        self.scans.load(Ordering::Relaxed)
+    }
+
     pub(crate) fn get(&self, run_id: &str) -> Option<Arc<Coverage>> {
         self.lock().get(run_id).cloned()
     }

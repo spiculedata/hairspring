@@ -39,6 +39,26 @@ fn a_finished_runs_coverage_is_the_same_on_every_read() {
 }
 
 #[test]
+fn a_finished_run_is_scanned_once_and_an_open_run_every_time() {
+    let (svc, _store, engine) = setup();
+    let job = lease_with_budget(&svc, &engine, &local(), 2);
+    let mut rec = Recorder::new();
+    let p = props("c.id", AssertKind::Always, 1, 0);
+    svc.ingest_trials(&job.job_id, &local(), &[rec.pass(1, &p), rec.pass(2, &p)])
+        .unwrap();
+
+    svc.coverage(&job.run_id).unwrap();
+    svc.coverage(&job.run_id).unwrap();
+    assert_eq!(svc.coverage_scans(), 2, "an open run is never cached");
+
+    finish(&svc, &job, &local(), passed(2, Some(2)));
+    svc.coverage(&job.run_id).unwrap();
+    svc.coverage(&job.run_id).unwrap();
+    svc.coverage(&job.run_id).unwrap();
+    assert_eq!(svc.coverage_scans(), 3, "a finished run is scanned once");
+}
+
+#[test]
 fn coverage_of_an_unknown_run_is_none() {
     let (svc, _store, _engine) = setup();
     assert!(svc.coverage("no-such-run").unwrap().is_none());
