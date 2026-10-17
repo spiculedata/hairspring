@@ -1,5 +1,6 @@
 use crate::cli::{Format, TestArgs};
 use crate::ctx::{CmdResult, Ctx};
+use crate::host::{self, HostFacts};
 use hairspring_engine::config::Budget;
 use hairspring_engine::format::{to_junit, to_sarif, to_text};
 use hairspring_engine::report::{RunOutcome, RunStatus};
@@ -38,6 +39,9 @@ pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write)
     } else {
         args.targets.clone()
     };
+    if host::involves_process_target(ctx.engine.config(), &names) {
+        host::write_warnings(err, &HostFacts::probe())?;
+    }
     let svc = ctx.service()?;
     let seed = args.seed.unwrap_or_else(random_seed);
     let text_mode = args.format == Format::Text;
