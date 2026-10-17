@@ -50,6 +50,15 @@ agents.
   We did not use a commercial software-composition-analysis service. Review `Cargo.lock` for your own policy.
 - Not yet implemented: per-token run quotas, audit logging, token rotation without restart, S3 blob storage.
 - The rate limiter is in-memory and per process; with several server replicas each enforces its own limit.
+- **Anonymous rate-limit buckets are keyed by the connecting address.** IPv4 callers get one bucket per address and
+  IPv6 callers one per /64. A holder of a larger IPv6 allocation (a /56 or /48) therefore gets a separate bucket for
+  every /64 it controls, and can also push older anonymous windows out of the bounded table by sending from many
+  /64s. This matters only where anonymous callers reach real endpoints (open mode, with no tokens configured).
+  Valid tokens keep their own buckets and are never evicted by anonymous traffic.
+- **Behind a reverse proxy, anonymous callers share one bucket.** Forwarding headers such as `X-Forwarded-For` are
+  deliberately not trusted (a client could set them to mint fresh buckets at will), so every anonymous caller
+  arriving through the proxy is counted under the proxy's address. Authenticated callers are unaffected, since
+  they are keyed by token. If you need per-client limits for anonymous traffic, enforce them at the proxy.
 
 ## Hardening checklist for a deployment
 

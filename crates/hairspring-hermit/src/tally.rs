@@ -182,10 +182,7 @@ impl Tally {
         if self.trials == 0 {
             // The backend always starts a first trial, so this is a guard: a run that judged nothing is never a pass.
             return self.with_partial_properties(
-                RunOutcome::error(
-                    "the budget ran out before any trial started; nothing was tested",
-                )
-                .with_elapsed_ms(ms),
+                RunOutcome::error("no trial was judged; nothing was tested").with_elapsed_ms(ms),
             );
         }
         if self.inconclusive == self.trials {
@@ -393,9 +390,10 @@ mod tests {
         assert_eq!(out.status, RunStatus::Error, "{out:?}");
         let msg = out.error.unwrap();
         assert!(
-            msg.contains("budget ran out before any trial started"),
+            msg.contains("no trial was judged; nothing was tested"),
             "{msg}"
         );
+        assert!(!msg.contains("budget"), "no cause is asserted: {msg}");
     }
 
     #[test]
