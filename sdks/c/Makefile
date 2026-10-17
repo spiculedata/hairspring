@@ -4,7 +4,8 @@
 #   make disasm         machine code of two call sites
 #   make test CC=gcc     the same with another compiler (warnings are errors either way)
 #   make tsan-signals   the process tests under TSan with its signal handlers off (runs the SIGSEGV report tests)
-#   make conformance    fold the sample programs' output with the Rust parser (needs cargo)
+#   make asan-signals   the same under ASan + UBSan with ASan's signal handlers off
+#   make conformance   fold the sample programs' output with the Rust parser (needs cargo)
 #   make clean
 
 CC ?= cc
@@ -24,7 +25,7 @@ LIB := $(BUILD)/libhairspring.a
 SCENARIOS := basic merge fork threads crash exit_status eval big forkexec spawn closefd forklock execself dup2fd manyids conflict empty limits plain_exit segv abort threadsegv alive alarm evalfd sigign
 SAMPLES := $(SCENARIOS:%=$(BUILD)/hs_sample_%)
 
-.PHONY: all lib fixtures test unit audit proc tsan-signals nosyscall nosyscall-pic cxx cxx-templates audit-control cxx-mixed staticfail gnusource disasm conformance clean
+.PHONY: all lib fixtures test unit audit proc tsan-signals asan-signals ubsan-fatal nosyscall nosyscall-pic cxx cxx-templates audit-control cxx-mixed staticfail gnusource disasm conformance clean
 
 all: lib
 
@@ -68,9 +69,22 @@ proc: $(BUILD)/test_proc $(SAMPLES)
 # and friends, set by the test), so the SDK installs its handlers and the SIGSEGV report tests run instead of skipping.
 # Not part of `make test`. Whether the runtime leaves the signals alone is the runtime's behaviour, not the SDK's.
 TSAN_BUILD ?= build/tsan
+ASAN_BUILD ?= build/asan-signals-$(notdir $(CC))
+# -fno-sanitize-recover=undefined: a UBSan finding aborts the program, so it fails the test that hit it.
+ASAN_FLAGS := -fsanitize=address,undefined -fno-sanitize-recover=undefined
 
 tsan-signals:
-	env HS_TEST_TSAN_SIGNALS=1 $(MAKE) proc BUILD=$(TSAN_BUILD) EXTRA=-fsanitize=thread
+	env HS_TEST_SANITIZER_SIGNALS=1 $(MAKE) proc BUILD=$(TSAN_BUILD) EXTRA=-fsanitize=thread
+
+# The same under AddressSanitizer + UBSan with ASan's fatal-signal handlers off (ASAN_OPTIONS, set by the test).
+asan-signals: ubsan-fatal
+	env HS_TEST_SANITIZER_SIGNALS=1 $(MAKE) proc BUILD=$(ASAN_BUILD) EXTRA="$(ASAN_FLAGS)"
+
+# Negative control: a seeded signed overflow must make the program exit non-zero under ASAN_FLAGS.
+ubsan-fatal: | $(BUILD)
+	$(CC) $(CFLAGS) $(ASAN_FLAGS) -o $(BUILD)/ubsan_probe tests/fixtures/ubsan_probe.c
+	@if $(BUILD)/ubsan_probe >/dev/null 2>&1; then echo "FAIL a UBSan finding did not fail the run"; exit 1; \
+	else echo "ok   a UBSan finding fails the run"; fi
 
 # T1: no system call at a call site (seccomp; the test itself prints "skip" off Linux).
 $(BUILD)/test_nosyscall: tests/test_nosyscall.c $(LIB) $(SDK_HDR) | $(BUILD)
