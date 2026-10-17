@@ -1,5 +1,6 @@
 //! Read-only checks of the machine a process target runs on. They only ever produce warnings: determinism does not
 //! depend on them, so they never fail a command.
+mod apt_conf;
 mod autoupdate;
 mod kernel;
 mod loader;
@@ -31,7 +32,10 @@ impl HostFacts {
     pub fn probe() -> HostFacts {
         HostFacts {
             kernel_release: read_trimmed(Path::new(KERNEL_RELEASE_FILE)),
-            auto_updates: autoupdate::probe(Path::new(autoupdate::APT_CONF_DIR)),
+            auto_updates: autoupdate::probe(
+                Path::new(autoupdate::APT_CONF_DIR),
+                Path::new(autoupdate::APT_CONF_FILE),
+            ),
             loader: LoaderHashes::probe(),
         }
     }

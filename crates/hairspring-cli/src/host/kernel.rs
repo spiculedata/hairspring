@@ -24,8 +24,9 @@ pub fn warning(release: &str) -> Option<String> {
     let version = parse_release(release)?;
     (version < FAST_PATH_SINCE).then(|| {
         format!(
-            "kernel {} is older than {}.{}: Hermit runs 10 to 40 times slower here (no PIDFD_THREAD). Schedules are \
-             unaffected, but trial budgets and timeouts tuned on a newer kernel will be misleading.",
+            "kernel {} is older than {}.{}: Hermit's ptrace backend lacks PIDFD_THREAD here and was measured 12 to 38 times \
+             slower on the workloads tried. Schedules are unaffected, but trial budgets and timeouts tuned on a newer \
+             kernel will be misleading.",
             release.trim(),
             FAST_PATH_SINCE.0,
             FAST_PATH_SINCE.1
