@@ -369,10 +369,16 @@ pub(crate) fn same_identity(a: &RunIdentity, b: &RunIdentity) -> bool {
         == (&b.scheme, &b.identity_text, &b.identity_hash, b.complete)
 }
 
-/// Whether the offered identity completes the stored one: an incomplete identity is the only one that may be replaced,
-/// and only by a complete one (and only while no tree depends on the run; the store checks that).
-pub(crate) fn completes(stored: &RunIdentity, offered: &RunIdentity) -> bool {
-    !stored.complete && offered.complete
+/// The identity to store when `offered` completes `stored`, or `None` when it may not. An incomplete identity is the
+/// only one that may be replaced, only by a complete one, and only by the reporter that wrote it. The stored trust
+/// flag is never raised: the result is trusted only if both were. (The store also checks that no tree depends on the
+/// run.)
+pub(crate) fn completed(stored: &RunIdentity, offered: &RunIdentity) -> Option<RunIdentity> {
+    let allowed = !stored.complete && offered.complete && stored.reporter_id == offered.reporter_id;
+    allowed.then(|| RunIdentity {
+        reporter_trusted: stored.reporter_trusted && offered.reporter_trusted,
+        ..offered.clone()
+    })
 }
 
 /// A tree has point identity exactly when its root run has a complete identity, and then they must agree.

@@ -10,6 +10,7 @@ pub fn run_all_identity(make: &dyn Fn() -> Arc<dyn Store>) {
     a_complete_identity_is_never_replaced(&*make());
     an_incomplete_identity_cannot_change_into_another_incomplete_one(&*make());
     an_identity_a_tree_depends_on_stays_as_it_is(&*make());
+    completion_keeps_the_reporter_and_never_raises_trust(&*make());
 }
 
 fn an_incomplete_identity_can_be_completed(s: &dyn Store) {
@@ -80,4 +81,50 @@ fn an_identity_a_tree_depends_on_stays_as_it_is(s: &dyn Store) {
         IdentityOutcome::Rejected(TreeRejection::Conflict)
     );
     assert_eq!(s.get_run_identity(&run.id).unwrap(), Some(partial));
+}
+
+fn completion_keeps_the_reporter_and_never_raises_trust(s: &dyn Store) {
+    // Another reporter cannot complete (and so take over) an identity.
+    let run = new_run(s, "sim");
+    let partial = identity(&run.id, "p\n", false);
+    s.put_run_identity(&partial).unwrap();
+    let mut stranger = identity(&run.id, "full\n", true);
+    stranger.reporter_id = "someone-else".into();
+    assert_eq!(
+        s.put_run_identity(&stranger).unwrap(),
+        IdentityOutcome::Rejected(TreeRejection::Conflict)
+    );
+    assert_eq!(s.get_run_identity(&run.id).unwrap(), Some(partial));
+
+    // The same reporter completes, but an untrusted row stays untrusted.
+    let run = new_run(s, "sim");
+    let mut partial = identity(&run.id, "p\n", false);
+    partial.reporter_trusted = false;
+    s.put_run_identity(&partial).unwrap();
+    let full = identity(&run.id, "full\n", true);
+    assert!(full.reporter_trusted);
+    assert_eq!(
+        s.put_run_identity(&full).unwrap(),
+        IdentityOutcome::Completed
+    );
+    let stored = s.get_run_identity(&run.id).unwrap().unwrap();
+    assert!(stored.complete && !stored.reporter_trusted);
+    assert_eq!(stored.identity_text, "full\n");
+
+    // A trusted row completed by an untrusted report is lowered.
+    let run = new_run(s, "sim");
+    s.put_run_identity(&identity(&run.id, "p\n", false))
+        .unwrap();
+    let mut full = identity(&run.id, "full\n", true);
+    full.reporter_trusted = false;
+    assert_eq!(
+        s.put_run_identity(&full).unwrap(),
+        IdentityOutcome::Completed
+    );
+    assert!(
+        !s.get_run_identity(&run.id)
+            .unwrap()
+            .unwrap()
+            .reporter_trusted
+    );
 }

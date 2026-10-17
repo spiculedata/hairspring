@@ -147,7 +147,7 @@ pub(crate) fn put_identity(c: &mut postgres::Client, id: &RunIdentity) -> Result
     if same_identity(&stored, id) {
         return Ok(IdentityOutcome::Duplicate);
     }
-    if !completes(&stored, id) {
+    if completed(&stored, id).is_none() {
         return Ok(IdentityOutcome::Rejected(TreeRejection::Conflict));
     }
     complete_identity(tx, id)
@@ -159,7 +159,12 @@ fn complete_identity(
     mut tx: postgres::Transaction<'_>,
     id: &RunIdentity,
 ) -> Result<IdentityOutcome> {
-    tx.query_opt("SELECT 1 FROM runs WHERE id=$1 FOR UPDATE", &[&id.run_id])?;
+    // FOR NO KEY UPDATE conflicts with the FOR SHARE `create_tree` takes, as FOR UPDATE does, but does not block the
+    // key-share locks that foreign keys on the run take.
+    tx.query_opt(
+        "SELECT 1 FROM runs WHERE id=$1 FOR NO KEY UPDATE",
+        &[&id.run_id],
+    )?;
     // Read again under the lock: another writer may have completed the identity since it was first read.
     let stored = get_identity(&mut tx, &id.run_id)?.ok_or_else(|| {
         StoreError::Backend("a run identity vanished inside its transaction".into())
@@ -167,13 +172,16 @@ fn complete_identity(
     if same_identity(&stored, id) {
         return Ok(IdentityOutcome::Duplicate);
     }
-    if !completes(&stored, id) || tree_of_run(&mut tx, &id.run_id)?.is_some() {
+    let Some(merged) = completed(&stored, id) else {
+        return Ok(IdentityOutcome::Rejected(TreeRejection::Conflict));
+    };
+    if tree_of_run(&mut tx, &id.run_id)?.is_some() {
         return Ok(IdentityOutcome::Rejected(TreeRejection::Conflict));
     }
     tx.execute(
         "UPDATE run_identity SET scheme=$2, identity_text=$3, identity_hash=$4, complete=$5, reporter_id=$6, \
          reporter_trusted=$7 WHERE run_id=$1",
-        &[&id.run_id, &id.scheme, &id.identity_text, &id.identity_hash, &id.complete, &id.reporter_id, &id.reporter_trusted],
+        &[&merged.run_id, &merged.scheme, &merged.identity_text, &merged.identity_hash, &merged.complete, &merged.reporter_id, &merged.reporter_trusted],
     )?;
     tx.commit()?;
     Ok(IdentityOutcome::Completed)

@@ -133,13 +133,16 @@ pub(crate) fn put_identity(conn: &mut Connection, id: &RunIdentity) -> Result<Id
         if same_identity(&stored, id) {
             return Ok(IdentityOutcome::Duplicate);
         }
-        if !completes(&stored, id) || tree_of_run(&tx, &id.run_id)?.is_some() {
+        let Some(merged) = completed(&stored, id) else {
+            return Ok(IdentityOutcome::Rejected(TreeRejection::Conflict));
+        };
+        if tree_of_run(&tx, &id.run_id)?.is_some() {
             return Ok(IdentityOutcome::Rejected(TreeRejection::Conflict));
         }
         tx.execute(
             "UPDATE run_identity SET scheme=?, identity_text=?, identity_hash=?, complete=?, reporter_id=?, reporter_trusted=? \
              WHERE run_id=?",
-            params![id.scheme, id.identity_text, id.identity_hash, id.complete, id.reporter_id, id.reporter_trusted, id.run_id],
+            params![merged.scheme, merged.identity_text, merged.identity_hash, merged.complete, merged.reporter_id, merged.reporter_trusted, merged.run_id],
         )?;
         tx.commit()?;
         return Ok(IdentityOutcome::Completed);

@@ -16,12 +16,15 @@ pub(crate) fn is_sha256_hex(s: &str) -> bool {
 
 /// Whether `text` is one JSON document nested no deeper than [`MAX_COMMAND_JSON_DEPTH`].
 pub(crate) fn is_bounded_json(text: &str) -> bool {
-    // serde_json refuses documents nested past its own recursion limit, so this cannot overflow the stack.
-    serde_json::from_str::<serde::de::IgnoredAny>(text).is_ok()
-        && nesting_depth(text) <= MAX_COMMAND_JSON_DEPTH
+    // The depth is measured first, by a loop that does not recurse, so the parser below is only ever given text
+    // nested within the bound. Parsing into a value (rather than skipping it) also refuses what a store could not
+    // round-trip, such as a lone surrogate escape.
+    nesting_depth(text) <= MAX_COMMAND_JSON_DEPTH
+        && serde_json::from_str::<serde_json::Value>(text).is_ok()
 }
 
-/// The deepest nesting of `[` and `{` in text already known to be valid JSON; brackets inside strings do not count.
+/// The deepest nesting of `[` and `{` in the text; brackets inside strings do not count. It does not need valid JSON:
+/// on malformed text the figure is only a bound, and the parser rejects the text anyway.
 fn nesting_depth(valid_json: &str) -> usize {
     let (mut depth, mut deepest) = (0usize, 0usize);
     let (mut in_string, mut escaped) = (false, false);
@@ -82,5 +85,7 @@ mod tests {
         assert!(!is_bounded_json(""));
         assert!(!is_bounded_json("{"));
         assert!(!is_bounded_json("{} {}"));
+        assert!(!is_bounded_json(r#"{"v":"\ud800"}"#));
+        assert!(is_bounded_json(r#"{"v":"😀"}"#));
     }
 }

@@ -108,7 +108,9 @@ pub trait Store: Send + Sync {
         error: Option<&str>,
         now: i64,
     ) -> Result<bool>;
-    /// Cancels a queued or running run. Returns false if it was already terminal.
+    /// Cancels a queued or running run. Returns false if it was already terminal. This writes no event: callers that
+    /// report the cancellation to readers of the run's event log must use [`Store::cancel_run_with_event`], so the
+    /// state and the `cancelled` event become visible together.
     fn cancel_run(&self, id: &str, now: i64) -> Result<bool>;
     /// [`Store::cancel_run`] and the run's `event`, committed together: a reader that sees the run cancelled also sees
     /// the event. The event is written only when the run was cancelled. Returns false for an unknown or final run.
@@ -194,7 +196,9 @@ pub trait Store: Send + Sync {
     // run identity and trial trees (schema version 3)
     /// Records the execution inputs of a run. The same identity again is a duplicate and a different one is refused,
     /// with one exception: an incomplete identity is replaced by a complete one (`Completed`) while no tree is rooted
-    /// at, or branches from, the run. A complete identity never changes.
+    /// at, or branches from, the run. A complete identity never changes. Completion is accepted only from the
+    /// reporter that wrote the incomplete identity (another reporter's offer is a conflict), and the stored trust
+    /// flag is never raised: the completed row is trusted only if both the stored and the offered report were.
     fn put_run_identity(&self, identity: &RunIdentity) -> Result<IdentityOutcome>;
     fn get_run_identity(&self, run_id: &str) -> Result<Option<RunIdentity>>;
     /// Creates the tree rooted at a run. `identity_hash` must be the root run's identity hash, or `None` when the run

@@ -111,6 +111,7 @@ fn commands_are_bounded_json(s: &dyn Store) {
         ("trailing data", trailing),
         ("too deep", too_deep.as_str()),
         ("single quotes", "{'verb':'step'}"),
+        ("a lone surrogate", r#"{"v":"\ud800"}"#),
         ("an unescaped control character", "{\"v\":\"a\nb\"}"),
     ] {
         invalid(try_command(text), what);
