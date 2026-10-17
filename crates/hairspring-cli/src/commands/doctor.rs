@@ -15,6 +15,10 @@ fn run_with_host(
     out: &mut dyn Write,
     facts: &HostFacts,
 ) -> CmdResult<i32> {
+    // First, so a per-target error below cannot hide it.
+    if host::involves_process_target(ctx.engine.config(), &args.targets) {
+        host::write_report(out, facts)?;
+    }
     let names: Vec<String> = if args.targets.is_empty() {
         ctx.engine
             .config()
@@ -40,9 +44,6 @@ fn run_with_host(
                 writeln!(out, "{name}: NON-DETERMINISTIC (seed {}, diverged at step {}). Look for HashMap iteration, time, threads or randomness outside the simulation.", d.seed, d.step)?;
             }
         }
-    }
-    if host::involves_process_target(ctx.engine.config(), &args.targets) {
-        host::write_report(out, facts)?;
     }
     Ok(code)
 }
@@ -102,6 +103,7 @@ mod tests {
             AutoUpdates::Disabled,
             AutoUpdates::NotPresent,
             AutoUpdates::Unreadable,
+            AutoUpdates::Unknown,
         ] {
             let facts = HostFacts {
                 auto_updates: state,
@@ -131,6 +133,29 @@ mod tests {
         let text = String::from_utf8(out).unwrap();
         assert_eq!(code, crate::EXIT_OK, "a warning never fails doctor");
         assert!(text.contains("warning: kernel 6.8.0-146-generic"), "{text}");
+    }
+
+    #[test]
+    fn a_named_process_target_gets_the_host_report_even_when_its_check_errors() {
+        // A hermit that cannot run makes the per-target check fail; the host report was printed before it.
+        let config = "[target.svc]\nkind = \"process\"\ncommand = [\"/bin/true\"]\n";
+        let mut named = args();
+        named.targets = vec!["svc".to_string()];
+        let mut out = Vec::new();
+        let facts = kernel("6.8.0-146-generic");
+        let _ = run_with_host(&ctx_with(config), &named, &mut out, &facts);
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains("warning: kernel 6.8.0-146-generic"), "{text}");
+    }
+
+    #[test]
+    fn naming_a_target_that_is_not_configured_prints_no_host_report() {
+        let mut named = args();
+        named.targets = vec!["nonexistent".to_string()];
+        let mut out = Vec::new();
+        let facts = kernel("6.8.0-146-generic");
+        let _ = run_with_host(&ctx_with(PROCESS), &named, &mut out, &facts);
+        assert!(out.is_empty());
     }
 
     #[test]
