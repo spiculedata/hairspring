@@ -86,6 +86,45 @@ fn exit_status_still_decides_when_no_property_failed() {
     assert_eq!(classify(&t, 5), Verdict::Violation("exit code 4".into()));
 }
 
+fn deadlocked(code: Option<i32>) -> Trial {
+    Trial {
+        exit_code: code,
+        stderr: "hermit: start\nERROR: Deadlock detected\n".into(),
+        ..Trial::default()
+    }
+}
+
+#[test]
+fn a_deadlock_report_with_a_failing_exit_is_a_deadlock_not_an_exit_code() {
+    match classify(&deadlocked(Some(1)), 5) {
+        Verdict::Deadlock(m) => assert!(m.contains("Deadlock detected"), "{m}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn deadlock_text_on_a_clean_exit_is_not_a_deadlock() {
+    assert_eq!(classify(&deadlocked(Some(0)), 5), Verdict::Pass);
+}
+
+#[test]
+fn a_timeout_or_a_property_failure_outranks_a_deadlock_report() {
+    let hung = Trial {
+        timed_out: true,
+        ..deadlocked(Some(1))
+    };
+    assert!(matches!(classify(&hung, 5), Verdict::Hang(_)));
+    let failed = Trial {
+        exit_code: Some(1),
+        ..with_false()
+    };
+    let both = Trial {
+        stderr: "Deadlock detected\n".into(),
+        ..failed
+    };
+    assert!(matches!(classify(&both, 5), Verdict::Violation(m) if m.contains("x.id")));
+}
+
 #[test]
 fn a_property_failure_outranks_the_legacy_violation_line_and_the_exit_status() {
     let t = Trial {

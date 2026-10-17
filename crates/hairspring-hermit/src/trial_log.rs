@@ -36,6 +36,8 @@ fn verdict_parts(v: &Verdict) -> (ReportedVerdict, &str) {
     match v {
         Verdict::Pass => (ReportedVerdict::Pass, ""),
         Verdict::Violation(r) => (ReportedVerdict::Violation, r),
+        // A deadlock is a finding; the stored verdict set has no separate kind, so the reason says what it was.
+        Verdict::Deadlock(r) => (ReportedVerdict::Violation, r),
         Verdict::Hang(r) => (ReportedVerdict::Inconclusive, r),
         Verdict::Inconclusive(r) => (ReportedVerdict::Unusable, r),
         Verdict::Infra(r) => (ReportedVerdict::Infra, r),

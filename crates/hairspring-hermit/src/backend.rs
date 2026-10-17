@@ -27,8 +27,25 @@ struct Found<'a> {
     req: &'a RunRequest,
     seed: u64,
     trial: &'a Trial,
+    kind: FailureKind,
     reason: &'a str,
     confirmed: &'a Confirmation,
+}
+
+/// What kind of finding a failing trial is, as the report and the bundle name it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FailureKind {
+    Violation,
+    Deadlock,
+}
+
+impl FailureKind {
+    fn bundle_name(self) -> &'static str {
+        match self {
+            FailureKind::Violation => "violation",
+            FailureKind::Deadlock => "deadlock",
+        }
+    }
 }
 
 /// How the confirmation reruns of a violating seed went.
@@ -211,10 +228,14 @@ impl HermitBackend {
             .map(|_| match self.trial(p, seed, timeout) {
                 Err(e) => Rerun::NotStarted(e.to_string()),
                 Ok(t) => match self.verdict(p, &t, timeout) {
-                    Verdict::Violation(_) if property_verdict::reproduces(&hash, &failing, &t) => {
+                    Verdict::Violation(_) | Verdict::Deadlock(_)
+                        if property_verdict::reproduces(&hash, &failing, &t) =>
+                    {
                         Rerun::Reproduced
                     }
-                    Verdict::Violation(_) | Verdict::Pass => Rerun::Different,
+                    Verdict::Violation(_) | Verdict::Deadlock(_) | Verdict::Pass => {
+                        Rerun::Different
+                    }
                     Verdict::Hang(_) | Verdict::Inconclusive(_) | Verdict::Infra(_) => {
                         Rerun::Inconclusive
                     }
@@ -283,31 +304,38 @@ impl HermitBackend {
                 None
             }
             Verdict::Violation(reason) => {
-                let confirmed = self.confirm(j.p, j.seed, j.trial, j.timeout);
-                let failure = self.failure(&Found {
-                    spec: j.spec,
-                    p: j.p,
-                    req: j.req,
-                    seed: j.seed,
-                    trial: j.trial,
-                    reason: &reason,
-                    confirmed: &confirmed,
-                });
-                let ms = j.started.elapsed().as_millis() as u64;
-                let (distinct, work) = tally.schedule_stats();
-                Some(
-                    tally.with_partial_properties(
-                        RunOutcome::failed(j.index + 1, j.index + 1, ms, failure)
-                            .with_inconclusive(tally.inconclusive)
-                            .with_schedule_stats(distinct, work),
-                    ),
-                )
+                Some(self.finding(j, tally, FailureKind::Violation, &reason))
+            }
+            Verdict::Deadlock(reason) => {
+                Some(self.finding(j, tally, FailureKind::Deadlock, &reason))
             }
             Verdict::Pass => {
                 tally.pass();
                 None
             }
         }
+    }
+
+    /// Confirms a failing trial by rerunning its seed and builds the outcome that ends the run.
+    fn finding(&self, j: &Judged, tally: &Tally, kind: FailureKind, reason: &str) -> RunOutcome {
+        let confirmed = self.confirm(j.p, j.seed, j.trial, j.timeout);
+        let failure = self.failure(&Found {
+            spec: j.spec,
+            p: j.p,
+            req: j.req,
+            seed: j.seed,
+            trial: j.trial,
+            kind,
+            reason,
+            confirmed: &confirmed,
+        });
+        let ms = j.started.elapsed().as_millis() as u64;
+        let (distinct, work) = tally.schedule_stats();
+        tally.with_partial_properties(
+            RunOutcome::failed(j.index + 1, j.index + 1, ms, failure)
+                .with_inconclusive(tally.inconclusive)
+                .with_schedule_stats(distinct, work),
+        )
     }
 
     fn failure(&self, found: &Found) -> FailureReport {
@@ -317,15 +345,19 @@ impl HermitBackend {
             req,
             seed,
             trial: t,
+            kind,
             reason,
             confirmed,
         } = *found;
         let hash = behaviour_hash(t);
         let total = self.settings.repro_runs;
         let (reproduced, inconclusive) = (confirmed.reproduced, confirmed.inconclusive);
-        let mut message = format!(
-            "property violated at sched-seed {seed} ({reason}); reproduced {reproduced}/{total}"
-        );
+        let lead = match kind {
+            FailureKind::Violation => "property violated",
+            FailureKind::Deadlock => "deadlock",
+        };
+        let mut message =
+            format!("{lead} at sched-seed {seed} ({reason}); reproduced {reproduced}/{total}");
         if inconclusive > 0 {
             message.push_str(&inconclusive_text(
                 inconclusive,
@@ -343,6 +375,7 @@ impl HermitBackend {
             .with_param("heuristic", p.scheduler.effective_heuristic().name())
             .with_param("scheduler", scheduler_flags(p.scheduler).join(" "))
             .with_param("hermit_args", p.hermit_args.join(" "))
+            .with_param("failure_kind", kind.bundle_name())
             .with_param("hang_is_violation", p.hang_is_violation.to_string())
             .with_param("events_transport", self.events_transport())
             .with_param("output_hash", hash)
@@ -603,7 +636,7 @@ impl Backend for HermitBackend {
         let notes = replay_notes(bundle, &trial, &verdict, hang_relaxed);
         let matches = output_matches(bundle, &trial);
         Ok(ReplayOutcome {
-            reproduced: matches!(verdict, Verdict::Violation(_))
+            reproduced: matches!(verdict, Verdict::Violation(_) | Verdict::Deadlock(_))
                 && matches != Some(false)
                 && property_matches(bundle, &trial) != Some(false),
             steps: steps(

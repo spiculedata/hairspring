@@ -14,6 +14,8 @@ const USAGE: &str = "Usage: hermit";
 const SKID_OVERSHOOT: &str = "SKID_OVERSHOOT";
 const PANICKED: &str = "panicked";
 const OVERSHOOT: &str = "overshoot";
+/// What Hermit prints when every guest thread is blocked and no timer can wake one.
+const DEADLOCK: &str = "Deadlock detected";
 const ERROR_UPPER: &str = "Error:";
 const ERROR_LOWER: &str = "error:";
 
@@ -38,6 +40,8 @@ pub struct Findings {
     /// Some line contains `panicked`, and some line (maybe another) contains `overshoot`.
     pub panicked: bool,
     pub overshoot: bool,
+    /// The first line containing Hermit's deadlock report, trimmed.
+    pub deadlock_line: Option<String>,
 }
 
 impl Findings {
@@ -57,8 +61,10 @@ const HAS_ERROR_LOWER: u8 = 1 << 3;
 const HAS_SKID: u8 = 1 << 4;
 const HAS_PANICKED: u8 = 1 << 5;
 const HAS_OVERSHOOT: u8 = 1 << 6;
+const HAS_DEADLOCK: u8 = 1 << 7;
 
-const NEEDLES: [(&str, u8); 7] = [
+const NEEDLES: [(&str, u8); 8] = [
+    (DEADLOCK, HAS_DEADLOCK),
     (INTERNAL_FAILURE, HAS_INTERNAL_FAILURE),
     (ERROR_UPPER, HAS_ERROR_UPPER),
     (USAGE, HAS_USAGE),
@@ -143,6 +149,9 @@ impl LineScan {
         if found.lower_error_line.is_none() && seen & HAS_ERROR_LOWER != 0 {
             found.lower_error_line = Some(line.trim().to_string());
         }
+        if found.deadlock_line.is_none() && seen & HAS_DEADLOCK != 0 {
+            found.deadlock_line = Some(line.trim().to_string());
+        }
     }
 }
 
@@ -223,6 +232,24 @@ mod tests {
         let f = scan(&[&long]);
         assert!(f.internal_failure);
         assert_eq!(f.violation_line, None);
+    }
+
+    #[test]
+    fn hermits_deadlock_report_is_found_with_its_line_wherever_the_reads_end() {
+        let input = b"hermit: starting\nERROR: Deadlock detected\nlater\n";
+        let whole = scan(&[input]);
+        assert_eq!(
+            whole.deadlock_line.as_deref(),
+            Some("ERROR: Deadlock detected")
+        );
+        for i in 0..=input.len() {
+            assert_eq!(scan(&[&input[..i], &input[i..]]), whole, "split at {i}");
+        }
+    }
+
+    #[test]
+    fn a_stream_without_the_report_has_no_deadlock_line() {
+        assert_eq!(scan(&[b"all fine\n"]).deadlock_line, None);
     }
 
     #[test]

@@ -154,7 +154,11 @@ In this order, the first rule that applies decides:
 4. A trial-level property failure (`always` false, `unreachable` hit, catalog conflict): the trial fails and gets a
    bundle recording `property` and `property_kind`. This holds for degraded trials too: a false that was read is a
    false.
-5. A `HAIRSPRING_VIOLATION:` line, then the exit status, as before.
+5. A `HAIRSPRING_VIOLATION:` line.
+5a. Hermit's `Deadlock detected` report together with a non-zero exit: a deadlock finding. It is reported as a
+   deadlock with Hermit's own line, the bundle records `failure_kind=deadlock`, and `hang_is_violation` does not
+   change it (Hermit detected it; no timeout was involved).
+5b. Otherwise the exit status, as before.
 6. Otherwise a clean exit is a pass, unless the events are unusable (a Guest fault such as an unreadable, oversized or
    truncated file or an output stream that never closed; lost or contradictory data; a process with no `end`). Such a
    trial is degraded and inconclusive: it is never a pass, is not rated, and makes no must-hit claim.

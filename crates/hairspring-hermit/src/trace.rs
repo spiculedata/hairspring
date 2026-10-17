@@ -15,6 +15,10 @@ pub enum Verdict {
     Violation(String),
     /// The trial hit its time limit: possibly a hang or deadlock, possibly just slow. Not a finding by itself.
     Hang(String),
+    /// Hermit reported that every guest thread was blocked with no timer to wake one, and the guest exited non-zero.
+    /// Unlike a timeout this is positively detected, so it is a finding without waiting for a wall-clock limit; it
+    /// is never a data-property violation and is reported as a deadlock. The text carries Hermit's own line.
+    Deadlock(String),
     /// Hermit itself failed, or the run is misconfigured: not a finding about the target, and the run cannot go on.
     Infra(String),
     /// This trial cannot be judged (the host failed to collect its events, or the guest's events are unusable) but
@@ -75,7 +79,8 @@ fn hermit_own_failure(stderr: &Findings) -> Option<String> {
 
 /// Judges a trial. Order: Hermit's own failures and misconfiguration (the run cannot go on), then a timeout, then host
 /// faults collecting events (both inconclusive, never a pass), then property failures (a false that was read counts
-/// even when the rest of the report is damaged), then the legacy violation line, then the exit status. A trial that
+/// even when the rest of the report is damaged), then the legacy violation line, then Hermit's deadlock report (with a
+/// non-zero exit), then the exit status. A trial that
 /// exits cleanly but whose events are unusable is inconclusive, not a pass.
 pub fn classify(t: &Trial, timeout_secs: u64) -> Verdict {
     // Read from the lines as they arrived, not from the kept text: a long stream keeps only its two ends.
@@ -119,6 +124,13 @@ pub fn classify(t: &Trial, timeout_secs: u64) -> Verdict {
         } else {
             reason.to_string()
         });
+    }
+    if let (Some(line), Some(code)) = (&err.deadlock_line, t.exit_code) {
+        if code != 0 {
+            return Verdict::Deadlock(format!(
+                "deadlock: hermit reported `{line}` (exit code {code})"
+            ));
+        }
     }
     match (t.exit_code, t.signal) {
         (Some(0), _) => match property_verdict::unusable_events(t) {
