@@ -81,6 +81,8 @@ pub struct RunIdentity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdentityOutcome {
     Stored,
+    /// An incomplete identity was replaced by a complete one.
+    Completed,
     /// The same identity was already stored; nothing changed.
     Duplicate,
     Rejected(TreeRejection),
@@ -367,6 +369,12 @@ pub(crate) fn check_identity(id: &RunIdentity) -> std::result::Result<(), TreeRe
 pub(crate) fn same_identity(a: &RunIdentity, b: &RunIdentity) -> bool {
     (&a.scheme, &a.identity_text, &a.identity_hash, a.complete)
         == (&b.scheme, &b.identity_text, &b.identity_hash, b.complete)
+}
+
+/// Whether the offered identity completes the stored one: an incomplete identity is the only one that may be replaced,
+/// and only by a complete one (and only while no tree depends on the run; the store checks that).
+pub(crate) fn completes(stored: &RunIdentity, offered: &RunIdentity) -> bool {
+    !stored.complete && offered.complete
 }
 
 /// A tree has point identity exactly when its root run has a complete identity, and then they must agree.

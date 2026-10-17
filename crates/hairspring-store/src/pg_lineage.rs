@@ -144,11 +144,39 @@ pub(crate) fn put_identity(c: &mut postgres::Client, id: &RunIdentity) -> Result
     let stored = get_identity(&mut tx, &id.run_id)?.ok_or_else(|| {
         StoreError::Backend("a run identity vanished inside its transaction".into())
     })?;
-    Ok(if same_identity(&stored, id) {
-        IdentityOutcome::Duplicate
-    } else {
-        IdentityOutcome::Rejected(TreeRejection::Conflict)
-    })
+    if same_identity(&stored, id) {
+        return Ok(IdentityOutcome::Duplicate);
+    }
+    if !completes(&stored, id) {
+        return Ok(IdentityOutcome::Rejected(TreeRejection::Conflict));
+    }
+    complete_identity(tx, id)
+}
+
+/// Replaces an incomplete identity with the complete one offered, unless a tree depends on the run. The run row is
+/// locked first, as `create_tree` locks it, so a tree being created at the same time is waited for and then seen.
+fn complete_identity(
+    mut tx: postgres::Transaction<'_>,
+    id: &RunIdentity,
+) -> Result<IdentityOutcome> {
+    tx.query_opt("SELECT 1 FROM runs WHERE id=$1 FOR UPDATE", &[&id.run_id])?;
+    // Read again under the lock: another writer may have completed the identity since it was first read.
+    let stored = get_identity(&mut tx, &id.run_id)?.ok_or_else(|| {
+        StoreError::Backend("a run identity vanished inside its transaction".into())
+    })?;
+    if same_identity(&stored, id) {
+        return Ok(IdentityOutcome::Duplicate);
+    }
+    if !completes(&stored, id) || tree_of_run(&mut tx, &id.run_id)?.is_some() {
+        return Ok(IdentityOutcome::Rejected(TreeRejection::Conflict));
+    }
+    tx.execute(
+        "UPDATE run_identity SET scheme=$2, identity_text=$3, identity_hash=$4, complete=$5, reporter_id=$6, \
+         reporter_trusted=$7 WHERE run_id=$1",
+        &[&id.run_id, &id.scheme, &id.identity_text, &id.identity_hash, &id.complete, &id.reporter_id, &id.reporter_trusted],
+    )?;
+    tx.commit()?;
+    Ok(IdentityOutcome::Completed)
 }
 
 // ---- trees -------------------------------------------------------------------------------------------------------
@@ -161,7 +189,7 @@ pub(crate) fn get_tree<C: GenericClient>(c: &mut C, id: &str) -> Result<Option<T
     .map(|r| tree_from_row(&r)))
 }
 
-pub(crate) fn tree_of_run(c: &mut postgres::Client, run_id: &str) -> Result<Option<String>> {
+pub(crate) fn tree_of_run<C: GenericClient>(c: &mut C, run_id: &str) -> Result<Option<String>> {
     Ok(c.query_opt(
         "SELECT id FROM trees WHERE id=$1 UNION ALL SELECT tree_id FROM tree_branches WHERE run_id=$1 LIMIT 1",
         &[&run_id],
@@ -180,8 +208,9 @@ pub(crate) fn create_tree(
     now: i64,
 ) -> Result<TreeOutcome> {
     let mut tx = c.transaction()?;
+    // Share-locked: completing the run's identity waits for this tree, and this waits for a completion in progress.
     let run = tx.query_opt(
-        "SELECT backend, target FROM runs WHERE id=$1",
+        "SELECT backend, target FROM runs WHERE id=$1 FOR SHARE",
         &[&new.run_id],
     )?;
     let Some(run) = run else {

@@ -175,8 +175,9 @@ pub trait Store: Send + Sync {
     fn run_contributors(&self, run_id: &str) -> Result<Vec<Contributor>>;
 
     // run identity and trial trees (schema version 3)
-    /// Records the execution inputs of a run. Written once: the same identity again is a duplicate, a different one is
-    /// refused.
+    /// Records the execution inputs of a run. The same identity again is a duplicate and a different one is refused,
+    /// with one exception: an incomplete identity is replaced by a complete one (`Completed`) while no tree is rooted
+    /// at, or branches from, the run. A complete identity never changes.
     fn put_run_identity(&self, identity: &RunIdentity) -> Result<IdentityOutcome>;
     fn get_run_identity(&self, run_id: &str) -> Result<Option<RunIdentity>>;
     /// Creates the tree rooted at a run. `identity_hash` must be the root run's identity hash, or `None` when the run
