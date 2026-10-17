@@ -9,6 +9,7 @@ use hairspring_props::record::TrialRecord as KeptRecord;
 use hairspring_props::TrialDigest;
 use hairspring_store::{KeptState, TrialRecord};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 /// The properties that failed in one trial, named for a row.
 #[derive(Default)]
@@ -263,10 +264,25 @@ impl Service {
     }
 
     /// Cumulative distinct properties reached (and true) and distinct schedules, by trial. `None` for an unknown run.
+    ///
+    /// The series of a finished run is worked out once and kept, since its trial rows no longer change. A run that
+    /// is still open is scanned on every call.
     pub fn coverage(&self, run_id: &str) -> Result<Option<Coverage>> {
-        if self.store.get_run(run_id)?.is_none() {
+        let Some(run) = self.store.get_run(run_id)? else {
             return Ok(None);
+        };
+        if !run.state.is_terminal() {
+            return self.scan_coverage(run_id).map(Some);
         }
+        if let Some(cached) = self.coverage_cache.get(run_id) {
+            return Ok(Some(Coverage::clone(&cached)));
+        }
+        let fresh = Arc::new(self.scan_coverage(run_id)?);
+        self.coverage_cache.insert(run_id, fresh.clone());
+        Ok(Some(Coverage::clone(&fresh)))
+    }
+
+    fn scan_coverage(&self, run_id: &str) -> Result<Coverage> {
         let (mut hit, mut tru, mut fps): (BTreeSet<u32>, BTreeSet<u32>, BTreeSet<String>) =
             Default::default();
         let (mut points, mut trials) = (Vec::new(), 0u64);
@@ -306,12 +322,12 @@ impl Service {
             points.push(p);
         }
         let (points, downsampled) = downsample(points);
-        Ok(Some(Coverage {
+        Ok(Coverage {
             run_id: run_id.to_owned(),
             trials,
             downsampled,
             points,
-        }))
+        })
     }
 
     /// Every trial of the run, in order, with no cap. Used only where the answer is one small series.
