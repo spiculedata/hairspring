@@ -47,7 +47,13 @@ fn run_with_a_corrupt_digest() -> (hairspring_service::Service, String) {
         kept_bytes_cap: MAX_KEPT_BYTES_PER_RUN,
     };
     store
-        .ingest_trials(&job.job_id, &local(), true, &batch, hairspring_store::now_ms())
+        .ingest_trials(
+            &job.job_id,
+            &local(),
+            true,
+            &batch,
+            hairspring_store::now_ms(),
+        )
         .unwrap();
     (svc, job.run_id)
 }

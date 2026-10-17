@@ -628,15 +628,7 @@ fn strip_rows_carry_the_verdict_and_flags_in_sequence_order(s: &dyn Store) {
     let rows = s.list_trial_strip_rows(&r.id, None, 10).unwrap();
     let got: Vec<_> = rows
         .iter()
-        .map(|t| {
-            (
-                t.seq,
-                t.verdict,
-                t.rated,
-                t.degraded,
-                t.report_missing,
-            )
-        })
+        .map(|t| (t.seq, t.verdict, t.rated, t.degraded, t.report_missing))
         .collect();
     assert_eq!(
         got,
@@ -650,7 +642,10 @@ fn strip_rows_carry_the_verdict_and_flags_in_sequence_order(s: &dyn Store) {
     );
     let after = s.list_trial_strip_rows(&r.id, Some(2), 2).unwrap();
     assert_eq!(after.iter().map(|t| t.seq).collect::<Vec<_>>(), vec![3, 4]);
-    assert!(s.list_trial_strip_rows(&r.id, Some(4), 2).unwrap().is_empty());
+    assert!(s
+        .list_trial_strip_rows(&r.id, Some(4), 2)
+        .unwrap()
+        .is_empty());
 }
 
 fn hostile_text_in_trials_and_catalog_is_stored_verbatim(s: &dyn Store) {

@@ -69,6 +69,8 @@ mod tests {
             cache.insert(&id, series(&id));
             assert!(cache.len() <= MAX_CACHED_SERIES);
         }
-        assert!(cache.get(&format!("r{}", MAX_CACHED_SERIES * 3 - 1)).is_some());
+        assert!(cache
+            .get(&format!("r{}", MAX_CACHED_SERIES * 3 - 1))
+            .is_some());
     }
 }

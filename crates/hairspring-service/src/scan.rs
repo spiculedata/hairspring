@@ -103,7 +103,11 @@ impl Service {
         scan_pages(
             after,
             |t: &TrialStripRow| t.seq,
-            |cursor| Ok(self.store.list_trial_strip_rows(run_id, cursor, STORE_PAGE)?),
+            |cursor| {
+                Ok(self
+                    .store
+                    .list_trial_strip_rows(run_id, cursor, STORE_PAGE)?)
+            },
             visit,
         )
     }

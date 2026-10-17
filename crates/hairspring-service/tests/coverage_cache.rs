@@ -25,12 +25,8 @@ fn a_finished_runs_coverage_is_the_same_on_every_read() {
     let job = lease_with_budget(&svc, &engine, &local(), 2);
     let mut rec = Recorder::new();
     let p = props("c.id", AssertKind::Always, 1, 0);
-    svc.ingest_trials(
-        &job.job_id,
-        &local(),
-        &[rec.pass(1, &p), rec.pass(2, &p)],
-    )
-    .unwrap();
+    svc.ingest_trials(&job.job_id, &local(), &[rec.pass(1, &p), rec.pass(2, &p)])
+        .unwrap();
     finish(&svc, &job, &local(), passed(2, Some(2)));
 
     let first = svc.coverage(&job.run_id).unwrap().unwrap();
