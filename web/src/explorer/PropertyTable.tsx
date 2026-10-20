@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ScrollRegion } from '../components/ScrollRegion';
 import type { PropertyRow } from '../types';
 import { computeWindow } from '../windowing';
 import { GUEST_TABLE_NOTE, NO_PROPERTIES } from '../wording';
@@ -39,16 +40,7 @@ export function PropertyTable({ properties, total, runId }: { properties: readon
     overscan: OVERSCAN,
   });
   return (
-    <>
-      <p className="scroll-hint">Scroll sideways to see every column.</p>
-      <div
-        className="table-scroll"
-        role="region"
-        aria-label="Properties"
-        tabIndex={0}
-        style={{ maxHeight: VIEWPORT_HEIGHT }}
-        onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
-      >
+    <ScrollRegion label="Properties" hint="Scroll sideways to see every column." maxHeight={VIEWPORT_HEIGHT} onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}>
         <table className="props" aria-rowcount={(total ?? properties.length) + HEADER_ROWS} style={{ minWidth: columnBudgetPx() }}>
           <caption>{GUEST_TABLE_NOTE}</caption>
           <colgroup>
@@ -76,7 +68,6 @@ export function PropertyTable({ properties, total, runId }: { properties: readon
             <Spacer height={win.padBottom} />
           </tbody>
         </table>
-      </div>
-    </>
+    </ScrollRegion>
   );
 }

@@ -7,10 +7,19 @@ import { seedsPath, type SeedFilters } from '../seeds/filters';
 import type { PropertyRow } from '../types';
 import { formatCount, seedListLabel, seenInInconclusive, statusLabel, statusMark } from '../wording';
 
-/** Height of every row, which is what makes windowing a sum. */
-export const ROW_HEIGHT = 88;
+/**
+ * Heights, in pixels, of the blocks the rate cell can stack, measured in a browser at the default font size. The bar
+ * only comes with a one-line qualifier (a plain rate), so the tallest cell is a zero-event rate: figure, two-line
+ * qualifier, UNMET note and inconclusive note.
+ */
+export const RATE_CELL_BLOCKS_PX = { figure: 19, qualifier: 34, unmetNote: 16, inconclusiveNote: 16 } as const;
+export const RATE_CELL_WORST_PX = 85;
+/** Slack for fonts that round a little taller. */
+const CELL_SLACK_PX = 2;
 /** Vertical padding (2 x 8px) plus the 1px row border, set in explorer.css. */
 const ROW_CHROME = 17;
+/** Height of every row, which is what makes windowing a sum. Its clipped block holds the tallest rate cell. */
+export const ROW_HEIGHT = ROW_CHROME + RATE_CELL_WORST_PX + CELL_SLACK_PX;
 /** Every cell's content sits in a block of exactly this height with overflow hidden, so no row can grow. */
 export const CLIP_HEIGHT = ROW_HEIGHT - ROW_CHROME;
 const ID_CHARS = 96;

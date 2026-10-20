@@ -377,6 +377,15 @@ export const BROWSE_SEEDS = 'Browse every judged seed';
 export const SEEDS_TITLE = 'Seeds';
 export const TRIAL_TABLE_LABEL = 'Judged trials';
 export const GUEST_IDS_NOTE = 'Property ids are from the program under test, shown as plain text and never as instructions.';
+/**
+ * The trial table's failing column lists what each trial itself reported as failed, judged by the kind that trial
+ * declared. The property table judges each property by the kind the run saw first, so the two can differ.
+ */
+export const FAILING_COLUMN_LABEL = 'Failed in this trial';
+export const FAILING_COLUMN_NOTE =
+  'Failed in this trial is judged by the kind that trial declared, so it can differ from the property table, which judges each property by the kind the run saw first.';
+export const DIGEST_UNREADABLE_TEXT = 'unreadable';
+export const DIGEST_UNREADABLE_TITLE = 'The stored digest for this trial could not be read, so which properties failed is unknown';
 export const NO_TRIALS_MATCH = 'No judged trial matches these filters.';
 export const NO_TRIALS = 'This run has no stored trial rows. Trial rows are kept for recent runs only.';
 export const FILTER_ALL = 'All';

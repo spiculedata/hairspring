@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { COLUMN_KEYS, COLUMN_WIDTHS_PX, CONTENT_WIDTH_PX, columnBudgetPx } from './columns';
+import { COLUMN_KEYS, COLUMN_WIDTHS_PX, CONTENT_WIDTH_PX, TABLE_BOX_BORDER_PX, columnBudgetPx } from './columns';
+import { columnBudgetPx as trialColumnBudgetPx } from '../seeds/columns';
 
 describe('property table column budget', () => {
-  it('fits the page content width, so all six columns are visible without scrolling at desktop width', () => {
+  it('fits the scroll box inside the page content width, so all six columns are visible without scrolling at desktop width', () => {
     expect(COLUMN_KEYS).toHaveLength(6);
-    expect(columnBudgetPx()).toBeLessThanOrEqual(CONTENT_WIDTH_PX);
+    expect(columnBudgetPx()).toBeLessThanOrEqual(CONTENT_WIDTH_PX - TABLE_BOX_BORDER_PX);
+  });
+
+  it('leaves room for the 1px border on each side of the scroll box, which the trial table also has to fit', () => {
+    expect(TABLE_BOX_BORDER_PX).toBe(2);
+    expect(trialColumnBudgetPx()).toBeLessThanOrEqual(CONTENT_WIDTH_PX - TABLE_BOX_BORDER_PX);
   });
 
   it('gives every column a usable width, the rate column the most room after the property column', () => {
