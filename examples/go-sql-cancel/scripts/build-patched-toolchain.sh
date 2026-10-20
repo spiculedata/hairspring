@@ -17,11 +17,29 @@ dl="$here/.cache/dl"
 tc="$here/.cache/toolchains"
 mkdir -p "$tc"
 
+# Check a cached archive against PINS before anything is unpacked from it. A file that fails (or has no pin) is
+# deleted, so the next scripts/fetch-go.sh downloads it again.
+verify_archive() {
+  f=$1
+  if [ ! -f "$dl/$f" ]; then
+    echo "missing $dl/$f; run scripts/fetch-go.sh" >&2
+    exit 1
+  fi
+  want=$(awk -v f="$f" '$2 == f { print $1 }' "$here/PINS")
+  got=$(shasum -a 256 "$dl/$f" | awk '{ print $1 }')
+  if [ -z "$want" ] || [ "$got" != "$want" ]; then
+    echo "checksum of $f does not match PINS; removing it, run scripts/fetch-go.sh again" >&2
+    rm -f "${dl:?}/$f"
+    exit 1
+  fi
+}
+
 unpack_official() {
   name=$1
   if [ -x "$tc/$name/bin/go" ]; then return 0; fi
+  verify_archive "$name.darwin-arm64.tar.gz"
   echo "unpack $name"
-  rm -rf "$tc/$name.tmp" "$tc/$name"
+  rm -rf "${tc:?}/$name.tmp" "${tc:?}/$name"
   mkdir "$tc/$name.tmp"
   tar -xzf "$dl/$name.darwin-arm64.tar.gz" -C "$tc/$name.tmp"
   mv "$tc/$name.tmp/go" "$tc/$name"
@@ -31,8 +49,9 @@ unpack_official() {
 unpack_source() {
   dest=$1
   if [ -f "$dest/VERSION" ]; then return 0; fi
+  verify_archive go1.24.5.src.tar.gz
   echo "unpack source into $dest"
-  rm -rf "$dest.tmp" "$dest"
+  rm -rf "${dest:?}.tmp" "${dest:?}"
   mkdir "$dest.tmp"
   tar -xzf "$dl/go1.24.5.src.tar.gz" -C "$dest.tmp"
   mv "$dest.tmp/go" "$dest"

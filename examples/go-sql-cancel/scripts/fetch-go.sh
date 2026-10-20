@@ -20,7 +20,13 @@ pin_for() {
 }
 
 for f in $files; do
-  if [ -f "$dl/$f" ]; then continue; fi
+  # A cached archive is trusted only if it matches its pin; otherwise it is deleted and fetched again.
+  if [ -f "$dl/$f" ]; then
+    cached=$(shasum -a 256 "$dl/$f" | awk '{ print $1 }')
+    if [ "$cached" = "$(pin_for "$f")" ]; then continue; fi
+    echo "discard cached $f (checksum does not match PINS)"
+    rm -f "${dl:?}/$f"
+  fi
   echo "fetch $f"
   curl -fsSL -o "$dl/$f.part" "$base/$f"
   mv "$dl/$f.part" "$dl/$f"
