@@ -1,10 +1,14 @@
 //! One-file repro bundle: plain text so it can be pasted into an issue.
 //!
 //! Format v2 is line oriented `key=value`; free-text values are percent-escaped
-//! so a value can never inject a new line or field. v1 bundles still decode.
+//! so a value can never inject a new line or field. v1 bundles still decode. v3 is v2 plus recorded
+//! execution-environment params (`host.*`, `hermit.*`, `env.*`, `target.*`).
 use crate::ActionId;
 use std::collections::BTreeMap;
 
+/// Written only by bundles that record an execution environment (see `crate::environment`). A reader that predates
+/// it rejects the header, so bundles with nothing to record keep writing v2.
+const HEADER_V3: &str = "hairspring-bundle v3";
 const HEADER_V2: &str = "hairspring-bundle v2";
 const HEADER_V1: &str = "hairspring-bundle v1";
 // Bundles written under the project's former name (Anthill) still decode.
@@ -90,10 +94,24 @@ impl Bundle {
         Bundle { params, ..self }
     }
 
+    /// Whether any param belongs to the recorded execution environment, which is what makes a bundle v3.
+    fn records_environment(&self) -> bool {
+        self.params.keys().any(|k| {
+            crate::environment::NAMESPACES
+                .iter()
+                .any(|ns| k.starts_with(ns))
+        })
+    }
+
     pub fn encode(&self) -> String {
         let path: Vec<String> = self.path.iter().map(|id| format!("{id:016x}")).collect();
+        let header = if self.records_environment() {
+            HEADER_V3
+        } else {
+            HEADER_V2
+        };
         let mut out = format!(
-            "{HEADER_V2}\nseed={}\nbuild={}\ntarget={}\nbackend={}\n",
+            "{header}\nseed={}\nbuild={}\ntarget={}\nbackend={}\n",
             self.seed,
             escape(&self.build),
             escape(&self.target),
@@ -113,8 +131,11 @@ impl Bundle {
     pub fn decode(text: &str) -> Result<Bundle, BundleError> {
         let mut lines = text.lines();
         match lines.next() {
-            Some(HEADER_V2) | Some(HEADER_V1) | Some(LEGACY_HEADER_V2) | Some(LEGACY_HEADER_V1) => {
-            }
+            Some(HEADER_V3)
+            | Some(HEADER_V2)
+            | Some(HEADER_V1)
+            | Some(LEGACY_HEADER_V2)
+            | Some(LEGACY_HEADER_V1) => {}
             _ => return Err(BundleError::BadHeader),
         }
         let mut fields: BTreeMap<&str, &str> = BTreeMap::new();
