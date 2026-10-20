@@ -1,0 +1,5 @@
+# Pins for the condlock build. Checked by scripts/record-build.sh; a mismatch stops the build record.
+#
+# The C SDK (sdks/c) is taken from an origin/main commit, not from a stacked PR branch.
+SDK_COMMIT=c0564d7c7434689f704b9e9caa987196a11e7562
+SDK_TREE=52fa1f24cf226b5ba3b500af00efdb93c9561b79
