@@ -130,15 +130,41 @@ uses the recursive form; PostgreSQL uses it below 100,000 nodes in the tree and 
 always use the recursive form, and children are paged by keyset on the parent index. A recursive-form descendant
 listing for a node with more than 50,000 descendants is refused (`LimitExceeded`): page by children instead.
 
-Opening a version 3 database runs no DDL; it only checks that the four tables exist. Opening a version 2 database
-adds them in the same transaction as the version bump.
+Opening a current database runs no DDL; it only checks that the tables exist. Opening a version 2 database adds the
+tree tables in the same transaction as the version bump.
 
 **Downgrade to version 2** (offline; back up first, nothing is downgraded automatically):
 `hairspring_store::downgrade_sqlite` and `downgrade_postgres` (also `cargo run -p hairspring-store --example
-store_downgrade`) drop the four tables and set the version to 2. Branch runs, which exist only because of version 3,
+store_downgrade`) drop the four tree tables (and the two version 4 tables, if present) and set the version to 2.
+Branch runs, which exist only because of version 3,
 are listed first and kept by default as ordinary runs; `--drop-branch-runs` deletes them, with their trials, jobs,
 events and failures, in the same transaction and removes the blobs nothing else refers to. `--dry-run` only reports.
 Upgrading again later restores empty tree tables.
+
+## Digest allowance and stored coverage (schema version 4)
+
+Version 4 adds two tables and, like version 3, changes nothing in `runs` or `trials`, so migrating a database with
+many trials rewrites no existing row. A run with no row in either table has used no allowance and has no stored series.
+
+- `run_digest_use`: the bytes of trial digests a run holds and how many trials had their digest replaced. A run may
+  hold `ServiceConfig::digest_bytes_per_run` bytes (default `MAX_DIGEST_BYTES_PER_RUN`, 64 MiB; the value is a
+  proposal). Every read of a run decodes its digests, and a registered worker could otherwise store up to 1 MiB per
+  trial. A trial whose digest would pass the allowance is **not refused and not dropped**: the server stores the same
+  trial (sequence number, seed, verdict, counters, kept detail and output) with an empty digest marked as excluded, and
+  starts its reason with `DIGEST_CAPPED_REASON`. The trial is not rated, so it counts toward no statistic, the trial
+  list and detail show `digest_capped`, and the run finishes marked `ingest_incomplete`, so it makes no must-hit claim
+  and its headline says it ended early. A worker cannot send that reason text itself. Sending a batch again after a
+  replacement changes nothing.
+- `run_coverage`: the run's coverage series (`GET /api/runs/{id}/coverage`), worked out once when its job finishes and
+  stored with it. A read of a finished run scans no trials, in this process or after a restart. A run finished before
+  version 4, or whose stored series cannot be used, is scanned once on first read and then served from memory. A run
+  that is still open is scanned on every read.
+
+`Store::reporters_of` names the worker behind each failing seed from the seed index, reading only the seed, sequence
+number and worker columns of the matching rows. The claim gate used to page through whole trial rows for this.
+
+Opening a version 3 database adds the two tables in the same transaction as the version bump. An older release
+refuses a version 4 database; the offline downgrade above removes the two tables.
 
 ## Bundles
 
