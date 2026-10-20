@@ -7,7 +7,7 @@ stopped, by its own pre-registered rule, before the counted runs. It is the comp
 
 What you can take from it:
 
-- how to build and pin a glibc source state that no distribution ships, and prove that a test program is linked against
+- how to build and pin a glibc source state that no distribution ships, and show that a test program is linked against
   that glibc and nothing else;
 - a test workload and a stuck-state property designed not to fire falsely under Hermit's time model, with planted faults
   that check the detector fires when it should;
@@ -156,9 +156,10 @@ Nothing on this page is a statement about any distribution's own glibc package.
 
 Apart from the container pre-checks, every build and run on this page used one machine: Ubuntu 24.04.5, kernel
 6.17.0-42-generic, x86-64 (Intel Xeon E5-1410 v2), gcc 13.3.0. The workload binaries were built from
-a local commit made before this example was rebased onto the current repository history. That commit's `src/` is
-identical to this example's apart from the C SDK pin (the SDK commit it used is an ancestor of the one pinned here, and
-the SDK library source did not change between them) and one comment. This example rebuilds the workload: the macOS
+a local commit made before this example was rebased onto the current repository history. That commit's `src/` differs
+from this example's in one comment only. Outside `src/`, `PINS` names an earlier C SDK commit (an ancestor of the one
+pinned here, with unchanged SDK library source), and `scripts/pack-results.sh` (one tar flag) and
+`scripts/record-build.sh` (one comment) differ. This example rebuilds the workload: the macOS
 build with `make`, and the Linux binaries with the scripts in
 [`experiment/`](../examples/glibc-condlock/experiment). Binaries built from this example were not part of these runs,
 and builds are not byte-reproducible across rebuilds or build paths (see 5.1 and section 7); compare stripped objects,
@@ -166,8 +167,9 @@ not file hashes.
 
 ## 4. How the experiment was designed and pre-registered
 
-Each step was a separate specification with its scripts embedded and hashed. An independent review step signed each
-experiment before it ran. Each specification fixed, before any of its data existed: the commands, the seeds, the
+Each step was a separate specification with its scripts embedded and hashed. Each experiment was specified in
+writing before it ran and read by a separate reviewing agent session before launch; the reviewer was another AI agent
+run, not a human. Each specification fixed, before any of its data existed: the commands, the seeds, the
 evaluator code, the outcome table (the first rule that holds gives the outcome), the stop rules, and the sentences that
 each outcome allows. The evaluator, not a person, printed the outcome; results were copied, not re-judged. Hits were
 counted per site from each run's own report, never from a pass/fail verdict of any tool.
@@ -236,7 +238,7 @@ with 534 member lines from the arm's own `libc.a`, 8 from the SDK archive and no
 exactly `pthread_cond_wait.o`; a 60-second virtual sleep under the pinned Hermit completed in 74 to 164 ms of wall time
 on each arm (Hermit's fast-forward of an all-blocked process, which the property's design relies on). The
 same job's plain-run cell recorded hit runs on U; by its pre-registered rule this stopped the native step until the
-dedicated native experiment below was specified and signed.
+dedicated native experiment below was specified and reviewed.
 
 The planted and violation-only builds (2026-10-17, 21:15): twenty planted builds (`drop`, `leak`, `barrier`, `holdg`,
 each with k in 1, 2, 5, 20, 50) linked against arm C, and two violation-only builds (no SDK) against U and P1; rebuilt

@@ -72,7 +72,10 @@ Search for `EDIT:`. You need: the path of your Hermit binary (and, unless you re
 `HERMIT_SHA`/`HSHA`, see below), and the work directories of the build scripts. The scripts also assume they run as a
 user named `ubuntu`: the root-owned-file scans (`rootowned` in `x1b.sh`, `x1c.sh`, `x1d.sh`, `x1e.sh`, `glg.sh`:
 `find ... ! -user ubuntu`) and the leftover-process scan in `guard.sh` (`$2!="ubuntu"`) hard-code that name; replace it
-with your user. The reuse gates compare every input with
+with your user. `x1b.sh`, `x1c.sh`, `x1d.sh` and `x1e.sh` also check the workload tarball's `PINS` file with
+`grep -qx 'SDK_COMMIT=a4131e49...'` and `grep -qx 'SDK_TREE=f5d13d77...'` (for example `x1b.sh` line 176). This
+example's `PINS` names a different, later C SDK commit, so a tarball of this example fails that check (`CK-FAIL`)
+until you replace the two pinned values with the ones in your `PINS`. The reuse gates compare every input with
 the sha256 recorded in our run; with your own builds those gates will stop until you replace the pins with your own
 values. That is intended: the scripts refuse to run on inputs they were not pinned to.
 
@@ -84,19 +87,25 @@ They were not hardened for shared or production hosts. Read them first, and note
 - **Privilege.** `x1b.sh`, `x1c.sh`, `x1d.sh`, `x1e.sh` and `glg.sh` run every Hermit call as root through `sudo -n`
   (the `timeout`, `env -i` and `taskset` wrapper sits inside `sudo`, so Hermit and the guest run with root privileges).
   They also run `sudo -n /bin/true` as a gate. Everything else, including all builds, runs as the invoking user.
-  `x2.sh` and `x2_eval.py` use no `sudo` and no Hermit. Use a disposable machine or VM, not a workstation.
-- **World-writable directories.** Because root writes into places the script's user later reads, the scripts create
-  several directories with mode `1777` (`chmod 1777 $d/tmp $H/hout` and the like: Hermit's `--tmp` and
-  `--summary-json` directories, and a per-run temp directory in `glg.sh`). On a multi-user machine that exposes those
-  directories to other local users; run them under a work directory that only you can enter. Root-owned files
-  remain in those directories after a run and need `sudo` to remove.
+  `x2.sh` and `x2_eval.py` use no `sudo` and no Hermit. Use a disposable machine (a VM was not tested for Hermit
+  runs), not a workstation. `sudo -n timeout ... env ... hermit` needs a passwordless `sudo` rule that covers
+  `timeout`, which amounts to unrestricted root for that user.
+- **Fixed path under `/dev/shm`, executed as root.** In `x1b.sh`, `x1c.sh`, `x1d.sh` and `x1e.sh` the Hermit work
+  directory is hard-coded, with no `EDIT:` marker: `H=/dev/shm/x1b-glibc-$STAMP` (`x1c`, `x1d`, `x1e` likewise,
+  `STAMP` being a script argument). The scripts `mkdir -p $H`, create `$H/hout` and `$H/runs/<id>/tmp` with mode
+  `1777`, copy the guest binaries into `$H`, compare them with `cmp`, and then run them as root through `sudo -n`.
+  On a host with other users, someone could pre-create that guessable path, swap a guest binary (for example
+  `condlock-U`) after the `cmp` check and have it run as root, or plant a symlink at `hout/<id>.summary.json`. The
+  same applies to the `1777` directories of `glg.sh` (a per-run temp directory) and to the `--tmp` directories. The
+  only safe setting is a single-user, throwaway machine; do not run the Hermit steps on a shared host. Root-owned
+  files remain in those directories after a run and need `sudo` to remove.
 - **Hard-coded user name.** The root-owned-file scans (`find ... ! -user ubuntu`) and the leftover-process scan in
   `guard.sh` (`$2!="ubuntu"`) assume the user is `ubuntu`. With another user name they report your own files as
   foreign, or miss real ones. Replace the name before running (see "What you must edit before running").
 - **Deleting and killing.** The scripts delete only scratch files named inside their own work directory (for example
-  `rm -f "$t/cb.a" "$t/cb.b"`) and none runs `rm -rf`. Their paths come from variables you edit (`R`, `H`, `HERMIT`):
-  an unset or wrong value changes where files are written, and `chmod 1777`, `chmod 555` and `chmod 755` then apply
-  there. Check these variables first. The scripts never kill processes; the comments mention a manual
+  `rm -f "$t/cb.a" "$t/cb.b"`) and none runs `rm -rf`. The work directory `R` is the first argument and `HERMIT` is
+  edited in the script; `H` is fixed (see above). A wrong value changes where files are written, and `chmod 1777`,
+  `chmod 555` and `chmod 755` then apply there. Check these first. The scripts never kill processes; the comments mention a manual
   `sudo -n kill` of leftover process ids that you would do by hand after reading the listing.
 - **Reading outside the work directory.** The snapshots list `/tmp`, `/dev/shm` and `/var/crash`, hash
   `/etc/ld.so.cache` and read `/proc/mounts`, `/proc/loadavg` and process listings (`ps -eo ...args`). A process
@@ -107,8 +116,8 @@ They were not hardened for shared or production hosts. Read them first, and note
   `apt-get update` and `apt-get install` there, which needs network access. The build scripts build from inputs you
   supply (glibc source trees, GNU m4 and bison tarballs, the workload tarball), unpack them with `tar -xf`, and compare
   them with the sha256 values recorded in the scripts; none of them downloads anything. Only unpack archives you
-  built or fetched and verified yourself, because `tar -xf` writes wherever the archive's member names say, under the
-  extraction directory. Check each input hash against your own source before replacing a pin.
+  built or fetched and verified yourself, and inspect archives with `tar -tvf` before extracting; symlink members can
+  place later members outside the extraction directory. Check each input hash against your own source before replacing a pin.
 - **Resource use.** The runs pin work to particular CPU cores (`taskset`), run at `nice -n 10`, cap file size with
   `ulimit -f`, and refuse to start when the free-space, time-budget or stop-file checks say so. They are still
   long and CPU-heavy; do not run them on a machine other people depend on.

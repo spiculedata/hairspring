@@ -47,7 +47,7 @@ exit status: 0 completed, 3 property false, 4 stall, 5 harness invariant, 64 usa
 | Arm | What it is |
 | --- | --- |
 | Unmodified source line | `release/2.40` before the BZ 25847 backport. |
-| Fixed branch (control) | The same line with the BZ 25847 fix, to confirm the property stays true where the fix is present. |
+| Fixed branch (control) | The same line with the BZ 25847 fix, to check whether the property stays true where the fix is present. |
 | Positive control (assisted) | The unmodified line plus one patch hunk that adds a short delay in the signal path. This arm is assisted: the delay is placed by the person setting it up and is not part of upstream glibc. |
 
 ## Labels
@@ -61,10 +61,17 @@ exit status: 0 completed, 3 property false, 4 stall, 5 harness invariant, 64 usa
 
 ```sh
 make condlock tprobe selftest-bins   # the counted build, the T-probe, the planted and variant builds
-make test                            # unit tests, workload behaviour, classifier, T-probe, results guard
-sh scripts/run-selftests.sh all      # D-pos / D-neg / D-stall into a NEW results/m1-mac-<stamp> directory
-sh scripts/pack-results.sh results/m1-mac-<stamp>
+make test                            # macOS only: unit tests, workload behaviour, classifier, T-probe, results guard
+sh scripts/run-selftests.sh all      # macOS only: D-pos / D-neg / D-stall into a NEW results/m1-mac-<stamp> directory
+sh scripts/pack-results.sh results/m1-mac-<stamp>   # macOS only (BSD tar flags)
+make unit                            # unit tests (rule, config, report, state dump); works on macOS and Linux
 ```
+
+`make test`, `scripts/run-selftests.sh`, `scripts/pack-results.sh` and `scripts/record-build.sh` are macOS-only: they
+use `sw_vers`, `sysctl`, `shasum` and BSD `tar` flags, and `tests/test_workload.sh` expects the non-glibc library
+(`libc=none hdr=none`). `make unit` (102 checks) runs on Linux too, as does the T-probe check (`tests/test_tprobe.sh`, after `make tprobe`);
+both were run on Ubuntu 24.04. The classifier checks (`tests/test_classify.sh`) also run there, but their `real_*`
+cases need the built workload binaries. CI runs `make unit` only.
 
 The planted builds (`-DCONDLOCK_DROP_SIGNAL=k`, `-DCONDLOCK_PLANT_LEAK=k`, `-DCONDLOCK_PLANT_BARRIER=k`,
 `-DCONDLOCK_PLANT_HOLDG=k`) are separate binaries used only to test the detector; the counted binary contains no planted
@@ -82,9 +89,24 @@ only). Labels: native reference; bug known in advance; targeted workload; struct
 environment pinned; T2_instrumented (built with the protocol SDK). Two positive controls (the unmodified library plus
 one hunk that widens the race window; assisted, window_widening, library_patched) did not make the property false in
 any of the runs made under the pinned Hermit (P1: 90 runs including 30 informational; P2: 60), so the counted runs
-under Hermit were not started, and nothing is claimed about whether Hermit reaches the bug's state. glibc built with -U_FORTIFY_SOURCE added to CFLAGS (upstream's default no-fortify build; same effect as upstream fix 127cefd, BZ 31928), Ubuntu gcc 13.3.0 defaults otherwise.
-These results were produced from a pre-rebase local commit whose `src/` is identical to this example's apart from the
-SDK pin and one comment; this example rebuilds the workload, with the Linux binaries from the scripts in
-[`experiment/`](experiment). Builds are not byte-reproducible across rebuilds or build paths, so compare stripped
-objects, not file hashes. `BUILD-RECORD` and `BUILD-RECORD-fix1` name the commit the macOS binaries were built from
-before squashing.
+under Hermit were not started, and nothing is claimed about whether Hermit reaches the bug's state.
+glibc built with -U_FORTIFY_SOURCE added to CFLAGS (upstream's default no-fortify build; same effect as upstream fix
+127cefd, BZ 31928), Ubuntu gcc 13.3.0 defaults otherwise.
+
+These results were produced from a pre-rebase local commit. That commit's `src/` differs from this example's in one
+comment only. Outside `src/`, `PINS` names an earlier C SDK commit (an ancestor of the one pinned here, with unchanged
+SDK library source), and `scripts/pack-results.sh` (one tar flag) and `scripts/record-build.sh` (one comment) differ.
+This example rebuilds the workload, with the Linux binaries from the scripts in [`experiment/`](experiment). Builds are
+not byte-reproducible across rebuilds or build paths, so compare stripped objects, not file hashes. `BUILD-RECORD` and
+`BUILD-RECORD-fix1` name the commit the macOS binaries were built from before squashing (commits that are not in this
+repository's history).
+
+## Known limitations of the example
+
+- The watchdog ends the process with `hs_exit` while worker threads may still be running, so the exit path can race
+  with them (`src/cl_watchdog.c`, `src/main.c`).
+- The state dump in `src/cl_condraw.c` reads the glibc condition-variable internals with plain loads, not atomic ones,
+  so a dump taken while the variable is changing can be inconsistent; it is a description, not part of the property.
+- The worker count is capped at 16 (`-n`, `src/cl_config.c`).
+- `make test`, `scripts/run-selftests.sh` and `scripts/record-build.sh` are macOS-only (see above), and the Makefile
+  does not rebuild the C SDK library when the SDK sources change; run `make clean` first.
