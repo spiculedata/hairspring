@@ -175,6 +175,29 @@ A trial that timed out is inconclusive: the report of a killed process decides n
 finding and is not recorded in the bundle; the run counts it in `trials_inconclusive_with_failures` and the report says
 "seen in an inconclusive trial".
 
+## The run-level rate and claim text
+
+The report of a run (`hairspring test`, `hairspring show`) states how many runs hit, out of how many were rated, and
+nothing else about them. The figures and the wording are computed from counts and recorded labels by two pure
+modules in `hairspring-props`, `run_rate` and `run_claim`, so another front end can print the same lines.
+
+* A rate is always `k/n rated` with its Wilson 95% interval. A bare percentage is never printed.
+* The denominator is the rated runs. Inconclusive runs (timeouts and unusable events) and crashed runs are listed on a
+  `not rated:` line, are never in the denominator and are never described as passes.
+* If every non-rated run had been a hit, the rate would be `(k + x)/(n + x)`. The report prints that as a
+  `sensitivity:` line with its own interval, so a reader can see how much the excluded runs could change the figure.
+* With nothing rated the report says `0/0 rated` and that there is no rate. It never says 0%.
+* Zero hits also print the exact one-sided 95% upper bound, and the rule of three from 30 rated runs, where it is close.
+* A run that stopped at its first hit prints its counts and "not a rate": the stop decided how many runs it made.
+* The words are "hit runs" and "observed". The report does not say "found", "discovered", "unassisted" or "bug rate".
+
+Claim text follows the same rule: it is generated from the recorded label (build record, declared knowledge flags,
+seed selection) and the counts, never from free text. `chips:` shows the tier, seed selection and every declared flag
+beside the claim. A label with no declared knowledge list makes no claim and says so, a hit seen in one run is a
+candidate with the `single_run` caveat and no sentence, and the strongest phrase is "unmodified binary, blind seeds"
+followed by the configuration note. The word "unassisted" is never generated, because it cannot be derived from the
+recorded fields. A declared `window_widening` forces the `assisted` tier.
+
 ## Versioning and unknowns
 
 `v` is a major version. A line with `v` greater than 1 is counted and ignored. Within v1, unknown kinds and unknown
