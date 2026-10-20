@@ -23,7 +23,8 @@ This directory is a worked example, not a library. Nothing in it is published as
   is a `Scan` that returned a row other than its own. Six other
   sites are coverage markers or harness invariants; only the property decides the outcome.
 - **A Go shim for the guest event protocol** (`internal/hs`) that reports the sites on standard error as described
-  in `docs/guest-protocol.md`. It is an example-internal package.
+  in `docs/guest-protocol.md`. It is an example-internal package. The maintained Go SDK, derived from it, is in
+  [`sdks/go`](../../sdks/go); this copy is kept unchanged because the recorded binaries below were built from it.
 
 The program prints one fixed-width summary line on standard output and exits `0` whatever the property result,
 `3` if a harness invariant failed, and `64` on a usage error. The property result is carried by the protocol report.
