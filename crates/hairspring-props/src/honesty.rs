@@ -62,7 +62,7 @@ pub fn rate_cell(stat: &PropertyStat, stopped_at_first_failure: bool) -> RateCel
     }
 }
 
-fn pct(x: f64) -> String {
+pub(crate) fn pct(x: f64) -> String {
     format!("{:.2}%", x.clamp(0.0, 1.0) * 100.0)
 }
 

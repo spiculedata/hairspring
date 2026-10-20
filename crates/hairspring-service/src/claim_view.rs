@@ -5,9 +5,7 @@
 //! it. Whatever fails is listed in `withheld`; the figures themselves are still shown, labelled.
 use crate::claims::{claim_gate, FailureEvidence};
 use crate::{Result, RunCompletion, Service};
-use hairspring_props::claim_text::{
-    generate, BuildRecord, FindingState, Label, SeedSelection, Subject,
-};
+use hairspring_props::claim_text::{generate, FindingState, Label, Subject};
 use hairspring_props::{PropertyStat, PropertyStatus};
 use hairspring_store::RunRecord;
 use serde::Serialize;
@@ -27,18 +25,6 @@ pub struct ClaimView {
     pub caveats: Vec<&'static str>,
     /// Why there is no sentence, in words fit for a results page.
     pub withheld: Vec<String>,
-}
-
-/// The label of a run that never declared one.
-fn undeclared() -> Label {
-    Label {
-        build: BuildRecord {
-            instrumented: false,
-            behaviour_changes: false,
-        },
-        knowledge: None,
-        seed_selection: SeedSelection::Blind,
-    }
 }
 
 fn completion_reason(c: &RunCompletion) -> Option<String> {
@@ -108,7 +94,7 @@ impl Service {
         let trusted_workers = self.list_workers()?.iter().filter(|w| w.trusted).count();
         let gate = claim_gate(&trust.workers, &evidence, trusted_workers);
 
-        let fallback = undeclared();
+        let fallback = Label::undeclared();
         let label = label.unwrap_or(&fallback);
         let mut chips = label.chips();
         if !gate.allowed && !trust.workers.is_empty() {

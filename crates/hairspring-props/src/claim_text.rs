@@ -129,6 +129,18 @@ impl Label {
         }
     }
 
+    /// The label of an arm that never declared its knowledge: it makes no claim.
+    pub fn undeclared() -> Label {
+        Label {
+            build: BuildRecord {
+                instrumented: false,
+                behaviour_changes: false,
+            },
+            knowledge: None,
+            seed_selection: SeedSelection::Blind,
+        }
+    }
+
     pub fn declared(&self) -> bool {
         self.knowledge.is_some()
     }
@@ -183,6 +195,8 @@ pub enum Subject {
     NoFailure { rated: u64 },
     /// A property failed in `seed`.
     Failure { seed: u64, state: FindingState },
+    /// A hit seen in the one run that is being reported, with no replay: a candidate, never a claim.
+    SingleRunHit,
 }
 
 /// A claim sentence, if one may be made, and the reasons it was not.
@@ -203,10 +217,11 @@ pub fn generate(label: &Label, subject: &Subject) -> ClaimOutput {
     let mut out = ClaimOutput::default();
     if matches!(
         subject,
-        Subject::Failure {
-            state: FindingState::SingleRun,
-            ..
-        }
+        Subject::SingleRunHit
+            | Subject::Failure {
+                state: FindingState::SingleRun,
+                ..
+            }
     ) {
         out.caveats.push("single_run");
         out.withheld.push(SINGLE_RUN);
@@ -223,6 +238,8 @@ pub fn generate(label: &Label, subject: &Subject) -> ClaimOutput {
     let how = label.how();
     let note = label.knowledge_note();
     out.text = Some(match *subject {
+        // Already withheld above; there is never a sentence for a candidate.
+        Subject::SingleRunHit => return out,
         Subject::NoFailure { rated } => format!(
             "No trial failed a property in {}; {}; {how}; {note}.",
             plural(rated, "rated trial", "rated trials"),

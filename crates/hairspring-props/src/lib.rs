@@ -16,6 +16,8 @@ pub mod line;
 pub mod record;
 pub mod remap;
 pub mod run;
+pub mod run_claim;
+pub mod run_rate;
 pub mod stats;
 pub mod subtree;
 pub mod tally;
