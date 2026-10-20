@@ -9,6 +9,7 @@ use hairspring_engine::engine::{Engine, RunRequest};
 use hairspring_engine::erased::Registry;
 use hairspring_engine::report::{ReplayOutcome, RunStatus};
 use hairspring_engine::scheduler::SchedulerSpec;
+use hairspring_engine::EngineError;
 use hairspring_hermit::host_identity::HostSources;
 use hairspring_hermit::{HermitBackend, HermitSettings};
 use std::collections::BTreeMap;
@@ -40,6 +41,10 @@ fn fake_host(name: &str) -> PathBuf {
 }
 
 fn engine(host: &Path, fake_body: &str, script: &str) -> Engine {
+    engine_at(host, write_fake(&scratch("bin"), fake_body), script)
+}
+
+fn engine_at(host: &Path, bin: PathBuf, script: &str) -> Engine {
     let spec = TargetSpec {
         name: "svc".into(),
         description: String::new(),
@@ -60,7 +65,7 @@ fn engine(host: &Path, fake_body: &str, script: &str) -> Engine {
         },
     };
     let settings = HermitSettings {
-        bin: write_fake(&scratch("bin"), fake_body),
+        bin,
         trial_timeout: Duration::from_secs(10),
         summary_dir: None,
         ..HermitSettings::default()
@@ -93,9 +98,9 @@ fn a_new_bundle_is_v3_and_names_the_environment() {
     let bundle = record(&host);
     let text = bundle.encode();
     assert!(text.starts_with("hairspring-bundle v3\n"), "{text}");
-    let id = EnvironmentIdentity::from_bundle(&bundle).unwrap().unwrap();
+    let id = EnvironmentIdentity::from_bundle(&bundle).identity.unwrap();
     assert_eq!(id.get("host.kernel_release"), Some("6.8.0-45-generic"));
-    assert_eq!(id.get("env.base_env"), Some("minimal"));
+    assert_eq!(id.get("env.base_env"), Some("default"));
     assert!(id.get("host.loader.ld_so_cache.sha256").is_some());
     assert!(id.get("hermit.path.sha256").is_some());
 }
@@ -112,7 +117,7 @@ fn the_hermit_version_is_recorded_when_it_answers_and_skipped_when_it_hangs() {
             .run(&RunRequest::new("svc", 1), &mut |_| true)
             .unwrap();
         let bundle = Bundle::decode(&out.failure.unwrap().bundle).unwrap();
-        EnvironmentIdentity::from_bundle(&bundle).unwrap().unwrap()
+        EnvironmentIdentity::from_bundle(&bundle).identity.unwrap()
     };
     assert_eq!(run(&answering).get("hermit.version"), Some("hermit 9.9.9"));
     let hanging = format!(
@@ -231,6 +236,8 @@ fn a_miss_on_a_changed_host_is_reported_differently_from_a_miss_on_the_same_host
     put(&host, "proc/sys/kernel/osrelease", "6.9.1\n");
     let changed = engine(&host, PASSTHROUGH, PASSES).replay(&bundle).unwrap();
     assert!(!changed.reproduced);
+    assert!(!unchanged.environment_changed);
+    assert!(changed.environment_changed);
     assert!(has_warning(&changed, "environment differs"));
     assert!(
         changed
@@ -240,4 +247,144 @@ fn a_miss_on_a_changed_host_is_reported_differently_from_a_miss_on_the_same_host
         "{:?}",
         changed.steps
     );
+}
+
+fn changed_loader(host: &Path) {
+    put(host, "etc/ld.so.cache", "cache-two");
+}
+
+#[test]
+fn the_loader_refusal_is_its_own_error_kind() {
+    let host = fake_host("kind");
+    let bundle = record(&host);
+    changed_loader(&host);
+    let err = engine(&host, PASSTHROUGH, FAILS)
+        .replay(&bundle)
+        .unwrap_err();
+    assert!(
+        matches!(err, EngineError::EnvironmentMismatch(_)),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn a_hostile_bundle_with_thousands_of_params_gets_a_short_refusal() {
+    let host = fake_host("hostile");
+    let bundle = (0..5000).fold(record(&host), |b, i| {
+        b.with_param(format!("host.field_{i}"), "x".repeat(200))
+    });
+    changed_loader(&host);
+    let err = engine(&host, PASSTHROUGH, FAILS)
+        .replay(&bundle)
+        .unwrap_err();
+    assert!(
+        matches!(err, EngineError::EnvironmentMismatch(_)),
+        "{err:?}"
+    );
+    assert!(err.to_string().len() < 1000, "{}", err.to_string().len());
+}
+
+#[test]
+fn a_malformed_field_does_not_switch_off_the_loader_refusal() {
+    let host = fake_host("malformed");
+    let bundle = record(&host).with_param("host.container", "bad\nvalue");
+    changed_loader(&host);
+    let e = engine(&host, PASSTHROUGH, FAILS);
+    assert!(matches!(
+        e.replay(&bundle).unwrap_err(),
+        EngineError::EnvironmentMismatch(_)
+    ));
+    let opts = ReplayOptions {
+        allow_environment_change: true,
+    };
+    let r = e.replay_with(&bundle, opts).unwrap();
+    assert!(has_warning(&r, "malformed"), "{:?}", r.warnings);
+    assert!(has_warning(&r, "host.loader.ld_so_cache.sha256"));
+}
+
+#[test]
+fn a_different_base_env_mode_is_reported_by_field_name() {
+    let host = fake_host("baseenv");
+    let bundle = record(&host).with_param("env.base_env", "host");
+    let r = engine(&host, PASSTHROUGH, FAILS).replay(&bundle).unwrap();
+    assert!(
+        has_warning(&r, "env.base_env (recorded host, now default)"),
+        "{:?}",
+        r.warnings
+    );
+}
+
+fn fake_with_prelude(prelude: &str) -> String {
+    format!(
+        "#!/bin/sh\n{prelude}\n{}",
+        PASSTHROUGH.trim_start_matches("#!/bin/sh\n")
+    )
+}
+
+fn version_of(bundle: &Bundle) -> Option<String> {
+    EnvironmentIdentity::from_bundle(bundle)
+        .identity
+        .and_then(|id| id.get("hermit.version").map(str::to_string))
+}
+
+fn run_failing(e: &Engine) -> Bundle {
+    let out = e.run(&RunRequest::new("svc", 1), &mut |_| true).unwrap();
+    Bundle::decode(&out.failure.unwrap().bundle).unwrap()
+}
+
+#[test]
+fn an_in_place_hermit_upgrade_does_not_record_the_old_version() {
+    let host = fake_host("upgrade");
+    let bin = write_fake(
+        &scratch("upgrade-bin"),
+        &fake_with_prelude("[ \"$1\" = \"--version\" ] && { echo 'hermit 1.0.0'; exit 0; }"),
+    );
+    let e = engine_at(&host, bin.clone(), FAILS);
+    assert_eq!(
+        version_of(&run_failing(&e)).as_deref(),
+        Some("hermit 1.0.0")
+    );
+    write_fake(
+        bin.parent().unwrap(),
+        &fake_with_prelude("[ \"$1\" = \"--version\" ] && { echo 'hermit 2.0.0'; exit 0; }"),
+    );
+    assert_eq!(
+        version_of(&run_failing(&e)).as_deref(),
+        Some("hermit 2.0.0")
+    );
+}
+
+#[test]
+fn a_version_that_stops_answering_is_unavailable_not_changed() {
+    let host = fake_host("unavailable");
+    let flag = scratch("flag").join("hang");
+    let fake = fake_with_prelude(&format!(
+        "[ \"$1\" = \"--version\" ] && {{ [ -f {} ] && sleep 30; echo 'hermit 9.9.9'; exit 0; }}",
+        flag.display()
+    ));
+    let bundle = run_failing(&engine(&host, &fake, FAILS));
+    assert_eq!(version_of(&bundle).as_deref(), Some("hermit 9.9.9"));
+    std::fs::write(&flag, "").unwrap();
+    let r = engine(&host, &fake, FAILS).replay(&bundle).unwrap();
+    assert!(
+        has_warning(
+            &r,
+            "hermit.version (recorded hermit 9.9.9, now unavailable)"
+        ),
+        "{:?}",
+        r.warnings
+    );
+}
+
+#[test]
+fn the_identity_is_taken_when_the_run_starts_not_after_the_reruns() {
+    let host = fake_host("timing");
+    let kernel = host.join("proc/sys/kernel/osrelease");
+    let fake = fake_with_prelude(&format!(
+        "[ \"$1\" = run ] && echo 6.9.9 > {}",
+        kernel.display()
+    ));
+    let bundle = run_failing(&engine(&host, &fake, FAILS));
+    let id = EnvironmentIdentity::from_bundle(&bundle).identity.unwrap();
+    assert_eq!(id.get("host.kernel_release"), Some("6.8.0-45-generic"));
 }

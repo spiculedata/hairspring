@@ -3,27 +3,55 @@
 //! Every field is a hash or a short identifier. No host name, user name or absolute path is recorded: files are named
 //! by what they are (`host.loader.libc`), never by where they were found. A source the host does not offer is left
 //! out, so replay reports it as unavailable instead of comparing against an invented value.
-use hairspring_core::environment::{sha256_file, EnvironmentIdentity};
+use hairspring_core::environment::{
+    is_unsafe_display_char, sha256_file, EnvironmentIdentity, MAX_FIELD_VALUE_CHARS,
+};
 use hairspring_core::point::encoding::sha256_hex;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-const BASE_ENV: &str = "minimal";
-const LIBC_CANDIDATES: [&str; 5] = [
+const LIBC_CANDIDATES: [&str; 9] = [
     "lib/x86_64-linux-gnu/libc.so.6",
     "usr/lib/x86_64-linux-gnu/libc.so.6",
+    "lib/aarch64-linux-gnu/libc.so.6",
+    "usr/lib/aarch64-linux-gnu/libc.so.6",
     "lib64/libc.so.6",
     "usr/lib64/libc.so.6",
     "lib/libc.so.6",
+    "lib/libc.musl-x86_64.so.1",
+    "lib/libc.musl-aarch64.so.1",
 ];
-const LD_SO_CANDIDATES: [&str; 4] = [
+const LD_SO_CANDIDATES: [&str; 9] = [
     "lib64/ld-linux-x86-64.so.2",
     "lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
     "usr/lib64/ld-linux-x86-64.so.2",
     "lib/ld-linux-x86-64.so.2",
+    "lib/ld-linux-aarch64.so.1",
+    "lib/aarch64-linux-gnu/ld-linux-aarch64.so.1",
+    "usr/lib/ld-linux-aarch64.so.1",
+    "lib/ld-musl-x86_64.so.1",
+    "lib/ld-musl-aarch64.so.1",
 ];
 const CONTAINER_MARKERS: [(&str, &str); 2] =
     [(".dockerenv", "docker"), ("run/.containerenv", "podman")];
+/// Said when `/etc/ld.so.preload` does not exist, so "no preload" is a recorded value rather than a gap.
+const ABSENT: &str = "absent";
+/// What the record says when Hermit's own default decides the base environment, and when the flag cannot be read.
+const BASE_ENV_DEFAULT: &str = "default";
+const BASE_ENV_UNKNOWN: &str = "unknown";
+const BASE_ENV_MODES: [&str; 3] = ["minimal", "host", "empty"];
+const BASE_ENV_FLAG: &str = "--base-env";
+/// Variables whose values are recorded (as one hash). Anything else may be a secret, and a hash of a short secret can
+/// be guessed offline, so other variables contribute their name only.
+const ALLOWLISTED_VARS: [&str; 6] = [
+    "PATH",
+    "LANG",
+    "LANGUAGE",
+    "TZ",
+    "PYTHONDONTWRITEBYTECODE",
+    "PYTHONHASHSEED",
+];
+const ALLOWLISTED_PREFIXES: [&str; 1] = ["LC_"];
 
 /// Where each host fact is read from. [`HostSources::system`] is the running machine; tests root it in a temp directory.
 #[derive(Clone, Debug)]
@@ -31,6 +59,7 @@ pub struct HostSources {
     osrelease: PathBuf,
     cpuinfo: PathBuf,
     ld_so_cache: PathBuf,
+    ld_so_preload: PathBuf,
     libc: Vec<PathBuf>,
     ld_so: Vec<PathBuf>,
     container_markers: Vec<(PathBuf, &'static str)>,
@@ -47,6 +76,7 @@ impl HostSources {
             osrelease: root.join("proc/sys/kernel/osrelease"),
             cpuinfo: root.join("proc/cpuinfo"),
             ld_so_cache: root.join("etc/ld.so.cache"),
+            ld_so_preload: root.join("etc/ld.so.preload"),
             libc: LIBC_CANDIDATES.iter().map(under).collect(),
             ld_so: LD_SO_CANDIDATES.iter().map(under).collect(),
             container_markers: CONTAINER_MARKERS
@@ -57,20 +87,30 @@ impl HostSources {
     }
 }
 
-/// What the target runs: the command, where it starts, and the environment the guest is given (already built).
+/// What is known about the Hermit executable: the hash of its contents and what `--version` said, each if available.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HermitIdentity {
+    pub sha256: Option<String>,
+    pub version: Option<String>,
+}
+
+/// What the target runs: the command, where it starts, the environment the guest is given (already built), the names
+/// of the extra variables the Hermit process itself is given, and the extra Hermit arguments.
 pub struct GuestInputs<'a> {
     pub command: &'a [String],
     pub cwd: Option<&'a str>,
     pub env: &'a BTreeMap<String, String>,
+    pub extra_env_names: &'a [String],
+    pub hermit_args: &'a [String],
 }
 
-/// The identity of the host and the run's inputs. `hermit_version` is whatever `hermit --version` said, if anything.
+/// The identity of the host and the run's inputs.
 pub fn collect(
     sources: &HostSources,
-    hermit_bin: &Path,
-    hermit_version: Option<&str>,
+    hermit: &HermitIdentity,
     guest: &GuestInputs,
 ) -> EnvironmentIdentity {
+    let names = guest_names(guest);
     let fields: Vec<(&str, Option<String>)> = vec![
         ("host.kernel_release", read_trimmed(&sources.osrelease)),
         ("host.cpu_model", cpu_field(&sources.cpuinfo, "model name")),
@@ -81,11 +121,20 @@ pub fn collect(
         ),
         ("host.loader.libc.sha256", first_hash(&sources.libc)),
         ("host.loader.ld_so.sha256", first_hash(&sources.ld_so)),
+        (
+            "host.loader.ld_so_preload.sha256",
+            Some(hash_of(&sources.ld_so_preload).unwrap_or_else(|| ABSENT.to_string())),
+        ),
         ("host.container", Some(container(sources))),
-        ("hermit.path.sha256", hash_of(hermit_bin)),
-        ("hermit.version", hermit_version.map(str::to_string)),
-        ("env.base_env", Some(BASE_ENV.to_string())),
-        ("env.guest.sha256", Some(guest_env_hash(guest.env))),
+        ("hermit.path.sha256", hermit.sha256.clone()),
+        ("hermit.version", hermit.version.clone()),
+        ("env.base_env", Some(base_env_mode(guest.hermit_args))),
+        ("env.guest.names", names.listed()),
+        ("env.guest.names.sha256", names.fallback_hash()),
+        (
+            "env.guest.allowlisted.sha256",
+            Some(allowlisted_hash(guest.env)),
+        ),
         ("target.exe.sha256", target_hash(guest)),
     ];
     fields
@@ -138,28 +187,98 @@ fn container(sources: &HostSources) -> String {
         .to_string()
 }
 
-/// A hash of `KEY=VALUE` lines in order. Only the hash is kept: configured values may be secrets.
-fn guest_env_hash(env: &BTreeMap<String, String>) -> String {
-    let text: String = env.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
+/// The sorted names of every variable the guest can see, or a hash of them when the list is too long to record.
+struct GuestNames(String);
+
+impl GuestNames {
+    fn fits(&self) -> bool {
+        self.0.chars().count() <= MAX_FIELD_VALUE_CHARS
+            && !self.0.chars().any(is_unsafe_display_char)
+    }
+
+    fn listed(&self) -> Option<String> {
+        self.fits().then(|| self.0.clone())
+    }
+
+    fn fallback_hash(&self) -> Option<String> {
+        (!self.fits()).then(|| sha256_hex(self.0.as_bytes()))
+    }
+}
+
+fn guest_names(guest: &GuestInputs) -> GuestNames {
+    let mut names: Vec<&str> = guest
+        .env
+        .keys()
+        .map(String::as_str)
+        .chain(guest.extra_env_names.iter().map(String::as_str))
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    GuestNames(names.join(","))
+}
+
+fn is_allowlisted(name: &str) -> bool {
+    ALLOWLISTED_VARS.contains(&name) || ALLOWLISTED_PREFIXES.iter().any(|p| name.starts_with(p))
+}
+
+/// A hash of `NAME=value` lines for the allowlisted variables only.
+fn allowlisted_hash(env: &BTreeMap<String, String>) -> String {
+    let text: String = env
+        .iter()
+        .filter(|(name, _)| is_allowlisted(name))
+        .map(|(k, v)| format!("{k}={v}\n"))
+        .collect();
     sha256_hex(text.as_bytes())
 }
 
+/// The base-environment mode Hermit was asked for. With no flag Hermit's own default decides, which this cannot
+/// see; a flag with a value we do not know, or none, fails closed to `unknown`.
+fn base_env_mode(args: &[String]) -> String {
+    let mut mode = BASE_ENV_DEFAULT.to_string();
+    let mut i = 0;
+    while i < args.len() {
+        let value = if args[i] == BASE_ENV_FLAG {
+            i += 1;
+            Some(args.get(i).map(String::as_str))
+        } else {
+            args[i]
+                .strip_prefix(BASE_ENV_FLAG)
+                .and_then(|rest| rest.strip_prefix('='))
+                .map(Some)
+        };
+        if let Some(value) = value {
+            mode = match value {
+                Some(v) if BASE_ENV_MODES.contains(&v) => v.to_string(),
+                _ => BASE_ENV_UNKNOWN.to_string(),
+            };
+        }
+        i += 1;
+    }
+    mode
+}
+
+fn is_regular_file(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.is_file())
+}
+
 /// The program the guest starts, found as the guest would: a path is taken as given (relative to the working
-/// directory), a bare name is looked up on the guest's pinned `PATH`.
+/// directory), a bare name is looked up on the guest's pinned `PATH`. Only a regular file is hashed, so a device or a
+/// FIFO named as the command is never opened.
 fn target_hash(guest: &GuestInputs) -> Option<String> {
     let program = guest.command.first()?;
-    if program.contains('/') {
+    let found = if program.contains('/') {
         let path = Path::new(program);
-        let full = match (path.is_absolute(), guest.cwd) {
+        match (path.is_absolute(), guest.cwd) {
             (false, Some(cwd)) => Path::new(cwd).join(path),
             _ => path.to_path_buf(),
-        };
-        return hash_of(&full);
-    }
-    let search = guest.env.get("PATH")?;
-    search
-        .split(':')
-        .map(|dir| Path::new(dir).join(program))
-        .find(|candidate| candidate.is_file())
-        .and_then(|found| hash_of(&found))
+        }
+    } else {
+        guest
+            .env
+            .get("PATH")?
+            .split(':')
+            .map(|dir| Path::new(dir).join(program))
+            .find(|candidate| is_regular_file(candidate))?
+    };
+    is_regular_file(&found).then(|| hash_of(&found)).flatten()
 }

@@ -28,8 +28,19 @@ fn bounded(text: &str, max: usize, field: &str) -> Result<(), ServiceError> {
 /// Single-line text: every control character (including newlines) becomes a space.
 fn single_line(text: &str) -> String {
     text.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .map(|c| {
+            if hairspring_core::environment::is_unsafe_display_char(c) {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect()
+}
+
+/// An error message that is safe to show a caller: one line, no control or bidirectional characters, cut to size.
+pub fn public_text(text: &str) -> String {
+    single_line(text).chars().take(MAX_MESSAGE_CHARS).collect()
 }
 
 /// Multi-line text: newlines and tabs survive, other control characters become spaces.
@@ -75,6 +86,7 @@ pub fn replay_steps(out: ReplayOutcome) -> ReplayOutcome {
         reproduced: out.reproduced,
         steps,
         warnings,
+        environment_changed: out.environment_changed,
     }
 }
 

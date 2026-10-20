@@ -15,6 +15,7 @@
 mod backend;
 mod capture;
 mod env;
+mod environment_probe;
 mod events;
 mod exec;
 mod head_tail;

@@ -26,33 +26,26 @@ fn loader_changed(comparison: &EnvironmentComparison) -> bool {
     }
 }
 
-/// Compares the bundle's recorded environment with `current`. Refuses (as infrastructure, not a verdict) when the
-/// loader changed, unless `allow_change` is set; every other difference is reported and the replay goes ahead.
+/// Compares the bundle's recorded environment with `current`. Each recorded field is read on its own, so one malformed
+/// field is reported and the rest still count. Refuses (as an environment mismatch, not a verdict) when the loader
+/// changed, unless `allow_change` is set; every other difference is reported and the replay goes ahead.
 pub fn check(
     bundle: &Bundle,
     current: &EnvironmentIdentity,
     allow_change: bool,
 ) -> Result<EnvironmentCheck, EngineError> {
-    let recorded = match EnvironmentIdentity::from_bundle(bundle) {
-        Ok(recorded) => recorded,
-        Err(e) => {
-            return Ok(EnvironmentCheck {
-                warnings: vec![format!(
-                    "the recorded environment is malformed ({e}); it was not compared"
-                )],
-                differs: false,
-            })
-        }
-    };
-    let comparison = compare(recorded.as_ref(), current);
+    let parsed = EnvironmentIdentity::from_bundle(bundle);
+    let comparison = compare(parsed.identity.as_ref(), current);
+    let mut warnings: Vec<String> = parsed.warning().into_iter().collect();
     if loader_changed(&comparison) && !allow_change {
         let detail = comparison.warning().unwrap_or_default();
-        return Err(EngineError::Backend(format!(
-            "{detail}; the dynamic loader changed since the bundle was recorded, so its schedule may not reproduce. Replay refused: pass --allow-environment-change to replay anyway"
+        return Err(EngineError::EnvironmentMismatch(format!(
+            "replay refused, the dynamic loader changed since the bundle was recorded and its schedule may not reproduce (pass --allow-environment-change on the CLI, or allow_environment_change in the API, to replay anyway); {detail}"
         )));
     }
+    warnings.extend(comparison.warning());
     Ok(EnvironmentCheck {
-        warnings: comparison.warning().into_iter().collect(),
+        warnings,
         differs: comparison.differs(),
     })
 }

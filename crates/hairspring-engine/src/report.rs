@@ -212,6 +212,10 @@ pub struct ReplayOutcome {
     /// the one the bundle was recorded on. Absent in older stored replays.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// True when the host differs from the recording in a recorded field. A replay that did not reproduce the failure
+    /// on such a host is inconclusive: it does not show the bug is fixed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub environment_changed: bool,
 }
 
 impl ReplayOutcome {
@@ -220,6 +224,14 @@ impl ReplayOutcome {
             reproduced,
             steps,
             warnings: Vec::new(),
+            environment_changed: false,
+        }
+    }
+
+    pub fn with_environment_changed(self, environment_changed: bool) -> Self {
+        ReplayOutcome {
+            environment_changed,
+            ..self
         }
     }
 
