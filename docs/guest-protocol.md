@@ -177,24 +177,37 @@ finding and is not recorded in the bundle; the run counts it in `trials_inconclu
 
 ## The run-level rate and claim text
 
-The report of a run (`hairspring test`, `hairspring show`) states how many runs hit, out of how many were rated, and
-nothing else about them. The figures and the wording are computed from counts and recorded labels by two pure
-modules in `hairspring-props`, `run_rate` and `run_claim`, so another front end can print the same lines.
+The report of a run (`hairspring test`, `hairspring show`) states how many trials hit, out of how many were rated.
+One job runs many trials, and a hit is a trial in which a property failed. The figures and the wording are computed
+from counts and recorded labels by two pure modules in `hairspring-props`, `run_rate` and `run_claim`, so another
+front end can print the same lines.
 
-* A rate is always `k/n rated` with its Wilson 95% interval. A bare percentage is never printed.
-* The denominator is the rated runs. Inconclusive runs (timeouts and unusable events) and crashed runs are listed on a
-  `not rated:` line, are never in the denominator and are never described as passes.
-* If every non-rated run had been a hit, the rate would be `(k + x)/(n + x)`. The report prints that as a
-  `sensitivity:` line with its own interval, so a reader can see how much the excluded runs could change the figure.
-* With nothing rated the report says `0/0 rated` and that there is no rate. It never says 0%.
-* Zero hits also print the exact one-sided 95% upper bound, and the rule of three from 30 rated runs, where it is close.
-* A run that stopped at its first hit prints its counts and "not a rate": the stop decided how many runs it made.
-* The words are "hit runs" and "observed". The report does not say "found", "discovered", "unassisted" or "bug rate".
+* A rate is always `k/n rated trials` with its Wilson 95% interval. A bare percentage is never printed.
+* The denominator is the rated trials. Inconclusive trials (timeouts and unusable events) and crashed trials are
+  listed on a `not rated trials:` line, are never in the denominator and are never described as passes. The CLI reads
+  only the inconclusive count from a stored outcome; the crashed count is zero there, because a host or Hermit failure
+  ends the run as an error. Starved and infrastructure trials do not have columns of their own yet.
+* If every non-rated trial had been a hit, the rate would be `(k + x)/(n + x)`. The report prints that as a
+  `sensitivity:` line with its own interval. It is left out when nothing was rated, because it would only say that
+  all of them hit.
+* With nothing rated the report says `0/0 rated trials` and that there is no rate. It never says 0%. A run in which
+  every trial was inconclusive ends as an error and still shows this.
+* Zero hits print one bound: the exact one-sided 95% upper bound, with the rule of three (about 3/N) as a note from 30
+  rated trials, where it is close. Below that the exact bound alone is shown, because 3/N overshoots. The two-sided
+  Wilson interval is shown only when there is at least one hit.
+* Upper bounds are rounded up and lower bounds down; a figure below 0.01% is written `<0.01%`.
+* A run that stopped at its first hit prints its counts and "not a rate": the stop decided how many trials it ran.
+  A failed run is treated this way even if an older stored record lacks the stopped flag.
+* If a stored inconclusive count is larger than the trial count, it is capped and a `note:` line says so.
+* Not done: failures per core-hour with a Garwood interval, the exact rate-ratio test for comparing two builds, pooling
+  within an arm, and the "uncalibrated" label for a zero from an arm with no positive control.
+* The words are "hits" and "observed". The report does not say "found", "discovered", "unassisted" or "bug rate".
 
 Claim text follows the same rule: it is generated from the recorded label (build record, declared knowledge flags,
 seed selection) and the counts, never from free text. `chips:` shows the tier, seed selection and every declared flag
-beside the claim. A label with no declared knowledge list makes no claim and says so, a hit seen in one run is a
-candidate with the `single_run` caveat and no sentence, and the strongest phrase is "unmodified binary, blind seeds"
+beside the claim. When trials were left out of the count, the sentence says how many were not rated. A label with no
+declared knowledge list makes no claim and says so, a hit with no confirming replay is a candidate with the
+`single_run` caveat and no sentence, and the strongest phrase is "unmodified binary, blind seeds"
 followed by the configuration note. The word "unassisted" is never generated, because it cannot be derived from the
 recorded fields. A declared `window_widening` forces the `assisted` tier.
 
