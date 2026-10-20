@@ -57,6 +57,44 @@ Cause (verified from Hermit's debug log): Hermit virtualises file timestamps, so
 Hermit backend therefore starts guests from a minimal pinned environment and freezes bytecode caches. Idle
 time, CPU load and drop-caches did not matter (110/110 runs identical across gaps up to 90 s).
 
+### Recorded environment
+
+The measurements above mean a recorded schedule depends on more than the seed and the Hermit flags. Two cases
+seen in practice: a package install regenerated `/etc/ld.so.cache`, and the same seed then ran a different number
+of loader branches before opening libc, so old recordings stopped replaying; and with a host-derived environment the
+launch environment changed the schedule. Without a record, a bundle that fails to reproduce looks like
+nondeterminism.
+
+A Hermit bundle therefore records these fields (as `param.<name>` lines, which makes it a v3 bundle):
+
+| Field | What it is | Safe to publish |
+|---|---|---|
+| `host.kernel_release` | `uname -r` | yes |
+| `host.cpu_model` | first `model name` in `/proc/cpuinfo` | yes |
+| `host.cpu_flags.sha256` | hash of the sorted CPU feature list | yes |
+| `host.loader.ld_so_cache.sha256`, `host.loader.libc.sha256`, `host.loader.ld_so.sha256` | hashes of the loader cache, libc and the dynamic loader | yes |
+| `host.container` | `docker`, `podman` or `none`, from the usual marker files | yes |
+| `hermit.path.sha256`, `hermit.version` | hash of the Hermit executable and the first line of `hermit --version` (left out if it does not answer within a second) | yes |
+| `env.base_env` | always `minimal`: the guest starts from a pinned environment | yes |
+| `env.guest.sha256` | hash of the guest environment as `KEY=VALUE` lines in order | yes; the values are never stored, because configured values can be secrets |
+| `target.exe.sha256` | hash of the program the command starts (not of its arguments or input files) | yes |
+
+No path, host name or user name is stored: files are named by role, not by where they were found. A source the
+host does not offer is left out rather than invented, and replay then reports that field as unavailable.
+
+On replay, the recorded fields are compared with the current host:
+
+- `warning: environment differs: <field> (recorded X, now Y), ...` lists every field that changed (hashes are
+  shortened to 12 characters). The replay still runs. If it does not reproduce the failure, the trace says that
+  the environment differs, so the miss is not evidence the bug is fixed.
+- If a `host.loader.*` hash changed, replay is refused as an infrastructure error, because the schedule itself is
+  unreliable. `hairspring replay --allow-environment-change` replays anyway and still prints the warning.
+- A bundle recorded before this existed prints `warning: no environment recorded in this bundle` and replays as
+  before.
+
+Not recorded yet: the Hermit commit, Hermit's global seed, hashes of declared input files, the full Hermit command
+line beyond `hermit_args`, the `--tmp` pre-seed, and the Hairspring commit. Each would be another `param.` field.
+
 ### Not measured / not possible
 
 - **macOS**: there is no supported path to system-level determinism. Apple Silicon exposes performance
