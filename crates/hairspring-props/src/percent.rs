@@ -9,10 +9,10 @@ const HUNDREDTHS_PER_UNIT: f64 = 10_000.0;
 const NOISE: f64 = 1e-9;
 const LESS_THAN_SHOWN: &str = "<0.01%";
 
-fn hundredths(x: f64) -> f64 {
-    if x.is_nan() {
-        return 0.0;
-    }
+/// `x` in hundredths of a percent, clamped to 0..=1. An invalid (NaN) value becomes `if_invalid`, chosen by the caller
+/// as the value that overstates least: 1 for an upper bound, 0 otherwise.
+fn hundredths(x: f64, if_invalid: f64) -> f64 {
+    let x = if x.is_nan() { if_invalid } else { x };
     x.clamp(0.0, 1.0) * HUNDREDTHS_PER_UNIT
 }
 
@@ -25,15 +25,15 @@ fn show(h: f64, round: fn(f64) -> f64) -> String {
 
 /// An upper bound, rounded up.
 pub fn upper(x: f64) -> String {
-    show(hundredths(x), |h| (h - NOISE).ceil().max(0.0))
+    show(hundredths(x, 1.0), |h| (h - NOISE).ceil().max(0.0))
 }
 
 /// A lower bound, rounded down.
 pub fn lower(x: f64) -> String {
-    show(hundredths(x), |h| (h + NOISE).floor())
+    show(hundredths(x, 0.0), |h| (h + NOISE).floor())
 }
 
 /// A point estimate, rounded to nearest.
 pub fn nearest(x: f64) -> String {
-    show(hundredths(x), f64::round)
+    show(hundredths(x, 0.0), f64::round)
 }

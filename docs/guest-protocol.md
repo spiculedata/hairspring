@@ -201,7 +201,7 @@ front end can print the same lines.
 * If a stored inconclusive count is larger than the trial count, it is capped and a `note:` line says so.
 * Not done: failures per core-hour with a Garwood interval, the exact rate-ratio test for comparing two builds, pooling
   within an arm, and the "uncalibrated" label for a zero from an arm with no positive control.
-* The words are "hits" and "observed". The report does not say "found", "discovered", "unassisted" or "bug rate".
+* The word is "hits". The report does not say "found", "discovered", "unassisted" or "bug rate".
 
 Claim text follows the same rule: it is generated from the recorded label (build record, declared knowledge flags,
 seed selection) and the counts, never from free text. `chips:` shows the tier, seed selection and every declared flag

@@ -44,6 +44,14 @@ fn out_of_range_input_is_clamped() {
 }
 
 #[test]
+fn an_invalid_bound_never_looks_tighter_than_it_is() {
+    assert_eq!(upper(f64::NAN), "100.00%");
+    assert_eq!(lower(f64::NAN), "0.00%");
+    assert_eq!(upper(f64::INFINITY), "100.00%");
+    assert_eq!(lower(f64::NEG_INFINITY), "0.00%");
+}
+
+#[test]
 fn the_shown_upper_bound_is_never_below_the_value_and_the_lower_never_above() {
     for i in 0..=2_000u32 {
         let x = f64::from(i) / 2_000.0 * 0.05 + f64::from(i % 7) * 1.3e-6;

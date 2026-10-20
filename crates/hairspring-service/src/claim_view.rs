@@ -120,7 +120,8 @@ impl Service {
             }),
             (None, Some(rated)) => Some(Subject::NoFailure {
                 rated,
-                unrated: run.inconclusive,
+                // Every trial the rate leaves out: inconclusive, degraded, unreported and perturbing alike.
+                unrated: run.trials.saturating_sub(rated),
             }),
             (None, None) => {
                 withheld.push("the rated-trial count is not recorded for this run".to_owned());
