@@ -1,19 +1,24 @@
+use crate::env::guest_env;
 use crate::events;
-use crate::exec::{run_trial, scheduler_flags, Dirs, ProcessSpec, SpawnError, Trial};
+use crate::exec::{resolve_bin, run_trial, scheduler_flags, Dirs, ProcessSpec, SpawnError, Trial};
+use crate::hermit_version;
+use crate::host_identity::{self, GuestInputs, HostSources};
 use crate::property_verdict::{self, FailureKey};
+use crate::replay_environment::{self, MISS_ON_CHANGED_HOST};
 use crate::summary_dir::PrivateDir;
 use crate::tally::{Tally, TrialObserver};
 use crate::trace::{behaviour_hash, classify, steps, Verdict, HASH_SCHEME};
 use crate::HermitSettings;
 use hairspring_core::bundle::Bundle;
-use hairspring_engine::backend::{Backend, Progress, RunRequest};
+use hairspring_core::environment::EnvironmentIdentity;
+use hairspring_engine::backend::{Backend, Progress, ReplayOptions, RunRequest};
 use hairspring_engine::config::{Budget, TargetKind, TargetSpec};
 use hairspring_engine::report::{
     DoctorDivergence, DoctorReport, FailureReport, ReplayOutcome, RunOutcome,
 };
 use hairspring_engine::EngineError;
 use hairspring_props::AssertKind;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 const BUILD: &str = env!("CARGO_PKG_VERSION");
@@ -105,6 +110,10 @@ pub struct HermitBackend {
     events_scratch: Option<PrivateDir>,
     /// Told about every trial of every run; `None` does nothing.
     observer: Option<Arc<dyn TrialObserver>>,
+    /// Where the host's identity is read from; the running machine unless a test says otherwise.
+    host_sources: HostSources,
+    /// `hermit --version`, asked for once per backend.
+    hermit_version: OnceLock<Option<String>>,
 }
 
 impl HermitBackend {
@@ -122,7 +131,37 @@ impl HermitBackend {
             summaries,
             events_scratch,
             observer: None,
+            host_sources: HostSources::system(),
+            hermit_version: OnceLock::new(),
         }
+    }
+
+    /// Reads the host's identity from `host_sources` instead of the running machine.
+    #[must_use]
+    pub fn with_host_sources(self, host_sources: HostSources) -> HermitBackend {
+        HermitBackend {
+            host_sources,
+            ..self
+        }
+    }
+
+    /// The environment this run would record, or that a replay compares against.
+    fn environment(&self, p: &ProcessSpec) -> EnvironmentIdentity {
+        let bin = resolve_bin(&self.settings.bin);
+        let version = self
+            .hermit_version
+            .get_or_init(|| hermit_version::probe(&bin));
+        let env = guest_env(p.command, p.env);
+        host_identity::collect(
+            &self.host_sources,
+            &bin,
+            version.as_deref(),
+            &GuestInputs {
+                command: p.command,
+                cwd: p.cwd,
+                env: &env,
+            },
+        )
     }
 
     /// Reports every trial of every run to `observer` (see [`TrialObserver`]).
@@ -394,6 +433,7 @@ impl HermitBackend {
         if let Some(schedule) = &t.schedule {
             bundle = bundle.with_param("schedule_fingerprint", schedule.fingerprint.clone());
         }
+        bundle = self.environment(p).apply_to(bundle);
         if let Some(key) = property_verdict::primary_key(t) {
             // What replay must see fail again; bundles without these (older ones, legacy violations) skip the check.
             bundle = bundle
@@ -636,10 +676,24 @@ impl Backend for HermitBackend {
     }
 
     fn replay(&self, spec: &TargetSpec, bundle: &Bundle) -> Result<ReplayOutcome, EngineError> {
+        self.replay_with(spec, bundle, ReplayOptions::default())
+    }
+
+    fn replay_with(
+        &self,
+        spec: &TargetSpec,
+        bundle: &Bundle,
+        options: ReplayOptions,
+    ) -> Result<ReplayOutcome, EngineError> {
         let p = self.process(spec)?;
         check_same_scheduler(&p, bundle)?;
         self.check_events_setup(&p)?;
         self.check_same_events_transport(bundle)?;
+        let environment = replay_environment::check(
+            bundle,
+            &self.environment(&p),
+            options.allow_environment_change,
+        )?;
         let seed = bundle
             .params
             .get("sched_seed")
@@ -658,22 +712,27 @@ impl Backend for HermitBackend {
         }
         let hang_relaxed = matches!(verdict, Verdict::Hang(_))
             && bundle.params.get("hang_is_violation").map(String::as_str) == Some("true");
-        let notes = replay_notes(bundle, &trial, &verdict, hang_relaxed);
         let matches = output_matches(bundle, &trial);
-        Ok(ReplayOutcome {
-            reproduced: FailureKind::of(&verdict).is_some()
-                && failure_kind_matches(bundle, &verdict) != Some(false)
-                && matches != Some(false)
-                && property_matches(bundle, &trial) != Some(false),
-            steps: steps(
-                p.command,
-                seed,
-                &settings.epoch,
-                p.scheduler.effective_heuristic().name(),
-                &trial,
-                notes,
-            ),
-        })
+        let reproduced = FailureKind::of(&verdict).is_some()
+            && failure_kind_matches(bundle, &verdict) != Some(false)
+            && matches != Some(false)
+            && property_matches(bundle, &trial) != Some(false);
+        let mut notes = replay_notes(bundle, &trial, &verdict, hang_relaxed);
+        if !reproduced && environment.differs {
+            notes = Some(match notes {
+                Some(existing) => format!("{existing}; {MISS_ON_CHANGED_HOST}"),
+                None => MISS_ON_CHANGED_HOST.to_string(),
+            });
+        }
+        let steps = steps(
+            p.command,
+            seed,
+            &settings.epoch,
+            p.scheduler.effective_heuristic().name(),
+            &trial,
+            notes,
+        );
+        Ok(ReplayOutcome::new(reproduced, steps).with_warnings(environment.warnings))
     }
 
     fn doctor(

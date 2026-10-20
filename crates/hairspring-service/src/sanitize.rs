@@ -10,6 +10,9 @@ pub const MAX_LABEL_CHARS: usize = 500;
 pub const MAX_STATE_CHARS: usize = 4000;
 pub const MAX_MESSAGE_CHARS: usize = 500;
 pub const MAX_ACTION_ID_CHARS: usize = 64;
+pub const MAX_WARNINGS: usize = 20;
+/// An environment warning names every changed field, so it is longer than a step label.
+pub const MAX_WARNING_CHARS: usize = 2000;
 
 fn invalid(what: &str) -> ServiceError {
     ServiceError::InvalidRequest(what.to_string())
@@ -62,9 +65,16 @@ pub fn replay_steps(out: ReplayOutcome) -> ReplayOutcome {
             state: multi_line(&s.state).chars().take(MAX_STATE_CHARS).collect(),
         })
         .collect();
+    let warnings = out
+        .warnings
+        .iter()
+        .take(MAX_WARNINGS)
+        .map(|w| single_line(w).chars().take(MAX_WARNING_CHARS).collect())
+        .collect();
     ReplayOutcome {
         reproduced: out.reproduced,
         steps,
+        warnings,
     }
 }
 

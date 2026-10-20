@@ -385,10 +385,7 @@ impl Backend for WasmBackend {
                 state: String::new(),
             });
         }
-        Ok(ReplayOutcome {
-            reproduced: same,
-            steps,
-        })
+        Ok(ReplayOutcome::new(same, steps))
     }
 
     fn doctor(

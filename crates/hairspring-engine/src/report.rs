@@ -208,6 +208,24 @@ impl RunOutcome {
 pub struct ReplayOutcome {
     pub reproduced: bool,
     pub steps: Vec<Step>,
+    /// Things the caller should know about the replay that are not part of the trace, such as how the host differs from
+    /// the one the bundle was recorded on. Absent in older stored replays.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+impl ReplayOutcome {
+    pub fn new(reproduced: bool, steps: Vec<Step>) -> Self {
+        ReplayOutcome {
+            reproduced,
+            steps,
+            warnings: Vec::new(),
+        }
+    }
+
+    pub fn with_warnings(self, warnings: Vec<String>) -> Self {
+        ReplayOutcome { warnings, ..self }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -81,6 +81,9 @@ pub struct TestArgs {
 pub struct ReplayArgs {
     /// Bundle file, `-` for stdin, or a stored bundle hash.
     pub input: String,
+    /// Replay even when the host's dynamic loader differs from the recording (the differences are still reported).
+    #[arg(long)]
+    pub allow_environment_change: bool,
 }
 
 #[derive(Args)]

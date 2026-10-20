@@ -1,4 +1,4 @@
-use crate::backend::{Backend, Progress};
+use crate::backend::{Backend, Progress, ReplayOptions};
 use crate::config::Config;
 use crate::erased::Registry;
 use crate::report::{DoctorReport, ReplayOutcome, RunOutcome};
@@ -66,6 +66,14 @@ impl Engine {
     }
 
     pub fn replay(&self, bundle: &Bundle) -> Result<ReplayOutcome, EngineError> {
+        self.replay_with(bundle, ReplayOptions::default())
+    }
+
+    pub fn replay_with(
+        &self,
+        bundle: &Bundle,
+        options: ReplayOptions,
+    ) -> Result<ReplayOutcome, EngineError> {
         let spec = self
             .config
             .targets
@@ -80,7 +88,7 @@ impl Engine {
                 backend.name()
             )));
         }
-        backend.replay(spec, bundle)
+        backend.replay_with(spec, bundle, options)
     }
 
     /// Runs the determinism self-check for a target over `seeds` seeds.
