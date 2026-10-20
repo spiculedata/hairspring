@@ -4,6 +4,7 @@
 //! the rule-of-three bound and say what it is; nothing rated is "unrated", never 0%; and a run that stopped at its
 //! first confirmed failure has no rate at all, because the stop decided how many trials it ran.
 
+use crate::percent;
 use crate::run::{PropertyStat, RateBasis};
 use crate::stats::zero_event_upper_bound;
 use serde::Serialize;
@@ -62,10 +63,6 @@ pub fn rate_cell(stat: &PropertyStat, stopped_at_first_failure: bool) -> RateCel
     }
 }
 
-pub(crate) fn pct(x: f64) -> String {
-    format!("{:.2}%", x.clamp(0.0, 1.0) * 100.0)
-}
-
 pub(crate) fn plural(n: u64, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
@@ -88,10 +85,15 @@ impl RateCell {
                 lower,
                 upper,
                 ..
-            } => format!("{k}/{n} ({}) [{}, {}]", pct(point), pct(lower), pct(upper)),
+            } => format!(
+                "{k}/{n} ({}) [{}, {}]",
+                percent::nearest(point),
+                percent::lower(lower),
+                percent::upper(upper)
+            ),
             RateCell::ZeroEvents { n, upper_bound, .. } => format!(
                 "0/{n}, exact one-sided 95% upper bound {} (binomial, 0 of {n}){}",
-                pct(upper_bound),
+                percent::upper(upper_bound),
                 three_over_n_note(n)
             ),
             RateCell::Unrated => "unrated (0 rated trials)".to_owned(),
@@ -107,8 +109,9 @@ impl RateCell {
 /// From this many trials the rule of three is close enough to the exact bound to be worth mentioning beside it.
 const THREE_OVER_N_NOTE_FROM: u64 = 30;
 
-/// The rule of three, as a note on the exact bound and never as the bound itself.
-fn three_over_n_note(n: u64) -> String {
+/// The rule of three, as a note on the exact bound and never as the bound itself. Below 30 trials it overshoots, so
+/// only the exact bound is shown.
+pub(crate) fn three_over_n_note(n: u64) -> String {
     if n >= THREE_OVER_N_NOTE_FROM {
         format!("; about 3/{n}")
     } else {
@@ -121,7 +124,7 @@ pub(crate) fn zero_failure_bound_clause(rated: u64) -> String {
     let bound = zero_event_upper_bound(rated).unwrap_or(1.0);
     format!(
         "exact one-sided 95% upper bound on the failure rate: {} (binomial, 0 of {rated})",
-        pct(bound)
+        percent::upper(bound)
     )
 }
 

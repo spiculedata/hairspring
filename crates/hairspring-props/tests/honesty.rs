@@ -186,8 +186,8 @@ fn a_small_zero_failure_cell_states_the_exact_bound() {
 fn a_large_zero_failure_cell_states_the_exact_bound_and_gives_three_over_n_only_as_a_note() {
     let text = zero_failure_text(300);
     assert!(
-        text.contains("exact one-sided 95% upper bound 0.99%"),
-        "{text}"
+        text.contains("exact one-sided 95% upper bound 1.00%"),
+        "the bound is 0.9936%, rounded up: {text}"
     );
     assert!(text.contains("binomial, 0 of 300"), "{text}");
     assert!(text.contains("about 3/300"), "{text}");

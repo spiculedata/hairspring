@@ -15,6 +15,7 @@ fn subject(counts: &RunCounts, stopped_at_first_hit: bool) -> Subject {
     } else {
         Subject::NoFailure {
             rated: counts.rated(),
+            unrated: counts.excluded(),
         }
     }
 }

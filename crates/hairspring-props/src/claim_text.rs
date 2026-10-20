@@ -188,11 +188,12 @@ pub enum FindingState {
     Verified,
 }
 
-/// What a claim is about.
+/// What a claim is about. Non-exhaustive: callers outside this crate must allow for subjects added later.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Subject {
-    /// No trial failed a property in `rated` rated trials.
-    NoFailure { rated: u64 },
+    /// No trial failed a property in `rated` rated trials, and `unrated` trials were left out of that count.
+    NoFailure { rated: u64, unrated: u64 },
     /// A property failed in `seed`.
     Failure { seed: u64, state: FindingState },
     /// A hit seen in the one run that is being reported, with no replay: a candidate, never a claim.
@@ -210,7 +211,15 @@ pub struct ClaimOutput {
 const NOT_DECLARED: &str =
     "label not declared: the arm has no knowledge list, so it is incomplete and makes no claim";
 const NOTHING_RATED: &str = "no rated trials, so there is nothing to claim";
-const SINGLE_RUN: &str = "a failure seen in one run is a candidate, not a claim";
+const SINGLE_RUN: &str = "a failure with no confirming replay is a candidate, not a claim";
+
+/// Trials left out of a count are said so beside it, so the sentence does not read as covering them.
+fn unrated_note(unrated: u64) -> String {
+    match unrated {
+        0 => String::new(),
+        n => format!(" ({} not rated)", plural(n, "trial", "trials")),
+    }
+}
 
 /// The claim for `subject` under `label`.
 pub fn generate(label: &Label, subject: &Subject) -> ClaimOutput {
@@ -229,7 +238,7 @@ pub fn generate(label: &Label, subject: &Subject) -> ClaimOutput {
     if !label.declared() {
         out.withheld.push(NOT_DECLARED);
     }
-    if matches!(subject, Subject::NoFailure { rated: 0 }) {
+    if matches!(subject, Subject::NoFailure { rated: 0, .. }) {
         out.withheld.push(NOTHING_RATED);
     }
     if !out.withheld.is_empty() {
@@ -240,9 +249,10 @@ pub fn generate(label: &Label, subject: &Subject) -> ClaimOutput {
     out.text = Some(match *subject {
         // Already withheld above; there is never a sentence for a candidate.
         Subject::SingleRunHit => return out,
-        Subject::NoFailure { rated } => format!(
-            "No trial failed a property in {}; {}; {how}; {note}.",
+        Subject::NoFailure { rated, unrated } => format!(
+            "No trial failed a property in {}{}; {}; {how}; {note}.",
             plural(rated, "rated trial", "rated trials"),
+            unrated_note(unrated),
             zero_failure_bound_clause(rated)
         ),
         Subject::Failure { seed, state } => {

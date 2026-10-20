@@ -67,12 +67,32 @@ fn a_declared_empty_list_gets_the_strongest_phrase_with_chips_beside_it() {
 }
 
 #[test]
+fn a_claim_over_a_run_with_excluded_trials_says_how_many_were_not_rated() {
+    let out = claim_lines(Some(&plain()), &counts(0, 200, 8), false);
+    assert_eq!(
+        out[1],
+        "claim: No trial failed a property in 200 rated trials (8 trials not rated); exact one-sided 95% upper bound on the failure rate: 1.49% (binomial, 0 of 200); unmodified binary, blind seeds; declared configuration knowledge: none."
+    );
+    let one = claim_lines(Some(&plain()), &counts(0, 200, 1), false);
+    assert!(one[1].contains("(1 trial not rated)"), "{one:?}");
+}
+
+#[test]
+fn the_claim_bound_is_rounded_up() {
+    let out = claim_lines(Some(&plain()), &counts(0, 300, 0), false);
+    assert!(
+        out[1].contains("failure rate: 1.00% (binomial, 0 of 300)"),
+        "{out:?}"
+    );
+}
+
+#[test]
 fn a_hit_in_one_run_is_a_candidate_with_the_single_run_caveat_and_no_sentence() {
     let out = claim_lines(Some(&plain()), &counts(1, 40, 0), true);
     assert_eq!(out[0], "chips: tier: unmodified | seed selection: blind");
     assert_eq!(
         out[1],
-        "no claim: a failure seen in one run is a candidate, not a claim"
+        "no claim: a failure with no confirming replay is a candidate, not a claim"
     );
     assert_eq!(out[2], "caveats: single_run");
     assert_eq!(out.len(), 3);

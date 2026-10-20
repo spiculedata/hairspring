@@ -118,7 +118,10 @@ impl Service {
                     FindingState::SingleRun
                 },
             }),
-            (None, Some(rated)) => Some(Subject::NoFailure { rated }),
+            (None, Some(rated)) => Some(Subject::NoFailure {
+                rated,
+                unrated: run.inconclusive,
+            }),
             (None, None) => {
                 withheld.push("the rated-trial count is not recorded for this run".to_owned());
                 None

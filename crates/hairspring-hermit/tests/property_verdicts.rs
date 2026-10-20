@@ -254,7 +254,7 @@ fn a_run_without_events_has_no_property_section() {
     assert_eq!(
         to_text("svc", &o),
         format!(
-            "PASSED  svc  ({} steps, 2 trials, {} ms)\n  hit runs: 0/2 rated, Wilson 95% interval [0.00%, 65.76%]; exact one-sided 95% upper bound 77.64%\n",
+            "PASSED  svc  ({} steps, 2 trials, {} ms)\n  hits: 0/2 rated trials, exact one-sided 95% upper bound 77.64% (binomial, 0 of 2)\n",
             o.steps_executed, o.elapsed_ms
         )
     );

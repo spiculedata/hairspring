@@ -13,6 +13,7 @@ pub mod honesty;
 mod json;
 pub mod limits;
 pub mod line;
+pub mod percent;
 pub mod record;
 pub mod remap;
 pub mod run;

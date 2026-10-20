@@ -1,23 +1,25 @@
-//! The hit rate of one run (one arm), as lines of text, from counts only.
+//! The hit rate of one job (one arm), as lines of text, from counts only.
 //!
-//! Rules, each with a test:
-//! - A rate is `k/n` with its Wilson 95% interval, never a bare percentage.
-//! - The denominator is the rated runs. Inconclusive and crashed runs are listed apart, are never in it, and are never
-//!   described as passes.
-//! - Nothing rated reads `0/0`, never `0%`.
-//! - Zero hits also show the exact one-sided 95% upper bound, and the rule of three where it is close to it.
-//! - Excluded runs get a sensitivity line: the rate if every one of them had been a hit.
-//! - A run that stopped at its first hit has counts and no rate, because the stop decided how many runs it made.
+//! What is counted is trials: a job runs many trials, and a hit is a trial in which a property failed. Rules, each
+//! with a test:
+//! - A rate is `k/n` rated trials with its Wilson 95% interval, never a bare percentage.
+//! - The denominator is the rated trials. Inconclusive and crashed trials are listed apart, are never in it, and are
+//!   never described as passes.
+//! - Nothing rated reads `0/0`, never `0%`, and has no sensitivity line.
+//! - Zero hits show one bound, the exact one-sided 95% upper bound (with the rule of three as a note from 30 trials,
+//!   as `honesty` words it). The two-sided Wilson interval is shown only when there is a hit, so two different 95%
+//!   bounds never sit side by side.
+//! - Excluded trials get a sensitivity line: the rate if every one of them had been a hit.
+//! - A job that stopped at its first hit has counts and no rate, because the stop decided how many trials it ran.
 //!
-//! Pure: functions from counts to numbers and strings, with no I/O, so the explorer can use them as they are.
+//! Percentages come from [`crate::percent`] (upper bounds round up) and the zero-hit wording from [`crate::honesty`],
+//! so these lines and the property cells cannot drift apart. Pure: no I/O, so the explorer can use them as they are.
 
-use crate::honesty::{pct, plural};
-use crate::stats::{rule_of_three, wilson, zero_event_upper_bound, Z_95};
+use crate::honesty::{plural, three_over_n_note};
+use crate::percent;
+use crate::stats::{wilson, zero_event_upper_bound, Z_95};
 
-/// From this many rated runs the rule of three is close enough to the exact bound to be worth quoting beside it.
-const RULE_OF_THREE_FROM: u64 = 30;
-
-/// The counts of one run: hits are among the rated runs, and the excluded runs are apart from both.
+/// The counts of one job: hits are among the rated trials, and the excluded trials are apart from both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunCounts {
     hits: u64,
@@ -26,7 +28,7 @@ pub struct RunCounts {
     crashed: u64,
 }
 
-/// More hits than rated runs: the counts contradict each other and no rate is computed from them.
+/// More hits than rated trials: the counts contradict each other and no rate is computed from them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HitsExceedRated {
     pub hits: u64,
@@ -34,7 +36,7 @@ pub struct HitsExceedRated {
 }
 
 impl RunCounts {
-    /// `rated` is the denominator (it includes the hits); `inconclusive` and `crashed` are runs that were not rated.
+    /// `rated` is the denominator (it includes the hits); `inconclusive` and `crashed` are trials that were not rated.
     pub fn new(
         hits: u64,
         rated: u64,
@@ -60,7 +62,7 @@ impl RunCounts {
         self.rated
     }
 
-    /// Runs left out of the denominator.
+    /// Trials left out of the denominator.
     pub fn excluded(&self) -> u64 {
         self.inconclusive.saturating_add(self.crashed)
     }
@@ -88,10 +90,11 @@ pub fn figures(k: u64, n: u64) -> Option<Figures> {
     })
 }
 
-/// The rate if every excluded run had been a hit. `None` when nothing was excluded.
+/// The rate if every excluded trial had been a hit. `None` when nothing was excluded or nothing was rated (with
+/// nothing rated the answer would only say "all of them", which is not information).
 pub fn sensitivity(counts: &RunCounts) -> Option<Figures> {
     let excluded = counts.excluded();
-    if excluded == 0 {
+    if excluded == 0 || counts.rated == 0 {
         return None;
     }
     figures(
@@ -100,46 +103,55 @@ pub fn sensitivity(counts: &RunCounts) -> Option<Figures> {
     )
 }
 
-fn interval(f: &Figures) -> String {
-    format!("Wilson 95% interval [{}, {}]", pct(f.lower), pct(f.upper))
+fn with_point(f: &Figures) -> String {
+    format!(
+        "{}/{} ({}), Wilson 95% interval [{}, {}]",
+        f.k,
+        f.n,
+        percent::nearest(f.point),
+        percent::lower(f.lower),
+        percent::upper(f.upper)
+    )
 }
 
-fn zero_hit_bounds(n: u64) -> String {
+fn zero_hit_text(n: u64) -> String {
     let exact = zero_event_upper_bound(n).unwrap_or(1.0);
-    let base = format!("exact one-sided 95% upper bound {}", pct(exact));
-    match rule_of_three(n) {
-        Some(three) if n >= RULE_OF_THREE_FROM => {
-            format!("{base} (rule of three: {})", pct(three))
-        }
-        _ => base,
-    }
+    format!(
+        "0/{n} rated trials, exact one-sided 95% upper bound {} (binomial, 0 of {n}){}",
+        percent::upper(exact),
+        three_over_n_note(n)
+    )
 }
 
 fn rated_line(counts: &RunCounts, stopped_at_first_hit: bool) -> String {
     let (k, n) = (counts.hits, counts.rated);
     if n == 0 {
-        return "hit runs: 0/0 rated; nothing was rated, so there is no rate".to_owned();
+        return "hits: 0/0 rated trials; nothing was rated, so there is no rate".to_owned();
     }
     if stopped_at_first_hit {
         return format!(
-            "hit runs: {k} in {} before the run stopped at its first hit; not a rate",
-            plural(n, "rated run", "rated runs")
+            "hits: {k} in {} before the run stopped at its first hit; not a rate",
+            plural(n, "rated trial", "rated trials")
         );
     }
-    let Some(f) = figures(k, n) else {
-        return format!("hit runs: {k} in {n} rated runs; not a rate");
-    };
     if k == 0 {
-        return format!(
-            "hit runs: 0/{n} rated, {}; {}",
-            interval(&f),
-            zero_hit_bounds(n)
-        );
+        return format!("hits: {}", zero_hit_text(n));
     }
+    match figures(k, n) {
+        Some(f) => format!(
+            "hits: {k}/{n} rated trials ({}), {}",
+            percent::nearest(f.point),
+            interval_text(&f)
+        ),
+        None => format!("hits: {k} in {n} rated trials; not a rate"),
+    }
+}
+
+fn interval_text(f: &Figures) -> String {
     format!(
-        "hit runs: {k}/{n} rated ({}), {}",
-        pct(f.point),
-        interval(&f)
+        "Wilson 95% interval [{}, {}]",
+        percent::lower(f.lower),
+        percent::upper(f.upper)
     )
 }
 
@@ -156,7 +168,7 @@ fn not_rated_line(counts: &RunCounts) -> Option<String> {
         return None;
     }
     Some(format!(
-        "not rated: {}; reported separately, never in the denominator and never counted as passes",
+        "not rated trials: {}; reported separately, never in the denominator and never counted as passes",
         parts.join(", ")
     ))
 }
@@ -164,15 +176,12 @@ fn not_rated_line(counts: &RunCounts) -> Option<String> {
 fn sensitivity_line(counts: &RunCounts) -> Option<String> {
     let f = sensitivity(counts)?;
     Some(format!(
-        "sensitivity: if every non-rated run had been a hit: {}/{} ({}), {}",
-        f.k,
-        f.n,
-        pct(f.point),
-        interval(&f)
+        "sensitivity: if every non-rated trial had been a hit: {}",
+        with_point(&f)
     ))
 }
 
-/// The lines a report prints for one run. `stopped_at_first_hit` is true for a run that ended on its first hit: its
+/// The lines a report prints for one job. `stopped_at_first_hit` is true for a job that ended on its first hit: its
 /// counts are shown and nothing is computed from them.
 pub fn rate_lines(counts: &RunCounts, stopped_at_first_hit: bool) -> Vec<String> {
     let sensitivity = if stopped_at_first_hit {
