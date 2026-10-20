@@ -91,6 +91,16 @@ jobs:
         env:
           HS_REQUIRE_GO: "1"
 
+  glibc-condlock-example:
+    name: glibc condlock example (unit tests)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      # Unit tests only. `make test` in this example is macOS-only (see its README).
+      - name: Unit tests
+        run: make -C examples/glibc-condlock unit
+
   web:
     name: Web UI
     runs-on: ubuntu-latest

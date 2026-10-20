@@ -1,0 +1,7 @@
+build/
+# raw per-run files stay local; the committed evidence is raw/<cell>.tar.gz plus MANIFEST, SUMMARY.txt, SHA256SUMS
+results/*/dpos/
+results/*/dneg/
+results/*/dstall-leak/
+results/*/dstall-barrier/
+results/*/dstall-holdg/
