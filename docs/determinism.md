@@ -72,28 +72,50 @@ A Hermit bundle therefore records these fields (as `param.<name>` lines, which m
 | `host.kernel_release` | `uname -r` | yes |
 | `host.cpu_model` | first `model name` in `/proc/cpuinfo` | yes |
 | `host.cpu_flags.sha256` | hash of the sorted CPU feature list | yes |
-| `host.loader.ld_so_cache.sha256`, `host.loader.libc.sha256`, `host.loader.ld_so.sha256` | hashes of the loader cache, libc and the dynamic loader | yes |
+| `host.loader.ld_so_cache.sha256`, `host.loader.libc.sha256`, `host.loader.ld_so.sha256` | hashes of the loader cache, libc and the dynamic loader (glibc and musl, x86-64 and aarch64 locations) | yes |
+| `host.loader.ld_so_preload.sha256` | hash of `/etc/ld.so.preload`, or `absent` | yes |
 | `host.container` | `docker`, `podman` or `none`, from the usual marker files | yes |
-| `hermit.path.sha256`, `hermit.version` | hash of the Hermit executable and the first line of `hermit --version` (left out if it does not answer within a second) | yes |
-| `env.base_env` | always `minimal`: the guest starts from a pinned environment | yes |
-| `env.guest.sha256` | hash of the guest environment as `KEY=VALUE` lines in order | yes; the values are never stored, because configured values can be secrets |
-| `target.exe.sha256` | hash of the program the command starts (not of its arguments or input files) | yes |
+| `hermit.path.sha256`, `hermit.version` | hash of the Hermit executable and the first line of `hermit --version` (left out if it does not finish within a second; asked again after an upgrade in place, because the answer is kept per executable hash) | yes |
+| `env.base_env` | the `--base-env` mode in the target's `hermit_args`: `minimal`, `host` or `empty`; `default` when the flag is absent (Hermit's own default applies); `unknown` when the value is not one of those | yes |
+| `env.guest.names` | the sorted names of the variables the guest and the Hermit process are given; replaced by `env.guest.names.sha256` (a hash of the same list) when the list is too long to record | names can reveal what a deployment uses; check them before publishing a bundle |
+| `env.guest.allowlisted.sha256` | hash of `NAME=value` lines for an allowlist of non-secret variables only (`PATH`, `LANG`, `LANGUAGE`, `TZ`, `LC_*`, `PYTHONDONTWRITEBYTECODE`, `PYTHONHASHSEED`) | yes. Values of every other variable are not recorded or hashed, since a hash of a short secret can be guessed offline |
+| `target.exe.sha256` | hash of the program the command starts, only if it is a regular file (not of its arguments or input files) | yes |
+
+Only these names exist. A bundle becomes v3 only when it carries one of them; a `host.*` or `env.*` param with any
+other name is ignored on read, so an unknown or hostile param can neither change the header nor be compared.
 
 No path, host name or user name is stored: files are named by role, not by where they were found. A source the
-host does not offer is left out rather than invented, and replay then reports that field as unavailable.
+host does not offer is left out rather than invented, and replay then reports that field as unavailable (which is not
+the same as changed). The values are read when the run starts, before any trial or confirmation rerun, and they
+are the same fields for every failure the run reports.
 
-On replay, the recorded fields are compared with the current host:
+On replay, the recorded fields are compared with the current host. Each recorded field is checked on its own: a
+malformed one is named in a warning and skipped, and the others are still compared.
 
-- `warning: environment differs: <field> (recorded X, now Y), ...` lists every field that changed (hashes are
-  shortened to 12 characters). The replay still runs. If it does not reproduce the failure, the trace says that
-  the environment differs, so the miss is not evidence the bug is fixed.
-- If a `host.loader.*` hash changed, replay is refused as an infrastructure error, because the schedule itself is
-  unreliable. `hairspring replay --allow-environment-change` replays anyway and still prints the warning.
+- `warning: environment differs: <field> (recorded X, now Y), ...` lists the fields that changed (hashes are
+  shortened to 12 characters; after eight fields the rest are counted as `and N more`). The replay still runs. If it
+  does not reproduce the failure, the trace says that the environment differs, so the miss is not evidence the bug is
+  fixed.
+- If a `host.loader.*` hash changed, replay is refused, because the schedule itself is unreliable. The refusal is its
+  own error kind, not an internal error: HTTP 409 on the REST API, and a tool error that starts with `environment
+  mismatch` on MCP. `hairspring replay --allow-environment-change`, `"allow_environment_change": true` on
+  `POST /api/replay` and the `allow_environment_change` argument of the MCP `replay_bundle` tool replay anyway and
+  still return the warnings. The default is always strict.
 - A bundle recorded before this existed prints `warning: no environment recorded in this bundle` and replays as
   before.
 
+`hairspring replay` exit codes: `0` not reproduced on the environment it was recorded in (or one that cannot be
+compared), `1` reproduced, `2` error (including a refusal), `3` not reproduced on a changed environment. `3` is
+inconclusive: it does not show the bug is fixed. The API returns the same fact as `environment_changed` in the replay
+result.
+
 Not recorded yet: the Hermit commit, Hermit's global seed, hashes of declared input files, the full Hermit command
-line beyond `hermit_args`, the `--tmp` pre-seed, and the Hairspring commit. Each would be another `param.` field.
+line beyond `hermit_args`, the `--tmp` pre-seed, and the Hairspring commit. The environment is also not compared on
+confirmation reruns or on bundle import. Each new field needs its name added to the fixed list in
+`hairspring-core`.
+
+Upgrade order: a server that predates v3 rejects a v3 bundle (it does not recognise the header). Upgrade the server
+before the workers that send it bundles.
 
 ### Not measured / not possible
 
