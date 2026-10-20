@@ -14,7 +14,7 @@ export interface StripModel {
   loading: boolean;
   error: string | undefined;
   /** Loads the strip again from the start (the error boundary's Retry). */
-  reload?: () => void;
+  reload: () => void;
 }
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));

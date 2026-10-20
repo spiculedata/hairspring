@@ -1,4 +1,4 @@
-import { Component, Fragment, type ReactNode } from 'react';
+import { Component, createRef, type ReactNode } from 'react';
 
 export function ErrorNotice({ label, message, onRetry }: { label: string; message: string; onRetry?: () => void }) {
   return (
@@ -7,7 +7,7 @@ export function ErrorNotice({ label, message, onRetry }: { label: string; messag
         {`${label} could not be shown: ${message}`}
       </p>
       {onRetry && (
-        <button type="button" onClick={onRetry}>
+        <button type="button" onClick={onRetry} aria-label={`Retry ${label}`}>
           Retry
         </button>
       )}
@@ -35,13 +35,19 @@ export const afterRetry = (state: State): State => ({ message: undefined, attemp
  * Stops a response that is valid JSON of an unexpected shape from blanking the whole page: the part that cannot render
  * shows an error, and the rest of the page stays. Only the message is shown, never a component stack. Retry mounts the
  * part again, and `onRetry` has the owner load again the data the part was given, so a failure that has passed (a fixed
- * server, a restored connection) clears.
+ * server, a restored connection) clears. The Retry button is gone once it has been used, so focus moves to the part,
+ * which is a labelled group, instead of dropping to the top of the page.
  */
 export class ErrorBoundary extends Component<Props, State> {
   state: State = { message: undefined, attempt: 0 };
+  private region = createRef<HTMLDivElement>();
 
   static getDerivedStateFromError(error: unknown): Pick<State, 'message'> {
     return { message: error instanceof Error ? error.message : String(error) };
+  }
+
+  componentDidUpdate(_props: Props, prev: State): void {
+    if (prev.attempt !== this.state.attempt && this.state.message === undefined) this.region.current?.focus();
   }
 
   retry = (): void => {
@@ -51,6 +57,10 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (this.state.message !== undefined) return <ErrorNotice label={this.props.label} message={this.state.message} onRetry={this.retry} />;
-    return <Fragment key={this.state.attempt}>{this.props.children}</Fragment>;
+    return (
+      <div key={this.state.attempt} ref={this.region} role="group" aria-label={this.props.label} tabIndex={-1} className="boundary">
+        {this.props.children}
+      </div>
+    );
   }
 }

@@ -18,7 +18,7 @@ export interface SeedTrialsModel {
   error: string | undefined;
   loadMore: () => void;
   /** Loads the trials again from the start (the error boundary's Retry). */
-  reload?: () => void;
+  reload: () => void;
 }
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
