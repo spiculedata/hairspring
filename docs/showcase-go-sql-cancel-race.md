@@ -330,8 +330,8 @@ the workload, and the sensitivity line above shows how far they could move a cou
   or other hosts, kernels or `GOMAXPROCS` values.
 - That Hermit reaches the race better than something else, or that a hit would appear natively; no native figure is
   compared with a figure under Hermit. The example's `results/m1d/SUMMARY.txt` shows native go1.24.5 `-mode=std` runs
-  on a different host with the property site false in 5 of 5 runs in each of two cells; this page makes no claim that
-  Hermit was needed to reach the race.
+  on a different host, at `-q 25000` (the counted runs used `-q 250`), with the property site false in 5 of 5 runs in
+  each of two cells; this page makes no claim that Hermit was needed to reach the race.
 - That the 934 hits are 934 distinct interleavings.
 - That the 834 unconfirmed hits would each be confirmed.
 - That Hermit failures are rare or harmless in general.
