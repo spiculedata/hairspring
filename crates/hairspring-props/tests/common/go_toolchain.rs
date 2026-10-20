@@ -1,7 +1,41 @@
 //! Shared by the Go conformance tests: find out whether the Go command on hand is usable for the example module
 //! (`go 1.24` in its `go.mod`, built with `GOTOOLCHAIN=local`, so an older Go cannot build it).
 
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+
+/// Whether an environment switch is on: unset, empty, `0` and `false` (any case) are off, anything else is on.
+pub fn switch_is_on(value: Option<&str>) -> bool {
+    value.is_some_and(|v| {
+        let v = v.trim();
+        !(v.is_empty() || v == "0" || v.eq_ignore_ascii_case("false"))
+    })
+}
+
+/// Whether `HS_REQUIRE_GO` asks for a missing or too old Go to be an error instead of a skip.
+pub fn require_go() -> bool {
+    switch_is_on(std::env::var("HS_REQUIRE_GO").ok().as_deref())
+}
+
+/// A directory of prebuilt binaries named by the environment variable `var`: panics with a message naming the
+/// variable and the problem when the directory or one of the binaries is missing.
+pub fn check_prebuilt_dir(var: &str, dir: &Path, binaries: &[&str]) -> PathBuf {
+    assert!(
+        dir.is_dir(),
+        "{var}={} is not a directory (it should hold {})",
+        dir.display(),
+        binaries.join(" and ")
+    );
+    for binary in binaries {
+        assert!(
+            dir.join(binary).is_file(),
+            "{var}={} has no `{binary}` (it should hold {})",
+            dir.display(),
+            binaries.join(" and ")
+        );
+    }
+    dir.to_path_buf()
+}
 
 /// The oldest Go minor version (1.x) that can build the example module.
 pub const MIN_GO_MINOR: u32 = 24;
@@ -66,6 +100,52 @@ mod tests {
         assert!(is_new_enough("go version go1.27.1 darwin/arm64"));
         assert!(is_new_enough("go version devel go1.25-abc Mon linux/amd64"));
         assert!(is_new_enough("go version devel +abc123 Mon linux/amd64"));
+    }
+
+    #[test]
+    fn an_unset_empty_zero_or_false_switch_is_off() {
+        assert!(!switch_is_on(None));
+        assert!(!switch_is_on(Some("")));
+        assert!(!switch_is_on(Some("0")));
+        assert!(!switch_is_on(Some("false")));
+        assert!(!switch_is_on(Some("FALSE")));
+        assert!(!switch_is_on(Some(" 0 ")));
+    }
+
+    #[test]
+    fn any_other_value_turns_a_switch_on() {
+        assert!(switch_is_on(Some("1")));
+        assert!(switch_is_on(Some("true")));
+        assert!(switch_is_on(Some("yes")));
+    }
+
+    #[test]
+    #[should_panic(expected = "HS_TEST_BUILD_DIR")]
+    fn a_prebuilt_directory_that_does_not_exist_is_named_in_the_message() {
+        check_prebuilt_dir(
+            "HS_TEST_BUILD_DIR",
+            Path::new("/nonexistent/prebuilt"),
+            &["x"],
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "missing-binary")]
+    fn a_prebuilt_directory_without_the_binaries_names_the_missing_one() {
+        check_prebuilt_dir(
+            "HS_TEST_BUILD_DIR",
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            &["missing-binary"],
+        );
+    }
+
+    #[test]
+    fn a_prebuilt_directory_with_the_binaries_is_returned() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert_eq!(
+            check_prebuilt_dir("HS_TEST_BUILD_DIR", dir, &["Cargo.toml"]),
+            dir
+        );
     }
 
     #[test]

@@ -52,11 +52,15 @@ fn build_dir() -> Option<&'static PathBuf> {
     static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
     DIR.get_or_init(|| {
         if let Some(prebuilt) = std::env::var_os("HS_GO_SHIM_BUILD") {
-            return Some(PathBuf::from(prebuilt));
+            return Some(go_toolchain::check_prebuilt_dir(
+                "HS_GO_SHIM_BUILD",
+                Path::new(&prebuilt),
+                &["hssample", "hssample_violation"],
+            ));
         }
         if !go_available() {
             assert!(
-                std::env::var_os("HS_REQUIRE_GO").is_none(),
+                !go_toolchain::require_go(),
                 "HS_REQUIRE_GO is set but `{}` is not available or is older than Go 1.{}",
                 go_command(),
                 go_toolchain::MIN_GO_MINOR

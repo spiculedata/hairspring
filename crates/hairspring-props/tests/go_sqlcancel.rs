@@ -62,11 +62,15 @@ fn build_dir() -> Option<&'static PathBuf> {
     static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
     DIR.get_or_init(|| {
         if let Some(prebuilt) = std::env::var_os("HS_SQLCANCEL_BUILD") {
-            return Some(PathBuf::from(prebuilt));
+            return Some(go_toolchain::check_prebuilt_dir(
+                "HS_SQLCANCEL_BUILD",
+                Path::new(&prebuilt),
+                &["sqlcancel", "sqlcancel_violation"],
+            ));
         }
         if !go_available() {
             assert!(
-                std::env::var_os("HS_REQUIRE_GO").is_none(),
+                !go_toolchain::require_go(),
                 "HS_REQUIRE_GO is set but `{}` is not available or is older than Go 1.{}",
                 go_command(),
                 go_toolchain::MIN_GO_MINOR
@@ -278,6 +282,7 @@ fn the_violation_only_build_names_the_property_exactly_when_the_full_build_does(
                 lines[0]
             );
         }
-        _ => assert!(lines.is_empty(), "{lines:?}"),
+        "clean" => assert!(lines.is_empty(), "{lines:?}"),
+        other => panic!("SQLCANCEL_EXPECT={other}, want buggy or clean"),
     }
 }
