@@ -83,5 +83,8 @@ environment pinned; T2_instrumented (built with the protocol SDK). Two positive 
 one hunk that widens the race window; assisted, window_widening, library_patched) did not make the property false in
 any of the runs made under the pinned Hermit (P1: 90 runs including 30 informational; P2: 60), so the counted runs
 under Hermit were not started, and nothing is claimed about whether Hermit reaches the bug's state. glibc built with -U_FORTIFY_SOURCE added to CFLAGS (upstream's default no-fortify build; same effect as upstream fix 127cefd, BZ 31928), Ubuntu gcc 13.3.0 defaults otherwise.
-These results were produced with this example at commit `6a8693ff` and the C SDK at `a4131e49` (tag TAG-NAME);
-the example has since been rebased onto a newer SDK commit. The scripts that ran are in [`experiment/`](experiment).
+These results were produced from a pre-rebase local commit whose `src/` is identical to this example's apart from the
+SDK pin and one comment; this example rebuilds the workload, with the Linux binaries from the scripts in
+[`experiment/`](experiment). Builds are not byte-reproducible across rebuilds or build paths, so compare stripped
+objects, not file hashes. `BUILD-RECORD` and `BUILD-RECORD-fix1` name the commit the macOS binaries were built from
+before squashing.

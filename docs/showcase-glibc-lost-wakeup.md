@@ -3,7 +3,7 @@
 This page describes an experiment that set out to run a known glibc condition-variable bug (glibc bug 25847, a lost
 wakeup fixed upstream in 2025) under Hermit, the deterministic scheduler behind Hairspring's `process` backend, and that
 stopped, by its own pre-registered rule, before the counted runs. It is the companion of the
-[Go walkthrough](GO-PAGE-LINK), which reached its counted runs; this one did not, and says why.
+[Go walkthrough](showcase-go-sql-cancel-race.md), which reached its counted runs; this one did not, and says why.
 
 What you can take from it:
 
@@ -156,8 +156,13 @@ Nothing on this page is a statement about any distribution's own glibc package.
 
 Apart from the container pre-checks, every build and run on this page used one machine: Ubuntu 24.04.5, kernel
 6.17.0-42-generic, x86-64 (Intel Xeon E5-1410 v2), gcc 13.3.0. The workload binaries were built from
-`examples/glibc-condlock` at commit `6a8693ff` with the C SDK at commit `a4131e49` (tag TAG-NAME); the example as merged
-has since been rebased onto a newer SDK commit, and binaries built from it were not part of these runs.
+a local commit made before this example was rebased onto the current repository history. That commit's `src/` is
+identical to this example's apart from the C SDK pin (the SDK commit it used is an ancestor of the one pinned here, and
+the SDK library source did not change between them) and one comment. This example rebuilds the workload: the macOS
+build with `make`, and the Linux binaries with the scripts in
+[`experiment/`](../examples/glibc-condlock/experiment). Binaries built from this example were not part of these runs,
+and builds are not byte-reproducible across rebuilds or build paths (see 5.1 and section 7); compare stripped objects,
+not file hashes.
 
 ## 4. How the experiment was designed and pre-registered
 
@@ -400,6 +405,10 @@ patches and the Hermit build recipe.
    `-n 8 -r 125 -tick-ms 100 -q 10`, a 120 s cap per run; compare three runs per seed.
 7. **Positive-control probe.** Run the P2 binary for seeds 319891 to 319920 at `-r 125` and 319921 to 319950 at
    `-r 250`.
+
+Before running the drivers on any machine, read "Security notes for running the drivers" in the experiment folder's
+README: the Hermit calls run as root through `sudo -n`, the drivers create world-writable (mode 1777) directories, and
+they were run on a dedicated machine.
 
 What you cannot repeat exactly: our Hermit binary ([I] a rebuild will probably have a different sha256, so seeds,
 fingerprints and timings are not comparable), our binary hashes (the build path enters the debug information; compare
