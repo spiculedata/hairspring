@@ -1,18 +1,20 @@
-import { useEffect, useState } from 'react';
-import { isNotFound, retryDelay } from '../pollPolicy';
+import { useCallback, useEffect, useState } from 'react';
+import { isNotFound, retryDelay, STOP_ON_UNAUTHORIZED } from '../pollPolicy';
+import { useTokenVersion } from '../useTokenVersion';
 import { seedsApi } from './api';
 import { appendStripPage, EMPTY_STRIP, type StripState } from './strip';
 
 /** Codes asked for per request; the server caps this at the most trials it reads in one request. */
 export const STRIP_PAGE = 20_000;
 export const STRIP_LIVE_MS = 3000;
-const UNAUTHORIZED = 401;
 
 export interface StripModel {
   strip: StripState;
   /** The first pass over the run has not finished. */
   loading: boolean;
   error: string | undefined;
+  /** Loads the strip again from the start (the error boundary's Retry). */
+  reload?: () => void;
 }
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -26,6 +28,14 @@ export function useStrip(runId: string, live: boolean): StripModel {
   const [strip, setStrip] = useState<StripState>(EMPTY_STRIP);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
+  const tokenVersion = useTokenVersion();
+  const [reloads, setReloads] = useState(0);
+  // What is held is dropped, so a retried part does not render the data that made it fail.
+  const reload = useCallback(() => {
+    setStrip(EMPTY_STRIP);
+    setLoading(true);
+    setReloads((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -50,7 +60,7 @@ export function useStrip(runId: string, live: boolean): StripModel {
       } catch (e) {
         if (ctl.signal.aborted) return;
         setError(isNotFound(e) ? 'this run does not exist' : messageOf(e));
-        const wait = retryDelay(e, STRIP_LIVE_MS, [UNAUTHORIZED]);
+        const wait = retryDelay(e, STRIP_LIVE_MS, STOP_ON_UNAUTHORIZED);
         if (wait === undefined) {
           setLoading(false);
           return;
@@ -64,7 +74,7 @@ export function useStrip(runId: string, live: boolean): StripModel {
       ctl.abort();
       if (timer) clearTimeout(timer);
     };
-  }, [runId, live]);
+  }, [runId, live, tokenVersion, reloads]);
 
-  return { strip, loading, error };
+  return { strip, loading, error, reload };
 }

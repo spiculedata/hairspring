@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
-import { isNotFound, retryDelay } from '../pollPolicy';
+import { isNotFound, retryDelay, STOP_ON_UNAUTHORIZED } from '../pollPolicy';
 import type { PropertyPage, PropertyQuery, PropertyRow } from '../types';
+import { useTokenVersion } from '../useTokenVersion';
 
 /** Rows asked for per request; the server caps this, and the table windows what is loaded. */
 export const PAGE_SIZE = 200;
 export const LIVE_REFRESH_MS = 2000;
-const UNAUTHORIZED = 401;
 
 export interface PropertyOverviewModel {
   /** First page for the current filters: carries the header, claim and counts. */
@@ -18,6 +18,8 @@ export interface PropertyOverviewModel {
   loadMore: (() => void) | undefined;
   loadingMore: boolean;
   error: string | undefined;
+  /** Loads the table again from the start (the error boundary's Retry). */
+  reload: () => void;
 }
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -30,8 +32,8 @@ const messageOf = (e: unknown): string => (e instanceof Error ? e.message : Stri
  *   run ends the table is reloaded from the start with the final figures.
  * - A response that belongs to an earlier filter, or that arrives after a refresh replaced the rows it would extend,
  *   is dropped, and a superseded request is aborted.
- * - A 429 delays the next refresh by Retry-After, a 401 stops refreshing (the token prompt has been raised once) and a
- *   404 stops it for good (the run is gone); see pollPolicy.ts.
+ * - A 429 delays the next refresh by Retry-After, a 401 stops refreshing (the token prompt has been raised once; entering
+ *   a token loads the table again) and a 404 stops it for good (the run is gone); see pollPolicy.ts.
  */
 export function usePropertyOverview(runId: string, live: boolean): PropertyOverviewModel {
   const [query, setQuery] = useState<PropertyQuery>({});
@@ -44,6 +46,15 @@ export function usePropertyOverview(runId: string, live: boolean): PropertyOverv
   const moreCount = useRef(0);
   const moreRequest = useRef<AbortController | undefined>(undefined);
   const queryKey = JSON.stringify(query);
+  const tokenVersion = useTokenVersion();
+  const [reloads, setReloads] = useState(0);
+  // The rows already held are dropped, so a retried part does not render the data that made it fail.
+  const reload = useCallback(() => {
+    setPage(undefined);
+    setMore([]);
+    setCursor(null);
+    setReloads((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -64,7 +75,7 @@ export function usePropertyOverview(runId: string, live: boolean): PropertyOverv
         } catch (e) {
           if (ctl.signal.aborted) return;
           setError(isNotFound(e) ? 'this run does not exist' : messageOf(e));
-          const wait = retryDelay(e, LIVE_REFRESH_MS, [UNAUTHORIZED]);
+          const wait = retryDelay(e, LIVE_REFRESH_MS, STOP_ON_UNAUTHORIZED);
           if (wait === undefined) return;
           delay = wait;
         }
@@ -79,7 +90,7 @@ export function usePropertyOverview(runId: string, live: boolean): PropertyOverv
       if (timer) clearTimeout(timer);
     };
     // `queryKey` stands in for `query`, which is a new object on every change.
-  }, [runId, queryKey, live]);
+  }, [runId, queryKey, live, tokenVersion, reloads]);
 
   const loadMore = useCallback(() => {
     if (cursor === null) return;
@@ -106,5 +117,5 @@ export function usePropertyOverview(runId: string, live: boolean): PropertyOverv
   }, [runId, cursor, queryKey]);
 
   const rows = page ? [...page.properties, ...more] : [];
-  return { page, rows, query, setQuery, loadMore: cursor === null ? undefined : loadMore, loadingMore, error };
+  return { page, rows, query, setQuery, loadMore: cursor === null ? undefined : loadMore, loadingMore, error, reload };
 }
