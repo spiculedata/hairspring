@@ -2,7 +2,7 @@
 //!
 //! Format v2 is line oriented `key=value`; free-text values are percent-escaped
 //! so a value can never inject a new line or field. v1 bundles still decode. v3 is v2 plus recorded
-//! execution-environment params (`host.*`, `hermit.*`, `env.*`, `target.*`).
+//! execution-environment params (the exact names in `environment::KNOWN_FIELDS`).
 use crate::ActionId;
 use std::collections::BTreeMap;
 
@@ -96,11 +96,9 @@ impl Bundle {
 
     /// Whether any param belongs to the recorded execution environment, which is what makes a bundle v3.
     fn records_environment(&self) -> bool {
-        self.params.keys().any(|k| {
-            crate::environment::NAMESPACES
-                .iter()
-                .any(|ns| k.starts_with(ns))
-        })
+        self.params
+            .keys()
+            .any(|k| crate::environment::is_known_field(k))
     }
 
     pub fn encode(&self) -> String {
