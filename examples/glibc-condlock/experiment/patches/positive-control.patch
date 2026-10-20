@@ -1,0 +1,21 @@
+diff --git a/nptl/pthread_cond_wait.c b/nptl/pthread_cond_wait.c
+index 66786c7b9022b26c7bc02defcb576e967b1ad335..cfcdd10ee21239e1e5eaf7f7a43b058f022b7836 100644
+--- a/nptl/pthread_cond_wait.c
++++ b/nptl/pthread_cond_wait.c
+@@ -532,6 +532,16 @@ __pthread_cond_wait_common (pthread_cond_t *cond, pthread_mutex_t *mutex,
+   while (!atomic_compare_exchange_weak_acquire (cond->__data.__g_signals + g,
+ 						&signals, signals - 2));
+ 
++  /* G0P-POSITIVE-CONTROL-HUNK: a 10 ms relative sleep, as a raw system call
++     (not a cancellation point), between the CAS above and the __g1_start load
++     below.  This is the widening that BZ 25847 comments 7 and 10 did by hand
++     (usleep before the load).  Not upstream code.  */
++  {
++    struct timespec g0p_ts = { 0, 10000000 };
++    (void) INTERNAL_SYSCALL_CALL (clock_nanosleep, CLOCK_MONOTONIC, 0,
++				  &g0p_ts, NULL);
++  }
++
+   /* We consumed a signal but we could have consumed from a more recent group
+      that aliased with ours due to being in the same group slot.  If this
+      might be the case our group must be closed as visible through

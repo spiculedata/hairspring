@@ -1,0 +1,21 @@
+diff --git a/nptl/pthread_cond_wait.c b/nptl/pthread_cond_wait.c
+index 66786c7b9022b26c7bc02defcb576e967b1ad335..e58d3b839cb906ca73f0b5408634e45db8ab6456 100644
+--- a/nptl/pthread_cond_wait.c
++++ b/nptl/pthread_cond_wait.c
+@@ -532,6 +532,16 @@ __pthread_cond_wait_common (pthread_cond_t *cond, pthread_mutex_t *mutex,
+   while (!atomic_compare_exchange_weak_acquire (cond->__data.__g_signals + g,
+ 						&signals, signals - 2));
+ 
++  /* P2-POSITIVE-CONTROL-HUNK: a busy-wait of 40000 x86 PAUSE iterations
++     between the CAS above and the __g1_start load below.  No system call, no
++     access to the condvar or any shared memory, no fence instruction, and
++     the thread stays runnable: only time passes, so a preemption is far more
++     likely to land between the two statements (BZ 25847 comment 0).  The
++     "memory" clobber is a compiler barrier only; it keeps the compiler from
++     moving the __g1_start load above the loop.  Not upstream code.  */
++  for (unsigned int p2_spin = 0; p2_spin < 40000; p2_spin++)
++    __asm__ __volatile__ ("pause" ::: "memory");
++
+   /* We consumed a signal but we could have consumed from a more recent group
+      that aliased with ours due to being in the same group slot.  If this
+      might be the case our group must be closed as visible through
