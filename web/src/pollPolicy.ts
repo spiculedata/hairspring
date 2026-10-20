@@ -1,6 +1,13 @@
 import { ApiError } from './api';
 
 const NOT_FOUND = 404;
+const UNAUTHORIZED = 401;
+
+/**
+ * Statuses that stop a poll for good: on a 401 the token prompt has already been raised once, so asking again every
+ * interval would only raise it again. Entering a token reloads the page's data (see `useTokenVersion`).
+ */
+export const STOP_ON_UNAUTHORIZED: readonly number[] = [UNAUTHORIZED];
 
 /**
  * How long to wait before polling again after a failure, or `undefined` to stop.

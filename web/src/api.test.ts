@@ -1,6 +1,27 @@
-import { describe, expect, it } from 'vitest';
-import { isPropertyPage, parseRetryAfter, propertiesUrl } from './api';
+import { describe, expect, it, vi } from 'vitest';
+import { getTokenVersion, isPropertyPage, onTokenChange, parseRetryAfter, propertiesUrl, setToken } from './api';
 import { page } from './explorer/fixtures';
+
+describe('token version', () => {
+  it('advances each time a token is entered, so a hook that stopped on a 401 can load again', () => {
+    const before = getTokenVersion();
+    setToken('first');
+    setToken('second');
+    expect(getTokenVersion()).toBe(before + 2);
+    setToken(null);
+  });
+
+  it('tells listeners when the token changes, until they unsubscribe', () => {
+    const listener = vi.fn();
+    const off = onTokenChange(listener);
+    setToken('a');
+    expect(listener).toHaveBeenCalledTimes(1);
+    off();
+    setToken('b');
+    expect(listener).toHaveBeenCalledTimes(1);
+    setToken(null);
+  });
+});
 
 describe('parseRetryAfter', () => {
   it('reads delta-seconds', () => {
