@@ -56,6 +56,7 @@ table.props tbody td, table.props tbody th { padding: 8px .5rem; border-bottom: 
 .guest-trunc { color: var(--muted); font-style: italic; }
 .guest-more { text-decoration: underline; color: var(--accent); }
 
+.boundary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .error-notice { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
 .error-notice .error { margin: .5rem 0; }
 

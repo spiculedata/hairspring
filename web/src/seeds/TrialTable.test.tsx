@@ -1,7 +1,7 @@
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { COLUMN_KEYS, COLUMN_WIDTHS_PX, columnBudgetPx } from './columns';
-import { CONTENT_WIDTH_PX, TABLE_BOX_BORDER_PX } from '../explorer/columns';
+import { CONTENT_WIDTH_PX, SCROLLBAR_PX, TABLE_BOX_BORDER_PX } from '../explorer/columns';
 import { failingRow, manyRows, seedRow } from './fixtures';
 import { CLIP_HEIGHT, ROW_HEIGHT } from './rowMetrics';
 import { TrialTable } from './TrialTable';
@@ -118,13 +118,17 @@ describe('TrialTable', () => {
     expect(CLIP_HEIGHT).toBeLessThan(ROW_HEIGHT);
   });
 
-  it('sets each column to its budgeted width, the widths to the page content width, and tells a narrow screen to scroll', () => {
+  it('sets each fixed column to its width, leaves one column to take the rest, and sets the table minimum to the budget', () => {
     const html = render([seedRow()]);
-    const widths = [...html.matchAll(/<col style="width:(\d+)px"/g)].map((m) => Number(m[1]));
-    expect(widths).toEqual(COLUMN_KEYS.map((k) => COLUMN_WIDTHS_PX[k]));
-    expect(columnBudgetPx()).toBeLessThanOrEqual(CONTENT_WIDTH_PX - TABLE_BOX_BORDER_PX);
+    const cols = [...html.matchAll(/<col(?: style="width:(\d+)px")?\/?>/g)].map((m) => (m[1] === undefined ? undefined : Number(m[1])));
+    expect(cols).toEqual(COLUMN_KEYS.map((k) => COLUMN_WIDTHS_PX[k]));
+    expect(cols.filter((w) => w === undefined)).toHaveLength(1);
+    expect(columnBudgetPx()).toBeLessThanOrEqual(CONTENT_WIDTH_PX - TABLE_BOX_BORDER_PX - SCROLLBAR_PX);
     expect(html).toContain(`min-width:${columnBudgetPx()}px`);
-    expect(html).toContain('class="scroll-hint"');
+  });
+
+  it('has the scroll hint in the markup until the table is measured to fit', () => {
+    expect(render([seedRow()])).toContain('class="scroll-hint"');
   });
 
   it('marks the row a jump landed on', () => {

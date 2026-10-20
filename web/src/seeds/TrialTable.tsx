@@ -59,48 +59,48 @@ export function TrialTable({ runId, rows, total, highlightSeq, onFilter, onNearE
         if (isNearEnd(el.scrollTop, el.clientHeight, rows.length)) onNearEnd();
       }}
     >
-        <table className="seeds"aria-rowcount={total === undefined ? UNKNOWN_ROWS : total + HEADER_ROWS} style={{ minWidth: columnBudgetPx() }}>
-          <caption>
-            {GUEST_IDS_NOTE} {FAILING_COLUMN_NOTE}
-          </caption>
-          <colgroup>
-            {COLUMN_KEYS.map((key) => (
-              <col key={key} style={{ width: COLUMN_WIDTHS_PX[key] }} />
-            ))}
-          </colgroup>
-          <thead>
-            <tr aria-rowindex={1}>
-              <th scope="col" className="num">
-                Trial
-              </th>
-              <th scope="col">Seed</th>
-              <th scope="col">Verdict</th>
-              <th scope="col">{FAILING_COLUMN_LABEL}</th>
-              <th scope="col">Schedule</th>
-              <th scope="col" className="num">
-                Ops
-              </th>
-              <th scope="col" className="num">
-                ms
-              </th>
-              <th scope="col">Detail kept</th>
-            </tr>
-          </thead>
-          <tbody>
-            <Spacer height={win.padTop} />
-            {rows.slice(win.start, win.end).map((row, i) => (
-              <TrialRowView
-                key={row.seq}
-                row={row}
-                rowIndex={win.start + i + HEADER_ROWS + 1}
-                runId={runId}
-                highlight={row.seq === highlightSeq}
-                onFilter={onFilter}
-              />
-            ))}
-            <Spacer height={win.padBottom} />
-          </tbody>
-        </table>
+      <table className="seeds" aria-rowcount={total === undefined ? UNKNOWN_ROWS : total + HEADER_ROWS} style={{ minWidth: columnBudgetPx() }}>
+        <caption>
+          {GUEST_IDS_NOTE} {FAILING_COLUMN_NOTE}
+        </caption>
+        <colgroup>
+          {COLUMN_KEYS.map((key) => (
+            <col key={key} style={{ width: COLUMN_WIDTHS_PX[key] }} />
+          ))}
+        </colgroup>
+        <thead>
+          <tr aria-rowindex={1}>
+            <th scope="col" className="num">
+              Trial
+            </th>
+            <th scope="col">Seed</th>
+            <th scope="col">Verdict</th>
+            <th scope="col">{FAILING_COLUMN_LABEL}</th>
+            <th scope="col">Schedule</th>
+            <th scope="col" className="num">
+              Ops
+            </th>
+            <th scope="col" className="num">
+              ms
+            </th>
+            <th scope="col">Detail kept</th>
+          </tr>
+        </thead>
+        <tbody>
+          <Spacer height={win.padTop} />
+          {rows.slice(win.start, win.end).map((row, i) => (
+            <TrialRowView
+              key={row.seq}
+              row={row}
+              rowIndex={win.start + i + HEADER_ROWS + 1}
+              runId={runId}
+              highlight={row.seq === highlightSeq}
+              onFilter={onFilter}
+            />
+          ))}
+          <Spacer height={win.padBottom} />
+        </tbody>
+      </table>
     </ScrollRegion>
   );
 }
