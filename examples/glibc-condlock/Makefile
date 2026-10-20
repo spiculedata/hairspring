@@ -109,4 +109,4 @@ test: unit condlock tprobe selftest-bins
 	sh tests/test_results_guard.sh $(BUILD)
 
 clean:
-	rm -rf build
+	rm -rf $(BUILD)

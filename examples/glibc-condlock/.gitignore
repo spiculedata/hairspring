@@ -4,3 +4,4 @@ results/*/dpos/
 results/*/dneg/
 results/*/dstall-leak/
 results/*/dstall-barrier/
+results/*/dstall-holdg/
