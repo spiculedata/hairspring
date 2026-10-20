@@ -29,6 +29,9 @@ The scripts and the Hermit build recipe are in
 [`examples/go-sql-cancel/experiment`](../examples/go-sql-cancel/experiment); the workload and the pinned toolchain
 scripts are in [`examples/go-sql-cancel`](../examples/go-sql-cancel).
 
+A companion page describes a second experiment, on a glibc condition-variable lost wakeup, that stopped before its counted
+runs: [`showcase-glibc-lost-wakeup.md`](showcase-glibc-lost-wakeup.md).
+
 ## 1. The bug
 
 `database/sql` copies a column value out of the driver's row into your destination in `Rows.Scan`. In Go 1.24.5,
