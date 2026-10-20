@@ -1,0 +1,81 @@
+Only the non-test hunks of golang/go commit 83b4a5db240960720e51b7d5a6da1f399bd868ee
+("[release-branch.go1.24] database/sql: avoid closing Rows while scan is in progress", CVE-2025-47907 / GO-2025-3849),
+restricted to src/database/sql/sql.go and src/database/sql/convert.go, applied to go1.24.5 with `git apply -p1`.
+The test hunks (fakedb_test.go, sql_test.go) are left out on purpose. Copyright The Go Authors; BSD-3-Clause
+(https://go.dev/LICENSE). Regenerate with scripts/make-fix-patch.sh and compare the sha256 recorded in BUILD-RECORD.
+
+diff --git a/src/database/sql/convert.go b/src/database/sql/convert.go
+index 65fdfe6..26b139a 100644
+--- a/src/database/sql/convert.go
++++ b/src/database/sql/convert.go
+@@ -335,7 +335,6 @@ func convertAssignRows(dest, src any, rows *Rows) error {
+ 			if rows == nil {
+ 				return errors.New("invalid context to convert cursor rows, missing parent *Rows")
+ 			}
+-			rows.closemu.Lock()
+ 			*d = Rows{
+ 				dc:          rows.dc,
+ 				releaseConn: func(error) {},
+@@ -351,7 +350,6 @@ func convertAssignRows(dest, src any, rows *Rows) error {
+ 					parentCancel()
+ 				}
+ 			}
+-			rows.closemu.Unlock()
+ 			return nil
+ 		}
+ 	}
+diff --git a/src/database/sql/sql.go b/src/database/sql/sql.go
+index eddb647..1cbb52c 100644
+--- a/src/database/sql/sql.go
++++ b/src/database/sql/sql.go
+@@ -3368,38 +3368,36 @@ func (rs *Rows) Scan(dest ...any) error {
+ 		// without calling Next.
+ 		return fmt.Errorf("sql: Scan called without calling Next (closemuScanHold)")
+ 	}
++
+ 	rs.closemu.RLock()
++	rs.raw = rs.raw[:0]
++	err := rs.scanLocked(dest...)
++	if err == nil && scanArgsContainRawBytes(dest) {
++		rs.closemuScanHold = true
++	} else {
++		rs.closemu.RUnlock()
++	}
++	return err
++}
+ 
++func (rs *Rows) scanLocked(dest ...any) error {
+ 	if rs.lasterr != nil && rs.lasterr != io.EOF {
+-		rs.closemu.RUnlock()
+ 		return rs.lasterr
+ 	}
+ 	if rs.closed {
+-		err := rs.lasterrOrErrLocked(errRowsClosed)
+-		rs.closemu.RUnlock()
+-		return err
+-	}
+-
+-	if scanArgsContainRawBytes(dest) {
+-		rs.closemuScanHold = true
+-		rs.raw = rs.raw[:0]
+-	} else {
+-		rs.closemu.RUnlock()
++		return rs.lasterrOrErrLocked(errRowsClosed)
+ 	}
+ 
+ 	if rs.lastcols == nil {
+-		rs.closemuRUnlockIfHeldByScan()
+ 		return errors.New("sql: Scan called without calling Next")
+ 	}
+ 	if len(dest) != len(rs.lastcols) {
+-		rs.closemuRUnlockIfHeldByScan()
+ 		return fmt.Errorf("sql: expected %d destination arguments in Scan, not %d", len(rs.lastcols), len(dest))
+ 	}
+ 
+ 	for i, sv := range rs.lastcols {
+ 		err := convertAssignRows(dest[i], sv, rs)
+ 		if err != nil {
+-			rs.closemuRUnlockIfHeldByScan()
+ 			return fmt.Errorf(`sql: Scan error on column index %d, name %q: %w`, i, rs.rowsi.Columns()[i], err)
+ 		}
+ 	}

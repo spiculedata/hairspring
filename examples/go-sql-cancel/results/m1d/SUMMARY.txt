@@ -1,0 +1,35 @@
+M1d summary: informational, native macOS darwin/arm64; race cells are labelled 'race detector on macOS'.
+Not Hermit. Not the engine. Counts only.
+Not comparable with any Hermit count (different host, different -q, no scheduler).
+
+Columns: runs = runs in the cell; viol_runs = runs whose protocol report has the property site false at least
+once; falses = the property site's false evaluations, summed over the runs; foreign_next = driver Next calls
+made while another query's Scan was in flight (a driver-side overlap counter, not a property result), summed;
+nonzero = runs with an unexpected exit status; races = runs whose stderr has a race-detector report;
+reports = race-detector reports, summed; status = ran, or for race cells ran-and-clean / ran-and-reported.
+
+Cells: native = the plain build, GOMAXPROCS=2 (gmp2) or the default (gmpdef); race = built with the race
+detector; std = the unassisted workload, yield = the assisted control.
+
+Note (written by hand, not by summarize-m1d.sh): in this table the race-std cell of go1.24.5 has no race report in 10 runs;
+the race-std cell of go1.24.5 in the q5000 supplement (results/m1d-supplement-race-q5000) has a race report in 3 of 10 runs.
+
+toolchain          cell                runs viol_runs     falses foreign_next  nonzero  races  reports  status
+go1.24.5           native-yield-gmp2     20        20       6629         7837        0      0        0  ran
+go1.24.5           native-yield-gmpdef    20        20       6811         7825        0      0        0  ran
+go1.24.5           native-std-gmp2        5         5         29         1771        0      0        0  ran
+go1.24.5           native-std-gmpdef      5         5         32          945        0      0        0  ran
+go1.24.5           race-std              10         0          0            2        0      0        0  ran-and-clean
+go1.24.5           race-yield            10        10       3409         3619        0     10       10  ran-and-reported
+go1.24.6           native-yield-gmp2     20         0          0            0        0      0        0  ran
+go1.24.6           native-yield-gmpdef    20         0          0            0        0      0        0  ran
+go1.24.6           native-std-gmp2        5         0          0         2461        0      0        0  ran
+go1.24.6           native-std-gmpdef      5         0          0         1658        0      0        0  ran
+go1.24.6           race-std              10         0          0            1        0      0        0  ran-and-clean
+go1.24.6           race-yield            10         0          0            0        0      0        0  ran-and-clean
+go1.24.5-fixonly   native-yield-gmp2     20         0          0            0        0      0        0  ran
+go1.24.5-fixonly   native-yield-gmpdef    20         0          0            0        0      0        0  ran
+go1.24.5-fixonly   native-std-gmp2        5         0          0         2730        0      0        0  ran
+go1.24.5-fixonly   native-std-gmpdef      5         0          0         1684        0      0        0  ran
+go1.24.5-fixonly   race-std              10         0          0            1        0      0        0  ran-and-clean
+go1.24.5-fixonly   race-yield            10         0          0            0        0      0        0  ran-and-clean

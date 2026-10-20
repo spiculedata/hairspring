@@ -1,0 +1,9 @@
+# Official Go release archives and the upstream fix commit, pinned. Format: shasum -a 256 -c.
+# Values are the sha256 published at https://go.dev/dl/?mode=json&include=all (checked 2026-10-16).
+# `scripts/fetch-go.sh --live` re-checks these against the live listing.
+4e29202c49573b953be7cc3500e1f8d9e66ddd12faa8cf0939a4951411e09a2a  go1.24.6.darwin-arm64.tar.gz
+92d30a678f306c327c544758f2d2fa5515aa60abe9dba4ca35fbf9b8bfc53212  go1.24.5.darwin-arm64.tar.gz
+bbca37cc395c974ffa4893ee35819ad23ebb27426df87af92e93a9ec66ef8712  go1.24.6.linux-amd64.tar.gz
+10ad9e86233e74c0f6590fe5426895de6bf388964210eac34a6d83f38918ecdc  go1.24.5.linux-amd64.tar.gz
+74fdb09f2352e2b25b7943e56836c9b47363d28dec1c8b56c4a9570f30b8f59f  go1.24.5.src.tar.gz
+e1cb5582aab588668bc04c07de18688070f6b8c9b2aaf361f821e19bd47cfdbd  go1.24.6.src.tar.gz
