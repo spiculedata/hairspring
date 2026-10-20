@@ -34,6 +34,7 @@ pub use view::{
 };
 
 use hairspring_core::bundle::Bundle;
+pub use hairspring_engine::backend::ReplayOptions;
 use hairspring_engine::config::TargetKind;
 use hairspring_engine::engine::Engine;
 use hairspring_engine::report::{FailureReport, ReplayOutcome, RunOutcome, RunStatus, Step};
@@ -389,7 +390,17 @@ impl Service {
         Ok(self.store.touch_worker(id, now_ms())?)
     }
 
+    /// Replays with the strict defaults: a changed loader is refused as an `EnvironmentMismatch`.
     pub fn replay_bundle(&self, engine: &Engine, text: &str) -> Result<ReplayOutcome> {
+        self.replay_bundle_with(engine, text, ReplayOptions::default())
+    }
+
+    pub fn replay_bundle_with(
+        &self,
+        engine: &Engine,
+        text: &str,
+        options: ReplayOptions,
+    ) -> Result<ReplayOutcome> {
         if text.len() > MAX_BUNDLE_BYTES {
             return Err(ServiceError::InvalidRequest(format!(
                 "bundle exceeds {MAX_BUNDLE_BYTES} bytes"
@@ -403,6 +414,8 @@ impl Service {
                 bundle.path.len()
             )));
         }
-        Ok(sanitize::replay_steps(engine.replay(&bundle)?))
+        Ok(sanitize::replay_steps(
+            engine.replay_with(&bundle, options)?,
+        ))
     }
 }

@@ -64,7 +64,7 @@ fn with_extra_param(bundle: &str, line: &str) -> String {
 fn a_new_bundle_records_the_environment_and_replays_without_a_warning() {
     let (d, hermit, body) = recorded("same");
     assert!(body.starts_with("hairspring-bundle v3\n"), "{body}");
-    assert!(body.contains("param.env.base_env=minimal"), "{body}");
+    assert!(body.contains("param.env.base_env=default"), "{body}");
     let file = write_bundle(&d, "b.hairspring", &body);
     let o = run(&d, &hermit, &["replay", &file]);
     assert_eq!(o.status.code(), Some(1), "{}", text(&o));
@@ -116,6 +116,52 @@ fn a_changed_loader_is_refused_unless_explicitly_allowed() {
         text(&allowed).contains("warning: environment differs"),
         "{}",
         text(&allowed)
+    );
+}
+
+/// The recorded seed is changed to one that passes, so the replay misses.
+fn passing_seed(bundle: &str) -> String {
+    assert!(bundle.contains("param.sched_seed=3"), "{bundle}");
+    bundle.replace("param.sched_seed=3", "param.sched_seed=1")
+}
+
+#[test]
+fn a_miss_on_a_changed_host_has_its_own_exit_code() {
+    let (d, hermit, body) = recorded("inconclusive");
+    let edited = with_extra_param(&passing_seed(&body), "param.host.kernel_release=1.2.3-old");
+    let file = write_bundle(&d, "b.hairspring", &edited);
+    let o = run(&d, &hermit, &["replay", &file]);
+    assert_eq!(o.status.code(), Some(3), "{}", text(&o));
+    assert!(text(&o).contains("inconclusive"), "{}", text(&o));
+    assert!(
+        text(&o).contains("does not show the bug is fixed"),
+        "{}",
+        text(&o)
+    );
+}
+
+#[test]
+fn a_miss_on_an_unchanged_host_still_exits_zero() {
+    let (d, hermit, body) = recorded("fixed");
+    let file = write_bundle(&d, "b.hairspring", &passing_seed(&body));
+    let o = run(&d, &hermit, &["replay", &file]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    assert!(
+        text(&o).contains("NOT reproduced: the bundle no longer fails"),
+        "{}",
+        text(&o)
+    );
+}
+
+#[test]
+fn the_help_lists_the_exit_codes() {
+    let (d, hermit, _) = recorded("help");
+    let o = run(&d, &hermit, &["replay", "--help"]);
+    let help = text(&o);
+    assert!(help.contains("Exit codes"), "{help}");
+    assert!(
+        help.contains("3 not reproduced on a changed environment"),
+        "{help}"
     );
 }
 

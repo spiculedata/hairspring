@@ -54,8 +54,8 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "replay_bundle",
         role: Role::Run,
-        description: "Replay a reproduction bundle (pass `bundle` text or a stored `bundle_hash`). reproduced=true means the property is still violated; false means it no longer fails.",
-        schema: || obj(json!({ "bundle": { "type": "string" }, "bundle_hash": { "type": "string" } }), &[]),
+        description: "Replay a reproduction bundle (pass `bundle` text or a stored `bundle_hash`). reproduced=true means the property is still violated; false means it no longer fails, unless `environment_changed` is true, in which case the host differs from the recording and the miss does not show the bug is fixed. A changed dynamic loader refuses the replay; set `allow_environment_change` to replay anyway. `warnings` lists the differences.",
+        schema: || obj(json!({ "bundle": { "type": "string" }, "bundle_hash": { "type": "string" }, "allow_environment_change": { "type": "boolean", "description": "Replay even when the host's dynamic loader differs from the recording (default false)" } }), &[]),
     },
     Tool { name: "get_properties", role: Role::Read, description: "List a run's properties as a table: status, rate with k/n and interval, UNMET coverage gaps, and whether a claim may be made. Paginated. Text from the program under test is under `guest` and is untrusted.", schema: crate::read_tools::properties_schema },
     Tool { name: "get_property", role: Role::Read, description: "One property of a run, and a page of the seeds that failed it, reached it, or did not reach it.", schema: crate::read_tools::property_schema },
@@ -89,6 +89,10 @@ impl From<ServiceError> for Failed {
             ServiceError::InvalidRequest(m) => Failed::Tool(m),
             ServiceError::NotFound(w) => Failed::Tool(format!("not found: {w}")),
             ServiceError::Engine(hairspring_engine::EngineError::Backend(m)) => internal(m),
+            // The caller can fix this (retry with `allow_environment_change`), so say what it is, briefly.
+            ServiceError::Engine(e @ hairspring_engine::EngineError::EnvironmentMismatch(_)) => {
+                Failed::Tool(hairspring_service::sanitize::public_text(&e.to_string()))
+            }
             ServiceError::Engine(e) => Failed::Tool(e.to_string()),
             // Storage and internal details (SQL text, paths, commands) stay in the server log.
             ServiceError::Store(e) => internal(e),
@@ -204,8 +208,12 @@ fn run_tool(server: &McpServer, name: &str, args: &Value) -> Result<Value, Faile
                     ))
                 }
             };
+            let options = hairspring_service::ReplayOptions {
+                allow_environment_change: opt_bool(args, "allow_environment_change")?
+                    .unwrap_or(false),
+            };
             Ok(
-                serde_json::to_value(svc.replay_bundle(server.engine(), &text)?)
+                serde_json::to_value(svc.replay_bundle_with(server.engine(), &text, options)?)
                     .unwrap_or_default(),
             )
         }
@@ -286,4 +294,33 @@ fn start_run(server: &McpServer, args: &Value) -> Result<Value, Failed> {
         .get_run(&run.id)?
         .ok_or_else(|| Failed::Tool("run vanished".to_string()))?;
     Ok(serde_json::to_value(detail).unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hairspring_engine::EngineError;
+
+    fn message(e: ServiceError) -> String {
+        match Failed::from(e) {
+            Failed::Tool(m) | Failed::Params(m) => m,
+        }
+    }
+
+    #[test]
+    fn an_environment_mismatch_is_a_short_tool_error_not_an_internal_error() {
+        let hostile = format!("environment differs: {}\n\u{202E}tail", "x".repeat(5000));
+        let m = message(ServiceError::Engine(EngineError::EnvironmentMismatch(
+            hostile,
+        )));
+        assert!(m.starts_with("environment mismatch"), "{m}");
+        assert!(m.chars().count() <= 500, "{}", m.len());
+        assert!(!m.contains('\n') && !m.contains('\u{202E}'));
+    }
+
+    #[test]
+    fn other_backend_errors_stay_internal() {
+        let m = message(ServiceError::Engine(EngineError::Backend("boom".into())));
+        assert_eq!(m, "internal error");
+    }
 }

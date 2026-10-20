@@ -56,16 +56,12 @@ pub fn run(ctx: &Ctx, args: &ReplayArgs, out: &mut dyn Write) -> CmdResult<i32> 
     if replay.reproduced {
         writeln!(out, "reproduced: the property is still violated")?;
         Ok(crate::EXIT_VIOLATION)
-    } else if replay
-        .warnings
-        .iter()
-        .any(|w| w.starts_with("environment differs"))
-    {
+    } else if replay.environment_changed {
         writeln!(
             out,
-            "NOT reproduced, but the environment differs from the recording: this does not show the bug is fixed"
+            "inconclusive: not reproduced, but the environment differs from the recording; this does not show the bug is fixed"
         )?;
-        Ok(crate::EXIT_OK)
+        Ok(crate::EXIT_INCONCLUSIVE)
     } else {
         writeln!(
             out,

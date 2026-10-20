@@ -60,6 +60,11 @@ impl From<ServiceError> for ApiError {
             ServiceError::InvalidRequest(m) => ApiError::bad_request(m),
             ServiceError::NotFound(_) => ApiError::not_found(),
             ServiceError::Engine(EngineError::Backend(m)) => ApiError::internal(m),
+            // The caller can fix this (retry with the override), so say what it is, briefly.
+            ServiceError::Engine(e @ EngineError::EnvironmentMismatch(_)) => ApiError::new(
+                StatusCode::CONFLICT,
+                hairspring_service::sanitize::public_text(&e.to_string()),
+            ),
             ServiceError::Engine(e) => ApiError::bad_request(e.to_string()),
             ServiceError::Store(e) => ApiError::internal(e),
             ServiceError::Internal(m) => ApiError::internal(m),
@@ -81,5 +86,33 @@ impl IntoResponse for ApiError {
                 .insert(header::RETRY_AFTER, header::HeaderValue::from(secs));
         }
         res
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_environment_mismatch_is_a_409_with_a_short_single_line_message_not_an_internal_error() {
+        let hostile = format!("environment differs: {}\n\u{202E}tail", "x".repeat(5000));
+        let e = ApiError::from(ServiceError::Engine(EngineError::EnvironmentMismatch(
+            hostile,
+        )));
+        assert_eq!(e.status, StatusCode::CONFLICT);
+        assert!(
+            e.message.starts_with("environment mismatch"),
+            "{}",
+            e.message
+        );
+        assert!(e.message.chars().count() <= 500, "{}", e.message.len());
+        assert!(!e.message.contains('\n') && !e.message.contains('\u{202E}'));
+        assert_ne!(e.message, "internal error");
+    }
+
+    #[test]
+    fn other_backend_errors_stay_internal() {
+        let e = ApiError::from(ServiceError::Engine(EngineError::Backend("boom".into())));
+        assert_eq!(e.status, StatusCode::INTERNAL_SERVER_ERROR);
     }
 }
