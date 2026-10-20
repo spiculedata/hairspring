@@ -10,8 +10,8 @@ What you can take from it:
 
 - how to build one Go program three ways, with the official releases and a patched toolchain that differs from stock in
   exactly the fix's two files, pinned by hash, and use the unpatched-versus-fixed pair as a control;
-- a stuck-state style property for a pooled-connection race, designed so that it cannot be false on a correct library,
-  plus a deliberately assisted version of the workload that checks the detector fires;
+- an "always" check on the value `Scan` returns, for a pooled-connection race, designed not to be false when `Scan`
+  copies under the lock (the argument is in 2.2), plus a deliberately assisted version of the workload that checks the detector fires;
 - a count, under the skid-b reading of the outcome (mechanical code `C1-DONE/R-CRASH+R-CRASH-hermit(u=2,c=0,cp=0)`; both
   codes are given in 5.5): in this configuration the property site was false at least once in 934 of the 1,996 rated runs on
   Go 1.24.5, and in none of 2,000 runs on each of the two controls (labels in 6.2);
@@ -81,8 +81,10 @@ the row of its own query, exactly. A `Scan` error after a cancel is allowed (the
 When the site is false, a witness records the query id, the id at the head and at the tail of the returned string, and a
 class: 1 foreign (head and tail equal, a complete row of another query), 2 torn (head and tail differ), 3 unparsable.
 
-The property cannot be false on a correct library: the driver only ever writes complete rows of the query that owns the
-connection at that instant, and a copy that finishes before the connection can change owner sees exactly its own row. Six
+The property is designed not to be false when `Scan` copies under the lock: the driver only ever writes complete rows of
+the query that owns the connection at that instant, and a copy that finishes before the connection can change owner sees
+exactly its own row. That is an argument, not a proof; the observation is 0 of 2,000 runs on each of the two controls
+(6.2). Six
 more sites are coverage markers, a mechanism marker or harness invariants (one connection owner at a time; an error only
 after a cancel; every query ran). Only the property decides anything.
 
@@ -265,7 +267,7 @@ made.
 
 Under the skid-b reading, with A-c and A-c' both at 0 of 2,000, the lower Wilson bound of A-u (44.6129%) is above the
 larger upper Wilson bound of the two controls (0.1917%), and the 8-hit threshold of the design is passed by a wide margin.
-The three rates side by side, with the assisted control for context: A-u 934 of 1,996 [44.61%, 48.99%]; A-c 0
+The three counts side by side, with the assisted control for context: A-u 934 of 1,996 [44.61%, 48.99%]; A-c 0
 of 2,000 [0.00%, 0.19%]; A-c' 0 of 2,000 [0.00%, 0.19%]; assisted control P-u 199 of 199 and P-c, P-c' 0 of 200 each
 (section 6.1; assisted, window_widening). The controls are a fixed release (arm level only) and a patched toolchain; the
 comparison is not "the same seed passes on 1.24.6". The sensitivity line (information, not a rule): had every unrated A-u
@@ -282,16 +284,16 @@ The hit seeds in seed order begin 330003, 330004, 330008; the first 100 end at 3
 - **Direct reruns** (2026-10-19, same wrapper, binary, flags and seed): three more runs, all three a hit, each with the same
   standard output hash and schedule fingerprint as the original run: 300 of 300 rerun rows were hits.
 - **The engine** (2026-10-19): one `hairspring test` of the A-u binary at that seed, and, with exactly one bundle written
-  each time, one `hairspring replay`. The engine reported a failure at the hit's own seed (its own message ends "reproduced
-  3/3"), for all 100;
+  each time, one `hairspring replay`. The engine reported a failure at the hit's own seed (its message reports 3/3 failing
+  reruns), for all 100;
   the replay of its bundle matched the recording's output and schedule and the recorded property failed again, for all 100.
   The engine ran Hermit in a different environment from the direct driver (its own environment variables, and its three
   trials at seeds S, S+1 and S+2 in parallel); this is an observation about that environment, not a repetition of the
   direct run.
-- **The first false evaluation** of each of the 100 was of class 1 (foreign): a complete row belonging to another query.
+- **The recorded `first_false` witness** of each of the 100 was of class 1 (foreign): a complete row belonging to another query.
 
 The other 834 hits are counted and listed, and were not confirmed. Under the skid-b reading, the statement is: the property
-site was false in 934 of 2,000 blind seeds (1,996 rated; Wilson 95% [44.6129%, 48.9866%]); the first m = 100 of them in
+site was false in 934 of 1,996 rated runs (seeds fixed in advance; Wilson 95% [44.6129%, 48.9866%]); the first m = 100 of them in
 seed order were each confirmed (3/3 identical direct reruns, the engine at the same seed, bundle replay), on Go 1.24.5, with
 our test driver, bug known in advance, `T2_instrumented`; the engine ran in a different Hermit environment. No rate
 comparison with the controls is part of this sentence (see 6.3). The confirmation of a hit seed is an observation of this
@@ -327,7 +329,9 @@ the workload, and the sensitivity line above shows how far they could move a cou
 - Any statement about other Go versions, other drivers (including real ones), `Row.Scan`, `Tx`, `Conn`, `Stmt`, `RawBytes`
   or other hosts, kernels or `GOMAXPROCS` values.
 - That Hermit reaches the race better than something else, or that a hit would appear natively; no native figure is
-  compared with a figure under Hermit.
+  compared with a figure under Hermit. The example's `results/m1d/SUMMARY.txt` shows native go1.24.5 `-mode=std` runs
+  on a different host with the property site false in 5 of 5 runs in each of two cells; this page makes no claim that
+  Hermit was needed to reach the race.
 - That the 934 hits are 934 distinct interleavings.
 - That the 834 unconfirmed hits would each be confirmed.
 - That Hermit failures are rare or harmless in general.
@@ -343,8 +347,14 @@ The scripts that ran, with machine paths replaced, are in
    binary sha256 values were built). On Linux, download the `linux-amd64` archives pinned in the example's `PINS` by hand.
 2. **Workload binaries.** Build `cmd/sqlcancel` with each toolchain and the flags of section 3; compare the sha256 values.
 3. **Hermit.** Build it with the recipe in the experiment folder (root is needed to run it).
-4. **Counted runs.** Use the five windows of 400 seeds from 330001 with `c1.sh count`, and `c1_eval.py verdict`.
+4. **Counted runs.** Use the five windows of 400 seeds from 330001 with `c1.sh count`, and
+   `python3 rev1b/c1_eval.py verdict --g1 PASS --skid-b WINDOW_DIR...` over the windows in order (with `g_eval.py` and `sclib.py` next to it);
+   `bin/c1_eval.py` gives only the mechanical code.
 5. **Confirmation.** `c1.sh confirm` for the direct reruns and `c2e.sh` for the engine, on the first 100 hit seeds.
+
+Before running the drivers on any machine, read "Security notes for running the drivers" in the experiment folder's
+README: `c2e.sh` runs the engine as root against a configuration file in a world-writable directory, and the drivers
+use world-writable summary and temporary directories; they were run on a machine with a single local user.
 
 What you cannot repeat exactly: our Hermit binary ([I] a rebuild will probably have a different sha256, so seeds and
 fingerprints are not comparable), our machine, and our raw run records (not published). The scripts' gates compare every

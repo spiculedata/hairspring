@@ -105,8 +105,9 @@ HS_GO="$GOROOT/bin/go" SQLCANCEL_EXPECT=buggy \
   cargo test -p hairspring-props --test go_shim --test go_sqlcancel
 ```
 
-Set `SQLCANCEL_EXPECT=clean` for go1.24.6 and go1.24.5 plus the fix. Without `HS_GO`, or if Go is missing, the
-tests print a skip notice (set `HS_REQUIRE_GO=1` to make that an error).
+Set `SQLCANCEL_EXPECT=clean` for go1.24.6 and go1.24.5 plus the fix. Without `HS_GO` the tests use `go` from
+`PATH`, and they print a skip notice instead of running if that Go is missing or older than 1.24 (set `HS_REQUIRE_GO=1`
+to make that an error; empty, `0` and `false` count as unset).
 
 ## Run it under Hairspring and Hermit
 
@@ -134,7 +135,7 @@ the environment that recorded it. The scheduler settings of the experiment were:
 The experiment that used this workload is described in
 [the write-up](../../docs/showcase-go-sql-cancel-race.md). In short, on one machine (Ubuntu 24.04.5, kernel
 6.17.0-42-generic, Intel Xeon E5-1410 v2) under one pinned Hermit build, the property site was false at least once in
-934 of 1,996 rated seeds on go1.24.5 (Wilson 95% [44.61%, 48.99%]; four runs were Hermit failures and are outside the
+934 of 1,996 rated runs on go1.24.5 (seeds fixed in advance; Wilson 95% [44.61%, 48.99%]; four runs were Hermit failures and are outside the
 rated runs) and in 0 of 2,000 on each of go1.24.6 and go1.24.5 plus only the fix, for the same 2,000 seeds. The first
 100 hit seeds in seed order were each confirmed by three direct reruns, by the engine at the same seed (in a different
 Hermit environment) and by bundle replay. Labels: bug known in advance; targeted workload; environment pinned;

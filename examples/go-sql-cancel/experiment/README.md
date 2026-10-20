@@ -10,6 +10,27 @@ Licences: the scripts are Apache-2.0, like the rest of this repository. `patches
 diff against Hermit (BSD-3-Clause). The Go fix-only patch is in the example (`patches/fix-only.patch`, BSD-3-Clause, the
 Go Authors' copyright).
 
+## Security notes for running the drivers
+
+The published scripts are the as-run copies, and they were run on a machine with a single local user. They are not
+hardened for a shared machine. Read this before running them anywhere else.
+
+- **The engine runs as root against a file in a world-writable directory.** `c2e.sh` writes `$R/cfg/ge.toml` into
+  `cfg/` (mode 1777) without checking the result of the write, hashes it for the log only, and then runs the engine as
+  root through `sudo -n` with `--config "$R/cfg/ge.toml"`. The target commands in that file are run by the engine, so
+  another local user who can plant or swap `ge.toml` (or the other files in `cfg/`) gets code run as root.
+- **Summary files and temporary directories sit in 1777 directories with predictable names.** `c1.sh` and `c2e.sh`
+  write Hermit's summary files into `sum/` and give each run a temporary directory under `tmp/`, both mode 1777 and
+  named after the run identifier, and Hermit runs as root there. Another local user could plant those names in advance
+  and force Hermit failures or forge the summary files that the schedule fingerprints are read from. The kernel settings
+  `fs.protected_regular` and `fs.protected_symlinks` reduce this but do not remove it.
+- **What to do instead.** Run the drivers only on a machine that has no other local users. Or create `cfg/`, `sum/`
+  and `tmp/` as root-owned directories with mode 0755 before the run (as `c2e.sh` already does for `e/`) and check the
+  sha256 of `ge.toml` against the logged value before each engine call; both need edits to the scripts that the
+  published copies do not have, and an edited script no longer has the hash in the table below.
+- **Paths with a double quote are unsupported.** `c2e.sh` builds the TOML with `printf`, so a work directory or binary
+  path containing `"` produces a broken or different configuration.
+
 ## What each file does
 
 | File | Role | What it does |
@@ -26,6 +47,8 @@ Go Authors' copyright).
 Not published: the idle check, the preflight listing and the leftover scan (they name other jobs on a shared machine), the
 earlier step's driver `g.sh` (its three Hermit functions are byte-identical to `c1.sh`'s, which is the version that
 ran), the specifications, and every run record (see below).
+
+Comments in `c1.sh` and `c2e.sh` that cite `SCRIPTS/README.md` mean this file (`experiment/README.md`).
 
 Internal step names appear in comments and in printed outcome codes: C1 = the counted runs, C2a = the direct reruns,
 C2b = the engine confirmations, GOG = the earlier determinism and control gates (G0, G1, G2). Comments that say "box"
@@ -73,8 +96,10 @@ replace the pins with your own values. That is intended: the scripts refuse to r
 ## Directory layout the drivers expect
 
 A fresh work directory `R` in a tmpfs that is not mounted `noexec` (we used a directory under `/dev/shm`) holding `bin/`
-(these files), `g/` (the three binaries named `u-shim`, `c-shim`, `cp-shim`), and, for windows after the first, a `prev/`
-bundle built by `c1_eval.py prepare` from the earlier windows. `c1.sh` creates `out/`, `runs/`, `sum/` and `tmp/` itself;
+(these files, plus the engine binary `bin/hairspring` for `c2e.sh`), `cfg/` (created beforehand with mode 1777, for
+`c2e.sh`; see the security notes above), `g/` (the three binaries named `u-shim`, `c-shim`, `cp-shim`), and, for windows
+after the first, a `prev/` bundle built by `c1_eval.py prepare` from the earlier windows. `c1.sh` creates `out/`,
+`runs/`, `sum/` and `tmp/` itself;
 the directories Hermit writes into are made mode 1777 because Hermit runs as root. Root-owned summary files remain in
 `sum/` afterwards. The launch lines are in the first comment lines of `c1.sh` and `c2e.sh`.
 
