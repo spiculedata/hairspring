@@ -4,10 +4,12 @@
 use crate::types::{Result, StoreError};
 use postgres::Transaction;
 
-pub(crate) const SCHEMA_VERSION: i32 = 3;
+pub(crate) const SCHEMA_VERSION: i32 = 4;
 
 /// The tables a version 3 schema must have.
 const V3_TABLES: [&str; 4] = ["run_identity", "trees", "trial_lineage", "tree_branches"];
+/// The tables version 4 added.
+const V4_TABLES: [&str; 2] = ["run_digest_use", "run_coverage"];
 /// The indexes of `trial_lineage`.
 const V3_INDEXES: [&str; 4] = [
     "lineage_children",
@@ -112,6 +114,15 @@ CREATE TABLE IF NOT EXISTS tree_branches (
   created_by TEXT NOT NULL, created_at BIGINT NOT NULL, UNIQUE (tree_id, command_hash));
 ";
 
+/// Version 4: see the SQLite migration of the same name; the two stores keep the same columns. Separate tables on
+/// purpose: `runs` and `trials` are not altered, so no existing row is rewritten.
+const MIGRATE_V3_TO_V4: &str = "
+CREATE TABLE IF NOT EXISTS run_digest_use (
+  run_id TEXT PRIMARY KEY REFERENCES runs(id), bytes BIGINT NOT NULL, capped_trials BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS run_coverage (
+  run_id TEXT PRIMARY KEY REFERENCES runs(id), series_json TEXT NOT NULL);
+";
+
 /// Brings the schema to [`SCHEMA_VERSION`] inside the caller's transaction. A schema from a newer release is refused.
 /// A current schema is only looked at: no DDL is issued, so opening it needs no rights beyond reading and writing rows.
 pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
@@ -135,6 +146,7 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             tx.batch_execute(SCHEMA_V1)?;
             tx.batch_execute(MIGRATE_V1_TO_V2)?;
             tx.batch_execute(MIGRATE_V2_TO_V3)?;
+            tx.batch_execute(MIGRATE_V3_TO_V4)?;
             tx.execute(
                 "INSERT INTO schema_version(version) VALUES ($1)",
                 &[&SCHEMA_VERSION],
@@ -143,6 +155,7 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
         Some(1) => {
             tx.batch_execute(MIGRATE_V1_TO_V2)?;
             tx.batch_execute(MIGRATE_V2_TO_V3)?;
+            tx.batch_execute(MIGRATE_V3_TO_V4)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(2) => {
@@ -152,6 +165,11 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
                 tx.batch_execute("ALTER TABLE workers ADD COLUMN IF NOT EXISTS secret_hash TEXT")?;
             }
             tx.batch_execute(MIGRATE_V2_TO_V3)?;
+            tx.batch_execute(MIGRATE_V3_TO_V4)?;
+            tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
+        }
+        Some(3) => {
+            tx.batch_execute(MIGRATE_V3_TO_V4)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(v) if v == SCHEMA_VERSION => verify_current(tx)?,
@@ -164,9 +182,9 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
     Ok(())
 }
 
-/// Reports a current schema that lost one of the version 3 tables or indexes instead of repairing it.
+/// Reports a current schema that lost one of its tables or a version 3 index instead of repairing it.
 fn verify_current(tx: &mut Transaction<'_>) -> Result<()> {
-    for table in V3_TABLES {
+    for table in V3_TABLES.into_iter().chain(V4_TABLES) {
         let row = tx.query_one(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables \
              WHERE table_schema = current_schema() AND table_name = $1)",

@@ -3,6 +3,7 @@
 use hairspring_store::*;
 use std::sync::Arc;
 
+pub mod explorer;
 #[cfg(feature = "postgres")]
 pub mod pg_support;
 pub mod terminal_events;
@@ -52,6 +53,7 @@ pub fn run_all(make: &dyn Fn() -> Arc<dyn Store>) {
     concurrent_leases_never_duplicate(make());
     terminal_events::run_all_terminal_events(make);
     trials::run_all_trials(make);
+    explorer::run_all_explorer(make);
     tree::run_all_trees(make);
 }
 

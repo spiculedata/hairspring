@@ -125,7 +125,7 @@ fn a_version_one_database_migrates_in_place_and_old_rows_read_back_with_zero_cou
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     std::fs::remove_dir_all(path.parent().unwrap()).ok();
 }
 

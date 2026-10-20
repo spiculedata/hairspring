@@ -16,7 +16,7 @@ fn new_run(s: &dyn Store, target: &str, now: i64) -> RunRecord {
 }
 
 /// A run with a leased job, ready for ingest.
-fn leased(s: &dyn Store, worker: &str) -> (RunRecord, Job) {
+pub(super) fn leased(s: &dyn Store, worker: &str) -> (RunRecord, Job) {
     let r = new_run(s, "t", 1);
     s.enqueue_job(&r.id, "run", "{}", 2).unwrap();
     let job = s.lease_job(worker, 600, 10).unwrap().unwrap();
@@ -24,7 +24,7 @@ fn leased(s: &dyn Store, worker: &str) -> (RunRecord, Job) {
     (r, job)
 }
 
-fn row(idx: u32, id: &str, decided: bool) -> CatalogRowRecord {
+pub(super) fn row(idx: u32, id: &str, decided: bool) -> CatalogRowRecord {
     CatalogRowRecord {
         idx,
         prop_id: id.to_string(),
@@ -38,7 +38,7 @@ fn row(idx: u32, id: &str, decided: bool) -> CatalogRowRecord {
     }
 }
 
-fn trial(seq: u64) -> NewTrial {
+pub(super) fn trial(seq: u64) -> NewTrial {
     NewTrial {
         seq,
         seed: 100 + seq,
@@ -61,14 +61,16 @@ fn trial(seq: u64) -> NewTrial {
         digest: vec![1, 0, 0, 0],
         detail: None,
         output: None,
+        on_digest_cap: None,
     }
 }
 
-fn batch(catalog: Vec<CatalogRowRecord>, trials: Vec<NewTrial>) -> TrialBatch {
+pub(super) fn batch(catalog: Vec<CatalogRowRecord>, trials: Vec<NewTrial>) -> TrialBatch {
     TrialBatch {
         catalog,
         trials,
         kept_bytes_cap: MAX_KEPT_BYTES_PER_RUN,
+        digest_bytes_cap: MAX_DIGEST_BYTES_PER_RUN,
     }
 }
 
@@ -175,6 +177,7 @@ fn finish_job_records_statistics_and_property_rows(s: &dyn Store) {
         ingest_incomplete: true,
         property_summary_json: Some("{\"trials\":10}".to_string()),
         properties: vec![property_row(0, "violation")],
+        coverage_json: None,
     };
     assert_eq!(
         finish_with_stats(s, &job, "w1", stats),
@@ -513,6 +516,7 @@ fn kept_detail_goes_to_blobs_under_a_per_run_cap(s: &dyn Store) {
         catalog: vec![],
         trials: vec![t],
         kept_bytes_cap: (MAX_KEPT_DETAIL_BYTES * 2) as u64,
+        digest_bytes_cap: MAX_DIGEST_BYTES_PER_RUN,
     };
     let big = |seq| NewTrial {
         detail: Some(vec![b'a'; MAX_KEPT_DETAIL_BYTES]),

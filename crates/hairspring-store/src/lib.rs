@@ -5,6 +5,7 @@
 //! Unix epoch and are passed in explicitly so behaviour is testable.
 #[macro_use]
 mod types;
+mod digest_allowance;
 mod downgrade;
 #[macro_use]
 mod lineage;
@@ -13,6 +14,8 @@ mod lineage_fields;
 mod pg;
 #[cfg(feature = "postgres")]
 mod pg_downgrade;
+#[cfg(feature = "postgres")]
+mod pg_explorer;
 #[cfg(feature = "postgres")]
 mod pg_lineage;
 #[cfg(feature = "postgres")]
@@ -23,8 +26,10 @@ mod pg_schema;
 mod pg_tree_query;
 #[cfg(feature = "postgres")]
 mod pg_trials;
+mod reporters;
 mod sqlite;
 mod sqlite_downgrade;
+mod sqlite_explorer;
 mod sqlite_lineage;
 mod sqlite_run_end;
 mod sqlite_schema;
@@ -32,6 +37,7 @@ mod sqlite_tree_query;
 mod sqlite_trials;
 mod trials;
 
+pub use digest_allowance::*;
 pub use downgrade::*;
 pub use lineage::*;
 #[cfg(feature = "postgres")]
@@ -44,6 +50,7 @@ pub use trials::*;
 pub use types::*;
 
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -200,6 +207,17 @@ pub trait Store: Send + Sync {
     fn list_run_properties(&self, run_id: &str) -> Result<Vec<RunPropertyRow>>;
     /// The workers that reported trials for the run, with whether all of their rows were from a trusted worker.
     fn run_contributors(&self, run_id: &str) -> Result<Vec<Contributor>>;
+
+    // the explorer's storage needs (schema version 4)
+    /// The worker that first reported each of the given seeds in the run (the lowest sequence number wins). A seed
+    /// the run has no trial for is left out. Reads only the seed and worker columns, never a whole trial row. More
+    /// than [`MAX_REPORTER_SEEDS`] seeds is `LimitExceeded`.
+    fn reporters_of(&self, run_id: &str, seeds: &[u64]) -> Result<BTreeMap<u64, String>>;
+    /// How much of the run's digest allowance its stored trials use. Zero for an unknown run or one with no digests.
+    fn run_digest_use(&self, run_id: &str) -> Result<DigestUse>;
+    /// The coverage series stored when the run's job finished, or `None` (an unfinished run, or one finished before
+    /// the series was stored).
+    fn run_coverage_json(&self, run_id: &str) -> Result<Option<String>>;
 
     // run identity and trial trees (schema version 3)
     /// Records the execution inputs of a run. The same identity again is a duplicate and a different one is refused,

@@ -6,7 +6,7 @@
 use crate::types::{Result, StoreError};
 use rusqlite::Connection;
 
-pub(crate) const SCHEMA_VERSION: i64 = 3;
+pub(crate) const SCHEMA_VERSION: i64 = 4;
 
 const SCHEMA_V1: &str = "
 CREATE TABLE runs (
@@ -115,8 +115,20 @@ CREATE TABLE IF NOT EXISTS tree_branches (
   created_by TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE (tree_id, command_hash));
 ";
 
+/// Version 4: the digest allowance a run has used and the coverage series stored when its job finished. Purely
+/// additive, and separate tables on purpose: `runs` and `trials` are not altered, so migrating a database with many
+/// trials rewrites nothing. A run without a row has used nothing and has no stored series.
+const MIGRATE_V3_TO_V4: &str = "
+CREATE TABLE IF NOT EXISTS run_digest_use (
+  run_id TEXT PRIMARY KEY REFERENCES runs(id), bytes INTEGER NOT NULL, capped_trials INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS run_coverage (
+  run_id TEXT PRIMARY KEY REFERENCES runs(id), series_json TEXT NOT NULL);
+";
+
 /// The tables a version 3 database must have.
 const V3_TABLES: [&str; 4] = ["run_identity", "trees", "trial_lineage", "tree_branches"];
+/// The tables version 4 added.
+const V4_TABLES: [&str; 2] = ["run_digest_use", "run_coverage"];
 /// The indexes of `trial_lineage`.
 const V3_INDEXES: [&str; 4] = [
     "lineage_children",
@@ -154,6 +166,7 @@ fn ensure_secret_column(conn: &Connection) -> Result<()> {
 fn verify_current(conn: &Connection) -> Result<()> {
     let wanted = V3_TABLES
         .iter()
+        .chain(V4_TABLES.iter())
         .map(|t| ("table", *t))
         .chain(V3_INDEXES.iter().map(|i| ("index", *i)));
     for (kind, name) in wanted {
@@ -182,6 +195,7 @@ fn upgrade(conn: &Connection, from: i64) -> Result<()> {
         ensure_secret_column(conn)?;
     }
     conn.execute_batch(MIGRATE_V2_TO_V3)?;
+    conn.execute_batch(MIGRATE_V3_TO_V4)?;
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }

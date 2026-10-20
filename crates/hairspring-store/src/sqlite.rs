@@ -1,4 +1,6 @@
+use crate::digest_allowance::DigestUse;
 use crate::lineage::*;
+use crate::sqlite_explorer as explorer;
 use crate::sqlite_lineage as lineage;
 use crate::sqlite_run_end as run_end;
 use crate::sqlite_schema;
@@ -8,6 +10,7 @@ use crate::trials::*;
 use crate::types::*;
 use crate::{new_id, sha256_hex, Store, MAX_JOB_ATTEMPTS};
 use rusqlite::{params, Connection, OptionalExtension, Row};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
@@ -581,6 +584,18 @@ impl Store for SqliteStore {
 
     fn run_contributors(&self, run_id: &str) -> Result<Vec<Contributor>> {
         trials::run_contributors(&self.conn(), run_id)
+    }
+
+    fn reporters_of(&self, run_id: &str, seeds: &[u64]) -> Result<BTreeMap<u64, String>> {
+        explorer::reporters_of(&self.conn(), run_id, seeds)
+    }
+
+    fn run_digest_use(&self, run_id: &str) -> Result<DigestUse> {
+        explorer::load_digest_use(&self.conn(), run_id)
+    }
+
+    fn run_coverage_json(&self, run_id: &str) -> Result<Option<String>> {
+        explorer::run_coverage_json(&self.conn(), run_id)
     }
 
     fn set_worker_trusted(&self, id: &str, trusted: bool) -> Result<()> {

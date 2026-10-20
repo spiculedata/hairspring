@@ -3,6 +3,7 @@
 //! A worker is a separate process, possibly remote and possibly compromised, and the text in its records is later shown
 //! to people and to AI agents. Every field is therefore re-checked here against the protocol's own limits, the digest
 //! is decoded and checked against the catalog the server holds, and a batch is stored all or nothing.
+use crate::digest_cap::{is_capped_reason, stand_in};
 use crate::query::is_schedule_fingerprint;
 use crate::types::IngestReceipt;
 use crate::{Result, Service, ServiceError};
@@ -166,6 +167,9 @@ fn check_report(r: &TrialReport, catalog: RunCatalog) -> Result<(Checked, RunCat
             "reason is too long or has control or format characters",
         ));
     }
+    if is_capped_reason(&r.reason) {
+        return Err(label("reason starts with text only the server writes"));
+    }
     hash_field(&r.behaviour_hash, "behaviour hash").map_err(|e| label(&e.to_string()))?;
     fingerprint_field(&r.schedule_fp).map_err(|e| label(&e.to_string()))?;
     let limit = i64::MAX as u64;
@@ -220,8 +224,14 @@ fn check_report(r: &TrialReport, catalog: RunCatalog) -> Result<(Checked, RunCat
         digest: r.digest.clone(),
         detail: r.detail.as_ref().map(|d| d.clone().into_bytes()),
         output: r.output.as_ref().map(|o| o.clone().into_bytes()),
+        on_digest_cap: None,
     };
     let rows = r.catalog.iter().map(row_record).collect();
+    // What the store keeps instead if this digest would pass the run's digest allowance.
+    let trial = NewTrial {
+        on_digest_cap: Some(Box::new(stand_in(&trial))),
+        ..trial
+    };
     Ok((Checked { trial, rows }, catalog))
 }
 
@@ -354,6 +364,7 @@ impl Service {
             catalog: rows,
             trials,
             kept_bytes_cap: self.cfg.kept_bytes_per_run,
+            digest_bytes_cap: self.cfg.digest_bytes_per_run,
         };
         let trusted = self.worker_is_trusted(worker_id)?;
         match self.store.ingest_trials(

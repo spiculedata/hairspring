@@ -4,7 +4,9 @@ mod common;
 use common::*;
 use hairspring_props::AssertKind;
 use hairspring_service::TrialQuery;
-use hairspring_store::{NewTrial, TrialBatch, TrialVerdict, MAX_KEPT_BYTES_PER_RUN};
+use hairspring_store::{
+    NewTrial, TrialBatch, TrialVerdict, MAX_DIGEST_BYTES_PER_RUN, MAX_KEPT_BYTES_PER_RUN,
+};
 
 const GOOD_SEED: u64 = 1;
 const CORRUPT_SEED: u64 = 2;
@@ -32,6 +34,7 @@ fn corrupt_trial(seq: u64) -> NewTrial {
         digest: vec![9, 9, 9],
         detail: None,
         output: None,
+        on_digest_cap: None,
     }
 }
 
@@ -45,6 +48,7 @@ fn run_with_a_corrupt_digest() -> (hairspring_service::Service, String) {
         catalog: Vec::new(),
         trials: vec![corrupt_trial(1)],
         kept_bytes_cap: MAX_KEPT_BYTES_PER_RUN,
+        digest_bytes_cap: MAX_DIGEST_BYTES_PER_RUN,
     };
     store
         .ingest_trials(

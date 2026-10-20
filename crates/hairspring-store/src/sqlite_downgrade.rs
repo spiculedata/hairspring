@@ -1,4 +1,4 @@
-//! Offline downgrade of a SQLite database from schema version 3 to version 2. See [`crate::downgrade`].
+//! Offline downgrade of a SQLite database from schema version 3 or 4 to version 2. See [`crate::downgrade`].
 use crate::downgrade::*;
 use crate::types::{Result, StoreError};
 use rusqlite::{Connection, OpenFlags};
@@ -62,6 +62,7 @@ fn collect_orphans(conn: &Connection, hashes: &[String]) -> Result<u64> {
 
 fn apply(
     conn: &Connection,
+    version: i64,
     branch_runs: &[String],
     opts: &DowngradeOptions,
 ) -> Result<(Vec<String>, u64)> {
@@ -69,6 +70,11 @@ fn apply(
     if opts.drop_branch_runs {
         for run in branch_runs {
             candidates.extend(blobs_of_run(conn, run)?);
+        }
+    }
+    if version >= FIRST_VERSION_WITH_V4_TABLES {
+        for table in V4_TABLES_DROP_ORDER {
+            conn.execute_batch(&format!("DROP TABLE {table}"))?;
         }
     }
     for table in V3_TABLES_DROP_ORDER {
@@ -126,11 +132,9 @@ fn downgrade_in_transaction(
         };
         return Ok((report, false));
     }
-    if version != DOWNGRADE_TARGET_VERSION + 1 {
+    if !DOWNGRADE_SOURCE_VERSIONS.contains(&version) {
         return Err(StoreError::Backend(format!(
-            "cannot downgrade a database at schema version {version} (only version {} can be downgraded to {})",
-            DOWNGRADE_TARGET_VERSION + 1,
-            DOWNGRADE_TARGET_VERSION
+            "cannot downgrade a database at schema version {version} (only versions {DOWNGRADE_SOURCE_VERSIONS:?} can be downgraded to {DOWNGRADE_TARGET_VERSION})"
         )));
     }
     let branches = branch_runs(conn)?;
@@ -142,7 +146,7 @@ fn downgrade_in_transaction(
     };
     // A dry run does the work for real inside the transaction (schema changes are transactional) so the counts are
     // true, then the caller rolls it back.
-    let (dropped_runs, dropped_blobs) = apply(conn, &branches, opts)?;
+    let (dropped_runs, dropped_blobs) = apply(conn, version, &branches, opts)?;
     report.dropped_runs = dropped_runs;
     report.dropped_blobs = dropped_blobs;
     report.applied = !opts.dry_run;

@@ -1,4 +1,4 @@
-//! Offline downgrade of a PostgreSQL schema from version 3 to version 2. See [`crate::downgrade`].
+//! Offline downgrade of a PostgreSQL schema from version 3 or 4 to version 2. See [`crate::downgrade`].
 use crate::downgrade::*;
 use crate::pg::{valid_schema, MIGRATION_LOCK};
 use crate::types::{Result, StoreError};
@@ -54,6 +54,7 @@ fn collect_orphans(tx: &mut Transaction, hashes: &[String]) -> Result<u64> {
 
 fn apply(
     tx: &mut Transaction,
+    version: i64,
     branches: &[String],
     opts: &DowngradeOptions,
 ) -> Result<(Vec<String>, u64)> {
@@ -65,6 +66,11 @@ fn apply(
     if opts.drop_branch_runs {
         for run in branches {
             candidates.extend(blobs_of_run(tx, run)?);
+        }
+    }
+    if version >= FIRST_VERSION_WITH_V4_TABLES {
+        for table in V4_TABLES_DROP_ORDER {
+            tx.batch_execute(&format!("DROP TABLE {table}"))?;
         }
     }
     for table in V3_TABLES_DROP_ORDER {
@@ -115,11 +121,9 @@ pub fn downgrade_postgres(
             ..DowngradeReport::default()
         });
     }
-    if version != DOWNGRADE_TARGET_VERSION + 1 {
+    if !DOWNGRADE_SOURCE_VERSIONS.contains(&version) {
         return Err(StoreError::Backend(format!(
-            "cannot downgrade a schema at version {version} (only version {} can be downgraded to {})",
-            DOWNGRADE_TARGET_VERSION + 1,
-            DOWNGRADE_TARGET_VERSION
+            "cannot downgrade a schema at version {version} (only versions {DOWNGRADE_SOURCE_VERSIONS:?} can be downgraded to {DOWNGRADE_TARGET_VERSION})"
         )));
     }
     let branches = branch_runs(&mut tx)?;
@@ -131,7 +135,7 @@ pub fn downgrade_postgres(
     };
     // A dry run does the work for real inside the transaction (schema changes are transactional) so the counts are
     // true, then drops the transaction without committing.
-    let (dropped_runs, dropped_blobs) = apply(&mut tx, &branches, opts)?;
+    let (dropped_runs, dropped_blobs) = apply(&mut tx, version, &branches, opts)?;
     report.dropped_runs = dropped_runs;
     report.dropped_blobs = dropped_blobs;
     if opts.dry_run {
