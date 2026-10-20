@@ -63,6 +63,34 @@ jobs:
       - name: Signal reports under AddressSanitizer and UBSan
         run: make asan-signals CC=${{ matrix.cc }}
 
+  go-example:
+    name: Go example
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOTOOLCHAIN: local
+      GOPROXY: "off"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.x
+          cache: false
+      - name: Vet
+        run: go vet ./...
+        working-directory: examples/go-sql-cancel
+      - name: Test
+        run: go test ./...
+        working-directory: examples/go-sql-cancel
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # With HS_REQUIRE_GO set, a missing or too old Go fails these tests instead of skipping them. The positive
+      # control's SQLCANCEL_EXPECT check is not run here.
+      - name: Conformance tests against the Go shim and workload
+        run: cargo test -p hairspring-props --test go_shim --test go_sqlcancel
+        env:
+          HS_REQUIRE_GO: "1"
+
   web:
     name: Web UI
     runs-on: ubuntu-latest
