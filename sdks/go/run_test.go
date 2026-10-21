@@ -165,14 +165,21 @@ func TestRunViolationOnlyIsSilentWhenNothingFailed(t *testing.T) {
 func TestConfigFromEnv(t *testing.T) {
 	w := (&sink{}).write
 
-	def := configFromEnv(env(nil), w, false)
-	tagged := configFromEnv(env(map[string]string{"HAIRSPRING_PROC": "p1.f2"}), w, false)
-	badTag := configFromEnv(env(map[string]string{"HAIRSPRING_PROC": "has space"}), w, false)
-	off := configFromEnv(env(map[string]string{"HAIRSPRING_EVENTS": "off"}), w, false)
-	viol := configFromEnv(env(nil), w, true)
+	def := configFromEnv(env(nil), testPID, w, false)
+	tagged := configFromEnv(env(map[string]string{"HAIRSPRING_PROC": "p1.f2"}), testPID, w, false)
+	badTag := configFromEnv(env(map[string]string{"HAIRSPRING_PROC": "has space"}), testPID, w, false)
+	spawned := configFromEnv(env(map[string]string{"HAIRSPRING_PROC": "p1", "HAIRSPRING_PROC_PID": "1"}), testPID, w, false)
+	off := configFromEnv(env(map[string]string{"HAIRSPRING_EVENTS": "off"}), testPID, w, false)
+	viol := configFromEnv(env(nil), testPID, w, true)
 
-	if def.Proc != "p1" || tagged.Proc != "p1.f2" || badTag.Proc != "p1" {
-		t.Errorf("procs = %q %q %q", def.Proc, tagged.Proc, badTag.Proc)
+	if def.Proc != "p1" || tagged.Proc != "p1.f2" || badTag.Proc != "p1" || spawned.Proc != "p1.s4242" {
+		t.Errorf("procs = %q %q %q %q", def.Proc, tagged.Proc, badTag.Proc, spawned.Proc)
+	}
+	if badTag.Dropped != 1 || def.Dropped != 0 || tagged.Dropped != 0 {
+		t.Errorf("a refused tag must be counted as dropped, and only that one: %d %d %d", def.Dropped, tagged.Dropped, badTag.Dropped)
+	}
+	if !spawned.Unstable || def.Unstable {
+		t.Errorf("unstable: spawned=%v default=%v", spawned.Unstable, def.Unstable)
 	}
 	if def.Disabled || !off.Disabled || def.ViolationOnly || !viol.ViolationOnly {
 		t.Errorf("flags: def=%+v off=%+v viol=%+v", def, off, viol)

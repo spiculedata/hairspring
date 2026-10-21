@@ -27,13 +27,24 @@ func decode(t *testing.T, line []byte) map[string]any {
 }
 
 func TestHelloLine(t *testing.T) {
-	m := decode(t, helloLine("p1", "00ff00ff00ff00ff"))
+	m := decode(t, helloLine("p1", "00ff00ff00ff00ff", false))
 
 	if m["kind"] != "hello" || m["proc"] != "p1" || m["sdk"] != "go" || m["signal_handlers"] != false {
 		t.Fatalf("hello = %v", m)
 	}
 	if m["catalog_hash"] != "00ff00ff00ff00ff" || m["sdk_version"] != SDKVersion {
 		t.Fatalf("hello = %v", m)
+	}
+	if _, has := m["tag_stable"]; has {
+		t.Fatalf("a stable tag should not send tag_stable: %v", m)
+	}
+}
+
+func TestHelloLineMarksAnUnstableTag(t *testing.T) {
+	m := decode(t, helloLine("p1.s42", "00ff00ff00ff00ff", true))
+
+	if m["tag_stable"] != false {
+		t.Fatalf("hello = %v, want tag_stable=false", m)
 	}
 }
 

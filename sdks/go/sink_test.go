@@ -119,7 +119,58 @@ func TestOpenSinkCloseOnTheStandardErrorSinkDoesNothing(t *testing.T) {
 }
 
 func process(m map[string]string, stderr *bytes.Buffer, violationOnly bool) processEnv {
-	return processEnv{getenv: env(m), stderr: stderr, violationOnly: violationOnly}
+	return processEnv{getenv: env(m), stderr: stderr, violationOnly: violationOnly, pid: testPID, setenv: func(string, string) {}}
+}
+
+func TestRunProcessExportsTheTagForChildProcesses(t *testing.T) {
+	cases := []struct {
+		name         string
+		env          map[string]string
+		violation    bool
+		wantTag      string
+		wantOwner    string
+		wantUnstable bool
+	}{
+		{"root, announced", nil, false, "p1", "4242:a", false},
+		{"spawned child, announced and unstable", map[string]string{"HAIRSPRING_PROC": "p1", "HAIRSPRING_PROC_PID": "1"}, false, "p1.s4242", "4242:au", true},
+		{"events off, nothing announced", map[string]string{"HAIRSPRING_EVENTS": "off"}, false, "p1", "4242", false},
+		{"violation-only, nothing announced", nil, true, "p1", "4242", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			exported := map[string]string{}
+			var stderr bytes.Buffer
+			p := process(c.env, &stderr, c.violation)
+			p.setenv = func(k, v string) { exported[k] = v }
+			cat, fn := program(t)
+
+			runProcess(cat, p, fn)
+
+			if exported["HAIRSPRING_PROC"] != c.wantTag || exported["HAIRSPRING_PROC_PID"] != c.wantOwner {
+				t.Fatalf("exported %v, want PROC=%s PROC_PID=%s", exported, c.wantTag, c.wantOwner)
+			}
+			if c.wantUnstable && !strings.Contains(stderr.String(), `"proc":"p1.s4242"`) {
+				t.Fatalf("hello does not carry the derived tag: %s", stderr.String())
+			}
+			if c.wantUnstable && !strings.Contains(stderr.String(), `"tag_stable":false`) {
+				t.Fatalf("hello does not say the tag is unstable: %s", stderr.String())
+			}
+		})
+	}
+}
+
+func TestRunProcessCountsARefusedTagAndAnUnopenableFileTogether(t *testing.T) {
+	var stderr bytes.Buffer
+	missing := filepath.Join(t.TempDir(), "no", "dir", "events")
+	p := process(map[string]string{"HAIRSPRING_PROC": "bad tag", "HAIRSPRING_EVENTS_FILE": missing}, &stderr, false)
+	cat, fn := program(t)
+
+	runProcess(cat, p, fn)
+
+	lines := strings.Split(strings.TrimSuffix(stderr.String(), "\n"), "\n")
+	if end := decode(t, []byte(lines[len(lines)-1]+"\n")); end["dropped"] != float64(2) {
+		t.Fatalf("end = %v, want dropped=2", end)
+	}
 }
 
 func TestRunProcessWritesTheReportToTheEventsFile(t *testing.T) {

@@ -119,9 +119,12 @@ func (c *Catalog) Snapshot() Report {
 	defer c.mu.Unlock()
 	r := Report{Ops: c.ops.Load(), Sites: make([]SiteReport, 0, len(c.handles))}
 	for _, h := range c.handles {
+		// Check bumps a counter and then fills the witness slot, so a slot can be ready for a count read earlier as
+		// zero. The protocol allows a witness only behind a nonzero count: drop the others (a later snapshot has both).
+		trues, falses := h.trues.Load(), h.falses.Load()
 		r.Sites = append(r.Sites, SiteReport{
-			Site: h.site, Trues: h.trues.Load(), Falses: h.falses.Load(),
-			FirstTrue: h.firstTrue.load(), FirstFalse: h.firstFalse.load(),
+			Site: h.site, Trues: trues, Falses: falses,
+			FirstTrue: witnessIf(trues, &h.firstTrue), FirstFalse: witnessIf(falses, &h.firstFalse),
 		})
 	}
 	sort.Slice(r.Sites, func(i, j int) bool { return r.Sites[i].Site.ID < r.Sites[j].Site.ID })

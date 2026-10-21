@@ -1,9 +1,6 @@
 package hairspring
 
-import (
-	"io"
-	"os"
-)
+import "io"
 
 // eventSink is where report lines go. Each write is one write call carrying one whole line.
 type eventSink struct {
@@ -20,11 +17,6 @@ func eventsFilePath(getenv func(string) string, privileged bool) string {
 		return ""
 	}
 	return getenv("HAIRSPRING_EVENTS_FILE")
-}
-
-// isPrivileged reports whether the process runs with a user or group id other than the one that started it.
-func isPrivileged() bool {
-	return os.Getuid() != os.Geteuid() || os.Getgid() != os.Getegid()
 }
 
 // openSink opens the events file for appending, or uses stderr when path is "". A file that cannot be opened (a

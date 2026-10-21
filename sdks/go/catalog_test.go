@@ -129,6 +129,53 @@ func TestSnapshotIsSortedAndDetachedFromLaterUpdates(t *testing.T) {
 	}
 }
 
+// Check bumps a counter and then fills the witness slot, so a snapshot can see a slot whose counter it read earlier.
+// The parser rejects a line with a witness but a count of zero, so such a witness must not be reported.
+func TestSnapshotDropsAWitnessWhoseCountItHasNotSeen(t *testing.T) {
+	c := NewCatalog()
+	h := mustDeclare(t, c, Site{ID: "s.partway", Kind: KindAlways})
+	h.firstTrue.offer(1, Vals{1})
+	h.firstFalse.offer(1, Vals{2})
+
+	r := siteReport(t, c, "s.partway")
+
+	if r.Trues != 0 || r.Falses != 0 || r.FirstTrue != nil || r.FirstFalse != nil {
+		t.Fatalf("report = %+v, want no witness for a count of zero", r)
+	}
+}
+
+func TestSnapshotsTakenDuringChecksAreAlwaysConsistent(t *testing.T) {
+	c := NewCatalog()
+	h := mustDeclare(t, c, Site{ID: "s.live", Kind: KindAlways})
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := int64(0); ; i++ {
+				select {
+				case <-stop:
+					return
+				default:
+					h.Check(i%2 == 0, Vals{i})
+				}
+			}
+		}()
+	}
+
+	for i := 0; i < 20000; i++ {
+		r := siteReport(t, c, "s.live")
+		if (r.FirstTrue != nil && r.Trues == 0) || (r.FirstFalse != nil && r.Falses == 0) {
+			close(stop)
+			wg.Wait()
+			t.Fatalf("inconsistent snapshot: %+v", r)
+		}
+	}
+	close(stop)
+	wg.Wait()
+}
+
 func TestViolationsAreFalseAlwaysAndHitUnreachable(t *testing.T) {
 	c := NewCatalog()
 	mustDeclare(t, c, Site{ID: "v.ok", Kind: KindAlways}).Check(true, Vals{})

@@ -165,6 +165,23 @@ func TestAReportOfManyIDsConforms(t *testing.T) {
 	}
 }
 
+// The parser counts at most 4096 ids per process, so end.sites says 4096 even when more were declared; the extra
+// catalog and assert lines are still sent and the parser marks the trial degraded.
+func TestEndSitesIsCappedAtTheProtocolLimit(t *testing.T) {
+	const declared = maxSitesPerProcess + 4
+	lines := reportOf(t, "p1", func(c *Catalog) func() int {
+		for i := 0; i < declared; i++ {
+			mustDeclare(t, c, Site{ID: fmt.Sprintf("cap.%05d", i), Kind: KindReachable})
+		}
+		return func() int { return 0 }
+	})
+
+	end := lines[len(lines)-1]
+	if len(lines) != 1+2*declared+1+1 || !strings.Contains(end, fmt.Sprintf(`"sites":%d,`, maxSitesPerProcess)) {
+		t.Fatalf("lines=%d end=%s", len(lines), end)
+	}
+}
+
 func TestSitesAtTheProtocolLimitsConform(t *testing.T) {
 	lines := reportOf(t, "p1", func(c *Catalog) func() int {
 		h := mustDeclare(t, c, Site{

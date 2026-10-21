@@ -41,6 +41,14 @@ func (s *slot) offer(ord uint64, v Vals) {
 	s.state.Store(slotReady)
 }
 
+// witnessIf returns the slot's witness only when count, read before the slot, is nonzero.
+func witnessIf(count uint64, s *slot) *Witness {
+	if count == 0 {
+		return nil
+	}
+	return s.load()
+}
+
 // load returns the witness, or nil when none was offered or the offer is still being written.
 func (s *slot) load() *Witness {
 	if s.state.Load() != slotReady {

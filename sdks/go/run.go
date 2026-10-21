@@ -10,19 +10,21 @@ type Config struct {
 	Proc          string             // process tag; "p1" for a root process
 	Write         func([]byte) error // called once per line, with the whole line
 	Dropped       uint64             // events already lost before Run starts (reported in the end line)
+	Unstable      bool               // the tag was derived from a pid, so it can differ between runs (hello.tag_stable)
 	Disabled      bool               // HAIRSPRING_EVENTS=off: write nothing
 	ViolationOnly bool               // write only HAIRSPRING_VIOLATION: lines, for the neutrality gate
 }
 
-const defaultProc = "p1"
-
-// configFromEnv reads HAIRSPRING_PROC and HAIRSPRING_EVENTS=off. An invalid tag falls back to the root tag.
-func configFromEnv(getenv func(string) string, write func([]byte) error, violationOnly bool) Config {
-	proc := getenv("HAIRSPRING_PROC")
-	if len(proc) > 64 || !identPattern.MatchString(proc) {
-		proc = defaultProc
+// configFromEnv reads HAIRSPRING_PROC, HAIRSPRING_PROC_PID and HAIRSPRING_EVENTS=off. An invalid tag falls back to the
+// root tag and is counted in Dropped, as the C SDK does; a process spawned by another instrumented process gets a
+// derived tag (see identity.go).
+func configFromEnv(getenv func(string) string, pid int, write func([]byte) error, violationOnly bool) Config {
+	id := resolveIdentity(getenv, pid)
+	cfg := Config{Proc: id.tag, Write: write, Unstable: id.unstable, Disabled: getenv("HAIRSPRING_EVENTS") == "off", ViolationOnly: violationOnly}
+	if id.refused {
+		cfg.Dropped = 1
 	}
-	return Config{Proc: proc, Write: write, Disabled: getenv("HAIRSPRING_EVENTS") == "off", ViolationOnly: violationOnly}
+	return cfg
 }
 
 // Run sends hello and the catalog, freezes the catalog, runs fn, then sends the asserts, work and end lines (or,
@@ -38,7 +40,7 @@ func Run(c *Catalog, cfg Config, fn func() int) int {
 		}
 	}
 	if !cfg.ViolationOnly {
-		send(helloLine(cfg.Proc, catalogHash(start)))
+		send(helloLine(cfg.Proc, catalogHash(start), cfg.Unstable))
 		for _, s := range start.Sites {
 			send(catalogLine(cfg.Proc, s.Site))
 		}
@@ -55,7 +57,7 @@ func Run(c *Catalog, cfg Config, fn func() int) int {
 		send(assertLine(cfg.Proc, s))
 	}
 	send(workLine(cfg.Proc, end.Ops))
-	send(endLine(cfg.Proc, int64(status), uint64(len(end.Sites)), end.Evals(), dropped))
+	send(endLine(cfg.Proc, int64(status), uint64(min(len(end.Sites), maxSitesPerProcess)), end.Evals(), dropped))
 	return status
 }
 
@@ -81,15 +83,22 @@ func AddWork(n uint64) { std.AddWork(n) }
 type processEnv struct {
 	getenv        func(string) string
 	stderr        io.Writer
-	privileged    bool // set-uid or set-gid: the events file setting is not trusted
+	privileged    bool // started with elevated rights: the events file setting is not trusted
 	violationOnly bool
+	pid           int
+	setenv        func(key, value string) // exports the tag for child processes
 }
 
 // Main runs fn under the process-wide catalog and writes the report: to HAIRSPRING_EVENTS_FILE when it names a file
 // that can be opened, otherwise to standard error, one write call per line, so concurrent writers to a pipe cannot
-// interleave inside a line. Use it as os.Exit(hairspring.Main(run)).
+// interleave inside a line. Use it as os.Exit(hairspring.Main(run)). It also exports HAIRSPRING_PROC and
+// HAIRSPRING_PROC_PID so that child processes derive their own tags.
 func Main(fn func() int) int {
-	return runProcess(std, processEnv{os.Getenv, os.Stderr, isPrivileged(), violationOnlyBuild}, fn)
+	env := processEnv{
+		getenv: os.Getenv, stderr: privateStderr(), privileged: isPrivileged(), violationOnly: violationOnlyBuild,
+		pid: os.Getpid(), setenv: func(k, v string) { _ = os.Setenv(k, v) }, // Setenv fails only on a bad key
+	}
+	return runProcess(std, env, fn)
 }
 
 func runProcess(c *Catalog, p processEnv, fn func() int) int {
@@ -99,7 +108,10 @@ func runProcess(c *Catalog, p processEnv, fn func() int) int {
 	}
 	s := openSink(path, p.stderr)
 	defer func() { _ = s.close() }() // every line was already written whole; a close error cannot lose one
-	cfg := configFromEnv(p.getenv, s.write, p.violationOnly)
-	cfg.Dropped = s.dropped
+	cfg := configFromEnv(p.getenv, p.pid, s.write, p.violationOnly)
+	cfg.Dropped += s.dropped
+	announced := !cfg.Disabled && !cfg.ViolationOnly // Run sends the hello before the workload can start a child
+	p.setenv("HAIRSPRING_PROC", cfg.Proc)
+	p.setenv("HAIRSPRING_PROC_PID", ownerValue(p.pid, announced, cfg.Unstable))
 	return Run(c, cfg, fn)
 }

@@ -47,6 +47,9 @@ const (
 	maxMsgBytes  = 512
 	maxFileBytes = 256
 	maxFuncBytes = 128
+
+	// maxSitesPerProcess is the number of ids the parser counts per process; end.sites is capped at it.
+	maxSitesPerProcess = 4096
 )
 
 var identPattern = regexp.MustCompile(`^[A-Za-z0-9._:/-]+$`)

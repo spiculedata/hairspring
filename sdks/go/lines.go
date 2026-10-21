@@ -31,9 +31,14 @@ func line(kind, body string) []byte {
 	return []byte(linePrefix + `{"v":1,"kind":"` + kind + `"` + body + "}\n")
 }
 
-func helloLine(proc, hash string) []byte {
-	return line("hello", `,"sdk":"go","sdk_version":"`+SDKVersion+`","proc":`+quote(proc)+
-		`,"catalog_hash":"`+hash+`","signal_handlers":false`)
+// helloLine announces the process. tag_stable is sent only when false (the tag was derived from a pid).
+func helloLine(proc, hash string, unstable bool) []byte {
+	body := `,"sdk":"go","sdk_version":"` + SDKVersion + `","proc":` + quote(proc) +
+		`,"catalog_hash":"` + hash + `","signal_handlers":false`
+	if unstable {
+		body += `,"tag_stable":false`
+	}
+	return line("hello", body)
 }
 
 // catalogLine drops the message and location when escaping would push the line over the cap.
