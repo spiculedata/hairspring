@@ -74,7 +74,12 @@ pub(crate) enum Failed {
     Params(String),
     /// The call was understood but could not be completed: a tool-level error.
     Tool(String),
+    /// A tool-level error a client can branch on: a stable `code` in `structuredContent`, besides the text.
+    Coded(&'static str, String),
 }
+
+/// The `code` of a replay refused because the host's dynamic loader differs from the recording.
+const ENVIRONMENT_MISMATCH_CODE: &str = "environment_mismatch";
 
 impl From<String> for Failed {
     fn from(s: String) -> Self {
@@ -91,7 +96,10 @@ impl From<ServiceError> for Failed {
             ServiceError::Engine(hairspring_engine::EngineError::Backend(m)) => internal(m),
             // The caller can fix this (retry with `allow_environment_change`), so say what it is, briefly.
             ServiceError::Engine(e @ hairspring_engine::EngineError::EnvironmentMismatch(_)) => {
-                Failed::Tool(hairspring_service::sanitize::public_text(&e.to_string()))
+                Failed::Coded(
+                    ENVIRONMENT_MISMATCH_CODE,
+                    hairspring_service::sanitize::public_text(&e.to_string()),
+                )
             }
             ServiceError::Engine(e) => Failed::Tool(e.to_string()),
             // Storage and internal details (SQL text, paths, commands) stay in the server log.
@@ -112,6 +120,18 @@ fn tool_result(value: Value) -> Value {
 
 fn tool_error(message: String) -> Value {
     json!({ "content": [{ "type": "text", "text": message }], "isError": true })
+}
+
+fn reply_for(failed: Failed) -> Reply {
+    match failed {
+        Failed::Params(m) => Reply::Error(INVALID_PARAMS, m),
+        Failed::Tool(m) => Reply::Result(tool_error(m)),
+        Failed::Coded(code, m) => {
+            let mut v = tool_error(m);
+            v["structuredContent"] = json!({ "code": code });
+            Reply::Result(v)
+        }
+    }
 }
 
 pub fn call(server: &McpServer, params: &Value, role: Role) -> Reply {
@@ -136,8 +156,7 @@ pub fn call(server: &McpServer, params: &Value, role: Role) -> Reply {
     }
     match run_tool(server, name, &args) {
         Ok(v) => Reply::Result(tool_result(v)),
-        Err(Failed::Params(m)) => Reply::Error(INVALID_PARAMS, m),
-        Err(Failed::Tool(m)) => Reply::Result(tool_error(m)),
+        Err(failed) => reply_for(failed),
     }
 }
 
@@ -303,7 +322,7 @@ mod tests {
 
     fn message(e: ServiceError) -> String {
         match Failed::from(e) {
-            Failed::Tool(m) | Failed::Params(m) => m,
+            Failed::Tool(m) | Failed::Params(m) | Failed::Coded(_, m) => m,
         }
     }
 
@@ -316,6 +335,22 @@ mod tests {
         assert!(m.starts_with("environment mismatch"), "{m}");
         assert!(m.chars().count() <= 500, "{}", m.len());
         assert!(!m.contains('\n') && !m.contains('\u{202E}'));
+    }
+
+    #[test]
+    fn the_tool_error_carries_a_machine_readable_code() {
+        let reply = reply_for(Failed::from(ServiceError::Engine(
+            EngineError::EnvironmentMismatch("environment differs: x".into()),
+        )));
+        let Reply::Result(v) = reply else {
+            panic!("expected a tool result")
+        };
+        assert_eq!(v["isError"], json!(true));
+        assert_eq!(v["structuredContent"]["code"], "environment_mismatch");
+        assert!(v["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("environment mismatch"));
     }
 
     #[test]

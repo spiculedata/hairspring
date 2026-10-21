@@ -37,6 +37,8 @@ pub fn check(
     let parsed = EnvironmentIdentity::from_bundle(bundle);
     let comparison = compare(parsed.identity.as_ref(), current);
     let mut warnings: Vec<String> = parsed.warning().into_iter().collect();
+    // A field that could not be read cannot be checked, so it counts as a change: it must not let a miss pass as a fix.
+    let tampered = !parsed.malformed.is_empty();
     if loader_changed(&comparison) && !allow_change {
         let detail = comparison.warning().unwrap_or_default();
         return Err(EngineError::EnvironmentMismatch(format!(
@@ -46,6 +48,6 @@ pub fn check(
     warnings.extend(comparison.warning());
     Ok(EnvironmentCheck {
         warnings,
-        differs: comparison.differs(),
+        differs: comparison.differs() || tampered,
     })
 }

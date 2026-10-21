@@ -141,6 +141,19 @@ fn a_miss_on_a_changed_host_has_its_own_exit_code() {
 }
 
 #[test]
+fn a_tampered_loader_hash_with_a_miss_exits_inconclusive_not_zero() {
+    let (d, hermit, body) = recorded("tampered");
+    let edited = with_extra_param(
+        &passing_seed(&body),
+        "param.host.loader.ld_so_cache.sha256=not-a-hash",
+    );
+    let file = write_bundle(&d, "b.hairspring", &edited);
+    let o = run(&d, &hermit, &["replay", &file]);
+    assert_eq!(o.status.code(), Some(3), "{}", text(&o));
+    assert!(text(&o).contains("malformed"), "{}", text(&o));
+}
+
+#[test]
 fn a_miss_on_an_unchanged_host_still_exits_zero() {
     let (d, hermit, body) = recorded("fixed");
     let file = write_bundle(&d, "b.hairspring", &passing_seed(&body));

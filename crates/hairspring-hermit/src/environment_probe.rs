@@ -4,7 +4,7 @@ use crate::exec::{resolve_bin, ProcessSpec};
 use crate::hermit_version;
 use crate::host_identity::{self, GuestInputs, HermitIdentity, HostSources};
 use hairspring_core::environment::{sha256_file, EnvironmentIdentity};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -13,6 +13,9 @@ pub struct EnvironmentProbe {
     /// `hermit --version` answers, by the hash of the executable that gave them, so an upgrade in place is asked again.
     /// Only answers are kept: a probe that timed out is retried next time.
     versions: Mutex<BTreeMap<String, String>>,
+    /// Executables whose `--version` did not answer. They are not asked again for the backend's lifetime, so a build
+    /// that hangs costs one probe, not one per run. An upgrade in place changes the hash and so is asked afresh.
+    silent: Mutex<BTreeSet<String>>,
 }
 
 impl EnvironmentProbe {
@@ -20,6 +23,7 @@ impl EnvironmentProbe {
         EnvironmentProbe {
             sources,
             versions: Mutex::new(BTreeMap::new()),
+            silent: Mutex::new(BTreeSet::new()),
         }
     }
 
@@ -37,8 +41,20 @@ impl EnvironmentProbe {
             .lock()
             .ok()
             .and_then(|map| map.get(&sha256).cloned());
+        let known_silent = self
+            .silent
+            .lock()
+            .is_ok_and(|silent| silent.contains(&sha256));
         let version = cached.or_else(|| {
-            let asked = hermit_version::probe(&bin)?;
+            if known_silent {
+                return None;
+            }
+            let Some(asked) = hermit_version::probe(&bin) else {
+                if let Ok(mut silent) = self.silent.lock() {
+                    silent.insert(sha256.clone());
+                }
+                return None;
+            };
             if let Ok(mut map) = self.versions.lock() {
                 map.insert(sha256.clone(), asked.clone());
             }

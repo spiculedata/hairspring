@@ -303,6 +303,16 @@ fn a_malformed_field_does_not_switch_off_the_loader_refusal() {
 }
 
 #[test]
+fn a_malformed_field_counts_as_a_changed_environment() {
+    let host = fake_host("tampered");
+    let bundle = record(&host).with_param("host.loader.libc.sha256", "not-a-hash");
+    let r = engine(&host, PASSTHROUGH, PASSES).replay(&bundle).unwrap();
+    assert!(!r.reproduced);
+    assert!(r.environment_changed);
+    assert!(has_warning(&r, "malformed"), "{:?}", r.warnings);
+}
+
+#[test]
 fn a_different_base_env_mode_is_reported_by_field_name() {
     let host = fake_host("baseenv");
     let bundle = record(&host).with_param("env.base_env", "host");
@@ -374,6 +384,24 @@ fn a_version_that_stops_answering_is_unavailable_not_changed() {
         "{:?}",
         r.warnings
     );
+}
+
+#[test]
+fn a_probe_that_failed_is_not_repeated_by_the_same_backend() {
+    let host = fake_host("probecache");
+    let log = scratch("probelog").join("probes");
+    let fake = fake_with_prelude(&format!(
+        "[ \"$1\" = \"--version\" ] && {{ echo x >> {}; sleep 30; }}",
+        log.display()
+    ));
+    let e = engine(&host, &fake, FAILS);
+    let started = std::time::Instant::now();
+    for _ in 0..3 {
+        assert_eq!(version_of(&run_failing(&e)), None);
+    }
+    let probes = std::fs::read_to_string(&log).unwrap().lines().count();
+    assert_eq!(probes, 1, "a hanging --version should cost one probe");
+    assert!(started.elapsed() < Duration::from_secs(8));
 }
 
 #[test]

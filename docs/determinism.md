@@ -85,8 +85,12 @@ Only these names exist. A bundle becomes v3 only when it carries one of them; a 
 other name is ignored on read, so an unknown or hostile param can neither change the header nor be compared.
 
 No path, host name or user name is stored: files are named by role, not by where they were found. A source the
-host does not offer is left out rather than invented, and replay then reports that field as unavailable (which is not
-the same as changed). The values are read when the run starts, before any trial or confirmation rerun, and they
+host does not offer is left out rather than invented. On replay such a field is reported as `now unavailable`, and
+that counts as changed: a recorded loader hash whose file is now missing refuses the replay, and a recorded
+`hermit.version` that does not answer within the probe's second (or a missing `/etc/ld.so.cache`) makes a miss
+exit `3`. A `--version` probe that gets no answer is not repeated for the lifetime of the backend. Recorded values are
+printable ASCII only, and the `.sha256` fields are lowercase hex (or `absent` for the preload file); a recorded value
+that is not is malformed, is named in a warning, is not compared, and also counts as changed. The values are read when the run starts, before any trial or confirmation rerun, and they
 are the same fields for every failure the run reports.
 
 On replay, the recorded fields are compared with the current host. Each recorded field is checked on its own: a
@@ -116,6 +120,13 @@ confirmation reruns or on bundle import. Each new field needs its name added to 
 
 Upgrade order: a server that predates v3 rejects a v3 bundle (it does not recognise the header). Upgrade the server
 before the workers that send it bundles.
+
+Rollback: a server rolled back to a version that predates v3 cannot replay the v3 bundles already stored, because it
+rejects the header. Older readers ignore the extra `param.` lines, so the only change needed is the first line,
+`hairspring-bundle v3` to `hairspring-bundle v2`, edited by hand. Rolling back without doing that is not supported.
+
+The 409 body from `POST /api/replay` is `{"error": "<short text>", "code": "environment_mismatch"}`; the MCP tool
+error has the same `code` in `structuredContent`.
 
 ### Not measured / not possible
 

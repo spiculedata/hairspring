@@ -75,10 +75,30 @@ fn validate(name: &str, value: &str) -> Result<(), EnvError> {
     if !is_known_field(name) {
         return Err(EnvError::UnknownField(name.to_string()));
     }
-    if value.chars().count() > MAX_FIELD_VALUE_CHARS || value.chars().any(is_unsafe_display_char) {
+    let printable_ascii = value.bytes().all(|b| (0x20..=0x7E).contains(&b));
+    let well_formed = if name.ends_with(HASH_FIELD_SUFFIX) {
+        is_hash_value(name, value)
+    } else {
+        printable_ascii
+    };
+    if value.len() > MAX_FIELD_VALUE_CHARS || !well_formed {
         return Err(EnvError::BadValue(name.to_string()));
     }
     Ok(())
+}
+
+/// The one hash field whose value may be the word `absent` (no `/etc/ld.so.preload`).
+const PRELOAD_FIELD: &str = "host.loader.ld_so_preload.sha256";
+const ABSENT: &str = "absent";
+
+fn is_hash_value(name: &str, value: &str) -> bool {
+    if name == PRELOAD_FIELD && value == ABSENT {
+        return true;
+    }
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// What a bundle recorded: the fields that could be read, and the names of recorded fields that could not.

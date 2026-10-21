@@ -161,6 +161,45 @@ fn values_are_bounded_and_clean() {
 }
 
 #[test]
+fn values_are_printable_ascii_only() {
+    let bad = |name: &str, value: &str| {
+        matches!(
+            EnvironmentIdentity::default().with_field(name, value),
+            Err(EnvError::BadValue(_))
+        )
+    };
+    for value in [
+        "line\u{2028}sep",
+        "para\u{2029}sep",
+        "soft\u{00AD}hyphen",
+        "tag\u{E0041}char",
+        "caf\u{e9}",
+        "tab\there",
+        "del\u{7f}",
+    ] {
+        assert!(bad("host.container", value), "{value:?}");
+    }
+    assert!(!bad("host.cpu_model", "Fake CPU @ 3.0GHz (R)"));
+}
+
+#[test]
+fn hash_fields_accept_only_lowercase_hex() {
+    let bad = |name: &str, value: &str| {
+        matches!(
+            EnvironmentIdentity::default().with_field(name, value),
+            Err(EnvError::BadValue(_))
+        )
+    };
+    assert!(bad("hermit.path.sha256", "not hex"));
+    assert!(bad("hermit.path.sha256", "ABCDEF"));
+    assert!(bad("host.loader.libc.sha256", ""));
+    assert!(!bad("hermit.path.sha256", &"a".repeat(64)));
+    // `absent` is how "no /etc/ld.so.preload" is recorded.
+    assert!(!bad("host.loader.ld_so_preload.sha256", "absent"));
+    assert!(bad("host.loader.libc.sha256", "absent"));
+}
+
+#[test]
 fn an_identity_round_trips_through_a_v3_bundle() {
     let bundle = recorded().apply_to(Bundle::new(1, "b", vec![]).with_backend("hermit"));
     let text = bundle.encode();
