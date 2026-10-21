@@ -10,3 +10,8 @@ web/dist/*
 .env.*
 .playwright-mcp/
 .claude/
+__pycache__/
+*.pyc
+*.egg-info/
+/sdks/python/build/
+/sdks/python/dist/

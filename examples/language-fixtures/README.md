@@ -1,11 +1,13 @@
-# Language fixtures: a planted lost-update race in C, C++ and Go
+# Language fixtures: a planted lost-update race in C, C++, Go, Rust and Python
+Small programs with the same planted race, each reporting through its language's Hairspring SDK
+([`sdks/c`](../../sdks/c) for C and C++, [`sdks/go`](../../sdks/go) for Go, [`sdks/python`](../../sdks/python) for
+Python; the Rust fixture sits beside its SDK in [`sdks/rust/fixtures`](../../sdks/rust/fixtures)). They are test subjects
+for checking that a language's runtime, its SDK and the `process` backend work together; they are not examples of good
+concurrent code.
 
-Three small programs with the same planted race, each reporting through its language's Hairspring SDK
-([`sdks/c`](../../sdks/c) for C and C++, [`sdks/go`](../../sdks/go) for Go). They are test subjects for checking that a
-language's runtime, its SDK and the `process` backend work together; they are not examples of good concurrent code.
-
-The fixtures follow a fixed output and mode contract, so that every language's program can be run and judged the same
-way. This page is that contract as it applies to C, C++ and Go.
+The fixtures follow one output and mode contract for all five languages (C, C++, Go, Rust and Python), so that every
+language's program can be run and judged the same way. This page is that contract; C, C++, Go and Python live here, and
+the Rust program follows the same contract in its own directory.
 
 ## One program, three modes
 
@@ -17,10 +19,11 @@ sha256 identifies what ran in every arm.
 | `at-c` | `make -C c` | `buggy`, `fixed`, `wide` |
 | `at-cxx-clang`, `at-cxx-gxx` | `make -C cpp` (clang++ or g++) | `buggy`, `fixed`, `wide` |
 | `at-go` | `make -C go` | `buggy`, `fixed`, `wide` |
+| `python/at_py.py` (with `python/probe_py.py` and the SDK package) | nothing to build; `scripts/stage-python.sh` stages and hashes it | `buggy`, `fixed`, `wide`, and `--switch=1.0` as an optional second argument |
 
 - `buggy`: the planted race, no lock.
 - `fixed`: the same program with a mutex held across the read-modify-write (`pthread_mutex_t`, `std::mutex` with
-  `std::lock_guard`, `sync.Mutex`); it cannot lose an update.
+  `std::lock_guard`, `sync.Mutex`, `threading.Lock`); it cannot lose an update.
 - `wide`: `buggy` with a busy loop ten times longer. Nothing else differs.
 
 Any other argument, no argument, or a spare argument prints a usage line on stderr, prints nothing on stdout and exits 64.
@@ -63,7 +66,7 @@ equivalent and the native rates should not be compared across languages.
 
 ## What each program reports
 
-- **Property** `<lang>.counter_exact` (`always`; `<lang>` is `c`, `cxx` or `go`): the final counter equals 4,000.
+- **Property** `<lang>.counter_exact` (`always`; `<lang>` is `c`, `cxx`, `go`, `rust` or `py`): the final counter equals 4,000.
   Evaluated once, in the main thread after the workers are joined, with four witness values `[final, 4000, 4, 1000]`.
 - **Coverage marker** `<lang>.all_started` (`sometimes`): all four workers started. Evaluated once, in the main thread.
 - **Work**: one operation per iteration (4,000 in total), counted after the store, outside the window.
@@ -147,11 +150,51 @@ pinned artifact therefore comes from one named producer, which the record states
 C++, `golang:1.27.3` for Go) and passes the source commit in; on a machine that is not x86-64 it is only a functional
 check of the script. Nothing here runs Hermit or needs a server.
 
+### Python's build record
+
+Python has nothing to compile, and the acceptance run pins a package (the fixture, the probe and the `hairspring/` SDK
+directory), not one module. `scripts/build-record-python.sh` writes the same kind of record with the checks that make
+sense for an interpreter: B1 stages the package twice (`scripts/stage-python.sh`), lists every file with its sha256 and
+a tree hash, and requires the two listings to be equal; B2 checks the window on the syntax tree instead of a
+disassembly (the disassembly and the seccomp self-test, B3, do not apply); the forbidden-reads check
+(`scripts/check-sources-python.sh`) searches `at_py.py` and `probe_py.py` for the seed, `/proc`, the CPU count, the
+environment and the clock, and allows `time.monotonic_ns` in the probe alone because its output line carries the
+monotonic clock; B4 is 50 native runs per mode, a negative control and the probe line; B5 runs `strace -ff` on one buggy
+run and requires every protocol line and the result line to be one whole `write(2)` (`scripts/check-writes.sh`); B6 is the
+SDK's tests and conformance; B7 prints the modes. The CI workflow's manual `fixture-build-records` job runs it for
+`python` (Python 3.12 from `actions/setup-python`) next to the other variants.
+
 ## Compilers
 
 C: gcc and clang. C++: clang++ is the supported compiler; g++ builds and reports too because every Hairspring call site
 here is in an ordinary function (`main`), not in a template, lambda or other inline function, which g++ does not place
 in the catalog (see [docs/c-sdk.md](../../docs/c-sdk.md)). The C++ program's helper functions contain no call site.
+
+## The Python fixture
+
+`python/at_py.py` is one program with the mode as its first argument: `buggy`, `fixed` (the same three steps under a
+`threading.Lock`) or `wide` (`buggy` with a ten times longer busy loop), plus an optional second argument
+`--switch=1.0` (the interpreter's thread switch interval, set before any thread starts). Four threads, 1,000
+iterations each, a busy loop of 1,000 rounds of pure Python between the read and the write of a shared attribute, a
+start barrier. Properties `py.counter_exact` and `py.all_started`; one stdout line,
+`LANGAT v1 lang=py mode=<mode> final=<20 digits> expect=<20 digits> order=<16 hex> rand=<16 hex>`; exit 0 whatever the
+property says (3 for an internal failure, 64 for a usage error). It finds the SDK next to itself or in
+`sdks/python/src`, so it runs under `python -I` too.
+
+```sh
+make -C python test                 # unit tests, then the native self-check and its negative control
+python3 python/check_native.py --runs 50 --switch-arm   # the numbers: how often each mode loses an update
+```
+
+`python/probe_py.py` is a no-SDK companion: four threads, a lock, an unlocked counter and a `queue.Queue`, and one stdout
+line of hashes (lock order, finishing order, a random value, elapsed monotonic time, queue drain order).
+
+The self-check has the same rules as the others (the detector and the program agree on every run, the locked twin never
+fires, the racy program fires at least once; unlike the others there is no exit 77 "skipped", because the interpreter
+lock switches threads on one CPU too), and prints how often each mode
+fired and the spread of the final values. [docs/python-sdk.md](../../docs/python-sdk.md) records the numbers; in short,
+CPython's interpreter lock hands over every few milliseconds inside the busy loop, so `buggy` loses updates in
+essentially every run, and `--switch=1.0` removes the race.
 
 ## What this does not do
 

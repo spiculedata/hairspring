@@ -136,6 +136,28 @@ jobs:
         env:
           HS_REQUIRE_GO: "1"
 
+  python-sdk:
+    name: Python SDK
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Version
+        run: python3 --version
+      # Standard library only: unit tests, and the sample programs run as real processes.
+      - name: Test
+        run: python3 -m unittest discover -s sdks/python/tests -t sdks/python -v
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # With HS_REQUIRE_PYTHON set, a missing or too old Python fails these tests instead of skipping them.
+      - name: Conformance tests against the Python SDK
+        run: cargo test -p hairspring-props --test python_sdk
+        env:
+          HS_REQUIRE_PYTHON: "1"
+
   language-fixtures:
     name: Language fixtures (${{ matrix.name }})
     runs-on: ubuntu-24.04
@@ -149,6 +171,7 @@ jobs:
           - { name: C++ clang++, dir: cpp, args: CXX=clang++ }
           - { name: C++ g++, dir: cpp, args: CXX=g++ }
           - { name: Go, dir: go, args: "" }
+          - { name: Python, dir: python, args: "" }
     env:
       GOTOOLCHAIN: local
       GOPROXY: "off"
@@ -161,6 +184,10 @@ jobs:
         with:
           go-version: 1.24.x
           cache: false
+      - uses: actions/setup-python@v5
+        if: matrix.dir == 'python'
+        with:
+          python-version: "3.12"
       # The check scripts, against a fake program (once, not per compiler).
       - name: Script tests
         if: matrix.name == 'C gcc'
@@ -184,7 +211,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [c, cxx-clang, cxx-gxx, go]
+        variant: [c, cxx-clang, cxx-gxx, go, python]
     env:
       GOTOOLCHAIN: local
       GOPROXY: "off"
@@ -196,13 +223,26 @@ jobs:
         with:
           go-version: 1.27.3
           cache: false
+      - uses: actions/setup-python@v5
+        if: matrix.variant == 'python'
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        if: matrix.variant == 'python'
       - name: Install the toolchains
-        if: matrix.variant != 'go'
+        if: matrix.variant != 'go' && matrix.variant != 'python'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-13 g++-13 clang-18 strace binutils
       - name: Install strace
-        if: matrix.variant == 'go'
+        if: matrix.variant == 'go' || matrix.variant == 'python'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq strace binutils
+      # Python has no compiler: the record stages the package (fixture, probe and SDK) twice and compares file hashes.
+      - name: Build record (Python)
+        if: matrix.variant == 'python'
+        env:
+          PRODUCER: GitHub Actions ubuntu-24.04 (native x86-64)
+        run: IMAGE_DIGEST="runner image $ImageOS $ImageVersion (no digest available)" sh examples/language-fixtures/scripts/build-record-python.sh "$RUNNER_TEMP/record-python.md"
       - name: Build record
+        if: matrix.variant != 'python'
         env:
           PRODUCER: GitHub Actions ubuntu-24.04 (native x86-64)
         run: IMAGE_DIGEST="runner image $ImageOS $ImageVersion (no digest available)" sh examples/language-fixtures/scripts/build-record.sh ${{ matrix.variant }} "$RUNNER_TEMP/record-${{ matrix.variant }}.md"

@@ -388,4 +388,43 @@ expect "check-writes rejects a result line written in two pieces" 1 sh "$here/ch
 expect "check-writes rejects a missing result line" 1 sh "$here/check-writes.sh" "$trace_no_stdout"
 expect "check-writes without a file is a usage error" 64 sh "$here/check-writes.sh"
 
+# check-sources-python.sh: at_py.py and probe_py.py must not read the seed, /proc, the CPU count, the environment or
+# the clock (the probe alone may call time.monotonic_ns).
+pyclean="$tmp/py_clean.py"
+printf 'import threading\nprint(1)\n' >"$pyclean"
+expect "check-sources-python accepts a clean source" 0 sh "$here/check-sources-python.sh" "$pyclean"
+for token in 'HAIRSPRING_SEED' '/proc/self/stat' 'os.cpu_count()' 'os.process_cpu_count()' 'os.sched_getaffinity(0)' 'os.environ["X"]' 'os.getenv("X")' 'time.time()' 'time.monotonic()' 'time.perf_counter()' 'time.process_time()' 'time.clock_gettime(0)' 'datetime.now()' 'time.monotonic_ns()'; do
+  pybad="$tmp/py_bad.py"
+  printf 'x = %s\n' "$token" >"$pybad"
+  expect "check-sources-python rejects $token" 1 sh "$here/check-sources-python.sh" "$pybad"
+done
+pyclock="$tmp/py_clock.py"
+printf 'import time\nt = time.monotonic_ns()\n' >"$pyclock"
+expect "check-sources-python accepts time.monotonic_ns when it is allowed" 0 sh "$here/check-sources-python.sh" --allow-monotonic-ns "$pyclock"
+printf 'import time\nt = time.monotonic()\n' >"$pyclock"
+expect "check-sources-python still rejects time.monotonic when monotonic_ns is allowed" 1 sh "$here/check-sources-python.sh" --allow-monotonic-ns "$pyclock"
+expect "check-sources-python without a file is a usage error" 64 sh "$here/check-sources-python.sh"
+pyroot="$here/../python"
+expect "the real at_py.py is clean" 0 sh "$here/check-sources-python.sh" "$pyroot/at_py.py"
+expect "the real probe_py.py is clean, apart from monotonic_ns" 0 sh "$here/check-sources-python.sh" --allow-monotonic-ns "$pyroot/probe_py.py"
+expect "the real probe_py.py is rejected when monotonic_ns is not allowed" 1 sh "$here/check-sources-python.sh" "$pyroot/probe_py.py"
+
+# stage-python.sh: the staged package (the fixture, the probe and the SDK package) with the sha256 of every file and a
+# tree hash, so two stagings of the same sources compare equal and a changed byte does not.
+stage1="$tmp/stage1"
+stage2="$tmp/stage2"
+expect "stage-python stages the package" 0 sh "$here/stage-python.sh" "$stage1" "$tmp/list1.txt"
+expect "stage-python stages it again elsewhere" 0 sh "$here/stage-python.sh" "$stage2" "$tmp/list2.txt"
+if cmp -s "$tmp/list1.txt" "$tmp/list2.txt"; then echo "ok   two stagings have equal listings and tree hash"; else echo "FAIL two stagings differ"; failures=$((failures + 1)); fi
+expect "the listing names the fixture, the probe and the package" 0 sh -c "grep -q ' at_py.py\$' '$tmp/list1.txt' && grep -q ' probe_py.py\$' '$tmp/list1.txt' && grep -q ' hairspring/__init__.py\$' '$tmp/list1.txt' && grep -q ' hairspring/_runtime.py\$' '$tmp/list1.txt'"
+expect "the listing ends with a tree hash" 0 sh -c "tail -1 '$tmp/list1.txt' | grep -Eq '^tree  [0-9a-f]{64}\$'"
+expect "the listing has no bytecode" 1 grep -q pycache "$tmp/list1.txt"
+cp -R "$here/../python" "$tmp/fx_copy"
+mkdir -p "$tmp/sdk_copy"
+cp -R "$here/../../../sdks/python/src/." "$tmp/sdk_copy"
+printf '# changed\n' >>"$tmp/sdk_copy/hairspring/_fmt.py"
+expect "stage-python stages changed sources" 0 env FIXTURE_DIR="$tmp/fx_copy" SDK_SRC="$tmp/sdk_copy" sh "$here/stage-python.sh" "$tmp/stage3" "$tmp/list3.txt"
+if [ "$(tail -1 "$tmp/list1.txt")" != "$(tail -1 "$tmp/list3.txt")" ]; then echo "ok   a changed byte changes the tree hash"; else echo "FAIL a changed byte did not change the tree hash"; failures=$((failures + 1)); fi
+expect "stage-python without arguments is a usage error" 64 sh "$here/stage-python.sh"
+
 exit $failures

@@ -31,6 +31,12 @@ The Rust SDK (`sdks/rust`) is a workspace member: `cargo test -p hairspring-sdk`
 the SDK's sample programs with a nested `cargo build`, and compare with the C SDK, which needs `make` and a C compiler).
 Its seccomp "no system call" check runs on Linux only.
 
+The Python SDK (`sdks/python`, Python 3.12 or newer, standard library only) has its own tests, run from the repository
+root with `python3 -m unittest discover -s sdks/python/tests -t sdks/python`. Its conformance tests against the
+reference parser are `cargo test -p hairspring-props --test python_sdk` (they skip with a notice when there is no
+Python 3.12+; `HS_REQUIRE_PYTHON=1` makes that an error, `HS_PYTHON` names the interpreter), and the lost-update
+fixture is checked with `make -C examples/language-fixtures/python test`.
+
 PostgreSQL tests are skipped unless `HAIRSPRING_TEST_PG_URL` is set. Besides the store conformance suite, the
 service and CLI tests also run against PostgreSQL when it is set:
 
