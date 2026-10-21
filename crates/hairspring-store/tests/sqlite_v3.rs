@@ -88,13 +88,15 @@ fn table_exists(conn: &Connection, name: &str) -> bool {
 }
 
 const NEW_TABLES: [&str; 4] = ["run_identity", "trees", "trial_lineage", "tree_branches"];
+/// The schema version this build creates and migrates to (version 4 only adds tables to version 3).
+const CURRENT_VERSION: i64 = 4;
 
 #[test]
-fn a_fresh_database_is_at_version_three_with_the_tree_tables() {
+fn a_fresh_database_is_current_and_has_the_tree_tables() {
     let path = temp_db("fresh");
     drop(SqliteStore::open(&path).unwrap());
     let conn = Connection::open(&path).unwrap();
-    assert_eq!(user_version(&conn), 3);
+    assert_eq!(user_version(&conn), CURRENT_VERSION);
     for t in NEW_TABLES {
         assert!(table_exists(&conn, t), "{t}");
     }
@@ -128,7 +130,7 @@ fn a_version_two_database_migrates_to_three_in_place_and_leaves_trials_and_runs_
     drop(s);
 
     let after = Connection::open(&path).unwrap();
-    assert_eq!(user_version(&after), 3);
+    assert_eq!(user_version(&after), CURRENT_VERSION);
     for (t, was) in kept.iter().zip(dumps) {
         assert_eq!(table_dump(&after, t), was, "{t} is untouched");
     }
@@ -233,15 +235,19 @@ fn a_version_three_database_missing_an_index_is_refused_not_repaired() {
 }
 
 #[test]
-fn a_database_newer_than_three_is_refused_untouched() {
-    let path = temp_db("v4");
+fn a_database_newer_than_this_build_is_refused_untouched() {
+    let path = temp_db("newer");
     drop(SqliteStore::open(&path).unwrap());
     let conn = Connection::open(&path).unwrap();
-    conn.pragma_update(None, "user_version", 4).unwrap();
+    conn.pragma_update(None, "user_version", CURRENT_VERSION + 1)
+        .unwrap();
     let dump = schema_dump(&conn);
     let err = SqliteStore::open(&path).err().expect("must refuse");
-    assert!(err.to_string().contains('4'), "{err}");
-    assert_eq!(user_version(&conn), 4);
+    assert!(
+        err.to_string().contains(&(CURRENT_VERSION + 1).to_string()),
+        "{err}"
+    );
+    assert_eq!(user_version(&conn), CURRENT_VERSION + 1);
     assert_eq!(schema_dump(&conn), dump);
     cleanup(&path);
 }
@@ -313,9 +319,12 @@ fn downgrading_keeps_branch_runs_as_detached_runs_and_the_round_trip_works() {
         },
     )
     .unwrap();
-    assert_eq!((dry.from_version, dry.applied), (3, false));
+    assert_eq!((dry.from_version, dry.applied), (CURRENT_VERSION, false));
     assert_eq!(dry.branch_runs, vec![f.branch_run.clone()]);
-    assert_eq!(user_version(&Connection::open(&path).unwrap()), 3);
+    assert_eq!(
+        user_version(&Connection::open(&path).unwrap()),
+        CURRENT_VERSION
+    );
 
     let v3_runs = {
         let c = Connection::open(&path).unwrap();
@@ -329,7 +338,7 @@ fn downgrading_keeps_branch_runs_as_detached_runs_and_the_round_trip_works() {
     );
     assert_eq!(
         (report.from_version, report.to_version, report.applied),
-        (3, 2, true)
+        (CURRENT_VERSION, 2, true)
     );
     assert_eq!(report.branch_runs, vec![f.branch_run.clone()]);
     assert!(report.dropped_runs.is_empty());
@@ -391,7 +400,7 @@ fn downgrading_keeps_branch_runs_as_detached_runs_and_the_round_trip_works() {
     assert_eq!(s.get_tree(&f.tree).unwrap(), None);
     drop(s);
     let conn = Connection::open(&path).unwrap();
-    assert_eq!(user_version(&conn), 3);
+    assert_eq!(user_version(&conn), CURRENT_VERSION);
     assert_eq!(dump_v2_tables(&conn), before_v2_again);
     cleanup(&path);
 }
@@ -459,7 +468,7 @@ fn the_downgrade_refuses_versions_it_does_not_know() {
     let path = temp_db("down-refuse");
     drop(SqliteStore::open(&path).unwrap());
     let conn = Connection::open(&path).unwrap();
-    for v in [4, 1] {
+    for v in [CURRENT_VERSION + 1, 1] {
         conn.pragma_update(None, "user_version", v).unwrap();
         let dump = schema_dump(&conn);
         let err = downgrade_sqlite(&path, &DowngradeOptions::default()).expect_err("refused");
@@ -499,7 +508,10 @@ fn many_threads_opening_version_two_databases_repeatedly_all_succeed() {
         assert!(errors.is_empty(), "round {round}: {errors:?}");
         let s = SqliteStore::open(&old).unwrap();
         assert_eq!(s.get_run("run_old").unwrap().unwrap().trials, 1);
-        assert_eq!(user_version(&Connection::open(&old).unwrap()), 3);
+        assert_eq!(
+            user_version(&Connection::open(&old).unwrap()),
+            CURRENT_VERSION
+        );
         cleanup(&old);
     }
 }
@@ -566,7 +578,10 @@ fn several_processes_opening_a_version_two_database_at_once_all_succeed() {
         .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
         .collect();
     assert!(failures.is_empty(), "child processes failed: {failures:?}");
-    assert_eq!(user_version(&Connection::open(&path).unwrap()), 3);
+    assert_eq!(
+        user_version(&Connection::open(&path).unwrap()),
+        CURRENT_VERSION
+    );
     assert_eq!(
         SqliteStore::open(&path)
             .unwrap()

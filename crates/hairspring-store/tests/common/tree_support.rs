@@ -57,6 +57,7 @@ fn trial(seq: u64, verdict: TrialVerdict) -> NewTrial {
         digest: vec![1, 0, 0, 0],
         detail: None,
         output: None,
+        on_digest_cap: None,
     }
 }
 
@@ -70,6 +71,7 @@ pub fn batch(verdicts: &[TrialVerdict], first_seq: u64) -> TrialBatch {
             .map(|(i, v)| trial(first_seq + i as u64, *v))
             .collect(),
         kept_bytes_cap: MAX_KEPT_BYTES_PER_RUN,
+        digest_bytes_cap: MAX_DIGEST_BYTES_PER_RUN,
     }
 }
 

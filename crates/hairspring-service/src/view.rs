@@ -5,7 +5,7 @@
 //! to a model, can then treat that one object as untrusted text and everything outside it as the server's own words.
 use crate::{ClaimView, RunCompletion};
 use hairspring_props::honesty::RateCell;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -143,6 +143,11 @@ pub struct TrialRow {
     pub failing_idx: Vec<u32>,
     /// The stored digest could not be read, so `failing_count` and the failing ids are unknown, not zero.
     pub digest_unreadable: bool,
+    /// The run's digest allowance was used up, so this trial's digest was replaced by an empty one and the trial
+    /// counts toward no statistic. `failing_count` is zero because nothing was kept, not because nothing failed.
+    /// Derived from the stored reason, which only the server writes with that start (workers cannot send it), not from
+    /// a stored flag: a database written by a build that wrote a different marker would not show it here.
+    pub digest_capped: bool,
     pub timed_out: bool,
     pub degraded: bool,
     pub perturbing: bool,
@@ -236,7 +241,7 @@ pub struct TrialDetail {
 }
 
 /// One point of the coverage series.
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct CoveragePoint {
     pub seq: u64,
     pub ids_hit: u64,
@@ -244,7 +249,7 @@ pub struct CoveragePoint {
     pub schedules: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Coverage {
     pub run_id: String,
     pub trials: u64,

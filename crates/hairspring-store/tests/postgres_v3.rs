@@ -96,6 +96,8 @@ fn table_exists(c: &mut Client, schema: &str, table: &str) -> bool {
 }
 
 const NEW_TABLES: [&str; 4] = ["run_identity", "trees", "trial_lineage", "tree_branches"];
+/// The schema version this build creates and migrates to (version 4 only adds tables to version 3).
+const CURRENT_VERSION: i32 = 4;
 
 /// The PostgreSQL tests return early without a URL, which looks like a pass. Setting `HAIRSPRING_REQUIRE_PG=1` turns
 /// a missing URL into a failure, and with a URL this proves a server answers.
@@ -117,12 +119,12 @@ fn the_postgres_tests_really_connect() {
 }
 
 #[test]
-fn a_fresh_schema_is_at_version_three_with_the_tree_tables() {
+fn a_fresh_schema_is_current_and_has_the_tree_tables() {
     let Some(url) = url() else { return };
     let schema = new_schema("f");
     drop(PgStore::connect_in_schema(&url, &schema, 1).unwrap());
     let mut c = admin(&url);
-    assert_eq!(recorded_version(&mut c, &schema), 3);
+    assert_eq!(recorded_version(&mut c, &schema), CURRENT_VERSION);
     for t in NEW_TABLES {
         assert!(table_exists(&mut c, &schema, t), "{t}");
     }
@@ -153,7 +155,7 @@ fn a_version_two_schema_migrates_to_three_in_place_and_leaves_trials_and_runs_al
     assert_eq!(s.get_run("run_old").unwrap().unwrap().trials, 1);
     assert_eq!(s.tree_of_run("run_old").unwrap(), None);
 
-    assert_eq!(recorded_version(&mut c, &schema), 3);
+    assert_eq!(recorded_version(&mut c, &schema), CURRENT_VERSION);
     for (t, was) in kept.iter().zip(before) {
         assert_eq!(table_dump(&mut c, t), was, "{t} is untouched");
     }
@@ -264,21 +266,22 @@ fn a_schema_missing_a_version_three_index_is_refused_not_repaired() {
 }
 
 #[test]
-fn a_schema_newer_than_three_is_refused_untouched() {
+fn a_schema_newer_than_this_build_is_refused_untouched() {
     let Some(url) = url() else { return };
     let schema = new_schema("n");
     drop(PgStore::connect_in_schema(&url, &schema, 1).unwrap());
     let mut c = admin(&url);
+    let newer = CURRENT_VERSION + 1;
     c.batch_execute(&format!(
-        "UPDATE \"{schema}\".schema_version SET version = 4"
+        "UPDATE \"{schema}\".schema_version SET version = {newer}"
     ))
     .unwrap();
     let dump = schema_dump(&mut c, &schema);
     let err = PgStore::connect_in_schema(&url, &schema, 1)
         .err()
         .expect("must refuse");
-    assert!(err.to_string().contains('4'), "{err}");
-    assert_eq!(recorded_version(&mut c, &schema), 4);
+    assert!(err.to_string().contains(&newer.to_string()), "{err}");
+    assert_eq!(recorded_version(&mut c, &schema), newer);
     assert_eq!(schema_dump(&mut c, &schema), dump);
 }
 
@@ -305,7 +308,7 @@ fn concurrent_first_opens_of_a_version_two_schema_migrate_it_exactly_once() {
             .filter_map(|h| h.join().unwrap())
             .collect();
         assert!(errors.is_empty(), "round {round}: {errors:?}");
-        assert_eq!(recorded_version(&mut admin(&url), &schema), 3);
+        assert_eq!(recorded_version(&mut admin(&url), &schema), CURRENT_VERSION);
     }
 }
 
@@ -374,7 +377,7 @@ fn several_processes_opening_a_version_two_schema_at_once_all_succeed() {
         .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
         .collect();
     assert!(failures.is_empty(), "child processes failed: {failures:?}");
-    assert_eq!(recorded_version(&mut admin(&url), &schema), 3);
+    assert_eq!(recorded_version(&mut admin(&url), &schema), CURRENT_VERSION);
 }
 
 #[test]
@@ -445,10 +448,13 @@ fn downgrading_keeps_branch_runs_as_detached_runs_and_the_round_trip_works() {
         },
     )
     .unwrap();
-    assert_eq!((dry.from_version, dry.applied), (3, false));
+    assert_eq!(
+        (dry.from_version, dry.applied),
+        (i64::from(CURRENT_VERSION), false)
+    );
     assert_eq!(dry.branch_runs, vec![f.branch_run.clone()]);
     let mut c = raw(&url, &schema);
-    assert_eq!(recorded_version(&mut c, &schema), 3);
+    assert_eq!(recorded_version(&mut c, &schema), CURRENT_VERSION);
 
     let (runs_before, trials_before) = (table_dump(&mut c, "runs"), table_dump(&mut c, "trials"));
     let report = downgrade_postgres(&url, &schema, &DowngradeOptions::default()).unwrap();
@@ -459,7 +465,7 @@ fn downgrading_keeps_branch_runs_as_detached_runs_and_the_round_trip_works() {
     );
     assert_eq!(
         (report.from_version, report.to_version, report.applied),
-        (3, 2, true)
+        (i64::from(CURRENT_VERSION), 2, true)
     );
     assert_eq!(report.branch_runs, vec![f.branch_run.clone()]);
     assert!(report.dropped_runs.is_empty());
@@ -506,7 +512,7 @@ fn downgrading_keeps_branch_runs_as_detached_runs_and_the_round_trip_works() {
     assert_eq!(s.get_run(&f.branch_run).unwrap().unwrap().mode, "branch");
     assert_eq!(s.count_trials(&f.branch_run).unwrap(), 2);
     assert_eq!(s.get_tree(&f.tree).unwrap(), None);
-    assert_eq!(recorded_version(&mut c, &schema), 3);
+    assert_eq!(recorded_version(&mut c, &schema), CURRENT_VERSION);
     assert_eq!(dump_v2_tables(&mut c), v2_state);
 }
 
@@ -593,7 +599,7 @@ fn the_downgrade_refuses_versions_it_does_not_know() {
     let schema = new_schema("dr");
     drop(PgStore::connect_in_schema(&url, &schema, 1).unwrap());
     let mut c = admin(&url);
-    for v in [4, 1] {
+    for v in [CURRENT_VERSION + 1, 1] {
         c.batch_execute(&format!(
             "UPDATE \"{schema}\".schema_version SET version = {v}"
         ))

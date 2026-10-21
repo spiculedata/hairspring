@@ -2,7 +2,9 @@
 //!
 //! Connections are plain TCP (`NoTls`): run Postgres on a private network or behind a TLS proxy.
 //! Leasing uses `FOR UPDATE SKIP LOCKED`, so any number of workers can pull jobs concurrently.
+use crate::digest_allowance::DigestUse;
 use crate::lineage::*;
+use crate::pg_explorer as explorer;
 use crate::pg_lineage as lineage;
 use crate::pg_run_end as run_end;
 use crate::pg_schema;
@@ -13,6 +15,7 @@ use crate::types::*;
 use crate::{new_id, sha256_hex, Store, MAX_JOB_ATTEMPTS};
 use postgres::{Client, Config, NoTls, Row};
 use r2d2_postgres::{r2d2, PostgresConnectionManager};
+use std::collections::BTreeMap;
 
 type Pool = r2d2::Pool<PostgresConnectionManager<NoTls>>;
 
@@ -573,6 +576,18 @@ impl Store for PgStore {
 
     fn run_contributors(&self, run_id: &str) -> Result<Vec<Contributor>> {
         trials::run_contributors(&mut *self.client()?, run_id)
+    }
+
+    fn reporters_of(&self, run_id: &str, seeds: &[u64]) -> Result<BTreeMap<u64, String>> {
+        explorer::reporters_of(&mut *self.client()?, run_id, seeds)
+    }
+
+    fn run_digest_use(&self, run_id: &str) -> Result<DigestUse> {
+        explorer::load_digest_use(&mut *self.client()?, run_id)
+    }
+
+    fn run_coverage_json(&self, run_id: &str) -> Result<Option<String>> {
+        explorer::run_coverage_json(&mut *self.client()?, run_id)
     }
 
     fn set_worker_trusted(&self, id: &str, trusted: bool) -> Result<()> {

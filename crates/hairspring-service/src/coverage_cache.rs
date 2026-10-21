@@ -1,7 +1,9 @@
 //! A small cache of coverage series for finished runs.
 //!
-//! The series is a scan of every trial of a run. A finished run's trial rows no longer change, so the series is
-//! worked out once and served from memory afterwards. Runs that are still open are never cached.
+//! The series is a scan of every trial of a run. A finished run's trial rows no longer change, so its series is
+//! worked out when its job finishes and kept in the store; this cache holds the ones read recently (and the series
+//! of runs finished before the store kept them, which are scanned on first read). Runs that are still open are never
+//! cached.
 use crate::view::Coverage;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

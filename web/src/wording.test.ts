@@ -99,6 +99,7 @@ describe('fixed phrases', () => {
   it('states why UNMET is suppressed', () => {
     expect(unmetSuppressedReason({ kind: 'stopped_at_first_failure' }, false)).toMatch(/stopped at its first failure/);
     expect(unmetSuppressedReason({ kind: 'complete' }, true)).toMatch(/incomplete/);
+    expect(unmetSuppressedReason({ kind: 'digest_allowance_used_up' }, false)).toMatch(/incomplete/);
     expect(unmetSuppressedReason({ kind: 'running' }, false)).toMatch(/not finished/);
     expect(
       unmetSuppressedReason({ kind: 'time_or_step_limited', trials_run: 3, trials_budget: 10 }, false, true),

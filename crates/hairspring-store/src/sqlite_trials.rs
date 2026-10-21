@@ -1,6 +1,8 @@
 //! SQLite side of per-trial storage (schema version 2). Every statement binds its inputs as parameters; nothing
 //! guest-influenced is ever spliced into SQL text.
+use crate::digest_allowance::{digest_form, DigestForm, DigestUse};
 use crate::sha256_hex;
+use crate::sqlite_explorer as explorer;
 use crate::sqlite_lineage as lineage;
 use crate::trials::{to_db, *};
 use crate::types::{Result, RunState, StoreError};
@@ -108,6 +110,7 @@ struct IngestRun {
     ingest_attempt: i64,
     catalog_size: i64,
     kept_bytes: i64,
+    digest: DigestUse,
 }
 
 fn run_state(tx: &Transaction, run_id: &str) -> Result<Option<IngestRun>> {
@@ -118,14 +121,16 @@ fn run_state(tx: &Transaction, run_id: &str) -> Result<Option<IngestRun>> {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()?;
-    Ok(row.map(
-        |(state, ingest_attempt, catalog_size, kept_bytes)| IngestRun {
-            open: RunState::parse(&state).is_some_and(|s| !s.is_terminal()),
-            ingest_attempt,
-            catalog_size,
-            kept_bytes,
-        },
-    ))
+    let Some((state, ingest_attempt, catalog_size, kept_bytes)) = row else {
+        return Ok(None);
+    };
+    Ok(Some(IngestRun {
+        open: RunState::parse(&state).is_some_and(|s| !s.is_terminal()),
+        ingest_attempt,
+        catalog_size,
+        kept_bytes,
+        digest: explorer::load_digest_use(tx, run_id)?,
+    }))
 }
 
 /// A new attempt of the job starts the run's trials over; the earlier attempt's rows are removed. The run's tree nodes
@@ -141,7 +146,13 @@ fn start_attempt(
     }
     let mut blobs = kept_blobs(tx, run_id)?;
     blobs.extend(lineage::drop_run_lineage(tx, run_id)?);
-    for table in ["trials", "run_catalog", "run_properties"] {
+    for table in [
+        "trials",
+        "run_catalog",
+        "run_properties",
+        "run_digest_use",
+        "run_coverage",
+    ] {
         tx.execute(&format!("DELETE FROM {table} WHERE run_id=?"), [run_id])?;
     }
     tx.execute(
@@ -320,6 +331,53 @@ fn insert_trial(
     Ok(())
 }
 
+enum Placed {
+    Inserted,
+    Duplicate,
+    Rejected(String),
+    NeedsStandIn,
+}
+
+/// Stores one trial of a batch, or recognises it as one already stored. Charges the digest it stores to `run`.
+fn place_trial(
+    tx: &Transaction,
+    run_id: &str,
+    run: &mut IngestRun,
+    who: &Who,
+    batch: &TrialBatch,
+    t: &NewTrial,
+) -> Result<Placed> {
+    if t.max_idx.is_some_and(|m| i64::from(m) >= run.catalog_size) {
+        return Ok(Placed::Rejected(format!(
+            "trial {} refers to an id the catalog does not hold",
+            t.seq
+        )));
+    }
+    if let Some(stored) = existing_trial(tx, run_id, t.seq)? {
+        if !stored.same_as_stored_form_of(t) {
+            // The stored row may be a stand-in this resend did not offer; ask for the offer before calling it a conflict.
+            if t.on_digest_cap.is_none() && run.digest.capped_trials > 0 {
+                return Ok(Placed::NeedsStandIn);
+            }
+            return Ok(Placed::Rejected(format!(
+                "trial {} was already stored with different content",
+                t.seq
+            )));
+        }
+        return Ok(Placed::Duplicate);
+    }
+    let (form, replaced) = match digest_form(t, run.digest.bytes, batch.digest_bytes_cap) {
+        DigestForm::Original(t) => (t, false),
+        DigestForm::Replaced(stand_in) => (stand_in, true),
+        DigestForm::Refused => return Ok(Placed::NeedsStandIn),
+    };
+    let kept = keep(tx, form, run.kept_bytes, batch.kept_bytes_cap)?;
+    run.kept_bytes += kept.bytes;
+    run.digest = run.digest.after(form, replaced);
+    insert_trial(tx, run_id, who, form, &kept)?;
+    Ok(Placed::Inserted)
+}
+
 pub(crate) fn ingest(
     conn: &mut Connection,
     job_id: &str,
@@ -352,6 +410,7 @@ pub(crate) fn ingest(
         }
         run.catalog_size = 0;
         run.kept_bytes = 0;
+        run.digest = DigestUse::default();
     }
     for row in &batch.catalog {
         match apply_catalog_row(&tx, &target.run_id, run.catalog_size, row)? {
@@ -366,31 +425,18 @@ pub(crate) fn ingest(
     };
     let (mut inserted, mut duplicates) = (0u32, 0u32);
     for t in &batch.trials {
-        if t.max_idx.is_some_and(|m| i64::from(m) >= run.catalog_size) {
-            return Ok(IngestOutcome::Rejected(format!(
-                "trial {} refers to an id the catalog does not hold",
-                t.seq
-            )));
+        match place_trial(&tx, &target.run_id, &mut run, &who, batch, t)? {
+            Placed::Inserted => inserted += 1,
+            Placed::Duplicate => duplicates += 1,
+            Placed::Rejected(why) => return Ok(IngestOutcome::Rejected(why)),
+            Placed::NeedsStandIn => return Ok(IngestOutcome::NeedsStandIn),
         }
-        if let Some(stored) = existing_trial(&tx, &target.run_id, t.seq)? {
-            if !stored.same_content(t) {
-                return Ok(IngestOutcome::Rejected(format!(
-                    "trial {} was already stored with different content",
-                    t.seq
-                )));
-            }
-            duplicates += 1;
-            continue;
-        }
-        let kept = keep(&tx, t, run.kept_bytes, batch.kept_bytes_cap)?;
-        run.kept_bytes += kept.bytes;
-        insert_trial(&tx, &target.run_id, &who, t, &kept)?;
-        inserted += 1;
     }
     tx.execute(
         "UPDATE runs SET catalog_size=?, kept_bytes=? WHERE id=?",
         params![run.catalog_size, run.kept_bytes, target.run_id],
     )?;
+    explorer::save_digest_use(&tx, &target.run_id, run.digest)?;
     tx.commit()?;
     Ok(IngestOutcome::Applied {
         inserted,
@@ -429,7 +475,8 @@ pub(crate) fn write_run_stats(tx: &Transaction, run_id: &str, s: &RunStats) -> R
             s.ingest_incomplete, s.property_summary_json, run_id
         ],
     )?;
-    replace_run_properties(tx, run_id, &s.properties)
+    replace_run_properties(tx, run_id, &s.properties)?;
+    explorer::write_coverage(tx, run_id, s.coverage_json.as_deref())
 }
 
 pub(crate) fn count_trials(conn: &Connection, run_id: &str) -> Result<u64> {

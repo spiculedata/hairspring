@@ -12,8 +12,6 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
 const CHIP_UNVERIFIED: &str = "unverified worker data";
-/// Trial rows read per page while looking for the worker that reported a failing trial.
-const REPORTER_PAGE: u32 = 500;
 
 /// Whether a claim may be made about a run, the sentence if so, and what to show beside it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -38,18 +36,10 @@ fn completion_reason(c: &RunCompletion) -> Option<String> {
 
 impl Service {
     /// The worker that reported each of the given failing seeds. A seed whose row cannot be found maps to nothing.
+    /// The store answers from the seed and worker columns only, so no trial row is read whole.
     fn reporters_of(&self, run_id: &str, seeds: &BTreeSet<u64>) -> Result<BTreeMap<u64, String>> {
-        let mut found = BTreeMap::new();
-        let mut after = None;
-        while found.len() < seeds.len() {
-            let page = self.store.list_trials(run_id, after, REPORTER_PAGE)?;
-            let Some(last) = page.last() else { break };
-            after = Some(last.seq);
-            for t in page.iter().filter(|t| seeds.contains(&t.seed)) {
-                found.entry(t.seed).or_insert_with(|| t.worker_id.clone());
-            }
-        }
-        Ok(found)
+        let wanted: Vec<u64> = seeds.iter().copied().collect();
+        Ok(self.store.reporters_of(run_id, &wanted)?)
     }
 
     /// What reproduces each violated property. No confirmation replays are stored yet, so every failure is

@@ -5,6 +5,8 @@ mod claim_view;
 pub mod claims;
 mod completion;
 mod coverage_cache;
+mod coverage_series;
+mod digest_cap;
 mod error;
 mod ingest;
 mod jobs;
@@ -23,6 +25,7 @@ pub mod view;
 
 pub use claim_view::ClaimView;
 pub use completion::{completion_of, RunCompletion};
+pub use digest_cap::DIGEST_CAPPED_REASON;
 pub use error::ServiceError;
 pub use query::{
     PropertyQuery, SeedQuery, StripQuery, TrialQuery, DEFAULT_PAGE, MAX_PAGE, MAX_PREFIX_BYTES,
@@ -70,6 +73,10 @@ pub struct ServiceConfig {
     pub progress_event_interval: Duration,
     /// How many bytes of kept trial detail and output one run may hold.
     pub kept_bytes_per_run: u64,
+    /// How many bytes of trial digests one run may hold. A trial whose digest would pass it is stored with a marked,
+    /// empty stand-in and the run finishes marked incomplete; the worker's batch is not refused. The default is a
+    /// proposal ([`hairspring_store::MAX_DIGEST_BYTES_PER_RUN`]), not a measured figure.
+    pub digest_bytes_per_run: u64,
 }
 
 impl Default for ServiceConfig {
@@ -80,6 +87,7 @@ impl Default for ServiceConfig {
             max_workers: 1000,
             progress_event_interval: Duration::from_millis(500),
             kept_bytes_per_run: hairspring_store::MAX_KEPT_BYTES_PER_RUN,
+            digest_bytes_per_run: hairspring_store::MAX_DIGEST_BYTES_PER_RUN,
         }
     }
 }

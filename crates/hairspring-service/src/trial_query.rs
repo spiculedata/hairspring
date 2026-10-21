@@ -1,4 +1,6 @@
 //! A run's trials: the list with its filters, one trial's detail and output, and the coverage series.
+use crate::coverage_series;
+use crate::digest_cap::is_capped_reason;
 use crate::output_view::{OutputMeta, STREAMS};
 use crate::query::*;
 use crate::scan::{failing_indexes, presence, Flow};
@@ -80,6 +82,7 @@ fn trial_row(t: &TrialRecord, failing: Failing) -> TrialRow {
         failing_count: failing.count,
         failing_idx: failing.idx,
         digest_unreadable: failing.unreadable,
+        digest_capped: is_capped_reason(&t.reason),
         timed_out: t.timed_out,
         degraded: t.degraded,
         perturbing: t.perturbing,
@@ -286,8 +289,9 @@ impl Service {
 
     /// Cumulative distinct properties reached (and true) and distinct schedules, by trial. `None` for an unknown run.
     ///
-    /// The series of a finished run is worked out once and kept, since its trial rows no longer change. A run that
-    /// is still open is scanned on every call.
+    /// The series of a finished run was worked out when its job finished and is read from the store; its trial rows
+    /// no longer change. A run finished before the series was stored, or whose stored series cannot be used, is
+    /// scanned once and kept in memory. A run that is still open is scanned on every call.
     pub fn coverage(&self, run_id: &str) -> Result<Option<Coverage>> {
         let Some(run) = self.store.get_run(run_id)? else {
             return Ok(None);
@@ -298,9 +302,37 @@ impl Service {
         if let Some(cached) = self.coverage_cache.get(run_id) {
             return Ok(Some(Coverage::clone(&cached)));
         }
-        let fresh = Arc::new(self.scan_coverage(run_id)?);
-        self.coverage_cache.insert(run_id, fresh.clone());
-        Ok(Some(Coverage::clone(&fresh)))
+        let series = match self.stored_coverage(run_id)? {
+            Some(stored) => stored,
+            None => self.scan_coverage(run_id)?,
+        };
+        let series = Arc::new(series);
+        self.coverage_cache.insert(run_id, series.clone());
+        Ok(Some(Coverage::clone(&series)))
+    }
+
+    /// The series the store kept when the run's job finished, if there is one this build can use.
+    fn stored_coverage(&self, run_id: &str) -> Result<Option<Coverage>> {
+        let Some(json) = self.store.run_coverage_json(run_id)? else {
+            return Ok(None);
+        };
+        let series = coverage_series::decode(&json, run_id);
+        if series.is_none() {
+            eprintln!("hairspring: the stored coverage series of {run_id} is unusable; working it out again");
+        }
+        Ok(series)
+    }
+
+    /// The coverage series of `run_id` as the JSON to store with it, worked out now. `None` when it cannot be worked
+    /// out or does not fit the store: the reader then works it out on demand, as for a run finished before.
+    pub(crate) fn coverage_to_store(&self, run_id: &str) -> Option<String> {
+        match self.scan_coverage(run_id) {
+            Ok(series) => coverage_series::encode(&series),
+            Err(e) => {
+                eprintln!("hairspring: cannot work out the coverage series of {run_id}: {e}");
+                None
+            }
+        }
     }
 
     /// How many coverage series have been worked out from stored trials (not served from the cache). For tests.

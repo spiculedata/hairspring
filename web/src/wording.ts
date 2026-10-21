@@ -192,7 +192,7 @@ export function unmetSuppressedReason(
   if (completion.kind === 'stopped_at_first_failure') return 'the run stopped at its first failure, which fixed how many trials ran';
   if (completion.kind === 'running') return 'the run has not finished';
   if (completion.kind === 'aborted') return 'the run ended in an error or was cancelled';
-  if (completion.kind === 'ended_early' || ingestIncomplete) return "the run's trial data is incomplete";
+  if (completion.kind === 'ended_early' || completion.kind === 'digest_allowance_used_up' || ingestIncomplete) return "the run's trial data is incomplete";
   return 'no trial could claim it';
 }
 

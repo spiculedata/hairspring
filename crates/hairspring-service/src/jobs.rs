@@ -274,7 +274,10 @@ impl Service {
             }
             _ => false,
         };
-        let mut incomplete = !counts_match || (short && !limited);
+        // A trial whose digest was replaced saw things the folded statistics do not include, so the run cannot say
+        // nothing is missing.
+        let capped = !stale && self.store.run_digest_use(run_id)?.capped_trials > 0;
+        let mut incomplete = !counts_match || (short && !limited) || capped;
         let (properties, property_summary_json) = if held == 0 {
             (Vec::new(), None)
         } else {
@@ -290,6 +293,14 @@ impl Service {
                 }
             }
         };
+        // The coverage series is worked out here, once, so no read of the finished run has to scan its trials. It is a
+        // second pass over the digests next to the fold above, not part of it: the job's lease is still held, so no
+        // trial can arrive between the two, and a series that is missing or fails is simply worked out on first read.
+        let coverage_json = if held > 0 && self.run_is_open(run_id)? {
+            self.coverage_to_store(run_id)
+        } else {
+            None
+        };
         Ok(RunStats {
             inconclusive: clean.inconclusive,
             distinct_schedules: clean.distinct_schedules,
@@ -298,7 +309,16 @@ impl Service {
             ingest_incomplete: incomplete,
             property_summary_json,
             properties,
+            coverage_json,
         })
+    }
+
+    /// Whether the run can still be finished (a cancelled or finished run keeps nothing a job writes).
+    fn run_is_open(&self, run_id: &str) -> Result<bool> {
+        Ok(self
+            .store
+            .get_run(run_id)?
+            .is_some_and(|r| !r.state.is_terminal()))
     }
 
     fn forget_progress(&self, run_id: &str) {

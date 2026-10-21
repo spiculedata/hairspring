@@ -76,6 +76,10 @@ pub struct NewTrial {
     pub detail: Option<Vec<u8>>,
     /// Kept output tails (JSON), stored in the blob table.
     pub output: Option<Vec<u8>>,
+    /// What to store instead of this trial when its digest would pass the run's digest allowance: the same trial
+    /// (same sequence number and seed) with a smaller digest. The store keeps it in place of the original and counts
+    /// the substitution. A batch whose digest does not fit and offers none is refused whole.
+    pub on_digest_cap: Option<Box<NewTrial>>,
 }
 
 /// One ingest request: catalog changes first, then trials.
@@ -85,6 +89,8 @@ pub struct TrialBatch {
     pub trials: Vec<NewTrial>,
     /// How many bytes of kept detail and output the run may hold in all.
     pub kept_bytes_cap: u64,
+    /// How many bytes of digests the run may hold in all (see [`crate::MAX_DIGEST_BYTES_PER_RUN`]).
+    pub digest_bytes_cap: u64,
 }
 
 /// A stored trial.
@@ -142,6 +148,15 @@ impl TrialRecord {
             && self.elapsed_ms == t.elapsed_ms
             && self.digest == t.digest
     }
+
+    /// Whether this stored row is what a re-sent trial would have been stored as: the trial itself, or the stand-in it
+    /// offered in case its digest did not fit. A batch sent again after a lost reply must not turn into a conflict.
+    pub fn same_as_stored_form_of(&self, t: &NewTrial) -> bool {
+        self.same_content(t)
+            || t.on_digest_cap
+                .as_deref()
+                .is_some_and(|stand_in| self.same_content(stand_in))
+    }
 }
 
 /// The part of a trial the run fold needs.
@@ -173,6 +188,9 @@ pub enum IngestOutcome {
     RunNotOpen,
     /// The batch broke a rule; nothing was written.
     Rejected(String),
+    /// A digest would pass the run's digest allowance and its trial offered no stand-in; nothing was written. Send the
+    /// batch again with [`NewTrial::on_digest_cap`] set on every trial.
+    NeedsStandIn,
 }
 
 /// Per-property statistics for one run, as columns. Rates are never stored: `rate_k` and `rate_n` are.
@@ -214,6 +232,8 @@ pub struct RunStats {
     pub property_summary_json: Option<String>,
     /// Replaces the run's property rows.
     pub properties: Vec<RunPropertyRow>,
+    /// The run's coverage series as JSON, worked out when the job finished. At most [`crate::MAX_COVERAGE_JSON_BYTES`].
+    pub coverage_json: Option<String>,
 }
 
 /// A worker that reported trials for a run.
@@ -276,7 +296,8 @@ impl NewTrial {
             && self
                 .output
                 .as_ref()
-                .is_none_or(|o| o.len() <= MAX_KEPT_OUTPUT_BYTES);
+                .is_none_or(|o| o.len() <= MAX_KEPT_OUTPUT_BYTES)
+            && self.stand_in_ok();
         if ok {
             Ok(())
         } else {
@@ -285,6 +306,16 @@ impl NewTrial {
                 self.seq
             ))
         }
+    }
+
+    /// A stand-in must be the same trial, must not offer a stand-in of its own, and must pass the same field checks.
+    fn stand_in_ok(&self) -> bool {
+        self.on_digest_cap.as_deref().is_none_or(|s| {
+            s.seq == self.seq
+                && s.seed == self.seed
+                && s.on_digest_cap.is_none()
+                && s.check().is_ok()
+        })
     }
 
     fn payload_bytes(&self) -> usize {

@@ -6,7 +6,7 @@
 use crate::types::{Result, StoreError};
 use rusqlite::Connection;
 
-pub(crate) const SCHEMA_VERSION: i64 = 3;
+pub(crate) const SCHEMA_VERSION: i64 = 4;
 
 const SCHEMA_V1: &str = "
 CREATE TABLE runs (
@@ -115,8 +115,20 @@ CREATE TABLE IF NOT EXISTS tree_branches (
   created_by TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE (tree_id, command_hash));
 ";
 
+/// Version 4: the digest allowance a run has used and the coverage series stored when its job finished. Purely
+/// additive, and separate tables on purpose: `runs` and `trials` are not altered, so migrating a database with many
+/// trials rewrites nothing. A run without a row has used nothing and has no stored series.
+const MIGRATE_V3_TO_V4: &str = "
+CREATE TABLE IF NOT EXISTS run_digest_use (
+  run_id TEXT PRIMARY KEY REFERENCES runs(id), bytes INTEGER NOT NULL, capped_trials INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS run_coverage (
+  run_id TEXT PRIMARY KEY REFERENCES runs(id), series_json TEXT NOT NULL);
+";
+
 /// The tables a version 3 database must have.
 const V3_TABLES: [&str; 4] = ["run_identity", "trees", "trial_lineage", "tree_branches"];
+/// The tables version 4 added.
+const V4_TABLES: [&str; 2] = ["run_digest_use", "run_coverage"];
 /// The indexes of `trial_lineage`.
 const V3_INDEXES: [&str; 4] = [
     "lineage_children",
@@ -152,7 +164,18 @@ fn ensure_secret_column(conn: &Connection) -> Result<()> {
 /// write rows; a database that lost a table or an index is reported, not repaired (the children query names its
 /// index, so a missing one would otherwise fail later, at the first read).
 fn verify_current(conn: &Connection) -> Result<()> {
-    let wanted = V3_TABLES
+    let tables: Vec<&str> = V3_TABLES.into_iter().chain(V4_TABLES).collect();
+    verify_objects(conn, SCHEMA_VERSION, &tables)
+}
+
+/// A version 3 database is looked at the same way before version 4 is added: the upgrade does not quietly recreate
+/// a version 3 table or index that went missing, on either backend.
+fn verify_v3(conn: &Connection) -> Result<()> {
+    verify_objects(conn, 3, &V3_TABLES)
+}
+
+fn verify_objects(conn: &Connection, version: i64, tables: &[&str]) -> Result<()> {
+    let wanted = tables
         .iter()
         .map(|t| ("table", *t))
         .chain(V3_INDEXES.iter().map(|i| ("index", *i)));
@@ -164,7 +187,7 @@ fn verify_current(conn: &Connection) -> Result<()> {
         )?;
         if present == 0 {
             return Err(StoreError::Backend(format!(
-                "database schema version {SCHEMA_VERSION} is incomplete: {kind} {name} is missing"
+                "database schema version {version} is incomplete: {kind} {name} is missing"
             )));
         }
     }
@@ -181,7 +204,12 @@ fn upgrade(conn: &Connection, from: i64) -> Result<()> {
     if from == 2 {
         ensure_secret_column(conn)?;
     }
-    conn.execute_batch(MIGRATE_V2_TO_V3)?;
+    if from == 3 {
+        verify_v3(conn)?;
+    } else {
+        conn.execute_batch(MIGRATE_V2_TO_V3)?;
+    }
+    conn.execute_batch(MIGRATE_V3_TO_V4)?;
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }
