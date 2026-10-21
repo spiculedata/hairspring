@@ -197,20 +197,34 @@ test. On macOS the access is a call through `_tlv_get_addr`, as in the C SDK, so
 
 ## The planted race
 
-`sdks/rust/fixtures/counter_racy.rs` and its locked twin `counter_locked.rs` share `counter_common.rs`:
+`sdks/rust/fixtures/lang_at/` builds one binary, `at-rust`, that follows a fixed output and mode contract shared by
+the language fixtures. The mode is the first argument, never a build flag, so a single artifact runs in every arm:
 
-* 4 threads, each doing 1,000 iterations of: read a shared `AtomicU64`, spin a fixed 2,000 busy iterations (an opaque
-  accumulator behind `black_box`; no system call in the window), write back the value read plus one. The racy build
-  uses a separate load and store, which is well defined and still loses updates. The locked build holds a `Mutex`
-  around the whole step.
-* Properties: `always!(final == 4000, "rust.counter_exact")` and `sometimes!(true, "rust.all_started")`.
-* Output: one fixed-width line on stdout (`final=`, a hash of the order the workers finished in, one random value so
-  that entropy leaks show) and exit 0 whatever the property says: the verdict comes from the report.
+* `at-rust buggy`: 4 threads, each doing 1,000 iterations of: load a shared `AtomicU64`, spin 1,000 busy iterations (an
+  opaque accumulator behind `black_box` in a non-inlined function; no system call in the window), store the value
+  loaded plus one. A separate load and store is well defined and still loses updates.
+* `at-rust fixed`: the same, with a `Mutex` held around each load, spin and store.
+* `at-rust wide`: `buggy` with a window ten times longer (10,000 busy iterations); nothing else differs.
+* Any other argument, none, or more than one: a usage line on stderr and exit 64.
+* Start barrier: each worker registers its stable thread key (`thread("worker", i)`), increments a shared `started`
+  counter, and waits until all four have started before its first iteration. A per-iteration `work(1)` follows the
+  store, outside the window.
+* Properties, evaluated once each in the main thread after the workers are joined: `always!(final == 4000,
+  "rust.counter_exact")` with the witness `[final, 4000, 4, 1000]`, then `sometimes!(started == 4,
+  "rust.all_started")`.
+* Output: one stdout line, written with one write, `LANGAT v1 lang=rust mode=<mode> final=<20 digits> expect=<20
+  digits> order=<16 hex> rand=<16 hex>` (`order` is the FNV-1a 64 hash of the finishing order written as four digits;
+  `rand` is one value from the runtime's random source, so that entropy leaks show). Exit 0 whatever the property says:
+  the verdict comes from the report. Exit 3 is an internal invariant failure (a thread did not start or finish, the
+  finishing order is incomplete).
+* It does not read `HAIRSPRING_SEED`, `/proc`, the CPU count or the clock. This needed no change to the SDK crate.
 
 Native self-tests (`sdks/rust/tests/fixture_race.rs`, and the same through the reference parser in
-`hairspring-props/tests/rust_sdk.rs`) show that the detector can fire on the racy build (a lost update, reported as
-`always` false with the witness `[final, 4000]`, within 200 native runs) and never fires on the locked build (20 runs,
-every one exactly 4000). They prove only that the race exists and the report sees it; nothing here ran under Hermit.
+`hairspring-props/tests/rust_sdk.rs`) show that the detector can fire in `buggy` and `wide` (a lost update, reported as
+`always` false with the witness `[final, 4000, 4, 1000]`, within 200 native runs) and never fires in `fixed` (20 runs,
+every one exactly 4000), and check the stdout line, the exit statuses and that each property is evaluated once. The
+binary has unit tests for the mode parser, the line format, the order hash and the workers. They prove only that the
+race exists and the report sees it; nothing here ran under Hermit.
 
 ## Conformance
 
@@ -235,7 +249,7 @@ every one exactly 4000). They prove only that the race exists and the report see
 * `tests/events.rs`: the shape of a report, the events file (and a symlink), `HAIRSPRING_EVENTS=off`, process tags, exit
   status, merged ids, 100 and 300 threads, and the audit positive control;
 * `tests/offline_catalog.rs`: the twins in a built binary equal the live `catalog` lines;
-* `tests/fixture_race.rs`: the planted race and its twin;
+* `tests/fixture_race.rs`: the language fixture's three modes, its output line and exit statuses;
 * `tests/no_syscall.rs`: the seccomp check (it prints `skip` and passes on macOS).
 
 Where it has been run: macOS arm64 (debug and release); Linux aarch64 natively in a container (debug with GNU ld; release
