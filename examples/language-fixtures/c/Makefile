@@ -43,10 +43,7 @@ $(BUILD)/lost_update_locked: $(SRC) $(HDR) $(LIB)
 
 # The negative control feeds the racy program in as the "locked twin": the check must reject it, or it checks nothing.
 test: $(PROGRAMS)
-	sh ../scripts/check-native.sh c $(BUILD)/lost_update_racy $(BUILD)/lost_update_locked $(RUNS)
-	@if sh ../scripts/check-native.sh c $(BUILD)/lost_update_racy $(BUILD)/lost_update_racy $(RUNS) >/dev/null 2>&1; then \
-	  echo "FAIL the self-check accepted the racy program as a locked twin"; exit 1; \
-	else echo "ok   the self-check rejects a racy program standing in for the locked twin"; fi
+	sh ../scripts/run-checks.sh c $(BUILD)/lost_update_racy $(BUILD)/lost_update_locked $(RUNS)
 
 clean:
 	rm -rf build

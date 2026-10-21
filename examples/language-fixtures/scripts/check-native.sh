@@ -10,11 +10,15 @@
 #   - the detector and the program agree: the property is false exactly when final != 4000.
 # Then, across the runs:
 #   - the locked twin never fires and always ends at 4000;
-#   - the racy program fires at least once (skipped, with a notice, on a host with a single CPU, where
-#     four threads cannot overlap).
-# Prints one summary line per binary. Exits 0 when everything holds, 1 otherwise.
+#   - the racy program fires at least once. On a host where this process may use only one CPU (nproc respects
+#     affinity and cgroup cpusets) four threads cannot overlap, so a racy program that never fires there ends the
+#     check with the exit code 77 (skipped), after the locked twin has been checked.
+# Each run is limited to $RUN_TIMEOUT seconds (default 60) when `timeout` or `gtimeout` is installed.
+# Prints one summary line per binary. Exits 0 when everything holds, 77 when the racy check was skipped, 1 otherwise.
 
 set -u
+
+SKIPPED=77
 
 if [ $# -lt 3 ]; then
   echo "usage: $0 <lang-id> <racy-binary> <locked-binary> [runs]" >&2
@@ -29,6 +33,14 @@ property="$lang.counter_exact"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/lang-at.XXXXXX") || exit 1
 trap 'rm -rf "$tmp"' EXIT
 
+limit=""
+for t in timeout gtimeout; do
+  if command -v "$t" >/dev/null 2>&1; then
+    limit="$t ${RUN_TIMEOUT:-60}"
+    break
+  fi
+done
+
 # counted <binary> <name>: runs the binary and prints "<fired> <exact>", the number of runs in which the property
 # was false and in which the final value was exact. Prints a reason on stderr and returns 1 on a contract violation.
 counted() {
@@ -39,8 +51,13 @@ counted() {
   i=0
   while [ "$i" -lt "$runs" ]; do
     i=$((i + 1))
-    env -u HAIRSPRING_PROC -u HAIRSPRING_EVENTS -u HAIRSPRING_EVENTS_FILE "$bin" >"$tmp/out" 2>"$tmp/err"
+    # shellcheck disable=SC2086  # $limit is a command and its argument on purpose
+    env -u HAIRSPRING_PROC -u HAIRSPRING_PROC_PID -u HAIRSPRING_EVENTS -u HAIRSPRING_EVENTS_FILE $limit "$bin" >"$tmp/out" 2>"$tmp/err"
     status=$?
+    if [ "$status" -eq 124 ] && [ -n "$limit" ]; then
+      echo "FAIL $name run $i: no result within the time limit ($limit)" >&2
+      return 1
+    fi
     if [ "$status" -ne 0 ]; then
       echo "FAIL $name run $i: exit status $status, want 0" >&2
       return 1
@@ -84,10 +101,11 @@ if [ "$locked_fired" -ne 0 ] || [ "$locked_exact" -ne "$runs" ]; then
   echo "FAIL the locked twin lost an update" >&2
   status=1
 fi
-cpus=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+cpus=${LANG_AT_CPUS:-$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)}  # LANG_AT_CPUS overrides, for the script tests
 if [ "$racy_fired" -eq 0 ]; then
   if [ "$cpus" -lt 2 ]; then
-    echo "skip: the racy program never fired, and this host has $cpus CPU (the race needs overlapping threads)"
+    echo "skip: the racy program never fired, and this process may use $cpus CPU (the race needs overlapping threads)"
+    [ $status -eq 0 ] && status=$SKIPPED
   else
     echo "FAIL the racy program never fired in $runs runs on $cpus CPUs: the planted race is not reachable" >&2
     status=1

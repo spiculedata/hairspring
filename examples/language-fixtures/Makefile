@@ -3,9 +3,13 @@
 #   make test     build and self-check all three (C with $(CC), C++ with clang++ unless CXX is given, Go)
 #   make clean
 
-.PHONY: test test-c test-cpp test-go clean
+.PHONY: test test-scripts test-c test-cpp test-go clean
 
-test: test-c test-cpp test-go
+test: test-scripts test-c test-cpp test-go
+
+# The check scripts themselves, with a fake program.
+test-scripts:
+	sh scripts/test-scripts.sh
 
 test-c:
 	$(MAKE) -C c test

@@ -69,6 +69,11 @@ func run(gate sync.Locker) Outcome {
 	return Outcome{Final: st.counter.Load(), Started: st.started.Load(), Order: st.order}
 }
 
+// work is one worker. Where the busy loop sits relies on the gc compiler's behaviour: it keeps the loop between the
+// counter's load and store because the loop's result feeds a later atomic store and gc moves no computation across
+// atomic operations. Nothing in the language promises that. If a toolchain ever dropped or moved the loop, the window
+// would shrink and TestRacyLosesAnUpdateAtLeastOnce and the detector test in race_test.go would stop finding lost
+// updates, which is how a regression would show.
 func work(id uint8, gate sync.Locker, st *state) {
 	st.started.Add(1)
 	for i := 0; i < Iterations; i++ {

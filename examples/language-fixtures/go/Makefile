@@ -36,10 +36,7 @@ test: $(PROGRAMS)
 	$(GO) vet ./...
 	$(GO) vet -tags locked ./...
 	GOMAXPROCS=2 $(GO) test -count=1 ./...
-	GOMAXPROCS=2 sh ../scripts/check-native.sh go $(BUILD)/lost_update_racy $(BUILD)/lost_update_locked $(RUNS)
-	@if GOMAXPROCS=2 sh ../scripts/check-native.sh go $(BUILD)/lost_update_racy $(BUILD)/lost_update_racy $(RUNS) >/dev/null 2>&1; then \
-	  echo "FAIL the self-check accepted the racy program as a locked twin"; exit 1; \
-	else echo "ok   the self-check rejects a racy program standing in for the locked twin"; fi
+	GOMAXPROCS=2 sh ../scripts/run-checks.sh go $(BUILD)/lost_update_racy $(BUILD)/lost_update_locked $(RUNS)
 
 clean:
 	rm -rf $(BUILD)

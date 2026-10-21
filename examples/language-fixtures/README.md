@@ -32,6 +32,11 @@ round, which also stops the compiler from moving the counter's load and store ac
 is stored to a per-worker atomic after the window. The native self-check below is what shows the window is real: a
 build whose loop had vanished would almost never lose an update.
 
+The memory orders differ between the languages. C and C++ use relaxed loads and stores. Go's atomics are sequentially
+consistent, so the Go counter's store is a stronger operation (a locked exchange on x86). The window is the busy loop
+in every language and the lost update does not depend on the order, but the programs are not instruction-for-instruction
+equivalent and the native rates should not be compared across languages.
+
 ## What each program reports
 
 - **Property** `<lang>.counter_exact` (`always`, ids `c.`, `cpp.`, `go.`): the final counter equals 4,000. It is
@@ -50,7 +55,8 @@ common/lang_at.h       the parts C and C++ share: parameters, busy loop, order h
 c/                     src/lost_update.c, Makefile (racy and locked builds, -DLANG_AT_LOCKED for the twin)
 cpp/                   src/lost_update.cc, Makefile (clang++ by default; CXX=g++ works)
 go/                    main.go, internal/race (the program and its unit tests), Makefile (-tags locked for the twin)
-scripts/check-native.sh  the native self-check shared by the three Makefiles
+scripts/check-native.sh  the native self-check shared by the three Makefiles; run-checks.sh adds the negative control;
+                       test-scripts.sh tests both with a fake program
 Makefile               make test: all three
 ```
 
@@ -69,8 +75,10 @@ Each language's `make test` builds the racy program and its locked twin, then:
   the stdout line, that the report has both assert lines, and that **the detector and the program agree** (the
   property is false exactly when the final value is not 4,000);
 - requires that the locked twin never fires and always ends at 4,000;
-- requires that the racy program fires at least once (skipped, with a notice, on a host with a single CPU, where the
-  workers cannot overlap);
+- requires that the racy program fires at least once. If it never fires and the process may use only one CPU
+  (`nproc`, which respects affinity and cpusets), the check ends with exit code 77 ("skipped") and `make test`
+  treats that as success, with a notice, because the workers cannot overlap there. `RUN_TIMEOUT` (default 60 s)
+  limits each run when `timeout` or `gtimeout` is installed;
 - feeds the racy program in as if it were the locked twin and requires the check to reject it, so the check itself is
   known to be able to fail.
 
