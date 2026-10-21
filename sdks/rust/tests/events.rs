@@ -3,6 +3,8 @@
 
 mod common;
 
+use std::os::unix::fs::OpenOptionsExt;
+
 use common::{events, number, of_kind, run, scratch, LINE_MAX};
 
 const BASIC: &str = env!("CARGO_BIN_EXE_hs_sample_basic");
@@ -188,18 +190,117 @@ fn one_id_at_two_call_sites_is_one_catalogued_id_with_summed_counts() {
 fn a_call_site_in_a_generic_function_is_one_record_for_every_instantiation() {
     let r = run(env!("CARGO_BIN_EXE_hs_sample_generic"), &[], &[]);
     let ev = events(&r.stderr);
-    assert_eq!(of_kind(&ev, "catalog").len(), 1);
+    // The second record is a call site in a module with no implicit prelude: the macros need nothing from the caller.
+    assert_eq!(of_kind(&ev, "catalog").len(), 2);
     let asserts = of_kind(&ev, "assert");
-    assert_eq!(asserts.len(), 1);
+    assert_eq!(asserts.len(), 2);
+    let generic = asserts
+        .iter()
+        .find(|l| l.contains("\"generic.positive\""))
+        .unwrap();
     assert_eq!(
         (
-            number(asserts[0], "hits"),
-            number(asserts[0], "trues"),
-            number(asserts[0], "falses")
+            number(generic, "hits"),
+            number(generic, "trues"),
+            number(generic, "falses")
         ),
         (3, 2, 1)
     );
-    assert_eq!(number(of_kind(&ev, "end")[0], "sites"), 1);
+    assert_eq!(number(of_kind(&ev, "end")[0], "sites"), 2);
+}
+
+#[test]
+fn a_closed_stderr_pipe_does_not_kill_the_program_with_sigpipe() {
+    // The reader is gone before the program starts, so the very first line (written before main) hits a broken pipe.
+    let (reader, writer) = std::io::pipe().expect("a pipe");
+    drop(reader);
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_hs_counter_locked"))
+        .stderr(std::process::Stdio::from(writer))
+        .output()
+        .expect("program runs");
+    assert!(out.status.success(), "{:?}", out.status);
+    assert!(
+        String::from_utf8_lossy(&out.stdout).starts_with("final="),
+        "main did not run to its end: {:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+#[test]
+fn a_forked_child_that_exits_does_not_repeat_the_parents_report() {
+    let r = run(env!("CARGO_BIN_EXE_hs_sample_fork"), &[], &[]);
+    let ev = events(&r.stderr);
+    assert_eq!(of_kind(&ev, "hello").len(), 1, "{}", r.stderr);
+    assert_eq!(of_kind(&ev, "assert").len(), 1);
+    assert_eq!(of_kind(&ev, "end").len(), 1);
+    assert!(ev.iter().all(|l| l.contains("\"proc\":\"p1\"")));
+}
+
+/// Run `exe` and wait for it, killing it after `limit`. `None` means it did not finish.
+fn finishes_within(
+    mut cmd: std::process::Command,
+    limit: std::time::Duration,
+) -> Option<std::process::Output> {
+    let mut child = cmd
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("program starts");
+    let deadline = std::time::Instant::now() + limit;
+    while std::time::Instant::now() < deadline {
+        if child.try_wait().expect("wait").is_some() {
+            return Some(child.wait_with_output().expect("output"));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    None
+}
+
+#[test]
+fn an_events_file_that_is_a_fifo_is_refused_instead_of_hanging() {
+    let fifo = scratch("fifo");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success());
+    let mut cmd = std::process::Command::new(BASIC);
+    cmd.env("HAIRSPRING_EVENTS_FILE", &fifo);
+    let out = finishes_within(cmd, std::time::Duration::from_secs(20));
+    let _ = std::fs::remove_file(&fifo);
+    let out = out.expect("the program hung opening a FIFO with no reader");
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    let ev = events(&stderr);
+    assert_eq!(ev.len(), 18, "events fall back to stderr");
+    assert_eq!(number(of_kind(&ev, "end")[0], "dropped"), 1);
+}
+
+#[test]
+fn an_events_file_that_is_a_fifo_with_a_reader_is_also_refused() {
+    let fifo = scratch("fifo_reader");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success());
+    // Hold the read end open so that opening for writing succeeds; only the file-type check can refuse it.
+    let _reader = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(if cfg!(target_os = "macos") {
+            0x4
+        } else {
+            0x800
+        })
+        .open(&fifo);
+    let mut cmd = std::process::Command::new(BASIC);
+    cmd.env("HAIRSPRING_EVENTS_FILE", &fifo);
+    let out = finishes_within(cmd, std::time::Duration::from_secs(20));
+    let _ = std::fs::remove_file(&fifo);
+    let out = out.expect("the program hung on a FIFO");
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(events(&stderr).len(), 18);
 }
 
 #[test]

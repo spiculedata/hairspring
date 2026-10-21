@@ -1,9 +1,9 @@
 //! The per-call-site record that lives in the catalog section, and its compile-time checks.
 
-use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::Ordering::{Acquire, Relaxed};
 use std::sync::atomic::{AtomicI64, AtomicU64};
 
-use crate::fmt::{ID_MAX, MSG_MAX};
+use crate::fmt::{FILE_MAX, ID_MAX, MSG_MAX};
 
 /// Assertion kinds. The numeric values match the C SDK; 0 marks the sentinel record.
 #[repr(u16)]
@@ -73,7 +73,8 @@ impl Witness {
 
     /// The witness if one was stored (ordinals start at 1), else `None`.
     pub fn snapshot(&self) -> Option<WitnessSnap> {
-        let ord = self.ord.load(Relaxed);
+        // The writer stores `ord` last, with release, so every other field of that write is visible once it is seen.
+        let ord = self.ord.load(Acquire);
         if ord == 0 {
             return None;
         }
@@ -178,17 +179,118 @@ pub const fn check_msg(msg: &str) {
     }
 }
 
-/// Copy a string's bytes into an array, for the offline catalog twin placed in its own section.
-pub const fn twin_bytes<const N: usize>(s: &str) -> [u8; N] {
-    let bytes = s.as_bytes();
-    assert!(bytes.len() == N, "the twin array must match the text");
-    let mut out = [0u8; N];
-    let mut i = 0;
-    while i < N {
-        out[i] = bytes[i];
-        i += 1;
+/// The fields of a call site that its catalog line is made from.
+#[derive(Clone, Copy)]
+pub struct TwinSource {
+    pub id: &'static str,
+    pub kind_name: &'static str,
+    pub must_hit: &'static str,
+    pub msg: &'static str,
+    pub file: &'static str,
+    pub line: u32,
+}
+
+/// Where the twin's bytes go. With an empty buffer it only counts, which is how the length is found at compile time.
+struct Sink<'a> {
+    buf: &'a mut [u8],
+    n: usize,
+}
+
+impl Sink<'_> {
+    const fn byte(&mut self, c: u8) {
+        if self.n < self.buf.len() {
+            self.buf[self.n] = c;
+        }
+        self.n += 1;
     }
-    out
+
+    const fn raw(&mut self, s: &str) {
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            self.byte(bytes[i]);
+            i += 1;
+        }
+    }
+
+    /// Like `Buf::put_json_text`: at most `max` source bytes from `from`, stopping at a NUL; `"` and `\` escaped;
+    /// printable ASCII kept; every other byte becomes `?`.
+    const fn json_text(&mut self, s: &[u8], from: usize, max: usize) {
+        self.byte(b'"');
+        let (mut i, mut taken) = (from, 0);
+        while i < s.len() && taken < max && s[i] != 0 {
+            let c = s[i];
+            if c == b'"' || c == b'\\' {
+                self.byte(b'\\');
+                self.byte(c);
+            } else if c >= 0x20 && c < 0x7f {
+                self.byte(c);
+            } else {
+                self.byte(b'?');
+            }
+            i += 1;
+            taken += 1;
+        }
+        self.byte(b'"');
+    }
+
+    const fn number(&mut self, v: u64) {
+        let mut digits = [0u8; 20];
+        let (mut i, mut rest) = (digits.len(), v);
+        loop {
+            i -= 1;
+            digits[i] = b'0' + (rest % 10) as u8;
+            rest /= 10;
+            if rest == 0 {
+                break;
+            }
+        }
+        while i < digits.len() {
+            self.byte(digits[i]);
+            i += 1;
+        }
+    }
+}
+
+/// The twin's text, without the terminating NUL. It is the live `catalog` line minus `proc`.
+const fn render(out: &mut Sink, src: &TwinSource) {
+    out.raw("{\"v\":1,\"kind\":\"catalog\",\"id\":\"");
+    out.raw(src.id);
+    out.raw("\",\"type\":\"");
+    out.raw(src.kind_name);
+    out.raw("\",\"must_hit\":");
+    out.raw(src.must_hit);
+    out.raw(",\"msg\":");
+    out.json_text(src.msg.as_bytes(), 0, MSG_MAX);
+    out.raw(",\"loc\":{\"file\":");
+    // The path may be longer than the protocol allows; keep its tail, which names the file.
+    let file = src.file.as_bytes();
+    let from = file.len().saturating_sub(FILE_MAX);
+    out.json_text(file, from, FILE_MAX);
+    out.raw(",\"line\":");
+    out.number(src.line as u64);
+    out.raw("}}");
+}
+
+/// Length in bytes of the offline twin of a catalog line, its terminating NUL included.
+pub const fn twin_len(src: TwinSource) -> usize {
+    let mut out = Sink { buf: &mut [], n: 0 };
+    render(&mut out, &src);
+    out.n + 1
+}
+
+/// The offline twin: the JSON of the `catalog` line without `proc`, escaped and trimmed exactly like the live line
+/// (the file path keeps its last 256 bytes, `"` and `\` are escaped, other non-printable bytes become `?`), then a NUL.
+/// Any bytes of the array past the text stay zero.
+pub const fn twin<const N: usize>(src: TwinSource) -> [u8; N] {
+    let mut bytes = [0u8; N];
+    let mut out = Sink {
+        buf: &mut bytes,
+        n: 0,
+    };
+    render(&mut out, &src);
+    assert!(out.n < N, "the twin array is too small for the text");
+    bytes
 }
 
 #[cfg(test)]
@@ -287,10 +389,134 @@ mod tests {
         check_msg("\u{2264}");
     }
 
+    /// The live `catalog` line for `src`, without its `proc` member.
+    fn live_line(src: &TwinSource) -> String {
+        use crate::fmt::Buf;
+        use crate::lines::{catalog, CatalogRow, ProcInfo};
+        let p = ProcInfo {
+            tag: "p1".to_string(),
+            tag_stable: true,
+            signal_handlers: false,
+            catalog_hash: 0,
+            n_ids: 0,
+            dropped: 0,
+        };
+        let kind = [
+            Kind::Always,
+            Kind::AlwaysOrUnreachable,
+            Kind::Sometimes,
+            Kind::Reachable,
+            Kind::Unreachable,
+        ]
+        .into_iter()
+        .find(|k| k.name() == src.kind_name)
+        .unwrap();
+        let row = CatalogRow {
+            id: src.id,
+            kind,
+            msg: src.msg,
+            file: src.file,
+            line: src.line,
+        };
+        let mut b = Buf::new();
+        catalog(&mut b, &p, &row).unwrap();
+        let text = String::from_utf8(b.as_bytes().to_vec()).unwrap();
+        text.trim_end()
+            .strip_prefix("HAIRSPRING_EVENT ")
+            .unwrap()
+            .replace("\"proc\":\"p1\",", "")
+    }
+
+    fn twin_text(src: TwinSource) -> String {
+        let len = twin_len(src);
+        let mut bytes = vec![0u8; len];
+        // The const fn is generic over the array length; go through the largest size the test needs.
+        let array = twin::<1024>(src);
+        bytes.copy_from_slice(&array[..len]);
+        assert_eq!(bytes.last(), Some(&0), "NUL terminated");
+        String::from_utf8(bytes[..len - 1].to_vec()).unwrap()
+    }
+
+    fn source(file: &'static str) -> TwinSource {
+        TwinSource {
+            id: "a.b",
+            kind_name: "sometimes",
+            must_hit: "true",
+            msg: "say hi",
+            file,
+            line: 42,
+        }
+    }
+
     #[test]
-    fn twin_bytes_copies_the_text() {
-        const TEXT: &str = "abc\0";
-        const BYTES: [u8; TEXT.len()] = twin_bytes::<{ TEXT.len() }>(TEXT);
-        assert_eq!(&BYTES, b"abc\0");
+    fn the_twin_equals_the_live_line_for_an_ordinary_path() {
+        let src = source("src/lib.rs");
+        assert_eq!(twin_text(src), live_line(&src));
+    }
+
+    #[test]
+    fn the_twin_escapes_a_path_exactly_like_the_live_line() {
+        let src = source("dir/we\"ird\\name\u{e9}.rs");
+        assert_eq!(twin_text(src), live_line(&src));
+        assert!(twin_text(src).contains("we\\\"ird\\\\name??.rs"));
+    }
+
+    #[test]
+    fn the_twin_keeps_the_last_256_bytes_of_a_long_path() {
+        let long: &'static str = Box::leak(format!("{}/tail.rs", "d".repeat(300)).into_boxed_str());
+        let src = source(long);
+        let text = twin_text(src);
+        assert_eq!(text, live_line(&src));
+        assert!(text.contains("/tail.rs\""));
+        assert!(!text.contains(&"d".repeat(257)));
+    }
+
+    #[test]
+    fn the_twin_length_counts_every_byte_including_the_nul() {
+        let src = source("x.rs");
+        assert_eq!(twin_len(src), live_line(&src).len() + 1);
+    }
+
+    #[test]
+    fn the_record_layout_is_pinned_so_a_change_must_bump_the_section_names() {
+        // Two copies of the crate with different layouts must not read each other's records: the section names carry
+        // a layout number (see section.rs and macros.rs). Change this number only together with those names.
+        assert_eq!(std::mem::size_of::<Site>(), 192);
+        assert_eq!(crate::section::LAYOUT, 1);
+    }
+
+    #[test]
+    fn a_witness_read_while_it_is_written_is_never_torn() {
+        // Every field of witness k is k. A reader that sees `ord` set must see all the other fields of that write.
+        const N: usize = 200_000;
+        let witnesses: Vec<Witness> = (0..N).map(|_| Witness::new()).collect();
+        let torn = std::thread::scope(|scope| {
+            let writer = scope.spawn(|| {
+                for (i, w) in witnesses.iter().enumerate() {
+                    let k = i as u64 + 1;
+                    crate::eval::store(w, k, k, &[k as i64; 4]);
+                }
+            });
+            let mut torn = 0usize;
+            let mut seen = 0usize;
+            while seen < N {
+                seen = 0;
+                for (i, w) in witnesses.iter().enumerate() {
+                    let k = i as u64 + 1;
+                    match w.snapshot() {
+                        None => break,
+                        Some(s) => {
+                            seen += 1;
+                            if s.ord != k || s.slot != k || s.vals != [k as i64; 4] {
+                                torn += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            writer.join().unwrap();
+            torn
+        });
+        assert_eq!(torn, 0, "witnesses read with a field from another write");
     }
 }

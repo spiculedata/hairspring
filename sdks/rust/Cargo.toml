@@ -5,6 +5,8 @@ edition = "2021"
 description = "Hairspring guest SDK for Rust: in-source property assertions that speak guest protocol v1 (no dependencies)"
 license = "Apache-2.0"
 publish = false
+# Const functions that take `&mut` (the offline catalog text) need 1.83; the tests use `std::io::pipe` (1.87).
+rust-version = "1.87"
 autobins = false
 autoexamples = true
 
@@ -17,6 +19,10 @@ path = "samples/basic.rs"
 [[bin]]
 name = "hs_sample_merge"
 path = "samples/merge.rs"
+
+[[bin]]
+name = "hs_sample_fork"
+path = "samples/fork.rs"
 
 [[bin]]
 name = "hs_sample_generic"

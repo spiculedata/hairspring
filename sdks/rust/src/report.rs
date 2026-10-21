@@ -1,8 +1,8 @@
 //! Writing the lines: the startup catalog and the report at exit. Everything here runs at startup or at exit, never
 //! at a call site.
 
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{AcqRel, Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32};
 
 use crate::catalog::{self, Totals};
 use crate::fmt::Buf;
@@ -16,6 +16,8 @@ use crate::slots::{table, MAX_THREADS};
 
 /// Set by the first report; later calls do nothing.
 static REPORTED: AtomicBool = AtomicBool::new(false);
+/// The process that started the SDK and so owns the report.
+static OWNER_PID: AtomicU32 = AtomicU32::new(0);
 
 /// Send a built line; one that did not fit, or could not be written, is counted, never truncated.
 fn send(built: Built, buf: &Buf) {
@@ -32,6 +34,11 @@ fn send(built: Built, buf: &Buf) {
 /// `hello`, then one `catalog` line per distinct (id, kind) pair, so a program that crashes, hangs or is killed
 /// still has a catalog.
 pub fn emit_startup(rt: &Runtime) {
+    OWNER_PID.store(std::process::id(), Relaxed);
+    output::with_sigpipe_blocked(|| emit_startup_lines(rt));
+}
+
+fn emit_startup_lines(rt: &Runtime) {
     let p = runtime::proc_info(rt);
     let mut b = Buf::new();
     send(lines::hello(&mut b, &p), &b);
@@ -183,5 +190,11 @@ pub fn report_now(reason: EndReason, status: i64) {
     if REPORTED.swap(true, AcqRel) {
         return;
     }
-    report_body(runtime::ensure_started(), reason, status);
+    // A forked child has its parent's state, including a report not yet written; the parent writes it. The child
+    // reports nothing of its own (there is no fork handler to give it a tag and fresh counters).
+    if std::process::id() != OWNER_PID.load(Relaxed) {
+        return;
+    }
+    let rt = runtime::ensure_started();
+    output::with_sigpipe_blocked(|| report_body(rt, reason, status));
 }

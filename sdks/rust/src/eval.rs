@@ -1,7 +1,7 @@
 //! The call-site hot path. It does only in-memory counter updates: no system call, no allocation, no lock, no
 //! printing, and the same instructions whether the condition holds or not (docs/rust-sdk.md has the argument).
 
-use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::Ordering::{Relaxed, Release};
 
 use crate::site::{Site, Witness};
 use crate::slots;
@@ -30,24 +30,23 @@ fn opaque(v: u64) -> u64 {
     }
 }
 
-/// `take ? a : b` for references, as arithmetic. `take` is 0 or 1.
+/// `take ? a : b` for references: an index into a two-element array, so no pointer is turned into an integer and
+/// back. `take` is 0 or 1; the mask lets the compiler see the index is in bounds, so there is no check to branch on.
 #[inline(always)]
 fn select<'a>(a: &'a Witness, b: &'a Witness, take: u64) -> &'a Witness {
-    let mask = 0usize.wrapping_sub(take as usize);
-    let picked = ((a as *const Witness as usize) & mask) | ((b as *const Witness as usize) & !mask);
-    // SAFETY: with `take` 0 or 1 the mask is all ones or all zeros, so `picked` is exactly `a` or exactly `b`, both
-    // live for 'a.
-    unsafe { &*(picked as *const Witness) }
+    [b, a][(take & 1) as usize]
 }
 
+/// Write a witness. Only one thread ever writes a given witness (the one whose counter left zero), and `ord` goes last
+/// with release: a report that sees `ord` set, and reads it with acquire, sees every other field of the same write.
 #[inline(always)]
-fn store(w: &Witness, slot: u64, ord: u64, vals: &[i64; 4]) {
+pub(crate) fn store(w: &Witness, slot: u64, ord: u64, vals: &[i64; 4]) {
     w.slot.store(slot, Relaxed);
-    w.ord.store(ord, Relaxed);
     w.vals[0].store(vals[0], Relaxed);
     w.vals[1].store(vals[1], Relaxed);
     w.vals[2].store(vals[2], Relaxed);
     w.vals[3].store(vals[3], Relaxed);
+    w.ord.store(ord, Release);
 }
 
 /// Count one evaluation of a condition kind. The evaluation that moves a counter off zero owns that side's witness;

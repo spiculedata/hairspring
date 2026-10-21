@@ -8,7 +8,7 @@ use std::mem::ManuallyDrop;
 use std::os::fd::{FromRawFd, IntoRawFd, RawFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
-use std::sync::atomic::{AtomicI32, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64};
 
 use crate::sys;
 
@@ -75,13 +75,22 @@ fn events_file_setting() -> Option<std::ffi::OsString> {
     env::var_os("HAIRSPRING_EVENTS_FILE").filter(|p| !p.is_empty())
 }
 
+/// Open the events file for appending. It must be a regular file: it is opened non-blocking, so a FIFO with no reader
+/// fails at once instead of hanging the program before `main`, and a FIFO (or device) that does open is refused.
 fn open_events_file(path: &std::ffi::OsStr) -> std::io::Result<File> {
-    OpenOptions::new()
+    let file = OpenOptions::new()
         .append(true)
         .create(true)
         .mode(FILE_MODE)
-        .custom_flags(sys::O_NOFOLLOW)
-        .open(path)
+        .custom_flags(sys::O_NOFOLLOW | sys::O_NONBLOCK)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "the events file is not a regular file",
+        ));
+    }
+    Ok(file)
 }
 
 /// Open the events channel from the environment. Returns how many losses to count as dropped (an events file that
@@ -154,13 +163,47 @@ pub fn write_line(bytes: &[u8]) -> Result<(), WriteFailed> {
                 retries += 1;
                 std::thread::yield_now();
             }
-            _ => {
+            Err(e) => {
+                SAW_EPIPE.fetch_or(e.raw_os_error() == Some(sys::EPIPE), Relaxed);
                 if done > 0 {
                     let _ = out.write(b"\n");
                 }
                 return Err(WriteFailed);
             }
+            Ok(_) => return Err(WriteFailed),
         }
     }
     Ok(())
+}
+
+/// Set when a write failed with `EPIPE` (the reader is gone).
+static SAW_EPIPE: AtomicBool = AtomicBool::new(false);
+
+/// Run `f` (a sequence of writes) with `SIGPIPE` blocked, so a reader that has gone away costs the report, not the
+/// process. If a write raised a `SIGPIPE` and the caller did not already have it blocked, it is consumed before the
+/// mask is restored, so it is not delivered on unblocking. This matters before `main`: Rust ignores `SIGPIPE` only
+/// once its runtime has started, and the startup lines are written from a constructor, before that.
+pub fn with_sigpipe_blocked<R>(f: impl FnOnce() -> R) -> R {
+    let (mut pipe_only, mut old) = (sys::SigSet::zeroed(), sys::SigSet::zeroed());
+    // SAFETY: the sets are valid, aligned and large enough for any platform's `sigset_t`.
+    unsafe {
+        sys::sigemptyset(&mut pipe_only);
+        sys::sigaddset(&mut pipe_only, sys::SIGPIPE);
+        sys::pthread_sigmask(sys::SIG_BLOCK, &pipe_only, &mut old);
+    }
+    SAW_EPIPE.store(false, Relaxed);
+    let result = f();
+    // SAFETY: as above; `sigwait` only runs when a `SIGPIPE` is pending for this thread, so it returns at once.
+    unsafe {
+        if SAW_EPIPE.load(Relaxed) && sys::sigismember(&old, sys::SIGPIPE) == 0 {
+            let mut pending = sys::SigSet::zeroed();
+            sys::sigpending(&mut pending);
+            if sys::sigismember(&pending, sys::SIGPIPE) == 1 {
+                let mut signal = 0;
+                sys::sigwait(&pipe_only, &mut signal);
+            }
+        }
+        sys::pthread_sigmask(sys::SIG_SETMASK, &old, std::ptr::null_mut());
+    }
+    result
 }

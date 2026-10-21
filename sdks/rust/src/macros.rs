@@ -15,33 +15,28 @@ macro_rules! __hs_site {
             $crate::__private::check_id($id);
             $crate::__private::check_msg($msg);
         };
-        const TWIN: &str = concat!(
-            "{\"v\":1,\"kind\":\"catalog\",\"id\":\"",
-            $id,
-            "\",\"type\":\"",
-            $kind_name,
-            "\",\"must_hit\":",
-            $must_hit,
-            ",\"msg\":\"",
-            $msg,
-            "\",\"loc\":{\"file\":\"",
-            file!(),
-            "\",\"line\":",
-            line!(),
-            "}}\0"
-        );
+        // The section names end in the layout number (`l1`): see `section::LAYOUT`.
+        const SOURCE: $crate::__private::TwinSource = $crate::__private::TwinSource {
+            id: $id,
+            kind_name: $kind_name,
+            must_hit: $must_hit,
+            msg: $msg,
+            file: ::core::file!(),
+            line: ::core::line!(),
+        };
+        const TWIN_LEN: usize = $crate::__private::twin_len(SOURCE);
         #[used]
-        #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__hs_rs_cstr")]
-        #[cfg_attr(not(target_vendor = "apple"), link_section = "hs_rust_catstr_v1")]
-        static OFFLINE: [u8; TWIN.len()] = $crate::__private::twin_bytes::<{ TWIN.len() }>(TWIN);
+        #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__hs_rs_cstr_l1")]
+        #[cfg_attr(not(target_vendor = "apple"), link_section = "hs_rust_catstr_l1")]
+        static OFFLINE: [u8; TWIN_LEN] = $crate::__private::twin::<TWIN_LEN>(SOURCE);
         #[used]
-        #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__hs_rs_cat")]
-        #[cfg_attr(not(target_vendor = "apple"), link_section = "hs_rust_catalog_v1")]
+        #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__hs_rs_cat_l1")]
+        #[cfg_attr(not(target_vendor = "apple"), link_section = "hs_rust_catalog_l1")]
         static SITE: $crate::__private::Site = $crate::__private::Site::new(
             $id,
             $msg,
-            file!(),
-            line!(),
+            ::core::file!(),
+            ::core::line!(),
             $crate::__private::Kind::$kind,
         );
         let _ = &OFFLINE;

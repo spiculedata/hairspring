@@ -262,6 +262,15 @@ fn a_spawned_instrumented_child_does_not_reuse_its_parents_tag() {
     assert!(found[1].starts_with("p1.s"), "{found:?}");
 }
 
+#[test]
+fn a_forked_child_that_exits_leaves_one_clean_report() {
+    let trial = run_trial("fork", &[]);
+    assert!(!trial.is_degraded(), "{:?}", trial.health);
+    assert_eq!(trial.health.duplicates, 0);
+    assert!(trial.report_missing().is_empty());
+    assert_eq!(tags(&trial), ["p1"]);
+}
+
 fn hello_lines(bytes: &[u8]) -> Vec<String> {
     String::from_utf8_lossy(bytes)
         .lines()

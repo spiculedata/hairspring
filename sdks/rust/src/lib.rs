@@ -34,7 +34,7 @@ pub use slots::KeyError;
 #[doc(hidden)]
 pub mod __private {
     pub use crate::eval::{eval, hit};
-    pub use crate::site::{check_id, check_msg, twin_bytes, Kind, Site};
+    pub use crate::site::{check_id, check_msg, twin, twin_len, Kind, Site, TwinSource};
 }
 
 /// Start the SDK now (it otherwise starts before `main` or at the first call site) and make sure it is linked into
