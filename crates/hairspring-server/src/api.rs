@@ -186,6 +186,9 @@ pub async fn get_bundle(
 #[derive(Deserialize)]
 pub struct ReplayBody {
     bundle: String,
+    /// Replay even when the host's dynamic loader differs from the recording. Off unless asked for.
+    #[serde(default)]
+    allow_environment_change: bool,
 }
 
 pub async fn replay(
@@ -194,7 +197,10 @@ pub async fn replay(
     ApiJson(body): ApiJson<ReplayBody>,
 ) -> Result<Json<Value>, ApiError> {
     caller.need(Role::Run)?; // replay executes target code, so it needs more than read access
-    let out = blocking(move || s.svc.replay_bundle(&s.engine, &body.bundle)).await?;
+    let options = hairspring_service::ReplayOptions {
+        allow_environment_change: body.allow_environment_change,
+    };
+    let out = blocking(move || s.svc.replay_bundle_with(&s.engine, &body.bundle, options)).await?;
     Ok(Json(serde_json::to_value(out).unwrap_or_default()))
 }
 

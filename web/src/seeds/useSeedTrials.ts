@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { isNotFound, retryDelay } from '../pollPolicy';
+import { isNotFound, retryDelay, STOP_ON_UNAUTHORIZED } from '../pollPolicy';
 import type { TrialRow } from '../trial/types';
+import { useTokenVersion } from '../useTokenVersion';
 import { seedsApi } from './api';
 import type { SeedFilters } from './filters';
 
 /** Rows asked for per request; the server caps this, and the table windows what is loaded. */
 export const TRIALS_PAGE = 200;
 export const TRIALS_LIVE_MS = 3000;
-const UNAUTHORIZED = 401;
 
 export interface SeedTrialsModel {
   rows: readonly TrialRow[];
@@ -17,6 +17,8 @@ export interface SeedTrialsModel {
   loadingMore: boolean;
   error: string | undefined;
   loadMore: () => void;
+  /** Loads the trials again from the start (the error boundary's Retry). */
+  reload: () => void;
 }
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -28,7 +30,7 @@ const messageOf = (e: unknown): string => (e instanceof Error ? e.message : Stri
  *   dropped silently).
  * - A response for an earlier filter, or one that arrives after a refresh replaced the rows it would extend, is dropped,
  *   and a superseded request is aborted.
- * - 404 stops refreshing for good, 401 stops it (the token prompt is up), 429 waits for Retry-After (pollPolicy.ts).
+ * - 404 stops refreshing for good, 401 stops it (the token prompt is up; entering a token loads again), 429 waits for Retry-After (pollPolicy.ts).
  */
 export function useSeedTrials(runId: string, filters: SeedFilters, live: boolean): SeedTrialsModel {
   const [first, setFirst] = useState<readonly TrialRow[]>([]);
@@ -41,6 +43,16 @@ export function useSeedTrials(runId: string, filters: SeedFilters, live: boolean
   const moreCount = useRef(0);
   const moreRequest = useRef<AbortController | undefined>(undefined);
   const filterKey = JSON.stringify(filters);
+  const tokenVersion = useTokenVersion();
+  const [reloads, setReloads] = useState(0);
+  // What is held is dropped, so a retried part does not render the data that made it fail.
+  const reload = useCallback(() => {
+    setFirst([]);
+    setMore([]);
+    setCursor(null);
+    setLoaded(false);
+    setReloads((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -63,7 +75,7 @@ export function useSeedTrials(runId: string, filters: SeedFilters, live: boolean
         } catch (e) {
           if (ctl.signal.aborted) return;
           setError(isNotFound(e) ? 'this run does not exist' : messageOf(e));
-          const wait = retryDelay(e, TRIALS_LIVE_MS, [UNAUTHORIZED]);
+          const wait = retryDelay(e, TRIALS_LIVE_MS, STOP_ON_UNAUTHORIZED);
           if (wait === undefined) return;
           delay = wait;
         }
@@ -78,7 +90,7 @@ export function useSeedTrials(runId: string, filters: SeedFilters, live: boolean
       if (timer) clearTimeout(timer);
     };
     // `filterKey` stands in for `filters`, which is a new object on every change.
-  }, [runId, filterKey, live]);
+  }, [runId, filterKey, live, tokenVersion, reloads]);
 
   const loadMore = useCallback(() => {
     if (cursor === null) return;
@@ -104,5 +116,5 @@ export function useSeedTrials(runId: string, filters: SeedFilters, live: boolean
     // `filterKey` stands in for `filters`.
   }, [runId, cursor, filterKey]);
 
-  return { rows: [...first, ...more], cursor, loaded, loadingMore, error, loadMore };
+  return { rows: [...first, ...more], cursor, loaded, loadingMore, error, loadMore, reload };
 }

@@ -11,7 +11,12 @@ pub struct ApiError {
     pub message: String,
     www_authenticate: bool,
     retry_after_secs: Option<u64>,
+    /// A stable identifier a client can branch on, when the error has one.
+    code: Option<&'static str>,
 }
+
+/// The `code` of a replay refused because the host's dynamic loader differs from the recording.
+pub const ENVIRONMENT_MISMATCH_CODE: &str = "environment_mismatch";
 
 impl ApiError {
     pub fn new(status: StatusCode, message: impl Into<String>) -> ApiError {
@@ -20,6 +25,14 @@ impl ApiError {
             message: message.into(),
             www_authenticate: false,
             retry_after_secs: None,
+            code: None,
+        }
+    }
+    /// The JSON body: the short text under `error`, plus `code` when there is one.
+    pub fn body(&self) -> serde_json::Value {
+        match self.code {
+            Some(code) => json!({ "error": self.message, "code": code }),
+            None => json!({ "error": self.message }),
         }
     }
     pub fn bad_request(message: impl Into<String>) -> ApiError {
@@ -60,6 +73,14 @@ impl From<ServiceError> for ApiError {
             ServiceError::InvalidRequest(m) => ApiError::bad_request(m),
             ServiceError::NotFound(_) => ApiError::not_found(),
             ServiceError::Engine(EngineError::Backend(m)) => ApiError::internal(m),
+            // The caller can fix this (retry with the override), so say what it is, briefly.
+            ServiceError::Engine(e @ EngineError::EnvironmentMismatch(_)) => ApiError {
+                code: Some(ENVIRONMENT_MISMATCH_CODE),
+                ..ApiError::new(
+                    StatusCode::CONFLICT,
+                    hairspring_service::sanitize::public_text(&e.to_string()),
+                )
+            },
             ServiceError::Engine(e) => ApiError::bad_request(e.to_string()),
             ServiceError::Store(e) => ApiError::internal(e),
             ServiceError::Internal(m) => ApiError::internal(m),
@@ -69,7 +90,7 @@ impl From<ServiceError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let mut res = (self.status, Json(json!({ "error": self.message }))).into_response();
+        let mut res = (self.status, Json(self.body())).into_response();
         if self.www_authenticate {
             res.headers_mut().insert(
                 header::WWW_AUTHENTICATE,
@@ -81,5 +102,47 @@ impl IntoResponse for ApiError {
                 .insert(header::RETRY_AFTER, header::HeaderValue::from(secs));
         }
         res
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_environment_mismatch_is_a_409_with_a_short_single_line_message_not_an_internal_error() {
+        let hostile = format!("environment differs: {}\n\u{202E}tail", "x".repeat(5000));
+        let e = ApiError::from(ServiceError::Engine(EngineError::EnvironmentMismatch(
+            hostile,
+        )));
+        assert_eq!(e.status, StatusCode::CONFLICT);
+        assert!(
+            e.message.starts_with("environment mismatch"),
+            "{}",
+            e.message
+        );
+        assert!(e.message.chars().count() <= 500, "{}", e.message.len());
+        assert!(!e.message.contains('\n') && !e.message.contains('\u{202E}'));
+        assert_ne!(e.message, "internal error");
+    }
+
+    #[test]
+    fn the_409_body_carries_a_machine_readable_code_besides_the_text() {
+        let e = ApiError::from(ServiceError::Engine(EngineError::EnvironmentMismatch(
+            "environment differs: host.loader.libc.sha256".into(),
+        )));
+        let body = e.body();
+        assert_eq!(body["code"], "environment_mismatch");
+        assert!(body["error"]
+            .as_str()
+            .unwrap()
+            .contains("environment mismatch"));
+        assert!(ApiError::bad_request("x").body().get("code").is_none());
+    }
+
+    #[test]
+    fn other_backend_errors_stay_internal() {
+        let e = ApiError::from(ServiceError::Engine(EngineError::Backend("boom".into())));
+        assert_eq!(e.status, StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

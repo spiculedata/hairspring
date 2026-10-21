@@ -22,6 +22,8 @@ use std::process::ExitCode;
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_VIOLATION: i32 = 1;
 pub const EXIT_ERROR: i32 = 2;
+/// A replay did not reproduce the failure, but the host differs from the recording, so it does not show the bug is fixed.
+pub const EXIT_INCONCLUSIVE: i32 = 3;
 
 pub fn main_with(registry: Registry) -> ExitCode {
     let code = run(

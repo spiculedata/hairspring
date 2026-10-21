@@ -91,6 +91,60 @@ jobs:
         env:
           HS_REQUIRE_GO: "1"
 
+  go-sdk:
+    name: Go SDK
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOTOOLCHAIN: local
+      GOPROXY: "off"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.x
+          cache: false
+      - name: Vet
+        run: go vet ./... && go vet -tags hs_violation_only ./...
+        working-directory: sdks/go
+      - name: Test
+        run: go test -race -count=1 ./...
+        working-directory: sdks/go
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # With HS_REQUIRE_GO set, a missing or too old Go fails these tests instead of skipping them.
+      - name: Conformance tests against the Go SDK
+        run: cargo test -p hairspring-props --test go_sdk
+        env:
+          HS_REQUIRE_GO: "1"
+
+  language-fixtures:
+    name: Language fixtures (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: C gcc, dir: c, args: CC=gcc }
+          - { name: C clang, dir: c, args: CC=clang }
+          - { name: C++ clang++, dir: cpp, args: CXX=clang++ }
+          - { name: C++ g++, dir: cpp, args: CXX=g++ }
+          - { name: Go, dir: go, args: "" }
+    env:
+      GOTOOLCHAIN: local
+      GOPROXY: "off"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        if: matrix.dir == 'go'
+        with:
+          go-version: 1.24.x
+          cache: false
+      # Native checks only: the racy program must lose an update at least once in 50 runs and the locked twin never.
+      - name: Build and self-check
+        run: make -C examples/language-fixtures/${{ matrix.dir }} test ${{ matrix.args }}
+
   glibc-condlock-example:
     name: glibc condlock example (unit tests)
     runs-on: ubuntu-24.04

@@ -10,6 +10,9 @@ pub const MAX_LABEL_CHARS: usize = 500;
 pub const MAX_STATE_CHARS: usize = 4000;
 pub const MAX_MESSAGE_CHARS: usize = 500;
 pub const MAX_ACTION_ID_CHARS: usize = 64;
+pub const MAX_WARNINGS: usize = 20;
+/// An environment warning names every changed field, so it is longer than a step label.
+pub const MAX_WARNING_CHARS: usize = 2000;
 
 fn invalid(what: &str) -> ServiceError {
     ServiceError::InvalidRequest(what.to_string())
@@ -25,8 +28,19 @@ fn bounded(text: &str, max: usize, field: &str) -> Result<(), ServiceError> {
 /// Single-line text: every control character (including newlines) becomes a space.
 fn single_line(text: &str) -> String {
     text.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .map(|c| {
+            if hairspring_core::environment::is_unsafe_display_char(c) {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect()
+}
+
+/// An error message that is safe to show a caller: one line, no control or bidirectional characters, cut to size.
+pub fn public_text(text: &str) -> String {
+    single_line(text).chars().take(MAX_MESSAGE_CHARS).collect()
 }
 
 /// Multi-line text: newlines and tabs survive, other control characters become spaces.
@@ -62,9 +76,17 @@ pub fn replay_steps(out: ReplayOutcome) -> ReplayOutcome {
             state: multi_line(&s.state).chars().take(MAX_STATE_CHARS).collect(),
         })
         .collect();
+    let warnings = out
+        .warnings
+        .iter()
+        .take(MAX_WARNINGS)
+        .map(|w| single_line(w).chars().take(MAX_WARNING_CHARS).collect())
+        .collect();
     ReplayOutcome {
         reproduced: out.reproduced,
         steps,
+        warnings,
+        environment_changed: out.environment_changed,
     }
 }
 

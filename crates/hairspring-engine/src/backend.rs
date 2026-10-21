@@ -33,6 +33,14 @@ impl RunRequest {
     }
 }
 
+/// Choices a caller makes about one replay.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReplayOptions {
+    /// Replay even when the recorded environment differs in a way that makes the schedule unreliable (for the Hermit
+    /// backend, a changed loader). Differences are still reported as warnings.
+    pub allow_environment_change: bool,
+}
+
 /// An execution backend. `progress` is called periodically; returning `false` asks the backend to stop
 /// (cancellation or shutdown) and it returns an error outcome with the message `cancelled`.
 ///
@@ -48,6 +56,15 @@ pub trait Backend: Send + Sync {
         progress: &mut dyn FnMut(Progress) -> bool,
     ) -> Result<RunOutcome, EngineError>;
     fn replay(&self, spec: &TargetSpec, bundle: &Bundle) -> Result<ReplayOutcome, EngineError>;
+    /// Replay with the caller's options. Backends that have no environment to check ignore them.
+    fn replay_with(
+        &self,
+        spec: &TargetSpec,
+        bundle: &Bundle,
+        _options: ReplayOptions,
+    ) -> Result<ReplayOutcome, EngineError> {
+        self.replay(spec, bundle)
+    }
     /// Determinism self-check. Backends that cannot do this in-process say so.
     fn doctor(
         &self,

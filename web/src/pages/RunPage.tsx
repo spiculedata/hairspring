@@ -83,7 +83,7 @@ export function RunPage({ id }: { id: string }) {
         </button>
       )}
       {cancelMsg && <span className="muted"> {cancelMsg}</span>}
-      <ErrorBoundary label="Property table">
+      <ErrorBoundary label="Property table" onRetry={properties.reload}>
         <PropertyOverviewPanel model={properties} />
       </ErrorBoundary>
       <p>

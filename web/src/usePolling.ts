@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { isNotFound, retryDelay } from './pollPolicy';
+import { startPolling } from './pollLoop';
+import { isNotFound } from './pollPolicy';
+import { useTokenVersion } from './useTokenVersion';
 
 export interface Polled<T> {
   data: T | undefined;
@@ -9,7 +11,10 @@ export interface Polled<T> {
   reload: () => void;
 }
 
-/** Loads data now and then every `intervalMs` until `stop(data)` returns true. */
+/**
+ * Loads data now and then every `intervalMs` until `stop(data)` returns true. A 401 stops it (the token prompt has been
+ * raised once); it starts again when a token is entered.
+ */
 export function usePolling<T>(load: () => Promise<T>, intervalMs: number, stop?: (data: T) => boolean): Polled<T> {
   const [data, setData] = useState<T>();
   const [error, setError] = useState<string>();
@@ -20,35 +25,26 @@ export function usePolling<T>(load: () => Promise<T>, intervalMs: number, stop?:
   stopRef.current = stop;
   const [tick, setTick] = useState(0);
   const reload = useCallback(() => setTick((t) => t + 1), []);
+  const tokenVersion = useTokenVersion();
 
-  useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const run = async () => {
-      let delay = intervalMs;
-      try {
-        const next = await loadRef.current();
-        if (cancelled) return;
-        setData(next);
-        setError(undefined);
-        setNotFound(false);
-        if (stopRef.current?.(next)) return;
-      } catch (e) {
-        if (cancelled) return;
-        setError(e instanceof Error ? e.message : String(e));
-        setNotFound(isNotFound(e));
-        const wait = retryDelay(e, intervalMs);
-        if (wait === undefined) return;
-        delay = wait;
-      }
-      timer = setTimeout(run, delay);
-    };
-    void run();
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [intervalMs, tick]);
+  useEffect(
+    () =>
+      startPolling({
+        load: () => loadRef.current(),
+        intervalMs,
+        stop: (next) => stopRef.current?.(next) ?? false,
+        onData: (next) => {
+          setData(next);
+          setError(undefined);
+          setNotFound(false);
+        },
+        onError: (e) => {
+          setError(e instanceof Error ? e.message : String(e));
+          setNotFound(isNotFound(e));
+        },
+      }),
+    [intervalMs, tick, tokenVersion],
+  );
 
   return { data, error, notFound, reload };
 }

@@ -78,9 +78,15 @@ pub struct TestArgs {
 }
 
 #[derive(Args)]
+#[command(
+    after_help = "Exit codes:\n  0 not reproduced, on the environment it was recorded in\n  1 reproduced: the property is still violated\n  2 error (including a replay refused because the dynamic loader changed)\n  3 not reproduced on a changed environment: inconclusive, not evidence the bug is fixed"
+)]
 pub struct ReplayArgs {
     /// Bundle file, `-` for stdin, or a stored bundle hash.
     pub input: String,
+    /// Replay even when the host's dynamic loader differs from the recording (the differences are still reported).
+    #[arg(long)]
+    pub allow_environment_change: bool,
 }
 
 #[derive(Args)]

@@ -42,7 +42,7 @@ export interface SeedExplorerViewProps {
   live: boolean;
   strip: StripModel;
   filters: SeedFilters;
-  trials: Pick<SeedTrialsModel, 'rows' | 'cursor' | 'loaded' | 'loadingMore' | 'error'>;
+  trials: Pick<SeedTrialsModel, 'rows' | 'cursor' | 'loaded' | 'loadingMore' | 'error' | 'reload'>;
   filterBar: {
     propertyLabel: string | undefined;
     search: PropertySearch;
@@ -120,13 +120,13 @@ export function SeedExplorerView(props: SeedExplorerViewProps) {
       {live && <p className="muted">{runningNote(judged)}</p>}
       {excluded !== undefined && <p className="excluded">{excluded}</p>}
       <FirstFailingSeed runId={runId} seed={firstFailingSeed} />
-      <ErrorBoundary label="Strip">
+      <ErrorBoundary label="Strip" onRetry={strip.reload}>
         <StripSection strip={strip.strip} loading={strip.loading} error={strip.error} onOpen={onOpen} />
       </ErrorBoundary>
       <section aria-labelledby="trials-title">
         <h2 id="trials-title">Trials</h2>
         <SeedFilterBar filters={filters} onChange={onFilters} {...filterBar} />
-        <ErrorBoundary label="Trial table">
+        <ErrorBoundary label="Trial table" onRetry={props.trials.reload}>
           <TrialsBody {...props} />
         </ErrorBoundary>
       </section>

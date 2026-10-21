@@ -1,7 +1,7 @@
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { COLUMN_KEYS, COLUMN_WIDTHS_PX, columnBudgetPx } from './columns';
-import { CONTENT_WIDTH_PX } from '../explorer/columns';
+import { CONTENT_WIDTH_PX, SCROLLBAR_PX, TABLE_BOX_BORDER_PX } from '../explorer/columns';
 import { failingRow, manyRows, seedRow } from './fixtures';
 import { CLIP_HEIGHT, ROW_HEIGHT } from './rowMetrics';
 import { TrialTable } from './TrialTable';
@@ -118,13 +118,17 @@ describe('TrialTable', () => {
     expect(CLIP_HEIGHT).toBeLessThan(ROW_HEIGHT);
   });
 
-  it('sets each column to its budgeted width, the widths to the page content width, and tells a narrow screen to scroll', () => {
+  it('sets each fixed column to its width, leaves one column to take the rest, and sets the table minimum to the budget', () => {
     const html = render([seedRow()]);
-    const widths = [...html.matchAll(/<col style="width:(\d+)px"/g)].map((m) => Number(m[1]));
-    expect(widths).toEqual(COLUMN_KEYS.map((k) => COLUMN_WIDTHS_PX[k]));
-    expect(columnBudgetPx()).toBeLessThanOrEqual(CONTENT_WIDTH_PX);
+    const cols = [...html.matchAll(/<col(?: style="width:(\d+)px")?\/?>/g)].map((m) => (m[1] === undefined ? undefined : Number(m[1])));
+    expect(cols).toEqual(COLUMN_KEYS.map((k) => COLUMN_WIDTHS_PX[k]));
+    expect(cols.filter((w) => w === undefined)).toHaveLength(1);
+    expect(columnBudgetPx()).toBeLessThanOrEqual(CONTENT_WIDTH_PX - TABLE_BOX_BORDER_PX - SCROLLBAR_PX);
     expect(html).toContain(`min-width:${columnBudgetPx()}px`);
-    expect(html).toContain('class="scroll-hint"');
+  });
+
+  it('has the scroll hint in the markup until the table is measured to fit', () => {
+    expect(render([seedRow()])).toContain('class="scroll-hint"');
   });
 
   it('marks the row a jump landed on', () => {
@@ -134,6 +138,32 @@ describe('TrialTable', () => {
 
   it('renders an empty list as nothing, leaving the message to the page', () => {
     expect(render([])).not.toContain('<table');
+  });
+
+  it('labels the failing column as what failed in that trial, not as the run-level verdict on a property', () => {
+    const html = render([failingRow()]);
+    const head = html.slice(html.indexOf('<thead'), html.indexOf('</thead>'));
+    expect(textOf(head)).toContain('Failed in this trial');
+    expect(textOf(head)).not.toContain('Failing properties');
+  });
+
+  it('explains that the failing column can differ from the property table', () => {
+    const text = textOf(render([failingRow()]));
+    expect(text).toContain('by the kind that trial declared');
+    expect(text).toContain('property table');
+  });
+
+  it('says the failing ids are unknown, not none, when the stored digest could not be read', () => {
+    const row = failingRow({ digest_unreadable: true, failing_count: 0, failing_idx: [], guest: { reason: '', failing_ids: [] } });
+    const body = render([row]);
+    const cells = body.slice(body.indexOf('<tbody'));
+    expect(textOf(cells)).toContain('unreadable');
+    expect(cells).toContain('title="The stored digest for this trial could not be read, so which properties failed is unknown"');
+  });
+
+  it('still shows a dash for a trial with no failing property whose digest was read', () => {
+    const body = render([seedRow({ digest_unreadable: false })]);
+    expect(textOf(body.slice(body.indexOf('<tbody')))).not.toContain('unreadable');
   });
 
   it('tells the reader where the ids came from', () => {

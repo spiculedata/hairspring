@@ -253,6 +253,30 @@ fn full_lifecycle_over_http() {
 }
 
 #[test]
+fn replay_takes_an_explicit_environment_override_and_checks_its_type() {
+    let (srv, _) = boot(tokens(), 2, 0);
+    let c = client(srv.addr(), Some(ADMIN));
+    let created = c.post("/api/runs", &json!({"target": "lock-lease", "seed": 7}));
+    let id = created.json()["run"]["id"].as_str().unwrap().to_string();
+    let done = wait_for_state(&c, &id, "failed");
+    let fid = done["failures"][0]["id"].as_str().unwrap();
+    let f = c.get(&format!("/api/failures/{fid}")).json();
+    let hash = f["record"]["bundle_hash"].as_str().unwrap();
+    let bundle = c.get(&format!("/api/bundles/{hash}")).body;
+    let allowed = c.post(
+        "/api/replay",
+        &json!({"bundle": bundle, "allow_environment_change": true}),
+    );
+    assert_eq!(allowed.status, 200, "{}", allowed.body);
+    assert_eq!(allowed.json()["reproduced"], true);
+    let bad = c.post(
+        "/api/replay",
+        &json!({"bundle": bundle, "allow_environment_change": "yes"}),
+    );
+    assert_eq!(bad.status, 400, "{}", bad.body);
+}
+
+#[test]
 fn input_validation_and_error_shapes() {
     let (srv, _) = boot(tokens(), 0, 0);
     let c = client(srv.addr(), Some(ADMIN));
