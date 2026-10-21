@@ -1,7 +1,7 @@
-# C lost-update fixture (racy program and locked twin), built with the C SDK in sdks/c.
+# C lost-update fixture: one program, at-c, with the modes buggy, fixed and wide, built with the C SDK in sdks/c.
 #
-#   make              build both programs
-#   make test         build, then the native self-checks (see ../README.md)
+#   make              build at-c
+#   make test         build, then the source check and the native self-checks (see ../README.md)
 #   make test CC=gcc  the same with another compiler (clang and gcc both work)
 #   make clean
 #
@@ -15,17 +15,18 @@ SDK := ../../../sdks/c
 SDK_BUILD := $(abspath $(BUILD))/sdk
 LIB := $(SDK_BUILD)/libhairspring.a
 
-CFLAGS += -std=gnu11 $(OPT) -g -Wall -Wextra -Werror -pthread -I$(SDK)/include -I../common
+# -g is kept for the disassembly in the build record; -ffile-prefix-map keeps the build directory out of the artifact.
+CFLAGS += -std=gnu11 $(OPT) -g -ffile-prefix-map=$(CURDIR)=. -Wall -Wextra -Werror -pthread -I$(SDK)/include -I../common
 LDFLAGS += -pthread
 
 SRC := src/lost_update.c
 HDR := ../common/lang_at.h $(SDK)/include/hairspring.h
-PROGRAMS := $(BUILD)/lost_update_racy $(BUILD)/lost_update_locked
+PROGRAM := $(BUILD)/at-c
 RUNS ?= 50
 
 .PHONY: all test clean FORCE
 
-all: $(PROGRAMS)
+all: $(PROGRAM)
 
 # The SDK's own Makefile decides whether the library is up to date.
 $(LIB): FORCE
@@ -33,17 +34,14 @@ $(LIB): FORCE
 
 FORCE:
 
-$(BUILD)/lost_update_racy: $(SRC) $(HDR) $(LIB)
+$(PROGRAM): $(SRC) $(HDR) $(LIB)
 	mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $(SRC) $(LIB) $(LDFLAGS)
 
-$(BUILD)/lost_update_locked: $(SRC) $(HDR) $(LIB)
-	mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -DLANG_AT_LOCKED -o $@ $(SRC) $(LIB) $(LDFLAGS)
-
-# The negative control feeds the racy program in as the "locked twin": the check must reject it, or it checks nothing.
-test: $(PROGRAMS)
-	sh ../scripts/run-checks.sh c $(BUILD)/lost_update_racy $(BUILD)/lost_update_locked $(RUNS)
+# The negative control runs the buggy mode in place of fixed: the check must reject it, or it checks nothing.
+test: $(PROGRAM)
+	sh ../scripts/check-sources.sh $(SRC) ../common/lang_at.h
+	sh ../scripts/run-checks.sh c $(PROGRAM) $(RUNS)
 
 clean:
 	rm -rf build

@@ -1,8 +1,13 @@
-// Command lost_update is the Go lost-update fixture: four goroutines make an unlocked read-modify-write on one
-// counter (or, in the build with -tags locked, a locked one) and the program reports whether any update was lost.
+// Command at-go is the Go lost-update fixture: four goroutines make a read-modify-write on one counter, with a lock
+// (fixed) or without one (buggy, wide), and the program reports whether any update was lost.
 //
-// Property: go.counter_exact (always): the final counter equals workers * iterations. Coverage: go.all_started.
-// Output: one fixed-width line on stdout. Exit status: 0, whatever the property says.
+//	at-go buggy|fixed|wide
+//
+// Property: go.counter_exact (always): the final counter equals workers * iterations, with the witness values
+// [final, 4000, 4, 1000]. Coverage: go.all_started (sometimes). Each is evaluated once, in main, after the workers
+// are joined.
+// Output: one contract line on stdout. Exit status: 0 whatever the property says, 3 for an internal invariant
+// failure (a worker did not record its finish, or the line could not be written), 64 for a usage error.
 //
 // Run it with GOMAXPROCS=2 and CGO_ENABLED=0, as the language acceptance plan does.
 package main
@@ -16,17 +21,36 @@ import (
 	hs "github.com/spiculedata/hairspring/sdks/go"
 )
 
-var (
-	allStarted   = hs.Sometimes("go.all_started", "every worker started")
-	counterExact = hs.Always("go.counter_exact", "no update was lost")
+const (
+	exitInvariant = 3
+	exitUsage     = 64
 )
 
-func main() { os.Exit(hs.Main(run)) }
+var (
+	counterExact = hs.Always("go.counter_exact", "no update was lost")
+	allStarted   = hs.Sometimes("go.all_started", "every worker started")
+)
 
-func run() int {
-	outcome := program()
+func main() {
+	mode, err := race.ParseMode(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(exitUsage)
+	}
+	os.Exit(hs.Main(func() int { return run(mode) }))
+}
+
+func run(mode race.Mode) int {
+	outcome := race.Run(mode)
+	if outcome.Arrived != race.Workers {
+		fmt.Fprintf(os.Stderr, "at-go: %d of %d workers recorded their finish\n", outcome.Arrived, race.Workers)
+		return exitInvariant
+	}
+	counterExact.Check(outcome.Final == race.Expected, hs.Vals{int64(outcome.Final), race.Expected, race.Workers, race.Iterations})
 	allStarted.Check(outcome.Started == race.Workers, hs.Vals{int64(outcome.Started)})
-	counterExact.Check(outcome.Final == race.Expected, hs.Vals{int64(outcome.Final), race.Expected})
-	fmt.Print(race.Line("go", outcome, rand.Uint64()))
+	if _, err := os.Stdout.WriteString(race.Line("go", mode, outcome, rand.Uint64())); err != nil {
+		fmt.Fprintf(os.Stderr, "at-go: cannot write the result line: %v\n", err)
+		return exitInvariant
+	}
 	return 0
 }

@@ -24,9 +24,9 @@ func TestSpinDependsOnItsSeedAndItsRounds(t *testing.T) {
 
 func TestOrderHashIsFNV1aOverTheArrivalOrder(t *testing.T) {
 	want := fnv.New64a()
-	want.Write([]byte{2, 0, 3, 1})
+	want.Write([]byte("2031"))
 
-	got := orderHash([]uint8{2, 0, 3, 1})
+	got := orderHash([]uint8("2031"))
 
 	if got != want.Sum64() {
 		t.Fatalf("orderHash = %016x, want %016x", got, want.Sum64())
@@ -36,43 +36,89 @@ func TestOrderHashIsFNV1aOverTheArrivalOrder(t *testing.T) {
 	}
 }
 
-func TestLineIsFixedWidthAndMatchesTheCFormat(t *testing.T) {
-	quiet := Line("go", Outcome{Final: 0}, 0)
-	busy := Line("go", Outcome{Final: Expected}, ^uint64(0))
+func TestTheContractConstantsAreTheSameForEveryLanguage(t *testing.T) {
+	if Workers != 4 || Iterations != 1000 || Spin != 1000 || SpinWide != 10000 || Expected != 4000 {
+		t.Fatalf("T=%d K=%d W=%d W_wide=%d expected=%d, want 4 1000 1000 10000 4000", Workers, Iterations, Spin, SpinWide, Expected)
+	}
+}
+
+func TestParseModeAcceptsExactlyOneOfTheThreeModes(t *testing.T) {
+	cases := []struct {
+		args []string
+		want Mode
+	}{
+		{[]string{"buggy"}, Mode{Name: "buggy", Locked: false, Spin: 1000}},
+		{[]string{"fixed"}, Mode{Name: "fixed", Locked: true, Spin: 1000}},
+		{[]string{"wide"}, Mode{Name: "wide", Locked: false, Spin: 10000}},
+	}
+	for _, c := range cases {
+		got, err := ParseMode(c.args)
+
+		if err != nil || got != c.want {
+			t.Errorf("ParseMode(%v) = %+v, %v; want %+v", c.args, got, err, c.want)
+		}
+	}
+}
+
+func TestParseModeRejectsEverythingElseWithAUsageError(t *testing.T) {
+	for _, args := range [][]string{nil, {}, {"Buggy"}, {"racy"}, {"locked"}, {""}, {"buggy", "extra"}, {"--switch=1.0"}} {
+		_, err := ParseMode(args)
+
+		if err == nil {
+			t.Errorf("ParseMode(%q) accepted its arguments", args)
+		}
+	}
+}
+
+func TestWideDiffersFromBuggyOnlyInTheBusyLoopLength(t *testing.T) {
+	buggy, _ := ParseMode([]string{"buggy"})
+	wide, _ := ParseMode([]string{"wide"})
+
+	wide.Name, wide.Spin = buggy.Name, buggy.Spin
+
+	if wide != buggy {
+		t.Fatalf("wide and buggy differ in more than the name and the spin: %+v vs %+v", wide, buggy)
+	}
+}
+
+func TestLineIsTheContractLine(t *testing.T) {
+	buggy := Mode{Name: "buggy"}
+	quiet := Line("go", buggy, Outcome{Final: 0}, 0)
+	busy := Line("go", buggy, Outcome{Final: Expected}, ^uint64(0))
 
 	if len(quiet) != len(busy) {
 		t.Fatalf("the line's width depends on its values: %d vs %d", len(quiet), len(busy))
 	}
-	shape := regexp.MustCompile(`^lang=go  final=\d{10} order=[0-9a-f]{16} rand=[0-9a-f]{16}\n$`)
+	shape := regexp.MustCompile(`^LANGAT v1 lang=go mode=buggy final=\d{20} expect=0{16}4000 order=[0-9a-f]{16} rand=[0-9a-f]{16}\n$`)
 	if !shape.MatchString(busy) {
 		t.Fatalf("line = %q", busy)
 	}
-	zeroOrder := fnv.New64a()
-	zeroOrder.Write([]byte{0, 0, 0, 0})
-	want := fmt.Sprintf("lang=go  final=0000004000 order=%016x rand=0000000000000001\n", zeroOrder.Sum64())
-	if got := Line("go", Outcome{Final: 4000}, 1); got != want {
+	order := Outcome{Final: 3999, Order: [Workers]uint8{'0', '1', '2', '3'}}
+	want := fmt.Sprintf("LANGAT v1 lang=go mode=wide final=00000000000000003999 expect=00000000000000004000 order=%016x rand=0000000000000001\n",
+		orderHash([]uint8("0123")))
+	if got := Line("go", Mode{Name: "wide"}, order, 1); got != want {
 		t.Fatalf("line = %q, want %q", got, want)
 	}
 }
 
-func TestLockedNeverLosesAnUpdate(t *testing.T) {
+func TestFixedNeverLosesAnUpdate(t *testing.T) {
 	for i := 0; i < nativeRuns; i++ {
-		o := Locked()
+		o := Run(Mode{Name: "fixed", Locked: true, Spin: Spin})
 
 		if o.Final != Expected || o.Started != Workers {
 			t.Fatalf("run %d: final=%d started=%d, want %d and %d", i, o.Final, o.Started, Expected, Workers)
 		}
-		if !isPermutation(o.Order[:]) {
-			t.Fatalf("run %d: arrival order %v is not each worker once", i, o.Order)
+		if !isArrivalList(o) {
+			t.Fatalf("run %d: arrival list %q is not each worker once", i, o.Order)
 		}
 	}
 }
 
-func TestRacyLosesAnUpdateAtLeastOnce(t *testing.T) {
+func TestBuggyLosesAnUpdateAtLeastOnce(t *testing.T) {
 	skipWithoutParallelism(t)
 	lost := 0
 	for i := 0; i < nativeRuns; i++ {
-		o := Racy()
+		o := Run(Mode{Name: "buggy", Spin: Spin})
 		if o.Final > Expected {
 			t.Fatalf("run %d: final=%d is above %d: the counter cannot gain updates", i, o.Final, Expected)
 		}
@@ -85,10 +131,31 @@ func TestRacyLosesAnUpdateAtLeastOnce(t *testing.T) {
 	}
 }
 
-// The property as the fixture reports it, driven natively: it must be false for the racy program and never for the locked one.
-func TestTheDetectorFiresOnTheRacyProgramAndNeverOnTheLockedOne(t *testing.T) {
+func TestWideRunsTheSameProgramWithALongerWindow(t *testing.T) {
+	o := Run(Mode{Name: "wide", Spin: SpinWide})
+
+	if o.Final > Expected || o.Started != Workers || !isArrivalList(o) {
+		t.Fatalf("wide run: final=%d started=%d order=%q", o.Final, o.Started, o.Order)
+	}
+}
+
+func TestEveryWorkerPassesTheStartBarrierBeforeItsFirstIteration(t *testing.T) {
+	for i := 0; i < nativeRuns; i++ {
+		o := Run(Mode{Name: "buggy", Spin: Spin})
+
+		for id, seen := range o.StartedAtFirstIteration {
+			if seen != Workers {
+				t.Fatalf("run %d: worker %d began iterating when %d of %d workers had started", i, id, seen, Workers)
+			}
+		}
+	}
+}
+
+// The property as the fixture reports it, driven natively with its four witness values: it must be false for the
+// buggy mode and never for the fixed one.
+func TestTheDetectorFiresOnTheBuggyModeAndNeverOnTheFixedOne(t *testing.T) {
 	skipWithoutParallelism(t)
-	fired := func(program func() Outcome) int {
+	fired := func(mode Mode) int {
 		n := 0
 		for i := 0; i < nativeRuns; i++ {
 			c := hs.NewCatalog()
@@ -96,8 +163,8 @@ func TestTheDetectorFiresOnTheRacyProgramAndNeverOnTheLockedOne(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			o := program()
-			h.Check(o.Final == Expected, hs.Vals{int64(o.Final), Expected})
+			o := Run(mode)
+			h.Check(o.Final == Expected, hs.Vals{int64(o.Final), Expected, Workers, Iterations})
 			if len(c.Snapshot().Violations()) > 0 {
 				n++
 			}
@@ -105,15 +172,15 @@ func TestTheDetectorFiresOnTheRacyProgramAndNeverOnTheLockedOne(t *testing.T) {
 		return n
 	}
 
-	racy, locked := fired(Racy), fired(Locked)
+	buggy, fixed := fired(Mode{Name: "buggy", Spin: Spin}), fired(Mode{Name: "fixed", Locked: true, Spin: Spin})
 
-	if racy == 0 {
-		t.Errorf("the detector never fired on the racy program in %d runs", nativeRuns)
+	if buggy == 0 {
+		t.Errorf("the detector never fired on the buggy mode in %d runs", nativeRuns)
 	}
-	if locked != 0 {
-		t.Errorf("the detector fired %d times on the locked program", locked)
+	if fixed != 0 {
+		t.Errorf("the detector fired %d times on the fixed mode", fixed)
 	}
-	t.Logf("racy fired in %d of %d runs, locked in %d", racy, nativeRuns, locked)
+	t.Logf("buggy fired in %d of %d runs, fixed in %d", buggy, nativeRuns, fixed)
 }
 
 func skipWithoutParallelism(t *testing.T) {
@@ -123,13 +190,14 @@ func skipWithoutParallelism(t *testing.T) {
 	}
 }
 
-func isPermutation(order []uint8) bool {
-	sorted := append([]uint8(nil), order...)
+// isArrivalList reports whether the outcome's arrival list holds each worker's digit exactly once.
+func isArrivalList(o Outcome) bool {
+	sorted := append([]uint8(nil), o.Order[:]...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
 	for i, v := range sorted {
-		if int(v) != i {
+		if int(v) != '0'+i {
 			return false
 		}
 	}
-	return len(sorted) == Workers
+	return o.Arrived == Workers
 }

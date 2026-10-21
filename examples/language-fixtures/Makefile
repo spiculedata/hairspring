@@ -1,4 +1,5 @@
-# Language fixtures: a planted lost-update race in C, C++ and Go, each with a locked twin. See README.md.
+# Language fixtures: a planted lost-update race in C, C++ and Go, one program per language with three modes
+# (buggy, fixed, wide). See README.md.
 #
 #   make test     build and self-check all three (C with $(CC), C++ with clang++ unless CXX is given, Go)
 #   make clean

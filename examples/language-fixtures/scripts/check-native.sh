@@ -1,35 +1,47 @@
 #!/bin/sh
-# Native self-check of a lost-update fixture pair (no Hermit, no engine).
+# Native self-check of a lost-update fixture artifact (no Hermit, no engine).
 #
-#   check-native.sh <lang-id> <racy-binary> <locked-binary> [runs]
+#   check-native.sh <lang-id> <artifact> [runs]
 #
-# Runs each binary `runs` times (default 50) and checks, for every run, the whole contract:
-#   - exit status 0 whatever the property says;
-#   - one stdout line of the fixed shape `lang=<id> final=<10 digits> order=<16 hex> rand=<16 hex>`;
-#   - the protocol report on stderr has the assert line of <lang-id>.counter_exact and the coverage marker;
-#   - the detector and the program agree: the property is false exactly when final != 4000.
+# The artifact is one program that takes its mode as argv[1]: buggy, fixed or wide. This script checks the whole
+# fixture contract, natively:
+#   - argv: no argument, an unknown mode, a wrong-case mode and an extra argument each print a usage line on stderr,
+#     print nothing on stdout, and exit 64;
+#   - every run of buggy, fixed and wide (`runs` of buggy and fixed, $WIDE_RUNS of wide, default 10) exits 0 whatever
+#     the property says and prints exactly one stdout line,
+#     `LANGAT v1 lang=<id> mode=<mode> final=<20 digits> expect=0000000000000000<4000> order=<16 hex> rand=<16 hex>`;
+#   - with stdout on /dev/full (closed where there is no /dev/full) the artifact exits 3: the result line could not be
+#     written;
+#   - the protocol report on stderr has one evaluation each of <id>.counter_exact (witness values
+#     [final, 4000, 4, 1000]) and <id>.all_started, and no incomplete-catalog notice from the SDK's audit;
+#   - the detector and the program agree: the property is false exactly when final != 4000, and final never exceeds it.
 # Then, across the runs:
-#   - the locked twin never fires and always ends at 4000;
-#   - the racy program fires at least once. On a host where this process may use only one CPU (nproc respects
-#     affinity and cgroup cpusets) four threads cannot overlap, so a racy program that never fires there ends the
-#     check with the exit code 77 (skipped), after the locked twin has been checked.
+#   - fixed never fires and always ends at 4000;
+#   - buggy fires at least once. On a host where this process may use only one CPU (nproc respects affinity and
+#     cgroup cpusets) four threads cannot overlap, so a buggy mode that never fires there ends the check with the
+#     exit code 77 (skipped), after the other checks. LANG_AT_REQUIRE_PARALLEL=1 turns that skip into a failure (the
+#     build record's check must run on at least two CPUs);
+#   - wide is only checked against the contract; how often it fires is printed.
 # Each run is limited to $RUN_TIMEOUT seconds (default 60) when `timeout` or `gtimeout` is installed.
-# Prints one summary line per binary. Exits 0 when everything holds, 77 when the racy check was skipped, 1 otherwise.
+# Prints one summary line per mode. Exits 0 when everything holds, 77 when the buggy check was skipped, 1 otherwise,
+# 64 for a usage error.
 
 set -u
 
 SKIPPED=77
+USAGE_STATUS=64
+EXPECTED=4000
 
-if [ $# -lt 3 ]; then
-  echo "usage: $0 <lang-id> <racy-binary> <locked-binary> [runs]" >&2
+if [ $# -lt 2 ]; then
+  echo "usage: $0 <lang-id> <artifact> [runs]" >&2
   exit 64
 fi
 lang=$1
-racy=$2
-locked=$3
-runs=${4:-50}
-expected=4000
+artifact=$2
+runs=${3:-50}
+wide_runs=${WIDE_RUNS:-10}
 property="$lang.counter_exact"
+coverage="$lang.all_started"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/lang-at.XXXXXX") || exit 1
 trap 'rm -rf "$tmp"' EXIT
 
@@ -41,73 +53,170 @@ for t in timeout gtimeout; do
   fi
 done
 
-# counted <binary> <name>: runs the binary and prints "<fired> <exact>", the number of runs in which the property
-# was false and in which the final value was exact. Prints a reason on stderr and returns 1 on a contract violation.
-counted() {
-  bin=$1
-  name=$2
+# run_artifact <args...>: runs the artifact with the SDK's environment removed; stdout in $tmp/out, stderr in $tmp/err.
+run_artifact() {
+  # shellcheck disable=SC2086  # $limit is a command and its argument on purpose
+  env -u HAIRSPRING_PROC -u HAIRSPRING_PROC_PID -u HAIRSPRING_EVENTS -u HAIRSPRING_EVENTS_FILE $limit "$artifact" "$@" >"$tmp/out" 2>"$tmp/err"
+}
+
+# usage_checked <description> <args...>: the artifact must reject these arguments with the usage status.
+usage_checked() {
+  what=$1
+  shift
+  run_artifact "$@"
+  status=$?
+  if [ "$status" -ne "$USAGE_STATUS" ]; then
+    echo "FAIL usage ($what): exit status $status, want $USAGE_STATUS" >&2
+    return 1
+  fi
+  if [ -s "$tmp/out" ] || [ ! -s "$tmp/err" ]; then
+    echo "FAIL usage ($what): want a usage line on stderr and nothing on stdout" >&2
+    return 1
+  fi
+}
+
+check_usage() {
+  usage_checked "no argument" || return 1
+  usage_checked "unknown mode" racy || return 1
+  usage_checked "wrong case" Buggy || return 1
+  usage_checked "extra argument" buggy extra || return 1
+}
+
+# one_run <mode> <index>: the whole contract for one run; prints "<fired> <exact>" on success, a reason and 1 if not.
+one_run() {
+  mode=$1
+  i=$2
+  run_artifact "$mode"
+  status=$?
+  if [ "$status" -eq 124 ] && [ -n "$limit" ]; then
+    echo "FAIL $mode run $i: no result within the time limit ($limit)" >&2
+    return 1
+  fi
+  if [ "$status" -ne 0 ]; then
+    echo "FAIL $mode run $i: exit status $status, want 0" >&2
+    return 1
+  fi
+  shape="^LANGAT v1 lang=$lang mode=$mode final=[0-9]{20} expect=0{16}$EXPECTED order=[0-9a-f]{16} rand=[0-9a-f]{16}$"
+  if ! grep -Eq "$shape" "$tmp/out" || [ "$(wc -l <"$tmp/out")" -ne 1 ]; then
+    echo "FAIL $mode run $i: stdout is not the one contract line: $(cat "$tmp/out")" >&2
+    return 1
+  fi
+  final=$(sed -n 's/^.* final=\([0-9]*\) expect=.*/\1/p' "$tmp/out" | sed 's/^0*\(.\)/\1/')
+  assert_line=$(grep "\"kind\":\"assert\".*\"id\":\"$property\"" "$tmp/err")
+  start_line=$(grep "\"kind\":\"assert\".*\"id\":\"$coverage\"" "$tmp/err")
+  if [ -z "$assert_line" ] || [ -z "$start_line" ]; then
+    echo "FAIL $mode run $i: the protocol report lacks the assert lines for $property and $coverage" >&2
+    return 1
+  fi
+  for id in "$property" "$coverage"; do
+    if [ "$(grep -c "\"kind\":\"assert\".*\"id\":\"$id\"" "$tmp/err")" -ne 1 ]; then
+      echo "FAIL $mode run $i: $id has more than one assert line" >&2
+      return 1
+    fi
+  done
+  for line in "$assert_line" "$start_line"; do
+    if ! echo "$line" | grep -Eq '"hits": *1,'; then
+      echo "FAIL $mode run $i: a property was not evaluated exactly once: $line" >&2
+      return 1
+    fi
+  done
+  if ! echo "$assert_line" | grep -Eq "\"vals\":\[$final,$EXPECTED,4,1000\]"; then
+    echo "FAIL $mode run $i: the witness values of $property are not [$final,$EXPECTED,4,1000]: $assert_line" >&2
+    return 1
+  fi
+  if grep -q 'incomplete catalog' "$tmp/err"; then
+    echo "FAIL $mode run $i: the SDK's audit reports call sites missing from the catalog" >&2
+    return 1
+  fi
+  falses=$(echo "$assert_line" | sed -n 's/.*"falses": *\([0-9][0-9]*\).*/\1/p')
+  if [ -z "$falses" ]; then
+    echo "FAIL $mode run $i: the falses counter of $property is missing or not a number: $assert_line" >&2
+    return 1
+  fi
+  if [ "$falses" -gt 0 ] && [ "$final" -eq "$EXPECTED" ]; then
+    echo "FAIL $mode run $i: property false but final=$final" >&2
+    return 1
+  fi
+  if [ "$falses" -eq 0 ] && [ "$final" -ne "$EXPECTED" ]; then
+    echo "FAIL $mode run $i: final=$final but the property did not fire" >&2
+    return 1
+  fi
+  if [ "$final" -gt "$EXPECTED" ]; then
+    echo "FAIL $mode run $i: final=$final is above $EXPECTED: the counter cannot gain updates" >&2
+    return 1
+  fi
   fired=0
   exact=0
-  i=0
-  while [ "$i" -lt "$runs" ]; do
-    i=$((i + 1))
-    # shellcheck disable=SC2086  # $limit is a command and its argument on purpose
-    env -u HAIRSPRING_PROC -u HAIRSPRING_PROC_PID -u HAIRSPRING_EVENTS -u HAIRSPRING_EVENTS_FILE $limit "$bin" >"$tmp/out" 2>"$tmp/err"
-    status=$?
-    if [ "$status" -eq 124 ] && [ -n "$limit" ]; then
-      echo "FAIL $name run $i: no result within the time limit ($limit)" >&2
-      return 1
-    fi
-    if [ "$status" -ne 0 ]; then
-      echo "FAIL $name run $i: exit status $status, want 0" >&2
-      return 1
-    fi
-    if ! grep -Eq "^lang=$lang +final=[0-9]{10} order=[0-9a-f]{16} rand=[0-9a-f]{16}$" "$tmp/out" || [ "$(wc -l <"$tmp/out")" -ne 1 ]; then
-      echo "FAIL $name run $i: stdout is not the one fixed-width line: $(cat "$tmp/out")" >&2
-      return 1
-    fi
-    final=$(sed -n 's/^lang=[^ ]* *final=\([0-9]*\) .*/\1/p' "$tmp/out" | sed 's/^0*\(.\)/\1/')
-    assert_line=$(grep "\"kind\":\"assert\".*\"id\":\"$property\"" "$tmp/err")
-    if [ -z "$assert_line" ] || ! grep -q "\"kind\":\"assert\".*\"id\":\"$lang.all_started\"" "$tmp/err"; then
-      echo "FAIL $name run $i: the protocol report lacks the assert lines for $property and $lang.all_started" >&2
-      return 1
-    fi
-    falses=$(echo "$assert_line" | sed 's/.*"falses": *\([0-9]*\).*/\1/')
-    if [ "$falses" -gt 0 ] && [ "$final" -eq "$expected" ]; then
-      echo "FAIL $name run $i: property false but final=$final" >&2
-      return 1
-    fi
-    if [ "$falses" -eq 0 ] && [ "$final" -ne "$expected" ]; then
-      echo "FAIL $name run $i: final=$final but the property did not fire" >&2
-      return 1
-    fi
-    [ "$falses" -gt 0 ] && fired=$((fired + 1))
-    [ "$final" -eq "$expected" ] && exact=$((exact + 1))
-  done
+  [ "$falses" -gt 0 ] && fired=1
+  [ "$final" -eq "$EXPECTED" ] && exact=1
   echo "$fired $exact"
 }
 
-racy_counts=$(counted "$racy" racy) || exit 1
-locked_counts=$(counted "$locked" locked) || exit 1
-racy_fired=${racy_counts% *}
-locked_fired=${locked_counts% *}
-locked_exact=${locked_counts#* }
+# counted <mode> <runs>: runs the mode and prints "<fired> <exact>", the number of runs in which the property was
+# false and in which the final value was exact. Returns 1 on a contract violation (already reported on stderr).
+counted() {
+  mode=$1
+  total=$2
+  fired_total=0
+  exact_total=0
+  i=0
+  while [ "$i" -lt "$total" ]; do
+    i=$((i + 1))
+    result=$(one_run "$mode" "$i") || return 1
+    fired_total=$((fired_total + ${result% *}))
+    exact_total=$((exact_total + ${result#* }))
+  done
+  echo "$fired_total $exact_total"
+}
 
-echo "$lang racy:   property false in $racy_fired of $runs native runs"
-echo "$lang locked: property false in $locked_fired of $runs native runs, final exact in $locked_exact"
+# A result line that cannot be written is an internal failure: exit 3, and a reason on stderr. Stdout is /dev/full
+# (every write fails with ENOSPC) where that exists, which is Linux. Elsewhere stdout is closed, and a runtime that
+# reopens closed descriptors (Go does) writes the line to /dev/null and exits 0: that is a skip, not a failure.
+check_unwritable_stdout() {
+  if [ -w /dev/full ]; then
+    # shellcheck disable=SC2086  # $limit is a command and its argument on purpose
+    env -u HAIRSPRING_PROC -u HAIRSPRING_PROC_PID -u HAIRSPRING_EVENTS -u HAIRSPRING_EVENTS_FILE $limit "$artifact" fixed >/dev/full 2>"$tmp/err"
+  else
+    # shellcheck disable=SC2086
+    env -u HAIRSPRING_PROC -u HAIRSPRING_PROC_PID -u HAIRSPRING_EVENTS -u HAIRSPRING_EVENTS_FILE $limit "$artifact" fixed >&- 2>"$tmp/err"
+  fi
+  status=$?
+  if [ "$status" -eq 0 ] && [ ! -w /dev/full ]; then
+    echo "skip: with stdout closed the artifact exited 0 (no /dev/full here, and the runtime may reopen closed descriptors)"
+    return 0
+  fi
+  if [ "$status" -ne 3 ]; then
+    echo "FAIL an unwritable stdout: exit status $status, want 3" >&2
+    return 1
+  fi
+}
+
+check_usage || exit 1
+check_unwritable_stdout || exit 1
+buggy_counts=$(counted buggy "$runs") || exit 1
+fixed_counts=$(counted fixed "$runs") || exit 1
+wide_counts=$(counted wide "$wide_runs") || exit 1
+buggy_fired=${buggy_counts% *}
+fixed_fired=${fixed_counts% *}
+fixed_exact=${fixed_counts#* }
+wide_fired=${wide_counts% *}
+
+echo "$lang buggy: property false in $buggy_fired of $runs native runs"
+echo "$lang fixed: property false in $fixed_fired of $runs native runs, final exact in $fixed_exact"
+echo "$lang wide:  property false in $wide_fired of $wide_runs native runs"
 
 status=0
-if [ "$locked_fired" -ne 0 ] || [ "$locked_exact" -ne "$runs" ]; then
-  echo "FAIL the locked twin lost an update" >&2
+if [ "$fixed_fired" -ne 0 ] || [ "$fixed_exact" -ne "$runs" ]; then
+  echo "FAIL the fixed mode lost an update" >&2
   status=1
 fi
 cpus=${LANG_AT_CPUS:-$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)}  # LANG_AT_CPUS overrides, for the script tests
-if [ "$racy_fired" -eq 0 ]; then
-  if [ "$cpus" -lt 2 ]; then
-    echo "skip: the racy program never fired, and this process may use $cpus CPU (the race needs overlapping threads)"
+if [ "$buggy_fired" -eq 0 ]; then
+  if [ "$cpus" -lt 2 ] && [ "${LANG_AT_REQUIRE_PARALLEL:-0}" != 1 ]; then
+    echo "skip: the buggy mode never fired, and this process may use $cpus CPU (the race needs overlapping threads)"
     [ $status -eq 0 ] && status=$SKIPPED
   else
-    echo "FAIL the racy program never fired in $runs runs on $cpus CPUs: the planted race is not reachable" >&2
+    echo "FAIL the buggy mode never fired in $runs runs on $cpus CPUs: the planted race is not reachable" >&2
     status=1
   fi
 fi
