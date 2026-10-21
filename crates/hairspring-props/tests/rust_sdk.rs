@@ -3,7 +3,7 @@
 //! byte.
 //!
 //! The programs are built with `cargo build -p hairspring-sdk --bins` (a nested cargo, run once per test binary).
-//! `HS_RUST_SDK_BUILD` names a directory of prebuilt `hs_sample_*` and `hs_counter_*` programs instead.
+//! `HS_RUST_SDK_BUILD` names a directory of prebuilt `hs_sample_*` programs and `at-rust` instead.
 
 use hairspring_props::{
     AssertKind, FailureReason, PropertyStat, PropertyStatus, RunProps, TrialEvents, TrialProps,
@@ -17,6 +17,8 @@ const BUILD_ENV: &str = "HS_RUST_SDK_BUILD";
 /// The planted race fires on almost every native run; this many tries make a miss vanishingly unlikely.
 const RACY_ATTEMPTS: usize = 200;
 const LOCKED_RUNS: usize = 20;
+/// The language fixture binary: modes `buggy`, `fixed` and `wide` by `argv[1]`.
+const FIXTURE: &str = "at-rust";
 
 fn workspace_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -333,16 +335,18 @@ fn a_call_site_outside_the_catalog_section_degrades_nothing_but_is_counted_as_dr
 
 // ---- the planted race --------------------------------------------------------------------------------------------
 
-fn counter_trial(name: &str) -> TrialProps {
-    let (bytes, status) = stderr_of(Command::new(program(name)));
+fn counter_trial(mode: &str) -> TrialProps {
+    let mut cmd = Command::new(program(FIXTURE));
+    cmd.arg(mode);
+    let (bytes, status) = stderr_of(cmd);
     assert!(status.success(), "exit 0 whatever the property says");
     fold(&bytes)
 }
 
 #[test]
-fn the_racy_build_is_reported_as_a_violation_with_its_witness() {
+fn the_buggy_mode_is_reported_as_a_violation_with_its_witness() {
     let trial = (0..RACY_ATTEMPTS)
-        .map(|_| counter_trial("hs_counter_racy"))
+        .map(|_| counter_trial("buggy"))
         .find(|t| !t.verdict().is_empty())
         .expect("the planted race never fired natively");
     assert!(!trial.is_degraded(), "{:?}", trial.health);
@@ -351,7 +355,8 @@ fn the_racy_build_is_reported_as_a_violation_with_its_witness() {
     assert_eq!(failures[0].id, "rust.counter_exact");
     assert_eq!(failures[0].reason, FailureReason::AlwaysFalse);
     let w = failures[0].witness.as_ref().expect("a witness");
-    assert!(w.vals[0] < 4_000 && w.vals[1] == 4_000, "{:?}", w.vals);
+    assert!(w.vals[0] < 4_000, "{:?}", w.vals);
+    assert_eq!(w.vals[1..], [4_000, 4, 1_000], "{:?}", w.vals);
     assert_eq!(
         status_of(&stats(&trial), "rust.counter_exact"),
         PropertyStatus::Violation
@@ -363,9 +368,9 @@ fn the_racy_build_is_reported_as_a_violation_with_its_witness() {
 }
 
 #[test]
-fn the_locked_twin_is_never_reported() {
+fn the_fixed_mode_is_never_reported() {
     for round in 0..LOCKED_RUNS {
-        let trial = counter_trial("hs_counter_locked");
+        let trial = counter_trial("fixed");
         assert!(!trial.is_degraded(), "{round}: {:?}", trial.health);
         assert!(trial.verdict().is_empty(), "{round}: {:?}", trial.verdict());
         assert_eq!(trial.total_work(), 4_000);

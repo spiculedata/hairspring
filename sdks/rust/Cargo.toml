@@ -64,11 +64,7 @@ path = "samples/audit.rs"
 name = "hs_sample_nosyscall"
 path = "samples/nosyscall.rs"
 
-# The planted race and its locked twin (see docs/rust-sdk.md).
+# The language fixture: one binary, modes buggy|fixed|wide (see docs/rust-sdk.md).
 [[bin]]
-name = "hs_counter_racy"
-path = "fixtures/counter_racy.rs"
-
-[[bin]]
-name = "hs_counter_locked"
-path = "fixtures/counter_locked.rs"
+name = "at-rust"
+path = "fixtures/lang_at/main.rs"
