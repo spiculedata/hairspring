@@ -7,6 +7,8 @@
 #   <defect>      racy, plus one violation of the contract (the cases below name them); each must be rejected
 
 set -u
+# CI sets this for the real checks; these tests set it themselves where they need it.
+unset LANG_AT_REQUIRE_PARALLEL
 here=$(dirname "$0")
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/lang-at-test.XXXXXX") || exit 1
 trap 'rm -rf "$tmp"' EXIT
