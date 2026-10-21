@@ -205,14 +205,14 @@ def main(argv: Sequence[str]) -> int:
     config = parse_args(argv)
     if config is None:
         print(f"usage: {argv[0]} buggy|fixed|wide [{SWITCH_ARGUMENT}]", file=sys.stderr)
-        return EXIT_USAGE
+        hs.exit(EXIT_USAGE)  # through the SDK, so the end line carries the same status as the process
     if config.switch:
         sys.setswitchinterval(SWITCH_INTERVAL_SECONDS)
     shared = Shared()
     run_workers(config, shared)
     if shared.failures or len(shared.arrival) != THREADS:
         print("invariant failure: " + "; ".join(shared.failures or ["the arrival list is incomplete"]), file=sys.stderr)
-        return EXIT_INVARIANT
+        hs.exit(EXIT_INVARIANT)
     final = shared.state.counter
     hs.always(final == EXPECTED, f"{LANG}.counter_exact", "counter equals T*K", final, EXPECTED, THREADS, ITERATIONS)
     hs.sometimes(shared.started == THREADS, f"{LANG}.all_started", "all workers started", shared.started)

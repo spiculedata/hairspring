@@ -58,6 +58,11 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(done.stdout, b"")
         self.assertIn(b"usage", done.stderr)
 
+    def test_the_report_of_a_usage_error_carries_the_status(self) -> None:
+        done = run("racy")
+        end = [e for e in events(done.stderr) if e["kind"] == "end"][0]
+        self.assertEqual(end["status"], 64)
+
     def test_an_unknown_mode_or_extra_argument_is_a_usage_error(self) -> None:
         for args in (("racy",), ("buggy", "extra"), ("fixed", "--switch=2.0"), ("buggy", "--switch=1.0", "x"), ("",)):
             done = run(*args)
