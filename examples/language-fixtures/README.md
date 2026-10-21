@@ -141,7 +141,9 @@ time in a different build directory, with a fresh Go build cache) and requires e
 (seccomp) and B5 (strace) do not work under an emulated container, and B2 is x86-64 disassembly. The CI workflow has a
 manual `fixture-build-records` job (workflow_dispatch, ubuntu-24.04) that runs `build-record.sh` for `c`, `cxx-clang`,
 `cxx-gxx` and `go` and uploads each record as an artifact; any other native x86-64 host works the same way.
-`scripts/build-record-docker.sh` runs the script in a container with the images pinned by digest (Ubuntu 24.04 for C and
+`-ffile-prefix-map` (and `-trimpath` in Go) covers the fixture's own sources only: the C SDK library keeps the absolute
+directory it was compiled in, so an artifact built on a CI runner and one built in a container differ in sha256. The
+pinned artifact therefore comes from one named producer, which the record states (`Producer:`). `scripts/build-record-docker.sh` runs the script in a container with the images pinned by digest (Ubuntu 24.04 for C and
 C++, `golang:1.27.3` for Go) and passes the source commit in; on a machine that is not x86-64 it is only a functional
 check of the script. Nothing here runs Hermit or needs a server.
 

@@ -44,7 +44,7 @@ digest=$image
 inside_out=/repo/examples/language-fixtures/build/record-$variant.md
 docker run --rm --platform "$platform" --cap-add SYS_PTRACE --security-opt seccomp=unconfined \
   -v "$repo/sdks:/repo/sdks:ro" -v "$repo/docs:/repo/docs:ro" -v "$fixtures:/repo/examples/language-fixtures" \
-  -e IMAGE_DIGEST="$digest" -e SOURCE_COMMIT="$SOURCE_COMMIT" -e RUNS="${RUNS:-50}" \
+  -e IMAGE_DIGEST="$digest" -e PRODUCER="docker $platform, image $image" -e SOURCE_COMMIT="$SOURCE_COMMIT" -e RUNS="${RUNS:-50}" \
   "$image" sh -c "$setup && sh /repo/examples/language-fixtures/scripts/build-record.sh $variant $inside_out"
 rc=$?
 if [ $# -ge 2 ] && [ -f "$fixtures/build/record-$variant.md" ]; then

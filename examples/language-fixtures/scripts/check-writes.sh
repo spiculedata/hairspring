@@ -19,6 +19,20 @@ fi
 file=$1
 
 awk '
+  # strace -f prints a call that blocks as "<pid> write(..., N <unfinished ...>" and finishes it later, possibly after
+  # other threads'"'"' lines, as "<pid> <... write resumed>) = N". Join the two halves by pid into one ordinary line.
+  /<unfinished \.\.\.>$/ {
+    pending[$1] = $0
+    sub(/ <unfinished \.\.\.>$/, "", pending[$1])
+    next
+  }
+  /<\.\.\. [a-z]+ resumed>/ {
+    if (!($1 in pending)) next
+    rest = $0
+    sub(/^.*resumed>/, "", rest)
+    $0 = pending[$1] rest
+    delete pending[$1]
+  }
   # write(<fd>, "<text>", <count>) = <ret>   (after an optional pid)
   match($0, /write\([0-9]+, "/) {
     head = substr($0, RSTART, RLENGTH)

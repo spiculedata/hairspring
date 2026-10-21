@@ -203,7 +203,9 @@ jobs:
         if: matrix.variant == 'go'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq strace binutils
       - name: Build record
-        run: sh examples/language-fixtures/scripts/build-record.sh ${{ matrix.variant }} "$RUNNER_TEMP/record-${{ matrix.variant }}.md"
+        env:
+          PRODUCER: GitHub Actions ubuntu-24.04 (native x86-64)
+        run: IMAGE_DIGEST="runner image $ImageOS $ImageVersion (no digest available)" sh examples/language-fixtures/scripts/build-record.sh ${{ matrix.variant }} "$RUNNER_TEMP/record-${{ matrix.variant }}.md"
       - name: Upload the record
         if: always()
         uses: actions/upload-artifact@v4

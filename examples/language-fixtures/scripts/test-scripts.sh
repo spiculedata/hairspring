@@ -354,6 +354,31 @@ trace_no_stdout="$tmp/trace_no_stdout.txt"
 cat >"$trace_no_stdout" <<'EOF'
 160   write(200, "HAIRSPRING_EVENT {\"v\":1,\"kind\":\"hello\"}\n", 38) = 38
 EOF
+# strace -f interleaves threads: a call that blocks is printed as "<unfinished ...>" and finished by "<... write resumed>".
+trace_interleaved="$tmp/trace_interleaved.txt"
+cat >"$trace_interleaved" <<'EOF'
+160   write(200, "HAIRSPRING_EVENT {\"v\":1,\"kind\":\"hello\"}\n", 38) = 38
+161   write(1, "LANGAT v1 lang=c mode=buggy final=00000000000000003990 expect=00000000000000004000 order=0123456789abcdef rand=0123456789abcdef\n", 128 <unfinished ...>
+162   write(200, "HAIRSPRING_EVENT {\"v\":1,\"kind\":\"end\"}\n", 36) = 36
+161   <... write resumed>) = 128
+EOF
+trace_interleaved_split="$tmp/trace_interleaved_split.txt"
+cat >"$trace_interleaved_split" <<'EOF'
+160   write(200, "HAIRSPRING_EVENT {\"v\":1,\"kind\"", 24 <unfinished ...>
+161   write(200, "HAIRSPRING_EVENT {\"v\":1,\"kind\":\"end\"}\n", 36) = 36
+160   <... write resumed>) = 24
+160   write(200, ":\"hello\"}\n", 11) = 11
+161   write(1, "LANGAT v1 lang=c mode=buggy final=00000000000000003990 expect=00000000000000004000 order=0123456789abcdef rand=0123456789abcdef\n", 128) = 128
+EOF
+trace_resumed_short="$tmp/trace_resumed_short.txt"
+cat >"$trace_resumed_short" <<'EOF'
+160   write(200, "HAIRSPRING_EVENT {\"v\":1,\"kind\":\"hello\"}\n", 38 <unfinished ...>
+160   <... write resumed>) = 20
+160   write(1, "LANGAT v1 lang=c mode=buggy final=00000000000000003990 expect=00000000000000004000 order=0123456789abcdef rand=0123456789abcdef\n", 128) = 128
+EOF
+expect "check-writes joins an unfinished write to its resumed half and accepts it" 0 sh "$here/check-writes.sh" "$trace_interleaved"
+expect "check-writes rejects a protocol line split across two writes even when interleaved" 1 sh "$here/check-writes.sh" "$trace_interleaved_split"
+expect "check-writes rejects a short write reported by the resumed half" 1 sh "$here/check-writes.sh" "$trace_resumed_short"
 expect "check-writes accepts whole single-write lines" 0 sh "$here/check-writes.sh" "$trace_ok"
 expect "check-writes rejects an event line split across two writes" 1 sh "$here/check-writes.sh" "$trace_split"
 expect "check-writes rejects a short write" 1 sh "$here/check-writes.sh" "$trace_short"

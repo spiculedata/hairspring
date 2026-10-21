@@ -7,6 +7,10 @@
 # loop:   the busy loop survived the optimiser: there is a backward jump (a jump to an address at or below its own).
 # window: the counter's load and store are separate instructions: within WINDOW_LINES (default 8) lines of the call
 #         to the busy loop there is no locked read-modify-write (lock xadd, cmpxchg, add, sub, inc, dec).
+# The window check with UNLOCKED_PATH=1 (C and C++) also requires one copy of the window with no mutex_lock call in the
+# 8 lines before its load. That depends on how the compiler lays the code out, not on the contract: clang-18 -O2/-O3 C
+# and every -O0 build may fail it. Only the pinned -O2 variants (gcc-13 C, g++-13 and clang++-18 C++) are required to
+# pass; the load -> call -> store rule above holds for all of them.
 # Exits 0 when the check holds, 1 when it does not, 2 when the text has nothing to check (no jump at all, or no call
 # to the busy loop), 64 for a usage error.
 
