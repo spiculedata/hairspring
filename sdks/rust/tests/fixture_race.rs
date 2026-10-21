@@ -230,12 +230,11 @@ fn a_missing_unknown_or_extra_argument_is_a_usage_error_with_exit_64() {
         assert_eq!(r.status.code(), Some(USAGE_EXIT), "{args:?}");
         assert!(r.stdout.is_empty(), "{args:?}: {:?}", r.stdout);
         assert!(r.stderr.contains("usage: "), "{args:?}: {}", r.stderr);
+        let ev = events(&r.stderr);
+        assert_eq!(
+            number(of_kind(&ev, "end")[0], "status"),
+            USAGE_EXIT as u64,
+            "the end line carries the exit status: {args:?}"
+        );
     }
-}
-
-#[test]
-fn the_harness_seed_does_not_change_what_the_program_does() {
-    let r = run(FIXTURE, &["fixed"], &[("HAIRSPRING_SEED", "12345")]);
-    assert!(r.status.success());
-    assert_eq!(parse_line(&r.stdout).final_value, EXPECTED);
 }

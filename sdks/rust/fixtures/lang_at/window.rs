@@ -80,7 +80,13 @@ impl Shared {
         }
     }
 
-    fn worker(&self, mode: Mode, id: u64) {
+    /// `panics` is a test hook: the worker panics at once, before it registers as started.
+    fn worker(&self, mode: Mode, id: u64, panics: bool) {
+        // If this worker dies for any reason, the others must not wait for it at the barrier.
+        let _abort_if_panicking = AbortOnPanic(&self.abort);
+        if panics {
+            panic!("worker {id} panics on request");
+        }
         // A refused name only costs the stable key; the worker carries on under its claim-order key.
         let _ = hairspring_sdk::thread("worker", id as u32);
         self.started.fetch_add(1, SeqCst);
@@ -103,6 +109,17 @@ impl Shared {
     }
 }
 
+/// Sets the abort flag when dropped during a panic.
+struct AbortOnPanic<'a>(&'a AtomicBool);
+
+impl Drop for AbortOnPanic<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.0.store(true, SeqCst);
+        }
+    }
+}
+
 /// A busy loop with an opaque accumulator in the fixture's own source, so the optimiser can neither remove it nor
 /// move the counter's load and store across it.
 #[inline(never)]
@@ -116,12 +133,20 @@ pub fn spin(iterations: u64) -> u64 {
 
 /// Run the four workers of `mode` to completion.
 pub fn run_all(mode: Mode) -> Result<Outcome, Invariant> {
+    run_with(mode, &[])
+}
+
+/// `run_all`, with the workers numbered in `panicking` told to panic (a test hook).
+fn run_with(mode: Mode, panicking: &[u64]) -> Result<Outcome, Invariant> {
     let shared = Shared::new();
     let joined = std::thread::scope(|scope| {
         let mut handles = Vec::new();
         for id in 0..THREADS {
             let shared = &shared;
-            match std::thread::Builder::new().spawn_scoped(scope, move || shared.worker(mode, id)) {
+            let panics = panicking.contains(&id);
+            let spawned = std::thread::Builder::new()
+                .spawn_scoped(scope, move || shared.worker(mode, id, panics));
+            match spawned {
                 Ok(handle) => handles.push(handle),
                 Err(_) => {
                     shared.abort.store(true, SeqCst);
@@ -130,7 +155,9 @@ pub fn run_all(mode: Mode) -> Result<Outcome, Invariant> {
             }
         }
         let spawned = handles.len() as u64;
-        let all_joined = handles.into_iter().all(|h| h.join().is_ok());
+        // Join every handle before looking at the results: an unjoined panicked thread would make the scope panic.
+        let results: Vec<bool> = handles.into_iter().map(|h| h.join().is_ok()).collect();
+        let all_joined = results.iter().all(|&ok| ok);
         spawned == THREADS && all_joined
     });
     if !joined {
@@ -181,6 +208,16 @@ mod tests {
             sorted.sort_unstable();
             assert_eq!(sorted, [0, 1, 2, 3]);
         }
+    }
+
+    #[test]
+    fn two_workers_that_panic_before_the_barrier_are_an_invariant_failure_not_a_hang_or_a_panic() {
+        assert!(run_with(Mode::Fixed, &[1, 2]).is_err());
+    }
+
+    #[test]
+    fn one_worker_that_panics_is_an_invariant_failure() {
+        assert!(run_with(Mode::Buggy, &[3]).is_err());
     }
 
     #[test]

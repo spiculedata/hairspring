@@ -23,8 +23,8 @@ use hairspring_sdk::{always, sometimes};
 use mode::{Mode, ITERATIONS, THREADS};
 use window::{Invariant, Outcome};
 
-const EXIT_INVARIANT: u8 = 3;
-const EXIT_USAGE: u8 = 64;
+const EXIT_INVARIANT: i32 = 3;
+const EXIT_USAGE: i32 = 64;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -32,14 +32,15 @@ fn main() -> ExitCode {
         Ok(mode) => mode,
         Err(usage) => {
             eprintln!("{usage}");
-            return ExitCode::from(EXIT_USAGE);
+            // Through the SDK, so the end line carries the same status as the process.
+            hairspring_sdk::exit(EXIT_USAGE);
         }
     };
     match window::run_all(mode).and_then(|outcome| report(mode, &outcome)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(Invariant(why)) => {
             eprintln!("at-rust: internal invariant failed: {why}");
-            ExitCode::from(EXIT_INVARIANT)
+            hairspring_sdk::exit(EXIT_INVARIANT)
         }
     }
 }

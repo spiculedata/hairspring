@@ -215,9 +215,12 @@ the language fixtures. The mode is the first argument, never a build flag, so a 
 * Output: one stdout line, written with one write, `LANGAT v1 lang=rust mode=<mode> final=<20 digits> expect=<20
   digits> order=<16 hex> rand=<16 hex>` (`order` is the FNV-1a 64 hash of the finishing order written as four digits;
   `rand` is one value from the runtime's random source, so that entropy leaks show). Exit 0 whatever the property says:
-  the verdict comes from the report. Exit 3 is an internal invariant failure (a thread did not start or finish, the
-  finishing order is incomplete).
-* It does not read `HAIRSPRING_SEED`, `/proc`, the CPU count or the clock. This needed no change to the SDK crate.
+  the verdict comes from the report. Exit 3 is an internal invariant failure: a thread did not start, finish or
+  panicked (every worker is joined first, so two panics still end in 3), the finishing order is incomplete, or the
+  stdout line could not be written (labelled internal on stderr). Exits 3 and 64 go through the SDK's `exit`, so the
+  end line carries the same status.
+* The fixture's own code does not read `HAIRSPRING_SEED`, `/proc`, the CPU count or the clock (the Rust runtime may).
+  This needed no change to the SDK crate.
 
 Native self-tests (`sdks/rust/tests/fixture_race.rs`, and the same through the reference parser in
 `hairspring-props/tests/rust_sdk.rs`) show that the detector can fire in `buggy` and `wide` (a lost update, reported as
