@@ -10,8 +10,8 @@
 # checklist line only when the evidence that proves it passed (record-lib.sh). Nothing here runs Hermit or touches the
 # box. Exits 1 if any step failed.
 #
-# There is no probe-rust in the repository (a probe program for the Rust feasibility row has not been written): this
-# script covers at-rust only, and the record says so.
+# This script covers at-rust only, and the record says so. The std-only probe program probe-rust has its own record,
+# from build-record-probe-rust.sh.
 #
 # Environment: TARGET is the Rust target (default x86_64-unknown-linux-musl, the pinned static build), RUST_PINNED the
 # toolchain version (default 1.99.1), IMAGE_DIGEST is copied into B1, RUNS is the native run count (default 50),
@@ -80,8 +80,9 @@ build_twice() {
   cargo_build "$target_two" || return 1
   first=$(hash_file "$binary")
   second=$(hash_file "$target_two/$target/release/$artifact")
-  command -v file >/dev/null 2>&1 && file "$binary"
-  equal_hashes "$artifact" "$first" "$second"
+  equal_hashes "$artifact" "$first" "$second" || return 1
+  # The musl build must be static: a missing `file` command is a failure, not a skip.
+  file "$binary" 2>&1 | sh "$here/check-static.sh"
 }
 
 # The mangled name of the busy loop ends in 4spin: _ZN...4spin17h<hash>E (legacy mangling) or _RNv...6window4spin (v0).
@@ -150,8 +151,8 @@ evidence_artifact=$binary
 barrier_sources=$fixture/window.rs
 constant_sources=$fixture/mode.rs
 
-say "Scope: this record covers at-rust. There is no probe-rust in the repository (the probe program of the Rust"
-say "feasibility row has not been written), so no probe record is produced: probe-rust is missing."
+say "Scope: this record covers at-rust. The std-only probe program probe-rust has its own record, produced by"
+say "build-record-probe-rust.sh."
 say ""
 say "Reproducibility: the checkout path is mapped to /src with RUSTFLAGS=--remap-path-prefix=<checkout>=/src. That flag is part"
 say "of the build command (B1 prints it in full) and is not in a plain \`cargo build\`: an artifact built without it has another"

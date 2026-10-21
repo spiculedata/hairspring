@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs build-record.sh for one variant in a linux/amd64 container, the build lane's environment for the record.
 #
-#   build-record-docker.sh <c|cxx-clang|cxx-gxx|go|rust> [out-file]
+#   build-record-docker.sh <c|cxx-clang|cxx-gxx|go|rust|rust-probe> [out-file]
 #
 # C and C++ use ubuntu:24.04 (gcc 13, g++ 13, clang 18, glibc 2.39: the box's toolchain); Go uses golang:1.27.3; Rust
 # uses rust:1.99.1-bookworm with the musl target of the platform (TARGET overrides it). The C, C++ and Go images are
@@ -15,7 +15,7 @@
 set -u
 
 if [ $# -lt 1 ]; then
-  echo "usage: $0 <c|cxx-clang|cxx-gxx|go|rust> [out-file]" >&2
+  echo "usage: $0 <c|cxx-clang|cxx-gxx|go|rust|rust-probe> [out-file]" >&2
   exit 64
 fi
 variant=$1
@@ -51,7 +51,7 @@ case "$variant" in
     image=$GO_IMAGE
     setup='apt-get update -qq && apt-get install -y -qq make binutils strace >/dev/null'
     ;;
-  rust)
+  rust | rust-probe)
     image=$RUST_IMAGE
     # Cargo needs the whole workspace, and the conformance tests build the C SDK inside its tree, so the container works
     # on a copy of the repository; only the fixtures' build directory comes back out.
@@ -59,11 +59,12 @@ case "$variant" in
     setup="cp -R /src /repo && apt-get update -qq && apt-get install -y -qq binutils strace file >/dev/null && rustup target add $target"
     mounts="-v $repo:/src:ro -v $fixtures/build:/out"
     script="build-record-rust.sh"
+    [ "$variant" = rust-probe ] && script="build-record-probe-rust.sh"
     inside_out=/out/record-$variant.md
     artifact_dir=/out/artifacts
     ;;
   *)
-    echo "usage: $0 <c|cxx-clang|cxx-gxx|go|rust> [out-file]" >&2
+    echo "usage: $0 <c|cxx-clang|cxx-gxx|go|rust|rust-probe> [out-file]" >&2
     exit 64
     ;;
 esac

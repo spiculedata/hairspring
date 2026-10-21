@@ -1,0 +1,13 @@
+[package]
+name = "probe-rust"
+version = "0.1.0"
+edition = "2021"
+description = "A std-only threaded program that prints one line of hashes: used to check scheduling behaviour of Rust std threads (no SDK, no dependencies)"
+license = "Apache-2.0"
+publish = false
+rust-version = "1.80"
+
+# Deliberately has no dependencies, not even hairspring-sdk: the program must be the plain std program.
+[[bin]]
+name = "probe-rust"
+path = "src/main.rs"

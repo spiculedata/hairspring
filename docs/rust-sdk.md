@@ -229,6 +229,41 @@ every one exactly 4000), and check the stdout line, the exit statuses and that e
 binary has unit tests for the mode parser, the line format, the order hash and the workers. They prove only that the
 race exists and the report sees it; nothing here ran under Hermit.
 
+## The std-only probe
+
+`sdks/rust/fixtures/probe/` builds a second binary, `probe-rust`, in a package of its own with no dependencies. It does
+not use this SDK: it is a plain `std` program used to check scheduling behaviour of Rust threads. It takes no
+arguments (any argument is a usage error, exit 64).
+
+Four `std::thread` workers each take a `Mutex<Vec>` once and push their number, run 200 rounds of a relaxed `AtomicU64`
+load, a busy loop and a store (a read-modify-write with no lock), and send their number on an `mpsc` channel when they
+finish. After they are joined, a `HashMap` of 32 keys is built with the standard library's random state. The program
+writes one line on stdout, with one write, and exits 0:
+
+```
+PROBE v1 lang=rust lock_order=<16 hex> arrival=<16 hex> rand=<16 hex> vtime_ns=<20 digits> extra=<16 hex>
+```
+
+`lock_order` is the FNV-1a 64 hash of the order the workers took the lock and `arrival` of the order they finished (each
+as four ASCII digits, like the fixture's order hash), `extra` is the hash of the map's iteration order (each key as
+decimal text followed by a comma), `rand` is one value from the standard library's random source, and `vtime_ns` is the
+monotonic clock difference between the start and the end of the run. Exit 3 is an internal invariant failure: a thread
+did not start or panicked, or the line could not be written (a full or otherwise failing stdout). A closed stdout
+(EBADF) is different: Rust's standard library ignores it, so the program exits 0 and prints no line. That is harmless
+under the engine, where stdout is a pipe.
+
+Where the program runs under a deterministic scheduler that is given only a scheduling seed, the random keys of the
+standard library (from `getrandom`, so `rand` and `extra`) can be the same for every seed, because the scheduler's random
+seed is a separate setting. Equality of two same-seed runs still shows an entropy leak, and a difference between seeds
+would itself point to one. `rand` and `extra` come from the same per-thread key pair, so they are not independent
+detectors.
+
+Natively the thread order and the random value differ from run to run, so the native tests check the shape: the line has
+exactly six fields of the right width and alphabet, the two thread orders are hashes of a permutation of the four
+workers, the elapsed time is positive, the random value varies, and the map order with a fixed hasher is repeatable.
+`scripts/build-record-probe-rust.sh` builds it twice for the static musl target and requires equal sha256 (see
+`examples/language-fixtures/README.md`). Nothing here ran under Hermit.
+
 ## Conformance
 
 * `cargo test -p hairspring-props --test rust_sdk` builds the SDK's sample programs with a nested `cargo build` and folds
