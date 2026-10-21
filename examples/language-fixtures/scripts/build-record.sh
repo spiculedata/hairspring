@@ -5,15 +5,20 @@
 #
 # Run it on Linux x86-64, in the pinned build image (build-record-docker.sh does that). It builds the artifact twice,
 # disassembles it, runs the seccomp self-test, runs the native self-check 50 times per mode on at least two CPUs,
-# runs strace on one buggy run, runs the SDK's own tests and prints the source of the modes. Every step is recorded as
-# PASS, FAIL or NOT-RUN with its output; the Markdown ends with the alignment checklist to tick by hand after reading
-# the evidence. Nothing here runs Hermit or touches the box. Exits 1 if any step failed.
+# runs strace on one buggy run, runs the SDK's own tests and prints the source of the modes. It then captures the
+# evidence for the rest of the alignment checklist from the built artifact (usage errors, the start barrier, one run's
+# event lines, the ids, a stdout line, the exit codes, a grep of the source). Every step is recorded as PASS, FAIL or
+# NOT-RUN with its output. The Markdown ends with the alignment checklist, each line ticked only when the evidence that
+# proves it passed (record-lib.sh). Nothing here runs Hermit or touches the box. Exits 1 if any step failed.
 #
 # Environment: CC / CXX / SDK_CC override the toolchain (defaults: gcc-13, g++-13 / clang++-18, gcc-13 / clang-18),
-# IMAGE_DIGEST is copied into B1, RUNS is the native run count (default 50).
+# IMAGE_DIGEST is copied into B1, RUNS is the native run count (default 50), ARTIFACT_DIR receives a copy of the pinned
+# binary and its SHA256SUMS (the workflow uploads it next to the record). The producer fields come from the GitHub
+# Actions environment (record-lib.sh).
 
-# The check functions below are run through step, which shellcheck cannot see.
-# shellcheck disable=SC2329
+# The check functions below are run through step, which shellcheck cannot see. The record_*, artifact_*, evidence_*
+# and barrier_sources variables are the interface with record-lib.sh, which reads them (and sets failed).
+# shellcheck disable=SC2329,SC2034,SC2154
 set -u
 
 if [ $# -lt 1 ]; then
@@ -25,6 +30,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=$(dirname "$here")
 runs=${RUNS:-50}
 build=build/record
+# shellcheck source=record-lib.sh
+. "$here/record-lib.sh"
 
 case "$variant" in
   c)
@@ -32,6 +39,8 @@ case "$variant" in
     tool=${CC:-gcc-13}
     make_args="CC=$tool BUILD=$build"
     spin_re='<(lang_at_spin)>:' worker_re='<(worker)>:'
+    barrier_sources=$root/c/src/lost_update.c
+    source_files="$root/c/src/lost_update.c $root/common/lang_at.h"
     ;;
   cxx-clang)
     dir=cpp lang=cxx artifact=at-cxx-clang
@@ -39,6 +48,8 @@ case "$variant" in
     SDK_CC=${SDK_CC:-clang-18}
     make_args="CXX=$tool SDK_CC=$SDK_CC BUILD=$build"
     spin_re='<(_ZL12lang_at_spinmj)>:' worker_re='<(_ZN12_GLOBAL__N_16workerEjPK12lang_at_mode)>:'
+    barrier_sources=$root/cpp/src/lost_update.cc
+    source_files="$root/cpp/src/lost_update.cc $root/common/lang_at.h"
     ;;
   cxx-gxx)
     dir=cpp lang=cxx artifact=at-cxx-gxx
@@ -46,12 +57,16 @@ case "$variant" in
     SDK_CC=${SDK_CC:-gcc-13}
     make_args="CXX=$tool SDK_CC=$SDK_CC BUILD=$build"
     spin_re='<(_ZL12lang_at_spinmj)>:' worker_re='<(_ZN12_GLOBAL__N_16workerEjPK12lang_at_mode)>:'
+    barrier_sources=$root/cpp/src/lost_update.cc
+    source_files="$root/cpp/src/lost_update.cc $root/common/lang_at.h"
     ;;
   go)
     dir=go lang=go artifact=at-go
     tool=${GO:-go}
     make_args="GO=$tool"
     spin_re='race\.spin>:' worker_re='race\.work>:'
+    barrier_sources=$root/go/internal/race/race.go
+    source_files="$root/go/main.go $root/go/internal/race/race.go"
     ;;
   *)
     echo "usage: $0 <c|cxx-clang|cxx-gxx|go> [out-file]" >&2
@@ -60,7 +75,6 @@ case "$variant" in
 esac
 out=${2:-$root/build/record-$variant.md}
 mkdir -p "$(dirname "$out")" || exit 1
-: >"$out"
 fixtures=$root/$dir
 if [ "$variant" = go ]; then
   build_dir=$fixtures/build/linux-amd64
@@ -71,38 +85,6 @@ else
 fi
 binary=$build_dir/$artifact
 GO_PINNED=${GO_PINNED:-go1.27.3}
-failed=0
-
-say() { printf '%s\n' "$*" >>"$out"; }
-
-# step <id> <title> <command...>: runs the command, records its output in a fenced block and PASS/FAIL under the title.
-step() {
-  id=$1
-  title=$2
-  shift 2
-  log=$(mktemp "${TMPDIR:-/tmp}/record.XXXXXX")
-  "$@" >"$log" 2>&1
-  rc=$?
-  status=PASS
-  if [ "$rc" -ne 0 ]; then
-    status=FAIL
-    failed=1
-  fi
-  say "### $id $title: $status"
-  say ""
-  say '```'
-  say "\$ $*"
-  cat "$log" >>"$out"
-  say '```'
-  say ""
-  rm -f "$log"
-  return "$rc"
-}
-
-not_run() { say "### $1 $2: NOT-RUN"; say ""; say "$3"; say ""; }
-
-# extract <regex> <objdump-file>: the disassembly of the function whose header line matches.
-extract() { awk -v re="$1" '$0 ~ re { on = 1 } on { print } on && /^$/ { exit }' "$2"; }
 
 # The make arguments are separate words on purpose.
 # shellcheck disable=SC2086
@@ -216,25 +198,33 @@ modes() {
   fi
 }
 
+# The grep of the fixture source for line 11 of the checklist.
+forbidden_reads() {
+  # shellcheck disable=SC2086  # source_files is a list of paths on purpose
+  sh "$here/check-sources.sh" $source_files
+}
+
 work=$(mktemp -d "${TMPDIR:-/tmp}/record-work.XXXXXX") || exit 1
 trap 'rm -rf "$work"' EXIT
+record_init
 
-say "# BUILD-RECORD: $artifact"
-say ""
-source_commit=${SOURCE_COMMIT:-$(git -C "$root" rev-parse HEAD 2>/dev/null || echo unknown)}
-say "Generated by scripts/build-record.sh $variant. Source tree: \`$source_commit\`."
-say ""
-say "Producer: ${PRODUCER:-<TO BE FILLED: which host or image produced this record>}"
-say ""
+SOURCE_COMMIT=${SOURCE_COMMIT:-$(git -C "$root" rev-parse HEAD 2>/dev/null || echo unknown)}
+record_title="BUILD-RECORD: $artifact"
+record_generated_by="Generated by scripts/build-record.sh $variant."
+artifact_name=$artifact
+artifact_sha="<not built>"
+evidence_artifact=$binary
+
 say "Reproducibility: -ffile-prefix-map covers the fixture's own sources only. The SDK library keeps the absolute"
 say "directory it was compiled in, so artifacts built in different checkouts or images (a CI runner and a container)"
 say "differ in sha256. The pinned artifact comes from one named producer: the one named above."
 say ""
 step B1 "toolchain, build command (in the log) and two builds with equal sha256" versions
 step B1 "the build, twice" build_twice
+artifact_sha=$(publish_artifact "$binary" "$artifact") || artifact_sha="<not built>"
 step B2 "the busy loop survived and the window's load and store are separate instructions" disassembly
 if [ "$lang" = go ]; then
-  not_run B3 "seccomp self-test" "Not applicable to Go: its runtime makes system calls on other threads. The no-syscall window is a code-review statement: spin touches no memory and makes no call."
+  not_applicable B3 "seccomp self-test" "Not applicable to Go: its runtime makes system calls on other threads. The no-syscall window is a code-review statement: spin touches no memory and makes no call."
 else
   say "B3 note: the self-test installs a seccomp-BPF filter that allows only exit, exit_group and rt_sigreturn"
   say "(the same approach as the SDK's own no-syscall test), not SECCOMP_MODE_STRICT, and runs the window with W = 1000."
@@ -257,19 +247,14 @@ else
 fi
 step B7 "the modes: wide differs from buggy only in the busy loop length" modes
 
-say "## Alignment checklist (tick each line after reading the evidence above)"
+say "## Evidence for the other checklist lines (captured from the built artifact above)"
 say ""
-say "- [ ] 1. One artifact per language, named \`$artifact\`; no separate racy and locked builds, no build flag choosing the mode."
-say "- [ ] 2. argv[1] is buggy, fixed or wide; anything else, or nothing, prints a usage line on stderr and exits 64."
-say "- [ ] 3. T = 4, K = 1000, W = 1000, W_wide = 10000; wide differs from buggy only in the loop count (B7)."
-say "- [ ] 4. Start barrier: each worker increments started, then waits until started == 4."
-say "- [ ] 5. The window: load; spin; store; nothing else between them."
-say "- [ ] 6. Main, after joining: always(final == T*K) with four witness values [final, 4000, 4, 1000], then sometimes(started == 4), each once."
-say "- [ ] 7. Ids are \`$lang.counter_exact\` and \`$lang.all_started\`."
-say "- [ ] 8. One stdout line in the contract form, one write; nothing else on stdout."
-say "- [ ] 9. Exit status 0 whatever the property says; 3 for an internal invariant failure; 64 for a usage error."
-say "- [ ] 10. B1 to B7 pass and the SDK's conformance goldens pass."
-say "- [ ] 11. No read of the seed, /proc, the CPU count or the clock outside the runtime and the random source."
+evidence_steps
 
-echo "wrote $out"
+alignment_checklist \
+  "One artifact per language, named \`$artifact\`; no separate racy and locked builds, no build flag choosing the mode." \
+  "argv[1] is buggy, fixed or wide; anything else, or nothing, prints a usage line on stderr and exits 64." \
+  "No read of the seed, /proc, the CPU count or the clock outside the runtime and the random source."
+
+finish_record
 exit $failed

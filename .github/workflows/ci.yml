@@ -203,6 +203,9 @@ jobs:
 
   # Build records for the artifacts that are pinned for the acceptance run. B3 (seccomp) and B5 (strace) need a native
   # x86-64 Linux host, which an emulated container is not, so the records are produced here. Manual only.
+  # Each job uploads the record and, next to it, the artifact it describes (the binary, or the staged Python package,
+  # with a SHA256SUMS file): the record states the sha256 of exactly those bytes. There is no probe-rust (no probe
+  # program for the Rust feasibility row exists in the repository), so the Rust variant covers at-rust only.
   fixture-build-records:
     name: Fixture build record (${{ matrix.variant }})
     if: github.event_name == 'workflow_dispatch'
@@ -211,7 +214,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [c, cxx-clang, cxx-gxx, go, python]
+        variant: [c, cxx-clang, cxx-gxx, go, python, rust]
     env:
       GOTOOLCHAIN: local
       GOPROXY: "off"
@@ -229,22 +232,37 @@ jobs:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
         if: matrix.variant == 'python'
+      # The pinned Rust toolchain and the static musl target of the artifact.
+      - uses: dtolnay/rust-toolchain@master
+        if: matrix.variant == 'rust'
+        with:
+          toolchain: 1.99.1
+          targets: x86_64-unknown-linux-musl
       - name: Install the toolchains
-        if: matrix.variant != 'go' && matrix.variant != 'python'
+        if: matrix.variant != 'go' && matrix.variant != 'python' && matrix.variant != 'rust'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-13 g++-13 clang-18 strace binutils
       - name: Install strace
-        if: matrix.variant == 'go' || matrix.variant == 'python'
+        if: matrix.variant == 'go' || matrix.variant == 'python' || matrix.variant == 'rust'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq strace binutils
       # Python has no compiler: the record stages the package (fixture, probe and SDK) twice and compares file hashes.
       - name: Build record (Python)
         if: matrix.variant == 'python'
         env:
           PRODUCER: GitHub Actions ubuntu-24.04 (native x86-64)
+          ARTIFACT_DIR: ${{ runner.temp }}/artifact
         run: IMAGE_DIGEST="runner image $ImageOS $ImageVersion (no digest available)" sh examples/language-fixtures/scripts/build-record-python.sh "$RUNNER_TEMP/record-python.md"
-      - name: Build record
-        if: matrix.variant != 'python'
+      # at-rust, built twice for the static musl target. probe-rust does not exist, so there is no record for it.
+      - name: Build record (Rust)
+        if: matrix.variant == 'rust'
         env:
           PRODUCER: GitHub Actions ubuntu-24.04 (native x86-64)
+          ARTIFACT_DIR: ${{ runner.temp }}/artifact
+        run: IMAGE_DIGEST="runner image $ImageOS $ImageVersion (no digest available)" sh examples/language-fixtures/scripts/build-record-rust.sh "$RUNNER_TEMP/record-rust.md"
+      - name: Build record
+        if: matrix.variant != 'python' && matrix.variant != 'rust'
+        env:
+          PRODUCER: GitHub Actions ubuntu-24.04 (native x86-64)
+          ARTIFACT_DIR: ${{ runner.temp }}/artifact
         run: IMAGE_DIGEST="runner image $ImageOS $ImageVersion (no digest available)" sh examples/language-fixtures/scripts/build-record.sh ${{ matrix.variant }} "$RUNNER_TEMP/record-${{ matrix.variant }}.md"
       - name: Upload the record
         if: always()
@@ -252,6 +270,14 @@ jobs:
         with:
           name: build-record-${{ matrix.variant }}
           path: ${{ runner.temp }}/record-${{ matrix.variant }}.md
+          if-no-files-found: error
+      # The artifact the record describes, byte for byte, with its SHA256SUMS. The record states these bytes' sha256.
+      - name: Upload the artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fixture-${{ matrix.variant }}
+          path: ${{ runner.temp }}/artifact
           if-no-files-found: error
 
   glibc-condlock-example:

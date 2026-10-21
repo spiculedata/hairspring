@@ -18,7 +18,14 @@ fake="$tmp/fake"
 cat >"$fake" <<'EOF'
 #!/bin/sh
 usage() {
-  echo "usage: fake buggy|fixed|wide" >&2
+  # The SDKs report to stderr at exit even after a usage error, so protocol lines may precede or follow the usage line.
+  [ "${FAKE:-}" = usageevents ] && echo 'HAIRSPRING_EVENT {"v":1,"kind":"hello"}' >&2
+  if [ "${FAKE:-}" = nousagetext ]; then
+    echo 'HAIRSPRING_EVENT {"v":1,"kind":"end"}' >&2
+  else
+    echo "usage: fake buggy|fixed|wide" >&2
+  fi
+  [ "${FAKE:-}" = usageout ] && echo "usage on stdout too"
   exit "${FAKE_USAGE_STATUS:-64}"
 }
 if [ "${FAKE:-}" = nousage ]; then
@@ -63,6 +70,18 @@ event() { # event <id> <falses> <vals> <hits>
   [ "${FAKE:-}" = nofalses ] && fieldfalses="\"falses\":null"
   echo "HAIRSPRING_EVENT {\"v\":1,\"kind\":\"assert\",\"proc\":\"p1\",\"id\":\"$1\",\"hits\":   $4,\"trues\":   $trues,$fieldfalses,\"first_false\":null,\"first_true\":{\"thread\":\"t#1\",\"ord\":1,\"vals\":$3}}" >&2
 }
+catalog() { # catalog <id> <type>
+  echo "HAIRSPRING_EVENT {\"v\":1,\"kind\":\"catalog\",\"proc\":\"p1\",\"id\":\"$1\",\"type\":\"$2\",\"must_hit\":true}" >&2
+}
+if [ "${FAKE:-}" != nocatalog ]; then
+  if [ "${FAKE:-}" = swaptype ]; then
+    catalog "$id.counter_exact" sometimes
+    catalog "$id.all_started" always
+  else
+    catalog "$id.counter_exact" always
+    catalog "$id.all_started" sometimes
+  fi
+fi
 event "$id.all_started" 0 "[4,0,0,0]" "$hits"
 event "$id.counter_exact" "$falses" "$vals" "$hits"
 [ "${FAKE:-}" = incomplete ] && echo "hairspring: incomplete catalog: 1 evaluation(s) ran at call sites that are missing from the catalog section" >&2
@@ -166,12 +185,15 @@ clean="$tmp/clean.c"
 printf 'int main(void) { return 0; }\n' >"$clean"
 expect "check-sources accepts a clean source" 0 sh "$here/check-sources.sh" "$clean"
 for token in HAIRSPRING_SEED '/proc/self' sysconf nproc NumCPU hardware_concurrency clock_gettime gettimeofday 'time.Now' \
-  getenv os.Getenv sched_getaffinity get_nprocs 'std::chrono' ' time(0)' rdtsc runtime.GOMAXPROCS; do
+  getenv os.Getenv sched_getaffinity get_nprocs 'std::chrono' ' time(0)' rdtsc runtime.GOMAXPROCS \
+  available_parallelism 'Instant::now' SystemTime 'env::var'; do
   bad="$tmp/bad.c"
   printf 'void f(void) { use("%s"); }\n' "$token" >"$bad"
   expect "check-sources rejects $token" 1 sh "$here/check-sources.sh" "$bad"
 done
 expect "check-sources without a file is a usage error" 64 sh "$here/check-sources.sh"
+expect "check-sources names the files it searched when they are clean" 0 sh -c "sh '$here/check-sources.sh' '$clean' | grep -q 'no match in:.*clean.c'"
+expect "the real Rust fixture is clean" 0 sh "$here/check-sources.sh" "$here"/../../../sdks/rust/fixtures/lang_at/main.rs "$here"/../../../sdks/rust/fixtures/lang_at/window.rs "$here"/../../../sdks/rust/fixtures/lang_at/mode.rs "$here"/../../../sdks/rust/fixtures/lang_at/line.rs
 
 # check-disasm.sh: the build record's B2, on canned objdump text of a loop and of a worker's window.
 loop_ok="$tmp/loop_ok.s"
@@ -426,5 +448,125 @@ printf '# changed\n' >>"$tmp/sdk_copy/hairspring/_fmt.py"
 expect "stage-python stages changed sources" 0 env FIXTURE_DIR="$tmp/fx_copy" SDK_SRC="$tmp/sdk_copy" sh "$here/stage-python.sh" "$tmp/stage3" "$tmp/list3.txt"
 if [ "$(tail -1 "$tmp/list1.txt")" != "$(tail -1 "$tmp/list3.txt")" ]; then echo "ok   a changed byte changes the tree hash"; else echo "FAIL a changed byte did not change the tree hash"; failures=$((failures + 1)); fi
 expect "stage-python without arguments is a usage error" 64 sh "$here/stage-python.sh"
+
+# check-evidence.sh: the evidence a build record needs for checklist lines 2, 4, 6, 7, 8 and 9, captured from the artifact.
+evidence="$here/check-evidence.sh"
+# sample <FAKE value> <mode> [env...]: captures one run of the fake and prints the prefix of the captured files.
+sample() {
+  behaviour=$1
+  mode=$2
+  shift 2
+  prefix="$(newstate)/run"
+  env FAKE="$behaviour" FAKE_STATE="$(newstate)" "$@" sh "$evidence" capture "$fake" "$mode" "$prefix" >/dev/null 2>&1
+  echo "$prefix"
+}
+expect "capture records stdout, stderr and the exit status" 0 sh -c "p=\$(cd '$tmp' && env FAKE_STATE='$(newstate)' sh '$evidence' capture '$fake' buggy '$tmp/cap' >/dev/null 2>&1; echo '$tmp/cap'); test -s \$p.out && test -s \$p.err && test \"\$(cat \$p.rc)\" = 0"
+expect "capture of a missing artifact fails" 1 sh "$evidence" capture "$tmp/no-such-program" buggy "$tmp/cap-missing"
+expect "evidence without a check is a usage error" 64 sh "$evidence"
+expect "evidence with an unknown check is a usage error" 64 sh "$evidence" other
+
+# line 2: a bad argument and no argument, each a usage line on stderr, empty stdout, exit 64
+expect "usage evidence passes for a conforming program" 0 env FAKE=racy FAKE_STATE="$(newstate)" sh "$evidence" usage t "$fake"
+expect "usage evidence rejects exit 2 instead of 64" 1 env FAKE=racy FAKE_USAGE_STATUS=2 FAKE_STATE="$(newstate)" sh "$evidence" usage t "$fake"
+expect "usage evidence rejects a program that ignores a bad argument" 1 env FAKE=nousage FAKE_STATE="$(newstate)" sh "$evidence" usage t "$fake"
+expect "usage evidence rejects a usage line on stdout" 1 env FAKE=usageout FAKE_STATE="$(newstate)" sh "$evidence" usage t "$fake"
+expect "usage evidence shows both runs and the exit status" 0 sh -c "env FAKE=racy FAKE_STATE='$(newstate)' sh '$evidence' usage t '$fake' | grep -c 'exit status: 64' | grep -qx 2"
+expect "usage evidence rejects stderr with protocol lines but no usage line" 1 env FAKE=nousagetext FAKE_STATE="$(newstate)" sh "$evidence" usage t "$fake"
+expect "usage evidence finds the usage line among protocol lines" 0 env FAKE=usageevents FAKE_STATE="$(newstate)" sh "$evidence" usage t "$fake"
+expect "usage evidence shows the usage line itself" 0 sh -c "env FAKE=usageevents FAKE_STATE='$(newstate)' sh '$evidence' usage t '$fake' | grep -q '^usage line: usage: fake buggy|fixed|wide'"
+
+# line 4: the start-barrier source excerpt
+barrier_c="$tmp/barrier.c"
+printf 'static unsigned started;\nstatic int wait_all(void) {\n  while (__atomic_load_n(&started, __ATOMIC_ACQUIRE) < LANG_AT_THREADS) {\n  }\n}\nvoid w(void) {\n  __atomic_fetch_add(&started, 1u, __ATOMIC_ACQ_REL);\n  wait_all();\n}\n' >"$barrier_c"
+barrier_rust="$tmp/barrier.rs"
+printf 'fn wait_for_all(&self) {\n    while self.started.load(SeqCst) < THREADS {\n    }\n}\nfn w(&self) {\n    self.started.fetch_add(1, SeqCst);\n    self.wait_for_all();\n}\n' >"$barrier_rust"
+barrier_go="$tmp/barrier.go"
+printf 'st.started.Add(1)\nfor st.started.Load() < Workers {\n}\n' >"$barrier_go"
+barrier_py="$tmp/barrier.py"
+printf 'with lock:\n    shared.started += 1\nshared.barrier.wait()\n' >"$barrier_py"
+barrier_none="$tmp/barrier_none.c"
+printf 'void w(void) { run(); }\n' >"$barrier_none"
+barrier_inc_only="$tmp/barrier_inc.c"
+printf 'void w(void) { __atomic_fetch_add(&started, 1u, __ATOMIC_ACQ_REL); }\n' >"$barrier_inc_only"
+barrier_wait_only="$tmp/barrier_wait.c"
+printf 'void w(void) { while (__atomic_load_n(&started, __ATOMIC_ACQUIRE) < LANG_AT_THREADS) {} }\n' >"$barrier_wait_only"
+expect "barrier evidence accepts the C increment and wait" 0 sh "$evidence" barrier "$barrier_c"
+expect "barrier evidence accepts the Rust increment and wait" 0 sh "$evidence" barrier "$barrier_rust"
+expect "barrier evidence accepts the Go increment and wait" 0 sh "$evidence" barrier "$barrier_go"
+expect "barrier evidence accepts the Python increment and Barrier.wait" 0 sh "$evidence" barrier "$barrier_py"
+expect "barrier evidence rejects a source with no barrier" 1 sh "$evidence" barrier "$barrier_none"
+expect "barrier evidence rejects an increment with no wait" 1 sh "$evidence" barrier "$barrier_inc_only"
+expect "barrier evidence rejects a wait with no increment" 1 sh "$evidence" barrier "$barrier_wait_only"
+expect "barrier evidence accepts the increment and the wait in different files" 0 sh "$evidence" barrier "$barrier_inc_only" "$barrier_wait_only"
+expect "barrier evidence without a file is a usage error" 64 sh "$evidence" barrier
+expect "barrier evidence prints the matching lines with line numbers" 0 sh -c "sh '$evidence' barrier '$barrier_c' | grep -q 'fetch_add(&started'"
+expect "the real C fixture has a start barrier" 0 sh "$evidence" barrier "$here/../c/src/lost_update.c"
+expect "the real C++ fixture has a start barrier" 0 sh "$evidence" barrier "$here/../cpp/src/lost_update.cc"
+expect "the real Go fixture has a start barrier" 0 sh "$evidence" barrier "$here/../go/internal/race/race.go"
+expect "the real Python fixture has a start barrier" 0 sh "$evidence" barrier "$here/../python/at_py.py"
+expect "the real Rust fixture has a start barrier" 0 sh "$evidence" barrier "$here/../../../sdks/rust/fixtures/lang_at/window.rs"
+
+# lines 6 and 7: the always and sometimes event lines of one native run
+expect "witness evidence passes for a conforming run" 0 sh "$evidence" witness t "$(sample racy buggy)"
+expect "witness evidence passes for a fixed run" 0 sh "$evidence" witness t "$(sample racy fixed)"
+expect "witness evidence rejects two witness values" 1 sh "$evidence" witness t "$(sample twovals buggy)"
+expect "witness evidence rejects a property evaluated twice" 1 sh "$evidence" witness t "$(sample twice buggy)"
+expect "witness evidence rejects the wrong id prefix" 1 sh "$evidence" witness t "$(sample wrongid buggy)"
+expect "witness evidence rejects swapped catalog types" 1 sh "$evidence" witness t "$(sample swaptype buggy)"
+expect "witness evidence rejects a missing catalog" 1 sh "$evidence" witness t "$(sample nocatalog buggy)"
+expect "witness evidence rejects two assert lines for one id" 1 sh "$evidence" witness t "$(sample dupe buggy)"
+expect "witness evidence prints the always line with the witness values" 0 sh -c "sh '$evidence' witness t '$(sample racy fixed)' | grep -q '\"vals\":\[4000,4000,4,1000\]'"
+expect "witness evidence states the witness values it found" 0 sh -c "sh '$evidence' witness t '$(sample racy fixed)' | grep -q '^ok .*\[4000, 4000, 4, 1000\]'"
+expect "witness evidence names the catalog types" 0 sh -c "sh '$evidence' witness t '$(sample racy fixed)' | grep -q '\"type\":\"always\"'"
+expect "ids evidence passes for the two contract ids" 0 sh "$evidence" ids t "$(sample racy buggy)"
+expect "ids evidence rejects the cpp prefix for C++" 1 sh "$evidence" ids cxx "$(sample wrongid buggy FAKE_LANG=cxx)"
+expect "ids evidence accepts the cxx prefix for C++" 0 sh "$evidence" ids cxx "$(sample racy buggy FAKE_LANG=cxx)"
+expect "ids evidence lists the ids" 0 sh -c "sh '$evidence' ids t '$(sample racy buggy)' | grep -q 't.counter_exact' "
+
+# line 8: one sample stdout line
+expect "stdout-line evidence passes for the contract line" 0 sh "$evidence" stdout-line t buggy "$(sample racy buggy)"
+expect "stdout-line evidence rejects the old line" 1 sh "$evidence" stdout-line t buggy "$(sample oldline buggy)"
+expect "stdout-line evidence rejects an extra line" 1 sh "$evidence" stdout-line t buggy "$(sample extraline buggy)"
+expect "stdout-line evidence rejects a line that names the wrong mode" 1 sh "$evidence" stdout-line t fixed "$(sample wrongmode fixed)"
+expect "stdout-line evidence rejects a short final" 1 sh "$evidence" stdout-line t buggy "$(sample shortfinal buggy)"
+expect "stdout-line evidence prints the line" 0 sh -c "sh '$evidence' stdout-line t buggy '$(sample racy buggy)' | grep -q '^LANGAT v1 lang=t mode=buggy '"
+
+# line 9: exit codes 0, 3 and 64
+if [ -w /dev/full ]; then
+  expect "exit-code evidence passes for a conforming program" 0 env FAKE=racy FAKE_STATE="$(newstate)" sh "$evidence" exit-codes t "$fake"
+  expect "exit-code evidence rejects a program that survives an unwritable stdout" 1 env FAKE=noexit3 FAKE_STATE="$(newstate)" sh "$evidence" exit-codes t "$fake"
+else
+  echo "skip exit-code evidence (no /dev/full here)"
+fi
+expect "exit-code evidence rejects a non-zero exit from a normal run" 1 env FAKE=badexit FAKE_STATE="$(newstate)" sh "$evidence" exit-codes t "$fake"
+expect "exit-code evidence rejects usage status 2" 1 env FAKE=racy FAKE_USAGE_STATUS=2 FAKE_STATE="$(newstate)" sh "$evidence" exit-codes t "$fake"
+
+# record-lib.sh: the shared pieces of the build-record scripts (steps, verdicts, ticked checklist lines, producer fields)
+libcase() { # libcase <name> <wanted exit> <snippet run after sourcing the library with a fresh work directory>
+  lname=$1
+  lwanted=$2
+  lsnippet=$3
+  expect "$lname" "$lwanted" sh -c '. "$1/record-lib.sh"; work=$(mktemp -d "$2/w.XXXXXX"); out=$work/record.md; record_init; '"$lsnippet" lib "$here" "$tmp"
+}
+libcase "a passing step has the verdict PASS" 0 'step B1 t true; [ "$(verdict B1)" = PASS ]'
+libcase "a failing step has the verdict FAIL and sets the failed flag" 0 'step B1 t false; [ "$(verdict B1)" = FAIL ] && [ "$failed" = 1 ]'
+libcase "one failing step among several makes the id FAIL" 0 'step B1 a true; step B1 b false; step B1 c true; [ "$(verdict B1)" = FAIL ]'
+libcase "a step that was not run has the verdict NOT-RUN and does not pass" 0 'not_run B5 t why; [ "$(verdict B5)" = NOT-RUN ]'
+libcase "a check that does not apply passes" 0 'not_applicable B3 t why; [ "$(verdict B3)" = PASS ]'
+libcase "an id with no step is MISSING" 0 '[ "$(verdict B9)" = MISSING ]'
+libcase "a step records the command and its output in the record" 0 'step B1 "the title" echo hello; grep -q "^### B1 the title: PASS" "$body" && grep -q "^hello" "$body"'
+libcase "a ticked line names the evidence that proves it" 0 'step B1 t true; tickline 1 "One artifact." B1; grep -q "^- \[x\] 1. One artifact. (proved by B1)" "$body"'
+libcase "a failing proof leaves the line unticked and shows the failure" 0 'step B1 t false; tickline 1 "One artifact." B1; grep -q "^- \[ \] 1. One artifact. (not ticked: B1 FAIL)" "$body"'
+libcase "missing evidence leaves the line unticked" 0 'tickline 2 "Usage." L2; grep -q "^- \[ \] 2. Usage. (not ticked: L2 MISSING)" "$body"'
+libcase "only the failing ids are listed" 0 'step B1 a true; step B2 b false; not_run B5 c why; tickline 3 "x" B1 B2 B5; grep -q "(not ticked: B2 FAIL, B5 NOT-RUN)" "$body"'
+libcase "a line needing several ids is ticked when all pass" 0 'step B1 a true; step B7 b true; not_applicable B3 c why; tickline 3 "x" B1 B3 B7; grep -q "^- \[x\] 3. x (proved by B1, B3, B7)" "$body"'
+libcase "producer fields from a GitHub Actions run" 0 'GITHUB_RUN_ID=12345 GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=o/r GITHUB_WORKFLOW_REF=o/r/.github/workflows/ci.yml@refs/heads/b GITHUB_WORKFLOW_SHA=abc123 ImageOS=ubuntu24 ImageVersion=20261018.339.1 SOURCE_COMMIT=def456 PRODUCER="GitHub Actions" producer_block >"$work/p"; grep -q "^GitHub run: 12345 (https://github.com/o/r/actions/runs/12345)" "$work/p" && grep -q "^Workflow file: .github/workflows/ci.yml, run at commit .abc123." "$work/p" && grep -q "^Runner image: ubuntu24 20261018.339.1" "$work/p" && grep -q "^Source commit: .def456. (the commit the artifacts were built from)" "$work/p" && ! grep -q "Source tree" "$work/p"'
+libcase "producer fields outside GitHub say so" 0 'unset GITHUB_RUN_ID GITHUB_WORKFLOW_REF GITHUB_WORKFLOW_SHA ImageOS ImageVersion; SOURCE_COMMIT=def456 producer_block >"$work/p"; grep -q "^GitHub run: <TO BE FILLED" "$work/p" && grep -q "^Runner image: <TO BE FILLED" "$work/p" && grep -q "^Source commit: .def456." "$work/p"'
+libcase "publishing an artifact copies it with a SHA256SUMS line and prints its sha256" 0 'printf x >"$work/bin"; ARTIFACT_DIR=$work/up; export ARTIFACT_DIR; sha=$(publish_artifact "$work/bin" at-x); [ "$sha" = 2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881 ] && cmp -s "$work/bin" "$work/up/at-x" && grep -q "^$sha  at-x$" "$work/up/SHA256SUMS"'
+libcase "publishing without an artifact directory still prints the sha256" 0 'printf x >"$work/bin"; unset ARTIFACT_DIR; sha=$(publish_artifact "$work/bin" at-x); [ "$sha" = 2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881 ]'
+libcase "publishing a missing file fails" 1 'unset ARTIFACT_DIR; publish_artifact "$work/none" at-x'
+libcase "publishing a staged tree copies the files and lists the tree hash" 0 'mkdir -p "$work/tree/sub"; printf a >"$work/tree/a"; printf b >"$work/tree/sub/b"; ARTIFACT_DIR=$work/up; export ARTIFACT_DIR; publish_tree "$work/tree" pkg abc >/dev/null; cmp -s "$work/tree/sub/b" "$work/up/pkg/sub/b" && grep -q "^tree  abc$" "$work/up/SHA256SUMS"'
+libcase "a staged package is identified by its tree hash in the artifact line" 0 'record_title=t; record_generated_by=g; artifact_name=at-py; artifact_sha_label="tree hash"; artifact_sha=bb; finish_record >/dev/null; grep -q "^Artifact: at-py, tree hash bb" "$out"'
+libcase "the finished record starts with the title, then the producer fields and the verdicts, then the steps" 0 'step B1 t true; step B2 t false; record_title="BUILD-RECORD: at-x"; record_generated_by="Generated by x."; artifact_name=at-x; artifact_sha=aa; finish_record >/dev/null; [ "$(head -1 "$out")" = "# BUILD-RECORD: at-x" ] && grep -q "^Verdicts: B1 PASS, B2 FAIL" "$out" && grep -q "^Artifact: at-x, sha256 aa" "$out" && grep -q "the box gets exactly those bytes" "$out" && [ "$(grep -n "^Verdicts" "$out" | cut -d: -f1)" -lt "$(grep -n "^### B1" "$out" | cut -d: -f1)" ]'
 
 exit $failures
