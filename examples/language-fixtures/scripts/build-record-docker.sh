@@ -26,7 +26,10 @@ platform=${PLATFORM:-linux/amd64}
 # Pinned by digest (the multi-platform index digests, resolved with `docker buildx imagetools inspect`).
 UBUNTU_IMAGE=ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
 GO_IMAGE=${GO_IMAGE:-golang:1.27.3@sha256:957861185dbf29d93668ace41e011d091c6e779953d47f0316ef2cc58e28fe2b}
-SOURCE_COMMIT=${SOURCE_COMMIT:-$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo unknown)}
+# shellcheck source=record-lib.sh
+. "$here/record-lib.sh"
+# A tree with uncommitted changes is labelled +dirty: the record then does not name a commit that can be checked out.
+SOURCE_COMMIT=${SOURCE_COMMIT:-$(source_commit_of "$repo")}
 
 RUST_IMAGE=${RUST_IMAGE:-rust:1.99.1-bookworm@sha256:e12566d5abc17a0da741628782cdb504b68b8961f5bfcf677936bf3e8b32de29}
 case "$platform" in

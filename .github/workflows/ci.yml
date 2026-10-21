@@ -233,10 +233,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         if: matrix.variant == 'python'
       # The pinned Rust toolchain and the static musl target of the artifact.
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@1.99.1
         if: matrix.variant == 'rust'
         with:
-          toolchain: 1.99.1
           targets: x86_64-unknown-linux-musl
       - name: Install the toolchains
         if: matrix.variant != 'go' && matrix.variant != 'python' && matrix.variant != 'rust'
@@ -271,6 +270,7 @@ jobs:
           name: build-record-${{ matrix.variant }}
           path: ${{ runner.temp }}/record-${{ matrix.variant }}.md
           if-no-files-found: error
+          retention-days: 90
       # The artifact the record describes, byte for byte, with its SHA256SUMS. The record states these bytes' sha256.
       - name: Upload the artifact
         if: always()
@@ -279,6 +279,21 @@ jobs:
           name: fixture-${{ matrix.variant }}
           path: ${{ runner.temp }}/artifact
           if-no-files-found: error
+          retention-days: 90
+      # A separate step from the build: download what was just uploaded, recompute the sha256 of the downloaded bytes and
+      # compare it with SHA256SUMS and with the record. The result goes into the job summary.
+      - name: Download the uploaded artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: fixture-${{ matrix.variant }}
+          path: ${{ runner.temp }}/downloaded
+      - name: Verify the artifact as downloaded
+        run: |
+          rc=0
+          sh examples/language-fixtures/scripts/verify-download.sh "$RUNNER_TEMP/downloaded" "$RUNNER_TEMP/record-${{ matrix.variant }}.md" > "$RUNNER_TEMP/verify.txt" 2>&1 || rc=$?
+          cat "$RUNNER_TEMP/verify.txt"
+          { echo "### Artifact as downloaded: ${{ matrix.variant }}"; echo '```'; cat "$RUNNER_TEMP/verify.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
 
   glibc-condlock-example:
     name: glibc condlock example (unit tests)

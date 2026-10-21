@@ -29,6 +29,12 @@ fi
 forbidden='HAIRSPRING_SEED|/proc|cpu_count|sched_getaffinity|nproc|os\.environ|environb|getenv|time\.time|time\.monotonic|perf_counter|process_time|clock_gettime|datetime'
 status=0
 for file in "$@"; do
+  # A missing or unreadable file is a failure, never a pass.
+  if [ ! -r "$file" ] || [ -d "$file" ]; then
+    echo "FAIL $file is missing or unreadable" >&2
+    status=1
+    continue
+  fi
   if [ "$allow_ns" -eq 1 ]; then
     found=$(sed 's/time\.monotonic_ns//g' "$file" | grep -En "$forbidden")
   else

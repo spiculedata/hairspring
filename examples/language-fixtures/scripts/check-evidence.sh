@@ -96,26 +96,152 @@ cmd_usage() {
   status=0
   usage_run "racy (a bad argument)" racy || status=1
   usage_run "(no argument)" || status=1
+  usage_run "buggy extra (an extra argument after a valid mode)" buggy extra || status=1
+  return $status
+}
+
+# Python alone accepts a second argument, exactly --switch=1.0; every other second argument is a usage error.
+cmd_switch() {
+  [ $# -eq 2 ] || die_usage
+  lang=$1
+  artifact=$2
+  status=0
+  tmp_out=$(mktemp "${TMPDIR:-/tmp}/evidence.XXXXXX")
+  tmp_err=$(mktemp "${TMPDIR:-/tmp}/evidence.XXXXXX")
+  run_artifact "$tmp_out" "$tmp_err" buggy --switch=1.0
+  got=$?
+  echo "\$ $(basename "$artifact") buggy --switch=1.0"
+  cat "$tmp_out"
+  echo "exit status: $got"
+  if [ "$got" -ne 0 ] || [ "$(wc -l <"$tmp_out" | tr -d ' ')" -ne 1 ] || ! grep -q "^LANGAT v1 lang=$lang mode=buggy " "$tmp_out"; then
+    echo "FAIL buggy --switch=1.0 must run and print the one result line" >&2
+    status=1
+  fi
+  rm -f "$tmp_out" "$tmp_err"
+  usage_run "buggy --switch=2 (another value)" buggy --switch=2 || status=1
+  usage_run "buggy --switch=1.0 extra (a third argument)" buggy --switch=1.0 extra || status=1
+  usage_run "--switch=1.0 (no mode)" --switch=1.0 || status=1
+  return $status
+}
+
+# constants <lang> <file>...: T = 4, K = 1000, W = 1000 and W_wide = 10000, read from the constants of the source.
+constant_names() {
+  case "$1" in
+    c | cxx) echo "LANG_AT_THREADS LANG_AT_ITERS LANG_AT_SPIN LANG_AT_SPIN_WIDE" ;;
+    go) echo "Workers Iterations Spin SpinWide" ;;
+    rust | py) echo "THREADS ITERATIONS WINDOW WINDOW_WIDE" ;;
+    *) echo "" ;;
+  esac
+}
+
+# constant_value <name> <file>...: the number the constant is defined as (underscores and suffixes dropped), or nothing.
+constant_value() {
+  name=$1
+  shift
+  awk -v n="$name" '
+    {
+      re = "^[ \t]*(#define[ \t]+|pub[ \t]+const[ \t]+|const[ \t]+)?" n "[ \t]*(:[^=]*)?(=|[ \t])[ \t]*[0-9][0-9_]*"
+      if (match($0, re)) {
+        s = substr($0, RSTART, RLENGTH)
+        sub(/^.*[^0-9_]/, "", s)
+        gsub(/_/, "", s)
+        print s
+        exit
+      }
+    }
+  ' "$@"
+}
+
+cmd_constants() {
+  [ $# -ge 2 ] || die_usage
+  lang=$1
+  shift
+  names=$(constant_names "$lang")
+  [ -n "$names" ] || die_usage
+  for file in "$@"; do
+    [ -r "$file" ] || { echo "no such source file: $file" >&2; return 1; }
+  done
+  status=0
+  # the expected values, in the order of the names: T, K, W, W_wide
+  files="$*"
+  want_list="4 1000 1000 10000"
+  label_list="T K W W_wide"
+  i=0
+  for name in $names; do
+    i=$((i + 1))
+    want=$(echo "$want_list" | cut -d' ' -f"$i")
+    label=$(echo "$label_list" | cut -d' ' -f"$i")
+    # shellcheck disable=SC2086  # files is a list of paths on purpose
+    got=$(constant_value "$name" $files)
+    echo "$name ($label) = ${got:-<not found>}, want $want"
+    if [ "$got" != "$want" ]; then
+      echo "FAIL $name is not $want" >&2
+      status=1
+    fi
+  done
   return $status
 }
 
 BARRIER_INCREMENT='(started[^;]*(fetch_add|\.Add\(|\+= *1|\+\+)|(fetch_add|\.Add)\(&?[A-Za-z_.>-]*started)'
 BARRIER_WAIT='(started[^;]*(<|>=|!=|==) *(LANG_AT_THREADS|Workers|THREADS|4)|barrier\.wait\(\))'
 
+# barrier_in_file <file>: succeeds when a line that increments started is followed, within six lines, by a wait, or by a
+# call to a function whose body (ten lines) holds a wait. Comments and the lines of assertion calls (the
+# sometimes(started == THREADS) check in main) are not code that waits or counts.
+barrier_in_file() {
+  INC=$BARRIER_INCREMENT WAIT=$BARRIER_WAIT awk '
+    function code(line) {
+      if (line ~ /^[ \t]*(\/\/|\/\*|\*|#)/) return 0
+      if (line ~ /(HS_SOMETIMES|HS_ALWAYS|[Ss]ometimes|[Aa]lways)/) return 0
+      return 1
+    }
+    function isdef(line, name) {
+      if (line ~ /(^|[ \t])(fn|def|func)[ \t]/ && line ~ (name "[ \t]*\\(")) return 1
+      return (line ~ ("^[A-Za-z_].*[ \t*]" name "[ \t]*\\(.*\\)[ \t]*(const)?[ \t]*\\{?[ \t]*$"))
+    }
+    { L[NR] = $0 }
+    END {
+      for (i = 1; i <= NR; i++) {
+        if (code(L[i]) && L[i] ~ ENVIRON["INC"]) inc[i] = 1
+        if (code(L[i]) && L[i] ~ ENVIRON["WAIT"]) wait[i] = 1
+      }
+      for (i = 1; i <= NR; i++) {
+        if (!inc[i]) continue
+        for (j = i + 1; j <= i + 6 && j <= NR; j++) {
+          if (wait[j]) { printf "increment at line %d, wait at line %d\n", i, j; exit 0 }
+          s = L[j]
+          while (match(s, /[A-Za-z_][A-Za-z0-9_]*[ ]*\(/)) {
+            name = substr(s, RSTART, RLENGTH)
+            sub(/[ ]*\($/, "", name)
+            s = substr(s, RSTART + RLENGTH)
+            for (d = 1; d <= NR; d++) {
+              if (!isdef(L[d], name)) continue
+              for (k = d + 1; k <= d + 10 && k <= NR; k++) {
+                if (wait[k]) { printf "increment at line %d, then %s (line %d) waits at line %d\n", i, name, d, k; exit 0 }
+              }
+            }
+          }
+        }
+      }
+      exit 1
+    }
+  ' "$1"
+}
+
 cmd_barrier() {
   [ $# -ge 1 ] || die_usage
-  incs=0
-  waits=0
+  found=0
   for file in "$@"; do
-    [ -f "$file" ] || { echo "no such source file: $file" >&2; return 1; }
+    [ -r "$file" ] || { echo "no such source file: $file" >&2; return 1; }
     echo "--- $file: the lines that count the started workers and wait for all of them (with two lines of context)"
     grep -n -E -B2 -A2 -e "$BARRIER_INCREMENT" -e "$BARRIER_WAIT" "$file"
-    incs=$((incs + $(grep -c -E "$BARRIER_INCREMENT" "$file")))
-    waits=$((waits + $(grep -c -E "$BARRIER_WAIT" "$file")))
+    if where=$(barrier_in_file "$file"); then
+      echo "--- $where"
+      found=1
+    fi
   done
-  echo "--- increments of started found: $incs; waits for all workers found: $waits"
-  if [ "$incs" -eq 0 ] || [ "$waits" -eq 0 ]; then
-    echo "FAIL no start barrier: want an increment of started and a wait until every worker has started" >&2
+  if [ "$found" -eq 0 ]; then
+    echo "FAIL no start barrier: want, in one file, an increment of started that is followed by a wait until every worker has started (comments and the sometimes(started == THREADS) call do not count)" >&2
     return 1
   fi
 }
@@ -163,8 +289,22 @@ cmd_witness() {
   final=$(sed -n 's/^.* final=\([0-9]*\) expect=.*/\1/p' "$out" | sed 's/^0*\(.\)/\1/')
   echo "one native run; its stdout reports final=$final"
   status=0
+  if [ -z "$final" ]; then
+    echo "FAIL the stdout of that run has no final= value to compare the witness values with" >&2
+    status=1
+  fi
   witness_id "$lang.counter_exact" always "$final" || status=1
   witness_id "$lang.all_started" sometimes "" || status=1
+  # The properties are evaluated by the main thread after the join. The tool checks that the evaluating thread is not one of
+  # the workers; it cannot tell the main thread from any other non-worker thread.
+  thread=$(grep "\"kind\":\"assert\".*\"id\":\"$lang.counter_exact\"" "$err" | sed -n 's/.*"thread":"\([^"]*\)".*/\1/p' | head -1)
+  echo "$lang.counter_exact evaluated on thread $thread"
+  case "$thread" in
+    "" | worker*)
+      echo "FAIL $lang.counter_exact was not evaluated on the main thread (thread '$thread')" >&2
+      status=1
+      ;;
+  esac
   [ "$status" -ne 0 ] || echo "ok   each property is evaluated once, with the witness values [$final, $EXPECTED, 4, 1000] for $lang.counter_exact"
   return $status
 }
@@ -241,6 +381,8 @@ case "$check" in
   capture) cmd_capture "$@" ;;
   usage) cmd_usage "$@" ;;
   barrier) cmd_barrier "$@" ;;
+  constants) cmd_constants "$@" ;;
+  switch) cmd_switch "$@" ;;
   witness) cmd_witness "$@" ;;
   ids) cmd_ids "$@" ;;
   stdout-line) cmd_stdout_line "$@" ;;

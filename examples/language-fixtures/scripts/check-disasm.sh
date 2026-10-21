@@ -79,9 +79,10 @@ awk -v span="$lines" -v want_unlocked="${UNLOCKED_PATH:-0}" '
     }
     return 0
   }
-  # True if no mutex lock is called in the 8 lines before line n.
+  # True if no mutex lock is taken in the 8 lines before line n: a call to a lock function, or an inline lock (Rust takes
+  # its futex mutex with a lock cmpxchg).
   function unlocked_before(n,   k) {
-    for (k = (n > 8 ? n - 8 : 1); k < n; k++) if (text[k] ~ /call.*mutex_lock/) return 0
+    for (k = (n > 8 ? n - 8 : 1); k < n; k++) if (text[k] ~ /call.*mutex_lock|lock[ \t]+cmpxchg/) return 0
     return 1
   }
   { text[NR] = $0 }

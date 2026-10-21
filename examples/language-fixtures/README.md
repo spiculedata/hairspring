@@ -142,8 +142,12 @@ property ids, one stdout line, the exit codes 0, 3 and 64, and a grep of the sou
 count and the clock. The record ends with the checklist: a line is ticked (`[x]`) only when the evidence that proves it
 passed, and otherwise left open with the failing evidence named. The record also names its producer (the GitHub run id,
 the workflow file and the commit it ran at, the runner image name and version), the commit the artifacts were built from
-(`Source commit`) and the sha256 of the artifact, which the job uploads next to the record, so the bytes in the run are the
-bytes the record describes. The checks are strict: B2 requires every call to the busy loop to be a load,
+(`Source commit`, with `+dirty` added when the tree has uncommitted changes) and the sha256 of the artifact, which the job
+uploads next to the record, so the bytes in the run are the bytes the record describes. The job then downloads what it
+uploaded and runs `scripts/verify-download.sh <artifact-dir> <record>`, a separate step that recomputes the sha256 of the
+downloaded bytes (for the Python package, its tree hash) and compares it with `SHA256SUMS` and with the record; run the
+same script on an artifact you downloaded yourself. Checks that a not-applicable language skips are shown as `N/A`, never
+as `PASS`, and each checklist line names what the tool does not check (`not checked by the tool: ...`). The checks are strict: B2 requires every call to the busy loop to be a load,
 the call and a store of the same address (compilers may emit one copy of the window per mode), B5 requires every
 protocol line and the result line to be one complete write with a matching return value, and B1 builds twice (the second
 time in a different build directory, with a fresh Go build cache) and requires equal sha256.

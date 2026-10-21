@@ -12,9 +12,47 @@
 record_init() {
   body=$work/body.md
   statusfile=$work/status.txt
+  reviewfile=$work/review-needed.txt
   : >"$body"
   : >"$statusfile"
+  : >"$reviewfile"
   failed=0
+  # A record lists only what this run published: an old SHA256SUMS in a reused directory would name other bytes.
+  if [ -n "${ARTIFACT_DIR:-}" ]; then
+    mkdir -p "$ARTIFACT_DIR" && : >"$ARTIFACT_DIR/SHA256SUMS"
+  fi
+}
+
+# source_commit_of <repo>: the HEAD commit, with +dirty when the tree has uncommitted or untracked changes, or unknown.
+source_commit_of() {
+  sha=$(git -C "$1" rev-parse HEAD 2>/dev/null) || { echo unknown; return 0; }
+  if [ -n "$(git -C "$1" status --porcelain 2>/dev/null)" ]; then
+    echo "$sha+dirty"
+  else
+    echo "$sha"
+  fi
+}
+
+# equal_hashes <name> <first> <second>: the two builds must have produced a binary, and the same one.
+equal_hashes() {
+  echo "sha256 of $1, first build:  $2"
+  echo "sha256 of $1, second build: $3"
+  if [ -z "$2" ] || [ -z "$3" ]; then
+    echo "FAIL a build produced no binary to hash"
+    return 1
+  fi
+  [ "$2" = "$3" ] || { echo "the two builds differ"; return 1; }
+  echo "the two builds are equal"
+}
+
+# require_lines: copies stdin to stdout and fails when there was nothing (a source excerpt that found nothing proves nothing).
+require_lines() {
+  shown=$(cat)
+  if [ -z "$shown" ]; then
+    echo "FAIL nothing to show: the source excerpt is empty"
+    return 1
+  fi
+  printf '%s\n' "$shown"
 }
 
 say() { printf '%s\n' "$*" >>"$body"; }
@@ -53,13 +91,38 @@ not_run() {
   say ""
 }
 
-# not_applicable <id> <title> <reason>: a check that does not apply to this language. It passes.
+# not_applicable <id> <title> <reason> [yes]: a check that does not apply to this language. It does not fail, and it is
+# shown as N/A, never as PASS. With a fourth argument the spec asks for a code-review statement in its place: the record
+# says that statement has not been made.
 not_applicable() {
   printf '%s N/A\n' "$1" >>"$statusfile"
   say "### $1 $2: NOT-APPLICABLE"
   say ""
   say "$3"
   say ""
+  if [ -n "${4:-}" ]; then
+    printf '%s\n' "$1" >>"$reviewfile"
+    say "Required by the spec and not yet made [I]: the code-review statement that stands in for $1. A reviewer writes it; this tool does not."
+    say ""
+  fi
+}
+
+# verdict_label <id>: like verdict, but N/A when only not-applicable rows exist and PASS+N/A when both kinds do.
+verdict_label() {
+  v=$(verdict "$1")
+  if [ "$v" = PASS ]; then
+    na=$(grep -c "^$1 N/A$" "$statusfile")
+    ok=$(grep -c "^$1 PASS$" "$statusfile")
+    if [ "$na" -gt 0 ] && [ "$ok" -eq 0 ]; then
+      echo N/A
+    elif [ "$na" -gt 0 ]; then
+      echo PASS+N/A
+    else
+      echo PASS
+    fi
+  else
+    echo "$v"
+  fi
 }
 
 # verdict <id>: PASS (every step of that id passed or does not apply), FAIL, NOT-RUN or MISSING (no step recorded).
@@ -87,8 +150,16 @@ tickline() {
     [ "$v" = PASS ] || bad="${bad:+$bad, }$id $v"
   done
   if [ -z "$bad" ]; then
-    proved=$(printf '%s, ' "$@")
-    say "- [x] $number. $text (proved by ${proved%, })"
+    proved=""
+    for id in "$@"; do
+      label=$(verdict_label "$id")
+      if [ "$label" = PASS ]; then
+        proved="${proved:+$proved, }$id"
+      else
+        proved="${proved:+$proved, }$id ($label)"
+      fi
+    done
+    say "- [x] $number. $text (proved by $proved)"
   else
     say "- [ ] $number. $text (not ticked: $bad)"
   fi
@@ -116,13 +187,17 @@ publish_artifact() {
   echo "$sha"
 }
 
-# publish_tree <dir> <name> <tree-hash>: the same for a staged package (a directory), identified by its tree hash.
+# publish_tree <dir> <name> <tree-hash>: the same for a staged package (a directory), identified by its tree hash. SHA256SUMS
+# lists every file (so `sha256sum -c SHA256SUMS` works from the artifact directory); the tree hash is in <name>.tree.
 publish_tree() {
   [ -d "$1" ] || { echo "no such directory: $1" >&2; return 1; }
   if [ -n "${ARTIFACT_DIR:-}" ]; then
     mkdir -p "$ARTIFACT_DIR/$2" || return 1
     cp -R "$1/." "$ARTIFACT_DIR/$2/" || return 1
-    printf 'tree  %s\n' "$3" >>"$ARTIFACT_DIR/SHA256SUMS" || return 1
+    (cd "$1" && find . -type f | sed 's|^\./||' | LC_ALL=C sort) | while read -r f; do
+      printf '%s  %s/%s\n' "$(hash_file "$1/$f")" "$2" "$f" >>"$ARTIFACT_DIR/SHA256SUMS"
+    done
+    printf '%s\n' "$3" >"$ARTIFACT_DIR/$2.tree" || return 1
   fi
   echo "$3"
 }
@@ -159,7 +234,7 @@ verdict_line() {
   ids=$(cut -d' ' -f1 "$statusfile" | awk '!seen[$0]++')
   line=""
   for id in $ids; do
-    line="${line:+$line, }$id $(verdict "$id")"
+    line="${line:+$line, }$id $(verdict_label "$id")"
   done
   echo "Verdicts: $line"
 }
@@ -199,6 +274,8 @@ evidence_steps() {
   # shellcheck disable=SC2086
   step L2 "line 2: a bad argument and no argument each print a usage line on stderr, nothing on stdout, and exit 64" $check usage "$lang" "$evidence_artifact"
   # shellcheck disable=SC2086
+  step L3 "line 3: T = 4, K = 1000, W = 1000, W_wide = 10000, read from the constants of the source" $check constants "$lang" $constant_sources
+  # shellcheck disable=SC2086
   step L4 "line 4: the start barrier in the source" $check barrier $barrier_sources
   # shellcheck disable=SC2086
   step L6 "line 6: the always and sometimes event lines of one native buggy run, each evaluated once, with the witness values" $check witness "$lang" "$sample"
@@ -216,15 +293,19 @@ evidence_steps() {
 alignment_checklist() {
   say "## Alignment checklist (ticked by this script when the evidence above passes; left open, with the failure shown, when it does not)"
   say ""
-  tickline 1 "$1" B1
+  tickline 1 "$1 (not checked by the tool: that no build tag or -D flag chooses the mode)" B1
   tickline 2 "$2" L2
-  tickline 3 "T = 4, K = 1000, W = 1000, W_wide = 10000; wide differs from buggy only in the loop count (B7; B4 runs wide against the contract)." B7 B4
-  tickline 4 "Start barrier: each worker increments started, then waits until started == 4." L4
+  tickline 3 "T = 4, K = 1000, W = 1000, W_wide = 10000 (read from the constants of the source, L3); wide differs from buggy only in the loop count (B7 shows the source; not checked by the tool: that nothing else differs)." B7 B4 L3
+  tickline 4 "Start barrier: each worker increments started, then waits until started == 4 (not checked by the tool: that the wait is in the same function as the increment; it checks that a wait follows the increment within six lines or in a function called there, and ignores comments and the sometimes() call)." L4
   tickline 5 "The window: load; spin; store; nothing else between them (B2)." B2
-  tickline 6 "Main, after joining: always(final == T*K) with four witness values [final, 4000, 4, 1000], then sometimes(started == 4), each once." L6
+  tickline 6 "Main, after joining: always(final == T*K) with four witness values [final, 4000, 4, 1000], then sometimes(started == 4), each once (not checked by the tool: that the evaluating thread is exactly the main thread; it checks that it is not a worker thread)." L6 B4 L8
   tickline 7 "Ids are \`$lang.counter_exact\` and \`$lang.all_started\`." L7
   tickline 8 "One stdout line in the contract form, one write; nothing else on stdout." L8 B5
   tickline 9 "Exit status 0 whatever the property says; 3 for an internal invariant failure; 64 for a usage error." L9 L2 B4
-  tickline 10 "B1 to B7 pass and the SDK's conformance goldens pass." B1 B2 B3 B4 B5 B6 B7
+  tenth="B1 to B7 pass and the SDK's conformance goldens pass."
+  if [ -s "$reviewfile" ]; then
+    tenth="$tenth (not checked by the tool: the code-review statements the spec requires in place of $(tr '\n' ' ' <"$reviewfile" | sed 's/ $//; s/ /, /g'); they are not yet made [I])."
+  fi
+  tickline 10 "$tenth" B1 B2 B3 B4 B5 B6 B7
   tickline 11 "$3" L11
 }
