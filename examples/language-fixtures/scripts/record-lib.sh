@@ -256,8 +256,11 @@ finish_record() {
     echo ""
     verdict_line
     echo ""
-    echo "Checklist lines ticked: $ticked of 11."
-    echo ""
+    # A probe has no alignment checklist (that list is for the AT programs): the caller sets record_no_checklist.
+    if [ -z "${record_no_checklist:-}" ]; then
+      echo "Checklist lines ticked: $ticked of 11."
+      echo ""
+    fi
     cat "$body"
   } >"$out"
   echo "wrote $out"

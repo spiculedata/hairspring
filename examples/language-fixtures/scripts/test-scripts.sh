@@ -765,6 +765,63 @@ window_inline_both="$tmp/window_inline_both.s"
 expect "check-disasm: a window that is only behind an inline lock has no unlocked path" 1 env UNLOCKED_PATH=1 sh "$here/check-disasm.sh" window "$window_inline_locked"
 expect "check-disasm: an inline-locked copy and an unlocked copy are both found" 0 env UNLOCKED_PATH=1 sh "$here/check-disasm.sh" window "$window_inline_both"
 
+# check-sources.sh --allow-instant: for the Rust probe alone, whose line carries the monotonic clock difference
+instant="$tmp/instant.rs"
+printf 'fn f() { let t = std::time::Instant::now(); let _ = t.elapsed(); }\n' >"$instant"
+expect "check-sources rejects Instant::now by default" 1 sh "$here/check-sources.sh" "$instant"
+expect "check-sources accepts Instant::now when it is allowed" 0 sh "$here/check-sources.sh" --allow-instant "$instant"
+for token in SystemTime 'env::var' available_parallelism '/proc/self' HAIRSPRING_SEED; do
+  bad="$tmp/bad3.rs"
+  printf 'fn f() { use_it("%s"); let _ = Instant::now(); }\n' "$token" >"$bad"
+  expect "check-sources --allow-instant still rejects $token" 1 sh "$here/check-sources.sh" --allow-instant "$bad"
+done
+expect "check-sources --allow-instant without a file is a usage error" 64 sh "$here/check-sources.sh" --allow-instant
+expect "the real Rust probe is clean apart from Instant::now" 0 sh "$here/check-sources.sh" --allow-instant "$here"/../../../sdks/rust/fixtures/probe/src
+expect "the real Rust probe is rejected when Instant::now is not allowed" 1 sh "$here/check-sources.sh" "$here"/../../../sdks/rust/fixtures/probe/src
+
+# check-probe-writes.sh: B5 of the probe, on canned `strace -ff -s 4096 -e trace=write` text. No SDK, so no protocol lines.
+pw_ok="$tmp/pw_ok.txt"
+cat >"$pw_ok" <<'EOF'
+160   write(1, "PROBE v1 lang=rust lock_order=0123456789abcdef arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef\n", 148) = 148
+EOF
+pw_two="$tmp/pw_two.txt"
+cat >"$pw_two" <<'EOF'
+160   write(1, "PROBE v1 lang=rust lock_order=0123456789abcdef ", 47) = 47
+160   write(1, "arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef\n", 101) = 101
+EOF
+pw_none="$tmp/pw_none.txt"
+printf '160   write(2, "something\\n", 10) = 10\n' >"$pw_none"
+pw_other="$tmp/pw_other.txt"
+cat >"$pw_other" <<'EOF'
+160   write(1, "LANGAT v1 lang=rust mode=buggy final=00000000000000003990 expect=00000000000000004000 order=0123456789abcdef rand=0123456789abcdef\n", 128) = 128
+EOF
+pw_short="$tmp/pw_short.txt"
+cat >"$pw_short" <<'EOF'
+160   write(1, "PROBE v1 lang=rust lock_order=0123456789abcdef arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef\n", 148) = 20
+EOF
+pw_event="$tmp/pw_event.txt"
+cat >"$pw_event" <<'EOF'
+160   write(200, "HAIRSPRING_EVENT {\"v\":1,\"kind\":\"hello\"}\n", 38) = 38
+160   write(1, "PROBE v1 lang=rust lock_order=0123456789abcdef arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef\n", 148) = 148
+EOF
+pw_interleaved="$tmp/pw_interleaved.txt"
+cat >"$pw_interleaved" <<'EOF'
+161   write(1, "PROBE v1 lang=rust lock_order=0123456789abcdef arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef\n", 148 <unfinished ...>
+162   write(2, "x\n", 2) = 2
+161   <... write resumed>) = 148
+EOF
+expect "check-probe-writes accepts one whole PROBE line on stdout" 0 sh "$here/check-probe-writes.sh" "$pw_ok"
+expect "check-probe-writes joins an unfinished write to its resumed half" 0 sh "$here/check-probe-writes.sh" "$pw_interleaved"
+expect "check-probe-writes rejects a line split across two writes" 1 sh "$here/check-probe-writes.sh" "$pw_two"
+expect "check-probe-writes rejects a run with no write to stdout" 1 sh "$here/check-probe-writes.sh" "$pw_none"
+expect "check-probe-writes rejects a stdout write that is not a PROBE line" 1 sh "$here/check-probe-writes.sh" "$pw_other"
+expect "check-probe-writes rejects a short write" 1 sh "$here/check-probe-writes.sh" "$pw_short"
+expect "check-probe-writes rejects a protocol line (the probe has no SDK)" 1 sh "$here/check-probe-writes.sh" "$pw_event"
+expect "check-probe-writes without a file is a usage error" 64 sh "$here/check-probe-writes.sh"
+
+libcase "a record without an alignment checklist does not claim a count of ticked lines" 0 'record_title=t; record_generated_by=g; artifact_name=p; artifact_sha=aa; record_no_checklist=1; finish_record >/dev/null; ! grep -q "Checklist lines ticked" "$out"'
+libcase "a record with an alignment checklist states how many lines are ticked" 0 'record_title=t; record_generated_by=g; artifact_name=p; artifact_sha=aa; finish_record >/dev/null; grep -q "^Checklist lines ticked: 0 of 11." "$out"'
+
 libcase "a staged package is identified by its tree hash in the artifact line" 0 'record_title=t; record_generated_by=g; artifact_name=at-py; artifact_sha_label="tree hash"; artifact_sha=bb; finish_record >/dev/null; grep -q "^Artifact: at-py, tree hash bb" "$out"'
 libcase "the finished record starts with the title, then the producer fields and the verdicts, then the steps" 0 'step B1 t true; step B2 t false; record_title="BUILD-RECORD: at-x"; record_generated_by="Generated by x."; artifact_name=at-x; artifact_sha=aa; finish_record >/dev/null; [ "$(head -1 "$out")" = "# BUILD-RECORD: at-x" ] && grep -q "^Verdicts: B1 PASS, B2 FAIL" "$out" && grep -q "^Artifact: at-x, sha256 aa" "$out" && grep -q "the box gets exactly those bytes" "$out" && [ "$(grep -n "^Verdicts" "$out" | cut -d: -f1)" -lt "$(grep -n "^### B1" "$out" | cut -d: -f1)" ]'
 

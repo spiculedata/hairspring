@@ -186,8 +186,17 @@ SDK's tests and conformance; B7 prints the modes. The CI workflow's manual `fixt
 twice into different target directories (the checkout path is mapped away with `--remap-path-prefix`) and requires equal
 sha256; B2 disassembles the busy loop and every function that calls it; B3 does not apply (the SDK's own seccomp test runs
 in B6); B4 is 50 native runs per mode; B5 runs `strace -ff` on one buggy run; B6 is the SDK's tests in release plus the
-conformance tests; B7 prints the constants and the window of each mode. There is no probe program for Rust in the
-repository yet, so the record covers `at-rust` only. `scripts/build-record-docker.sh rust` runs it in a container.
+conformance tests; B7 prints the constants and the window of each mode. The record covers `at-rust` only.
+`scripts/build-record-docker.sh rust` runs it in a container.
+
+`scripts/build-record-probe-rust.sh` records `probe-rust`, the std-only probe program in
+[`sdks/rust/fixtures/probe`](../../sdks/rust/fixtures/probe) (no SDK, no dependencies): B1 builds it twice for the static
+musl target and requires equal sha256; a source check allows `Instant::now` (the line carries the elapsed monotonic time)
+and no other clock, seed, `/proc`, CPU count or environment read; B4 is native runs that check only the format of the
+six-field line and the exit status; B5 runs `strace -ff` on one run and requires the line to be one `write(2)`
+(`scripts/check-probe-writes.sh`); the probe's own tests run in release. B2, B3, B6 and B7 belong to the AT programs and
+are marked not applicable, and the record has no alignment checklist. The CI workflow's manual `fixture-build-records`
+job runs it as the `rust-probe` variant; `scripts/build-record-docker.sh rust-probe` runs it in a container.
 
 ## Compilers
 

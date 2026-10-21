@@ -1,7 +1,7 @@
 #!/bin/sh
 # Source check of a lost-update fixture: it must not read the scheduler seed, /proc, the CPU count or the clock.
 #
-#   check-sources.sh <source-file-or-directory>...
+#   check-sources.sh [--allow-instant] <source-file-or-directory>...
 #
 # The fixture contract forbids these inputs outside the language runtime and the stated random source: the seed, /proc,
 # the CPU count (sysconf, nproc, NumCPU, sched_getaffinity, get_nprocs, hardware_concurrency, runtime.GOMAXPROCS,
@@ -19,12 +19,22 @@
 
 set -u
 
+# --allow-instant is for the Rust probe alone: its output line carries the monotonic clock difference between the start
+# and the end of the run, so `Instant::now` is allowed there and no other clock read is. The fixtures are checked without it.
+allow_instant=0
+if [ "${1:-}" = "--allow-instant" ]; then
+  allow_instant=1
+  shift
+fi
 if [ $# -lt 1 ]; then
-  echo "usage: $0 <source-file-or-directory>..." >&2
+  echo "usage: $0 [--allow-instant] <source-file-or-directory>..." >&2
   exit 64
 fi
 
 forbidden='HAIRSPRING_SEED|/proc|sysconf|nproc|NumCPU|hardware_concurrency|clock_gettime|gettimeofday|time\.Now|time\.Since|getenv|Getenv|LookupEnv|Environ\(|sched_getaffinity|get_nprocs|std::chrono|[^A-Za-z0-9_.]time\(|[^A-Za-z0-9_.]clock\(|timespec_get|rdtsc|runtime\.GOMAXPROCS|available_parallelism|Instant::now|SystemTime|env::var'
+if [ "$allow_instant" -eq 1 ]; then
+  forbidden=$(printf '%s' "$forbidden" | sed 's/|Instant::now//')
+fi
 list=$(mktemp "${TMPDIR:-/tmp}/sources.XXXXXX") || exit 1
 trap 'rm -f "$list"' EXIT
 status=0
