@@ -1,6 +1,7 @@
 import os
 import sys
 import threading
+import time
 import unittest
 from typing import Any
 
@@ -353,6 +354,42 @@ class ConcurrencyTests(unittest.TestCase):
         end = sink.of_kind("end")[0]
         self.assertEqual(end["evals"], 2 * total)
         self.assertEqual(sum(t["evals"] for t in sink.of_kind("thread")), 2 * total)
+
+    def test_counts_are_exact_even_if_a_thread_can_be_switched_between_any_two_opcodes(self) -> None:
+        """CPython 3.12 only switches threads at a few points, so a short `count += 1` happens to be safe there. Do not
+        rely on that: a tracer that yields the interpreter lock after every opcode of the SDK's own code makes every
+        unprotected read-modify-write lose updates."""
+
+        def tracer(frame: Any, event: str, arg: object) -> Any:
+            if not frame.f_code.co_filename.endswith("_runtime.py"):
+                return None
+            frame.f_trace_opcodes = True
+            if event == "opcode":
+                time.sleep(0)
+            return tracer
+
+        rt, sink = make_runtime()
+        per_thread, workers = 150, 4
+
+        def hammer() -> None:
+            for i in range(per_thread):
+                rt.record(Kind.ALWAYS, i % 3 != 0, "traced", "", (i,))
+                rt.work(1)
+
+        threading.settrace(tracer)
+        self.addCleanup(threading.settrace, None)
+        threads = [threading.Thread(target=hammer) for _ in range(workers)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        threading.settrace(None)
+        rt.report(EndReason.EXIT, 0)
+        site = sink.of_kind("assert")[0]
+        total = per_thread * workers
+        self.assertEqual((site["hits"], site["falses"]), (total, workers * (per_thread // 3)))
+        self.assertEqual(sink.of_kind("work")[0]["ops"], total)
+        self.assertEqual(sink.of_kind("end")[0]["evals"], total)
 
     def test_a_snapshot_taken_while_threads_run_is_consistent(self) -> None:
         rt, _ = make_runtime()

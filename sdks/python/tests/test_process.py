@@ -132,6 +132,11 @@ class ProcessTreeTests(unittest.TestCase):
         parent = next(e for e in of_kind(events, "assert") if e["id"] == "fork.parent")
         self.assertEqual(parent["hits"], 2)
 
+    def test_a_fork_while_another_thread_is_inside_the_sdk_leaves_the_child_able_to_use_it(self) -> None:
+        run = run_sample("forklock")
+        self.assertEqual(run.returncode, 0, "a forked child could not use the SDK (it inherited a held lock)")
+        self.assertEqual(tags(run.events()), ["p1"])
+
     def test_a_spawned_instrumented_child_takes_a_derived_unstable_tag(self) -> None:
         events = run_sample("spawn").events()
         found = tags(events)

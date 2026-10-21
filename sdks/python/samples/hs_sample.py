@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import threading
+import warnings
 from collections.abc import Callable, Sequence
 
 import hairspring as hs
@@ -104,6 +105,48 @@ def fork(args: Sequence[str]) -> int:
             sys.exit(0)
         os.waitpid(pid, 0)
     return 0
+
+
+FORKS_WHILE_BUSY = 100
+SLOTS_CLAIMED_FIRST = 200
+CHILD_ALARM_SECONDS = 5
+
+
+def forklock(args: Sequence[str]) -> int:
+    """Fork while another thread is inside the SDK. A child that inherited the SDK's lock held by that (now missing)
+    thread would block on its first call; its alarm turns that into a signal death. The busy thread renames itself over
+    and over with 200 slots claimed, so the key scan under the lock is long enough for the interpreter to switch
+    threads inside it (the same shape as the C SDK's `forklock` scenario)."""
+    warnings.simplefilter("ignore", DeprecationWarning)  # fork in a multithreaded process, on purpose
+    for _ in range(SLOTS_CLAIMED_FIRST):
+        claimer = threading.Thread(target=hs.work, args=(1,))
+        claimer.start()
+        claimer.join()
+    stop = threading.Event()
+
+    def spinner() -> None:
+        i = 0
+        while not stop.is_set():
+            hs.thread("spin", i % 1000)
+            i += 1
+
+    thread = threading.Thread(target=spinner)
+    thread.start()
+    failures = 0
+    for _ in range(FORKS_WHILE_BUSY):
+        pid = os.fork()
+        if pid == 0:
+            signal.alarm(CHILD_ALARM_SECONDS)
+            hs.thread("child", 0)
+            hs.always(True, "forklock.child", "the child evaluates")
+            os._exit(0)
+        _, status = os.waitpid(pid, 0)
+        if not (os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0):
+            failures += 1
+            break
+    stop.set()
+    thread.join()
+    return 1 if failures else 0
 
 
 def big(args: Sequence[str]) -> int:
@@ -212,6 +255,7 @@ SCENARIOS: dict[str, Callable[[Sequence[str]], int]] = {
     "plain_exit": plain_exit,
     "raises": raises,
     "fork": fork,
+    "forklock": forklock,
     "big": big,
     "spawn": spawn,
     "conflict": conflict,
