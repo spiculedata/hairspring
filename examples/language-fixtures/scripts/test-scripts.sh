@@ -460,7 +460,7 @@ sample() {
   env FAKE="$behaviour" FAKE_STATE="$(newstate)" "$@" sh "$evidence" capture "$fake" "$mode" "$prefix" >/dev/null 2>&1
   echo "$prefix"
 }
-expect "capture records stdout, stderr and the exit status" 0 sh -c "p=\$(cd '$tmp' && env FAKE_STATE='$(newstate)' sh '$evidence' capture '$fake' buggy '$tmp/cap' >/dev/null 2>&1; echo '$tmp/cap'); test -s \$p.out && test -s \$p.err && test \"\$(cat \$p.rc)\" = 0"
+expect "capture records stdout, stderr and the exit status" 0 sh -c "p=\$(env FAKE_STATE='$(newstate)' sh '$evidence' capture '$fake' buggy '$tmp/cap' >/dev/null 2>&1; echo '$tmp/cap'); test -s \$p.out && test -s \$p.err && test \"\$(cat \$p.rc)\" = 0"
 expect "capture of a missing artifact fails" 1 sh "$evidence" capture "$tmp/no-such-program" buggy "$tmp/cap-missing"
 expect "evidence without a check is a usage error" 64 sh "$evidence"
 expect "evidence with an unknown check is a usage error" 64 sh "$evidence" other
