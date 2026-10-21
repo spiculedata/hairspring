@@ -116,7 +116,7 @@ max_trials = 100
 A trial that times out is reported as inconclusive, not as a pass or a failure, unless you set
 `hang_is_violation = true`. Programs can also report assertions through the guest event protocol; see
 [docs/guest-protocol.md](docs/guest-protocol.md), the C SDK in [`sdks/c`](sdks/c) ([docs/c-sdk.md](docs/c-sdk.md)) and
-the Go SDK in [`sdks/go`](sdks/go).
+the Go SDK in [`sdks/go`](sdks/go) and the Rust SDK in [`sdks/rust`](sdks/rust) ([docs/rust-sdk.md](docs/rust-sdk.md)).
 
 ## For AI agents (MCP)
 

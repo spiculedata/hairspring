@@ -63,6 +63,23 @@ jobs:
       - name: Signal reports under AddressSanitizer and UBSan
         run: make asan-signals CC=${{ matrix.cc }}
 
+  rust-sdk:
+    name: Rust SDK (${{ matrix.profile }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [debug, release]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Includes the seccomp "no system call, no allocation" check and the planted race, natively on x86-64 Linux.
+      # The release run checks the linker-collected catalog with optimisation and section garbage collection.
+      - name: Test
+        run: cargo test -p hairspring-sdk --locked ${{ matrix.profile == 'release' && '--release' || '' }}
+
   go-example:
     name: Go example
     runs-on: ubuntu-latest
