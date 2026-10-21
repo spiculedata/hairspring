@@ -107,6 +107,13 @@ malformed one is named in a warning and skipped, and the others are still compar
   still return the warnings. The default is always strict.
 - A bundle recorded before this existed prints `warning: no environment recorded in this bundle` and replays as
   before.
+- `warning: hermit.path.sha256 was not recorded: a different Hermit build would not be noticed` appears when the
+  bundle has an environment but no Hermit hash, and `... was not recorded and cannot be read now: ...` when the hash
+  cannot be read on this host either. Nothing is compared in either case, so the line says so instead of staying
+  silent. A hash that was recorded but cannot be read now shows as `hermit.path.sha256 (recorded X, now unavailable)`
+  in the `environment differs` line.
+- `warning: malformed recorded environment fields, not compared: <fields>` names recorded values that are not valid;
+  they count as changed.
 
 `hairspring replay` exit codes: `0` not reproduced on the environment it was recorded in (or one that cannot be
 compared), `1` reproduced, `2` error (including a refusal), `3` not reproduced on a changed environment. `3` is

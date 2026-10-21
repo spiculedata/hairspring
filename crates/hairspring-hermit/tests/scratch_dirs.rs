@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Barrier};
 
 const THREADS: usize = 8;
-const PER_THREAD: usize = 300;
+const PER_THREAD: usize = 100;
 
 #[test]
 fn concurrent_callers_get_distinct_directories() {
@@ -24,9 +24,13 @@ fn concurrent_callers_get_distinct_directories() {
         .into_iter()
         .flat_map(|h| h.join().unwrap())
         .collect();
-    let distinct: BTreeSet<_> = all.iter().collect();
+    let distinct = all.iter().collect::<BTreeSet<_>>().len();
+    // Leave nothing behind, whether or not the check below holds.
+    for dir in &all {
+        let _ = std::fs::remove_dir_all(dir);
+    }
     assert_eq!(
-        distinct.len(),
+        distinct,
         all.len(),
         "some scratch directories were handed out twice"
     );

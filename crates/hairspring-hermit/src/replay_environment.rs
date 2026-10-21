@@ -8,6 +8,10 @@ use hairspring_engine::EngineError;
 /// whole schedule. Measured: a rewritten `ld.so.cache` alone made old recordings stop replaying.
 const LOADER_PREFIX: &str = "host.loader.";
 const HERMIT_HASH: &str = "hermit.path.sha256";
+const NOT_RECORDED: &str = "hermit.path.sha256 was not recorded";
+const NOT_RECORDED_AND_UNREADABLE: &str =
+    "hermit.path.sha256 was not recorded and cannot be read now";
+const NOT_NOTICED: &str = "a different Hermit build would not be noticed";
 
 /// Said when a replay misses on a host that differs from the recording.
 pub const MISS_ON_CHANGED_HOST: &str =
@@ -47,11 +51,16 @@ pub fn check(
         )));
     }
     if let Some(recorded) = &parsed.identity {
-        // Nothing is compared for a field neither side has, and that silence reads as "the same binary".
-        if recorded.get(HERMIT_HASH).is_none() && current.get(HERMIT_HASH).is_none() {
-            warnings.push(format!(
-                "{HERMIT_HASH} unavailable on both sides: cannot compare"
-            ));
+        // The comparison only looks at recorded fields, so a hash missing from the recording would otherwise read as
+        // "the same binary". (A hash recorded but unreadable now is already a reported change.)
+        let readable_now = current.get(HERMIT_HASH).is_some();
+        if recorded.get(HERMIT_HASH).is_none() {
+            let why = if readable_now {
+                NOT_RECORDED
+            } else {
+                NOT_RECORDED_AND_UNREADABLE
+            };
+            warnings.push(format!("{why}: {NOT_NOTICED}"));
         }
     }
     warnings.extend(comparison.warning());
@@ -64,8 +73,6 @@ pub fn check(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const UNAVAILABLE: &str = "hermit.path.sha256 unavailable on both sides: cannot compare";
 
     fn identity(pairs: &[(&str, &str)]) -> EnvironmentIdentity {
         pairs
@@ -85,21 +92,46 @@ mod tests {
             .warnings
     }
 
-    #[test]
-    fn a_hermit_hash_missing_on_both_sides_is_said_not_silently_equal() {
-        let recorded = identity(&[("host.container", "none")]);
-        let now = identity(&[("host.container", "none")]);
-        assert!(warnings(&recorded, &now).iter().any(|w| w == UNAVAILABLE));
+    fn with_hash() -> EnvironmentIdentity {
+        identity(&[
+            ("host.container", "none"),
+            ("hermit.path.sha256", &"a".repeat(64)),
+        ])
+    }
+
+    fn without_hash() -> EnvironmentIdentity {
+        identity(&[("host.container", "none")])
     }
 
     #[test]
-    fn a_hermit_hash_present_on_either_side_gives_no_such_warning() {
-        let hash = "a".repeat(64);
-        let with = identity(&[("host.container", "none"), ("hermit.path.sha256", &hash)]);
-        let without = identity(&[("host.container", "none")]);
-        assert!(!warnings(&with, &with).iter().any(|w| w == UNAVAILABLE));
-        assert!(!warnings(&with, &without).iter().any(|w| w == UNAVAILABLE));
-        assert!(!warnings(&without, &with).iter().any(|w| w == UNAVAILABLE));
+    fn a_hash_missing_on_both_sides_says_so() {
+        assert_eq!(
+            warnings(&without_hash(), &without_hash()),
+            [format!("{NOT_RECORDED_AND_UNREADABLE}: {NOT_NOTICED}")]
+        );
+    }
+
+    #[test]
+    fn a_hash_not_recorded_but_readable_now_says_so() {
+        assert_eq!(
+            warnings(&without_hash(), &with_hash()),
+            [format!("{NOT_RECORDED}: {NOT_NOTICED}")]
+        );
+    }
+
+    #[test]
+    fn a_hash_recorded_but_unreadable_now_is_reported_as_unavailable() {
+        let w = warnings(&with_hash(), &without_hash());
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(
+            w[0].contains("hermit.path.sha256 (recorded aaaaaaaaaaaa, now unavailable)"),
+            "{w:?}"
+        );
+    }
+
+    #[test]
+    fn a_hash_present_and_equal_on_both_sides_gives_no_warning() {
+        assert!(warnings(&with_hash(), &with_hash()).is_empty());
     }
 
     #[test]
