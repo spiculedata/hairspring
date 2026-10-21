@@ -61,7 +61,7 @@ Add it to a workspace member or a path dependency: `hairspring-sdk = { path = "s
 
 | Variable | Effect |
 |---|---|
-| `HAIRSPRING_EVENTS_FILE=path` | write events to this file (`O_APPEND` and `O_NOFOLLOW`, so a symlink is refused) instead of stderr; if it cannot be opened, events go to stderr and `end.dropped` counts it. Ignored in a set-uid or set-gid process |
+| `HAIRSPRING_EVENTS_FILE=path` | write events to this file (`O_APPEND`, `O_NOFOLLOW` so a symlink is refused, `O_NONBLOCK`, and it must be a regular file) instead of stderr; if it cannot be opened or is not a regular file, events go to stderr and `end.dropped` counts it. Ignored in a set-uid or set-gid process (`AT_SECURE` on Linux, `issetugid` on macOS, or differing real and effective ids) |
 | `HAIRSPRING_EVENTS=off` | record as usual but write nothing |
 | `HAIRSPRING_PROC=tag` | the root process tag: 1 to 64 bytes of `[A-Za-z0-9._:/-]`, not `_eval`; default `p1`. An invalid tag is refused (the default is used and `end.dropped` is incremented), never shortened |
 | `HAIRSPRING_PROC_PID` | set by the SDK; do not set it |
@@ -98,8 +98,10 @@ each is counted in `end.dropped`. A slot is reported only once its key is publis
 The tag travels in the environment (`HAIRSPRING_PROC`, `HAIRSPRING_PROC_PID`), exactly as in the C SDK. A child started
 with `std::process::Command` inherits the parent's tag and a pid that is not its own, so it takes `<parent>.s<pid>` and
 says `tag_stable:false` in its `hello`. An image that `exec`s without forking takes `<tag>.x1`. **There is no fork
-handler** (Rust programs rarely `fork` by hand): a raw `libc::fork` child shares the parent's SDK state, reports nothing
-of its own, and its exit does not repeat the parent's report.
+handler** (Rust programs rarely `fork` by hand): a raw `libc::fork` child shares the parent's SDK state and reports
+nothing of its own. The SDK records the pid of the process that started it and writes the report only from that
+process, so a child that exits does not repeat its parent's report (`hs_sample_fork`). Anything a forked child
+evaluates is lost.
 
 ## The catalog is collected by the linker
 
@@ -109,9 +111,9 @@ slice at startup. Nothing registers at run time.
 
 | | Linux (ELF) | macOS (Mach-O) |
 |---|---|---|
-| Records | section `hs_rust_catalog_v1` | `__DATA,__hs_rs_cat` |
-| Offline JSON twins | section `hs_rust_catstr_v1` | `__DATA,__hs_rs_cstr` |
-| How the SDK finds the bounds | the linker defines `__start_hs_rust_catalog_v1` and `__stop_hs_rust_catalog_v1` for a section whose name is a C identifier | ld64 defines `section$start$__DATA$__hs_rs_cat` and `section$end$__DATA$__hs_rs_cat` for any section that exists |
+| Records | section `hs_rust_catalog_l1` | `__DATA,__hs_rs_cat_l1` |
+| Offline JSON twins | section `hs_rust_catstr_l1` | `__DATA,__hs_rs_cstr_l1` |
+| How the SDK finds the bounds | the linker defines `__start_hs_rust_catalog_l1` and `__stop_hs_rust_catalog_l1` for a section whose name is a C identifier | ld64 defines `section$start$__DATA$__hs_rs_cat_l1` and `section$end$__DATA$__hs_rs_cat_l1` for any section that exists |
 | Keeping records through garbage collection | `#[used]`; the records are also referenced by the code that evaluates them | the same |
 
 * **Both need the section to exist.** The SDK always plants one sentinel record (kind `None`) in each section, and the
@@ -126,10 +128,26 @@ slice at startup. Nothing registers at run time.
   a NUL-terminated string, so a tool can read the catalog from the binary without running it. A test checks that the
   texts in a built binary (found by scanning the file, not by parsing sections) equal the live `catalog` lines. A reader
   must skip runs of NUL bytes and must not assume the first text of the section starts at a NUL: on x86-64 Linux the
-  first one directly followed the bytes of the preceding section. Because ids and messages are validated at compile time, the
-  twin is always valid JSON (the C SDK cannot promise that).
+  first one directly followed the bytes of the preceding section. The twin is built at compile time with the same
+  escaping and trimming as the live line (the file path keeps its last 256 bytes; `"` and `\` are escaped; other
+  non-printable bytes become `?`), and unit tests compare the two through the formatter for paths with quotes,
+  backslashes, non-ASCII bytes and more than 256 bytes. It is always valid JSON (the C SDK cannot promise that).
 * **Order.** Records come back in link order, which is not source order on every platform (on macOS the example
   `basic` sample lists `basic.always.bad` last). Reports do not depend on order: the catalog hash is order independent.
+* **Witnesses are not torn.** A witness is written by one thread (the one whose counter left zero) with `ord` stored
+  last, with release, and read with acquire, so a report racing live workers never prints an ordinal with the values
+  of another write. A stress test checks 200,000 witnesses read while they are written. (On aarch64 the release store
+  is a store-release instruction rather than a plain store.)
+
+### Limits worth knowing
+
+* **Thread keys can be read torn.** `thread` rewrites a slot's key while the slot may already be live (it has a
+  claim-order key from its first call), and a report on another thread at that moment can print a mixed key. The
+  window is a few byte stores; call `thread` before the thread does anything else.
+* **A `#[global_allocator]` must not call into the SDK.** Startup allocates (the identity, the index), and a call site
+  that runs inside the allocator before the SDK has started would start it from inside an allocation. Call `init()`
+  early if your allocator is instrumented, or keep call sites out of it.
+* **The events descriptor must not be redirected by the program** (see "Environment").
 
 ### What happens when the sections do not work
 
@@ -138,8 +156,8 @@ slice at startup. Nothing registers at run time.
 | A program never references the crate | the crate is not linked and nothing is reported (there is nothing to report); call `init()` to force the link | by construction |
 | A call-site record that is not in the section (a hand-built `Site` in a plain `static`, which no macro produces) | its evaluations are counted by the thread but not attributed to any catalogued record; at report time the SDK sees the totals disagree, adds one to `end.dropped` and writes one plain-text line `hairspring: incomplete catalog: <n> evaluation(s) ran at call sites that are missing from the catalog section` to the events descriptor | yes: `hs_sample_audit`, positive control |
 | A linker that does not define the bounds symbols | a link error (an undefined `__start_` or `section$start$` symbol), never a silent loss | not tested (GNU ld, lld and Apple ld64 define them) |
-| The SDK linked into a shared object or `cdylib` | unsupported, as in the C SDK: the records sit in a section nobody reads | not tested |
-| Two copies of the crate in one executable (two versions) | both read the whole section; the layouts may differ, so do not do this | not tested |
+| The SDK linked into a shared object or `cdylib` | not supported. By construction the shared object has its own copy of the SDK, with its own sections and state, and the bounds symbols resolve inside it, so it reads its own records; but two copies in one process each report under the same tag (a duplicate `hello` and `end`, so the trial is degraded) and each starts its own constructor and exit handler. Unlike the C SDK, nothing stays unreported because of a section nobody reads. This reasoning is not tested | not tested |
+| Two copies of the crate in one executable (two versions) | the section names carry a layout number (`_l1`), so copies with different layouts do not read each other's records; copies with the same layout would share the section and both report all of it, with a duplicate tag. Do not do this | not tested; a test pins the layout so a change must bump the number |
 | An unsupported OS | a compile error (`compile_error!`): Linux and macOS only | by construction |
 
 The audit has the same limits as the C SDK's, and the tolerance for in-flight evaluations is identical (one per thread
@@ -230,8 +248,14 @@ Linux only; CI's native x86-64 runner is its first x86-64 run.
 * Ids and messages are compile-time checked instead of sanitised at run time.
 * No `HAIRSPRING_SIGNAL_REPORT` (a crash without a report shows as `report_missing`), no `HS_EVAL_*` per-evaluation
   lines, no fork handler (`<parent>.f<n>` tags), no `hs_choice` or tape (neither exists in the C SDK yet either).
-* Linux and macOS only. Rust's runtime ignores `SIGPIPE`, so the report does not block it as the C SDK does around its
-  writes; a closed reader costs the report, not the process, unless the program has reset `SIGPIPE`.
+* Linux and macOS only. Like the C SDK, the SDK blocks `SIGPIPE` around the startup lines and the report and consumes
+  a `SIGPIPE` that its own write raised, so a reader that has gone away costs the report, not the process. This matters
+  before `main`: Rust ignores `SIGPIPE` only once its runtime has started, and the startup lines are written from a
+  constructor (`a_closed_stderr_pipe_does_not_kill_the_program_with_sigpipe`).
+* Writing the events file: it is opened non-blocking and must be a regular file. A FIFO with no reader fails to open at
+  once and one with a reader is refused after opening; either way events fall back to stderr and `end.dropped` counts
+  it, where the C SDK would block in `open` until a reader appears (an open issue for C). The check is made on the file
+  that was opened, so it does not race with a path swap.
 * Section names differ, and the records are immutable (see above).
 * The Linux `O_NOFOLLOW` value is chosen by architecture (x86, x86-64 and generic: `0o400000`; arm, aarch64 and powerpc:
   `0o100000`). Other architectures are untested.
