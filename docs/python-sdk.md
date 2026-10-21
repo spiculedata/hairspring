@@ -174,12 +174,12 @@ whatever the property says (3 for an internal failure, 64 for a usage error). Th
 loop of pure Python is interruptible, so a thread is almost always preempted inside the window. Measured natively
 (`check_native.py`, 50 runs of each):
 
-| | macOS arm64, CPython 3.12.2 | Linux aarch64, CPython 3.12.3 (container) |
-|---|---|---|
-| `buggy` lost an update | 50 of 50; final 1,000 to 1,346 (median 1,124) | 50 of 50; final 1,000 to 2,085 (median 1,184) |
-| `wide` lost an update | 50 of 50; final 990 to 1,069 | 50 of 50; final 1,000 to 1,177 |
-| `fixed` lost an update | 0 of 50; always 4,000 | 0 of 50; always 4,000 |
-| `buggy --switch=1.0` lost an update | **0 of 50**; always 4,000 | **0 of 50**; always 4,000 |
+| | macOS arm64, CPython 3.12.2 | Linux aarch64, CPython 3.12.3 (container) | Linux x86-64, CPython 3.12.15 (hosted CI runner) |
+|---|---|---|---|
+| `buggy` lost an update | 50 of 50; final 1,000 to 1,346 (median 1,124) | 50 of 50; final 1,000 to 2,085 (median 1,184) | 50 of 50; final 1,000 to 2,092 (median 1,106) |
+| `wide` lost an update | 50 of 50; final 990 to 1,069 | 50 of 50; final 1,000 to 1,177 | 50 of 50; final 847 to 1,757 |
+| `fixed` lost an update | 0 of 50; always 4,000 | 0 of 50; always 4,000 | 0 of 50; always 4,000 |
+| `buggy --switch=1.0` lost an update | **0 of 50**; always 4,000 | **0 of 50**; always 4,000 | **0 of 50**; always 4,000 |
 
 With one-second switch slices each thread finishes before it is preempted, so that flag removes the race on this
 fixture: it is a flag to study determinism with, not one to hunt with. These native numbers say the race exists and the
@@ -230,8 +230,9 @@ line, its report, and an `ast` check that the window is exactly a read, the busy
 
 Where it has been run (no Hermit anywhere): macOS arm64 with CPython 3.12.2 and 3.14 (the SDK tests, the fixture tests
 and self-check, the conformance test); Linux aarch64 natively in an Ubuntu 24.04 container with CPython 3.12.3 (the SDK
-tests, including the Linux-only pipe and `AT_SECURE` paths, the fixture tests and the 50-run self-check). Linux x86-64
-is CI's first run.
+tests, including the Linux-only pipe and `AT_SECURE` paths, the fixture tests and the 50-run self-check); and Linux
+x86-64 in CI with CPython 3.12 (the SDK tests, the conformance test with `HS_REQUIRE_PYTHON`, the fixture tests and the
+self-check).
 
 ## Differences from the C SDK
 
