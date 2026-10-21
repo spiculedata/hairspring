@@ -32,6 +32,9 @@ pub struct Shared {
     lock: Mutex<()>,
     /// Set when a worker could not be started, so the others stop waiting at the barrier.
     abort: AtomicBool,
+    /// Workers told to panic (test hook; not part of the shipped binary).
+    #[cfg(test)]
+    panicking: Vec<u64>,
 }
 
 impl Shared {
@@ -44,6 +47,8 @@ impl Shared {
             sink: AtomicU64::new(0),
             lock: Mutex::new(()),
             abort: AtomicBool::new(false),
+            #[cfg(test)]
+            panicking: Vec::new(),
         }
     }
 
@@ -80,11 +85,12 @@ impl Shared {
         }
     }
 
-    /// `panics` is a test hook: the worker panics at once, before it registers as started.
-    fn worker(&self, mode: Mode, id: u64, panics: bool) {
+    fn worker(&self, mode: Mode, id: u64) {
         // If this worker dies for any reason, the others must not wait for it at the barrier.
         let _abort_if_panicking = AbortOnPanic(&self.abort);
-        if panics {
+        // Test hook: panic at once, before registering as started.
+        #[cfg(test)]
+        if self.panicking.contains(&id) {
             panic!("worker {id} panics on request");
         }
         // A refused name only costs the stable key; the worker carries on under its claim-order key.
@@ -133,19 +139,26 @@ pub fn spin(iterations: u64) -> u64 {
 
 /// Run the four workers of `mode` to completion.
 pub fn run_all(mode: Mode) -> Result<Outcome, Invariant> {
-    run_with(mode, &[])
+    run_shared(Shared::new(), mode)
 }
 
-/// `run_all`, with the workers numbered in `panicking` told to panic (a test hook).
+/// `run_all`, with the workers numbered in `panicking` told to panic (compiled in tests only).
+#[cfg(test)]
 fn run_with(mode: Mode, panicking: &[u64]) -> Result<Outcome, Invariant> {
-    let shared = Shared::new();
+    let shared = Shared {
+        panicking: panicking.to_vec(),
+        ..Shared::new()
+    };
+    run_shared(shared, mode)
+}
+
+fn run_shared(shared: Shared, mode: Mode) -> Result<Outcome, Invariant> {
     let joined = std::thread::scope(|scope| {
         let mut handles = Vec::new();
         for id in 0..THREADS {
             let shared = &shared;
-            let panics = panicking.contains(&id);
-            let spawned = std::thread::Builder::new()
-                .spawn_scoped(scope, move || shared.worker(mode, id, panics));
+            let spawned =
+                std::thread::Builder::new().spawn_scoped(scope, move || shared.worker(mode, id));
             match spawned {
                 Ok(handle) => handles.push(handle),
                 Err(_) => {
