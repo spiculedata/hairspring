@@ -54,6 +54,20 @@ export function getToken(): string | null {
   }
 }
 
+let tokenVersion = 0;
+const tokenListeners = new Set<Listener>();
+
+/** Counts the tokens entered so far. A loader that stopped on a 401 depends on it to load again once a token is entered. */
+export function getTokenVersion(): number {
+  return tokenVersion;
+}
+
+/** Called whenever the token is set or cleared. Returns the unsubscribe function. */
+export function onTokenChange(fn: Listener): () => void {
+  tokenListeners.add(fn);
+  return () => tokenListeners.delete(fn);
+}
+
 export function setToken(token: string | null): void {
   try {
     if (token) sessionStorage.setItem(TOKEN_KEY, token);
@@ -61,6 +75,8 @@ export function setToken(token: string | null): void {
   } catch {
     // Storage can be unavailable (private mode); the token then lives only until reload.
   }
+  tokenVersion += 1;
+  tokenListeners.forEach((fn) => fn());
 }
 
 function headers(json: boolean): Record<string, string> {

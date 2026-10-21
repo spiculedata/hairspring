@@ -3,7 +3,7 @@ import { GuestText } from '../components/GuestText';
 import { Link } from '../components/Layout';
 import { trialPath } from '../router';
 import type { TrialRow } from '../trial/types';
-import { formatCount, keptText, moreFailing, NO_VALUE, verdictCellText, verdictTitle } from '../wording';
+import { DIGEST_UNREADABLE_TEXT, DIGEST_UNREADABLE_TITLE, formatCount, keptText, moreFailing, NO_VALUE, verdictCellText, verdictTitle } from '../wording';
 import { isFingerprint, type SeedFilters } from './filters';
 import { CLIP_HEIGHT, ROW_HEIGHT } from './rowMetrics';
 
@@ -33,6 +33,8 @@ interface Props {
 }
 
 function FailingIds({ row, onFilter }: Pick<Props, 'row' | 'onFilter'>) {
+  // An unreadable digest means the ids are unknown, which a dash (none failed) would misstate.
+  if (row.digest_unreadable) return <span title={DIGEST_UNREADABLE_TITLE}>{DIGEST_UNREADABLE_TEXT}</span>;
   if (row.failing_count === 0) return <>{NO_VALUE}</>;
   const shown = row.guest.failing_ids.slice(0, IDS_SHOWN);
   const extra = row.failing_count - shown.length;

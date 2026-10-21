@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from './api';
-import { retryDelay } from './pollPolicy';
+import { retryDelay, STOP_ON_UNAUTHORIZED } from './pollPolicy';
 
 const BASE = 2000;
 
@@ -22,5 +22,10 @@ describe('retryDelay', () => {
   it('stops on 401 only when asked to', () => {
     expect(retryDelay(new ApiError(401, 'no'), BASE)).toBe(BASE);
     expect(retryDelay(new ApiError(401, 'no'), BASE, [401])).toBeUndefined();
+  });
+
+  it('offers one list of statuses that stop a poll because the token prompt has been raised', () => {
+    expect(retryDelay(new ApiError(401, 'no'), BASE, STOP_ON_UNAUTHORIZED)).toBeUndefined();
+    expect(retryDelay(new ApiError(403, 'no'), BASE, STOP_ON_UNAUTHORIZED)).toBe(BASE);
   });
 });

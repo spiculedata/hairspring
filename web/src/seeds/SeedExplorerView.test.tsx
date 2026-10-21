@@ -9,7 +9,13 @@ import { appendStripPage, EMPTY_STRIP } from './strip';
 const noop = () => undefined;
 const stripOf = (codes: string) => appendStripPage(EMPTY_STRIP, { first_seq: 0, codes });
 
-function props(over: Partial<SeedExplorerViewProps> = {}): SeedExplorerViewProps {
+/** What a test overrides: the data of the strip and the trials, whose `reload` the helper supplies. */
+type Over = Omit<Partial<SeedExplorerViewProps>, 'strip' | 'trials'> & {
+  strip?: Omit<SeedExplorerViewProps['strip'], 'reload'>;
+  trials?: Omit<SeedExplorerViewProps['trials'], 'reload'>;
+};
+
+function props({ strip, trials, ...over }: Over = {}): SeedExplorerViewProps {
   return {
     runId: 'run_0123',
     target: 'wal-reset',
@@ -20,9 +26,17 @@ function props(over: Partial<SeedExplorerViewProps> = {}): SeedExplorerViewProps
     },
     firstFailingSeed: '1016',
     live: false,
-    strip: { strip: stripOf('ppvpep'), loading: false, error: undefined },
+    strip: { strip: stripOf('ppvpep'), loading: false, error: undefined, reload: noop, ...strip },
     filters: {},
-    trials: { rows: [seedRow({ seq: 0, seed: '1000' }), failingRow({ seq: 2 })], cursor: null, loaded: true, loadingMore: false, error: undefined },
+    trials: {
+      rows: [seedRow({ seq: 0, seed: '1000' }), failingRow({ seq: 2 })],
+      cursor: null,
+      loaded: true,
+      loadingMore: false,
+      error: undefined,
+      reload: noop,
+      ...trials,
+    },
     filterBar: {
       propertyLabel: undefined,
       search: { text: '', matches: [], state: 'idle' },
@@ -36,7 +50,7 @@ function props(over: Partial<SeedExplorerViewProps> = {}): SeedExplorerViewProps
     ...over,
   };
 }
-const render = (over: Partial<SeedExplorerViewProps> = {}) => renderToString(<SeedExplorerView {...props(over)} />);
+const render = (over: Over = {}) => renderToString(<SeedExplorerView {...props(over)} />);
 const textOf = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 
 describe('SeedExplorerView', () => {

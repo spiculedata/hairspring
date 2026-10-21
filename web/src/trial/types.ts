@@ -22,6 +22,8 @@ export interface TrialRow {
   /** How many properties failed in this trial; `failing_idx` and `guest.failing_ids` hold the first few. */
   failing_count: number;
   failing_idx: readonly number[];
+  /** The stored digest could not be read, so `failing_count` and the failing ids are unknown, not zero. */
+  digest_unreadable: boolean;
   timed_out: boolean;
   degraded: boolean;
   perturbing: boolean;
