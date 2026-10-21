@@ -80,8 +80,9 @@ build_twice() {
   cargo_build "$target_two" || return 1
   first=$(hash_file "$binary")
   second=$(hash_file "$target_two/$target/release/$artifact")
-  command -v file >/dev/null 2>&1 && file "$binary"
-  equal_hashes "$artifact" "$first" "$second"
+  equal_hashes "$artifact" "$first" "$second" || return 1
+  # The musl build must be static: a missing `file` command is a failure, not a skip.
+  file "$binary" 2>&1 | sh "$here/check-static.sh"
 }
 
 # The mangled name of the busy loop ends in 4spin: _ZN...4spin17h<hash>E (legacy mangling) or _RNv...6window4spin (v0).

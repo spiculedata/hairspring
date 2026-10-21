@@ -818,6 +818,53 @@ expect "check-probe-writes rejects a stdout write that is not a PROBE line" 1 sh
 expect "check-probe-writes rejects a short write" 1 sh "$here/check-probe-writes.sh" "$pw_short"
 expect "check-probe-writes rejects a protocol line (the probe has no SDK)" 1 sh "$here/check-probe-writes.sh" "$pw_event"
 expect "check-probe-writes without a file is a usage error" 64 sh "$here/check-probe-writes.sh"
+# check-static.sh: the binary must be statically linked, read from the text of `file`
+expect "check-static accepts a statically linked executable" 0 sh -c "echo 'x: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, stripped' | sh '$here/check-static.sh'"
+expect "check-static accepts a static-pie executable" 0 sh -c "echo 'x: ELF 64-bit LSB pie executable, x86-64, static-pie linked, stripped' | sh '$here/check-static.sh'"
+expect "check-static rejects a dynamically linked executable" 1 sh -c "echo 'x: ELF 64-bit LSB pie executable, x86-64, dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2' | sh '$here/check-static.sh'"
+expect "check-static rejects empty input (no file command)" 1 sh -c "printf '' | sh '$here/check-static.sh'"
+# check-instant-use.sh: exactly one Instant::now, no aliased import
+inst_one="$tmp/inst_one.rs"
+printf 'use std::time::Instant;\nfn f() { let _ = Instant::now(); }\n' >"$inst_one"
+inst_two="$tmp/inst_two.rs"
+printf 'use std::time::Instant;\nfn f() { let _ = Instant::now(); let _ = Instant::now(); }\n' >"$inst_two"
+inst_alias="$tmp/inst_alias.rs"
+printf 'use std::time::Instant as I;\nfn f() { let _ = Instant::now(); }\n' >"$inst_alias"
+inst_none="$tmp/inst_none.rs"
+printf 'fn f() {}\n' >"$inst_none"
+expect "check-instant-use accepts exactly one Instant::now" 0 sh "$here/check-instant-use.sh" "$inst_one"
+expect "check-instant-use rejects two reads" 1 sh "$here/check-instant-use.sh" "$inst_two"
+expect "check-instant-use rejects an aliased import" 1 sh "$here/check-instant-use.sh" "$inst_alias"
+expect "check-instant-use rejects a file with no read" 1 sh "$here/check-instant-use.sh" "$inst_none"
+expect "check-instant-use without a file is a usage error" 64 sh "$here/check-instant-use.sh"
+expect "the real probe has exactly one Instant::now" 0 sh "$here/check-instant-use.sh" "$here"/../../../sdks/rust/fixtures/probe/src/workload.rs
+# Real `strace -ff -o` output: one file per thread, no pid column, and an unfinished write is resumed in the same file.
+pw_real_main="$tmp/pw_real.100"
+cat >"$pw_real_main" <<'EOF'
+write(1, "PROBE v1 lang=rust lock_order=0123456789abcdef arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef\n", 148 <unfinished ...>
+<... write resumed>) = 148
++++ exited with 0 +++
+EOF
+pw_real_thread="$tmp/pw_real.101"
+printf '+++ exited with 0 +++\n' >"$pw_real_thread"
+pw_real_short="$tmp/pw_real_short.100"
+cat >"$pw_real_short" <<'EOF'
+write(1, "PROBE v1 lang=rust lock_order=0123456789abcdef arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef\n", 148 <unfinished ...>
+<... write resumed>) = 20
+EOF
+pw_real_two_files="$tmp/pw_real_two.101"
+printf 'write(1, "PROBE v1 lang=rust x\\n", 20) = 20\n' >"$pw_real_two_files"
+pw_writev="$tmp/pw_writev.txt"
+cat >"$pw_writev" <<'EOF'
+writev(1, [{iov_base="PROBE v1 lang=rust lock_order=0123456789abcdef arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef\n", iov_len=148}], 1) = 148
+EOF
+pw_writev_extra="$tmp/pw_writev_extra.txt"
+{ cat "$pw_ok"; cat "$pw_writev"; } >"$pw_writev_extra"
+expect "check-probe-writes accepts real per-thread files with an unfinished write resumed in the same file" 0 sh "$here/check-probe-writes.sh" "$pw_real_main" "$pw_real_thread"
+expect "check-probe-writes rejects a short resumed write in a real per-thread file" 1 sh "$here/check-probe-writes.sh" "$pw_real_short" "$pw_real_thread"
+expect "check-probe-writes counts stdout writes across the per-thread files" 1 sh "$here/check-probe-writes.sh" "$pw_real_main" "$pw_real_two_files"
+expect "check-probe-writes rejects a stdout line written with writev" 1 sh "$here/check-probe-writes.sh" "$pw_writev"
+expect "check-probe-writes rejects a writev to stdout beside a write" 1 sh "$here/check-probe-writes.sh" "$pw_writev_extra"
 
 libcase "a record without an alignment checklist does not claim a count of ticked lines" 0 'record_title=t; record_generated_by=g; artifact_name=p; artifact_sha=aa; record_no_checklist=1; finish_record >/dev/null; ! grep -q "Checklist lines ticked" "$out"'
 libcase "a record with an alignment checklist states how many lines are ticked" 0 'record_title=t; record_generated_by=g; artifact_name=p; artifact_sha=aa; finish_record >/dev/null; grep -q "^Checklist lines ticked: 0 of 11." "$out"'

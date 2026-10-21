@@ -78,21 +78,27 @@ build_twice() {
   cargo_build "$target_two" || return 1
   first=$(hash_file "$binary")
   second=$(hash_file "$target_two/$target/release/$artifact")
-  command -v file >/dev/null 2>&1 && file "$binary"
-  equal_hashes "$artifact" "$first" "$second"
+  equal_hashes "$artifact" "$first" "$second" || return 1
+  # The musl build must be static: a missing `file` command is a failure, not a skip.
+  file "$binary" 2>&1 | sh "$here/check-static.sh"
 }
 
 # The probe reads no seed, /proc, CPU count or environment, and no clock but Instant::now (its line carries the monotonic
 # clock difference between the start and the end of the run: vtime_ns).
 forbidden_reads() {
   sh "$here/check-sources.sh" --allow-instant "$probe/src" || return 1
-  echo "ok   the probe reads none of them; its only clock read is Instant::now (vtime_ns)"
-  grep -n 'Instant::now' "$probe"/src/*.rs
+  # --allow-instant lets Instant::now through; this makes sure there is exactly one, and no renamed import to hide another.
+  sh "$here/check-instant-use.sh" "$probe/src/workload.rs" || return 1
+  echo "ok   the probe reads none of them; its only clock read is the one Instant::now (vtime_ns)"
+  grep -n 'Instant' "$probe"/src/*.rs
 }
 
 # B4, format only: every run exits 0 with an empty stderr and one stdout line of the six-field form. The distinct counts are
-# information (natively the thread order and the random value vary from run to run; under Hermit they are a function of the
-# seed). A usage error (any argument) exits 64 with nothing on stdout.
+# information (natively the thread order and the random value vary from run to run). Under the engine only --sched-seed is
+# passed to Hermit, whose --rng-seed defaults from --seed, which nobody passes: guest randomness (getrandom, so the
+# RandomState keys, so `rand` and `extra`) is the same for every trial and seed. Same-seed equality still detects leaks, and
+# a difference across seeds would itself signal one. `rand` and `extra` come from the same per-thread key pair, so they are
+# not independent detectors. A usage error (any argument) exits 64 with nothing on stdout.
 native() {
   i=0
   : >"$work/lines.txt"
@@ -123,8 +129,8 @@ native() {
 # whole line is in the trace.
 events() {
   strace -ff -s 4096 -e trace=write,writev -o "$work/strace" "$binary" >"$work/stdout.txt" 2>"$work/stderr.txt" || return 1
-  cat "$work"/strace.* >"$work/strace-all.txt"
-  sh "$here/check-probe-writes.sh" "$work/strace-all.txt"
+  # One file per thread: they are checked as files, because their lines carry no pid column.
+  sh "$here/check-probe-writes.sh" "$work"/strace.*
 }
 
 # The probe's own unit and integration tests, in release, as the producer's toolchain runs them natively.
@@ -143,6 +149,11 @@ say "Scope: this record covers probe-rust, a std-only program (no SDK, no proper
 say "threads. It prints one \`PROBE v1\` line of six fields. Per the checks that apply to a probe, B1 and B4 (format only: the"
 say "line matches the six-field form and the exit status is 0) are required; B5 is run as well. B2, B3, B6 and B7 belong to the"
 say "AT programs and do not apply. The record for at-rust is produced by build-record-rust.sh."
+say ""
+say "Randomness: under the engine only --sched-seed reaches Hermit, whose --rng-seed defaults from --seed, which is not passed."
+say "Guest randomness (getrandom, hence the RandomState keys, hence \`rand\` and \`extra\`) is therefore the same for every trial and"
+say "seed. Same-seed equality still detects an entropy leak, and a difference across seeds would itself signal one. \`rand\` and"
+say "\`extra\` come from the same per-thread key pair, so they are not independent detectors."
 say ""
 say "Reproducibility: the checkout path is mapped to /src with RUSTFLAGS=--remap-path-prefix=<checkout>=/src. That flag is part"
 say "of the build command (B1 prints it in full) and is not in a plain \`cargo build\`: an artifact built without it has another"

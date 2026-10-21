@@ -242,7 +242,7 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-13 g++-13 clang-18 strace binutils
       - name: Install strace
         if: matrix.variant == 'go' || matrix.variant == 'python' || matrix.variant == 'rust' || matrix.variant == 'rust-probe'
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq strace binutils
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq strace binutils file
       # Python has no compiler: the record stages the package (fixture, probe and SDK) twice and compares file hashes.
       - name: Build record (Python)
         if: matrix.variant == 'python'
