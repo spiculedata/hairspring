@@ -172,6 +172,9 @@ make -C python test                 # unit tests, then the native self-check and
 python3 python/check_native.py --runs 50 --switch-arm   # the numbers: how often each mode loses an update
 ```
 
+`python/probe_py.py` is a no-SDK companion: four threads, a lock, an unlocked counter and a `queue.Queue`, and one stdout
+line of hashes (lock order, finishing order, a random value, elapsed monotonic time, queue drain order).
+
 The self-check has the same rules as the others (the detector and the program agree on every run, the locked twin never
 fires, the racy program fires at least once, exit 77 "skipped" on a one-CPU process), and prints how often each mode
 fired and the spread of the final values. [docs/python-sdk.md](../../docs/python-sdk.md) records the numbers; in short,
