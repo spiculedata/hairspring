@@ -1,7 +1,8 @@
-# C++ lost-update fixture (racy program and locked twin), built with the C SDK in sdks/c.
+# C++ lost-update fixture: one program per compiler, with the modes buggy, fixed and wide, built with the C SDK in
+# sdks/c. The artifact is at-cxx-clang (clang++, the default) or at-cxx-gxx (g++).
 #
-#   make                  build both programs with clang++ (or the compiler in CXX)
-#   make test             build, then the native self-checks (see ../README.md)
+#   make                  build the artifact of the compiler in CXX
+#   make test             build, then the source check and the native self-checks (see ../README.md)
 #   make test CXX=g++     the same with g++; its call sites are all in ordinary functions, as docs/c-sdk.md advises
 #   make clean
 #
@@ -15,6 +16,8 @@ CXX := clang++
 endif
 # make defines CC itself, so the SDK's C compiler gets its own name.
 SDK_CC ?= $(if $(findstring clang,$(CXX)),clang,$(if $(findstring g++,$(CXX)),gcc,cc))
+# The artifact is named for the compiler family: at-cxx-clang or at-cxx-gxx.
+FAMILY := $(if $(findstring clang,$(CXX)),clang,$(if $(findstring g++,$(CXX)),gxx,other))
 OPT ?= -O2
 BUILD ?= build/$(notdir $(CXX))$(subst -,,$(OPT))
 
@@ -27,12 +30,12 @@ LDFLAGS += -pthread
 
 SRC := src/lost_update.cc
 HDR := ../common/lang_at.h $(SDK)/include/hairspring.h
-PROGRAMS := $(BUILD)/lost_update_racy $(BUILD)/lost_update_locked
+PROGRAM := $(BUILD)/at-cxx-$(FAMILY)
 RUNS ?= 50
 
 .PHONY: all test clean FORCE
 
-all: $(PROGRAMS)
+all: $(PROGRAM)
 
 # The SDK's own Makefile decides whether the library is up to date.
 $(LIB): FORCE
@@ -40,17 +43,14 @@ $(LIB): FORCE
 
 FORCE:
 
-$(BUILD)/lost_update_racy: $(SRC) $(HDR) $(LIB)
+$(PROGRAM): $(SRC) $(HDR) $(LIB)
 	mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) -o $@ $(SRC) $(LIB) $(LDFLAGS)
 
-$(BUILD)/lost_update_locked: $(SRC) $(HDR) $(LIB)
-	mkdir -p $(BUILD)
-	$(CXX) $(CXXFLAGS) -DLANG_AT_LOCKED -o $@ $(SRC) $(LIB) $(LDFLAGS)
-
-# The negative control feeds the racy program in as the "locked twin": the check must reject it, or it checks nothing.
-test: $(PROGRAMS)
-	sh ../scripts/run-checks.sh cpp $(BUILD)/lost_update_racy $(BUILD)/lost_update_locked $(RUNS)
+# The negative control runs the buggy mode in place of fixed: the check must reject it, or it checks nothing.
+test: $(PROGRAM)
+	sh ../scripts/check-sources.sh $(SRC) ../common/lang_at.h
+	sh ../scripts/run-checks.sh cxx $(PROGRAM) $(RUNS)
 
 clean:
 	rm -rf build
