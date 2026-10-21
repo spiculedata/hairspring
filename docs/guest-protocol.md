@@ -7,8 +7,8 @@ a v2.
 
 ## Status
 
-Status: the protocol and the parser are done; the C SDK is in [`sdks/c`](../sdks/c) (see [c-sdk.md](c-sdk.md)). The wire
-format is frozen once the review findings are closed.
+Status: the protocol and the parser are done; the C SDK is in [`sdks/c`](../sdks/c) (see [c-sdk.md](c-sdk.md)) and the Go
+SDK in [`sdks/go`](../sdks/go). The wire format is frozen once the review findings are closed.
 
 ## Transport
 
