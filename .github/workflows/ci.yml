@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -172,6 +173,44 @@ jobs:
       - name: Race detector
         if: matrix.dir == 'go'
         run: make -C examples/language-fixtures/go test-race
+
+  # Build records for the artifacts that are pinned for the acceptance run. B3 (seccomp) and B5 (strace) need a native
+  # x86-64 Linux host, which an emulated container is not, so the records are produced here. Manual only.
+  fixture-build-records:
+    name: Fixture build record (${{ matrix.variant }})
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [c, cxx-clang, cxx-gxx, go]
+    env:
+      GOTOOLCHAIN: local
+      GOPROXY: "off"
+      SOURCE_COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        if: matrix.variant == 'go'
+        with:
+          go-version: 1.27.3
+          cache: false
+      - name: Install the toolchains
+        if: matrix.variant != 'go'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-13 g++-13 clang-18 strace binutils
+      - name: Install strace
+        if: matrix.variant == 'go'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq strace binutils
+      - name: Build record
+        run: sh examples/language-fixtures/scripts/build-record.sh ${{ matrix.variant }} "$RUNNER_TEMP/record-${{ matrix.variant }}.md"
+      - name: Upload the record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-record-${{ matrix.variant }}
+          path: ${{ runner.temp }}/record-${{ matrix.variant }}.md
+          if-no-files-found: error
 
   glibc-condlock-example:
     name: glibc condlock example (unit tests)

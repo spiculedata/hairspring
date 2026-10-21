@@ -25,7 +25,8 @@ SDK := ../../../sdks/c
 SDK_BUILD := $(abspath $(BUILD))/sdk
 LIB := $(SDK_BUILD)/libhairspring.a
 
-CXXFLAGS += -std=gnu++17 $(OPT) -g -Wall -Wextra -Werror -pthread -I$(SDK)/include -I../common
+# -g is kept for the disassembly in the build record; -ffile-prefix-map keeps the build directory out of the artifact.
+CXXFLAGS += -std=gnu++17 $(OPT) -g -ffile-prefix-map=$(CURDIR)=. -Wall -Wextra -Werror -pthread -I$(SDK)/include -I../common
 LDFLAGS += -pthread
 
 SRC := src/lost_update.cc

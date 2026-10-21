@@ -72,8 +72,11 @@ equivalent and the native rates should not be compared across languages.
   `order` is FNV-1a over the arrival list written as four ASCII digits (the worker ids in the order they finished);
   `rand` is one value from the system's entropy source, so a run that leaks entropy into its output shows it.
 - **Exit status**: 0 whatever the property says (the verdict is the protocol report, not the exit code); 3 for an
-  internal invariant failure (a worker could not be created or did not finish, or the line could not be written);
-  64 for a usage error.
+  internal invariant failure (a worker could not be created or did not finish, or the result line could not be
+  written); 64 for a usage error. In Go the usage check happens before the SDK starts, so a usage error exits 64 without
+  the SDK's report; the C and C++ programs exit 64 the same way and their SDK report shows no evaluations.
+  The check script exercises the exit-3 path for an unwritable result line (stdout closed). A failed thread creation
+  cannot be injected without hook code in the artifact, so that path is covered by review only.
 
 The programs do not read the scheduler seed, `/proc`, the CPU count or the clock; `scripts/check-sources.sh` searches
 the sources for them.
@@ -129,8 +132,18 @@ without a process. They run with `GOMAXPROCS=2` under `make test`.
 toolchain and two builds with equal sha256 (B1), the disassembly of the busy loop and the window (B2), the seccomp
 self-test (B3, C and C++), the native runs on at least two CPUs (B4), `strace` of one run to show that every protocol
 line is one `write(2)` (B5), the SDK's own tests and conformance goldens (B6) and the source of the modes (B7). It ends
-with the alignment checklist to tick by hand. `scripts/build-record-docker.sh` runs it in a linux/amd64 container (Ubuntu
-24.04 for C and C++, a Go image for Go). Neither runs Hermit or needs a server.
+with the alignment checklist to tick by hand. The checks are strict: B2 requires every call to the busy loop to be a load,
+the call and a store of the same address (compilers may emit one copy of the window per mode), B5 requires every
+protocol line and the result line to be one complete write with a matching return value, and B1 builds twice (the second
+time in a different build directory, with a fresh Go build cache) and requires equal sha256.
+
+**Records for the artifacts that are pinned for an acceptance run must come from a native x86-64 Linux host.** B3
+(seccomp) and B5 (strace) do not work under an emulated container, and B2 is x86-64 disassembly. The CI workflow has a
+manual `fixture-build-records` job (workflow_dispatch, ubuntu-24.04) that runs `build-record.sh` for `c`, `cxx-clang`,
+`cxx-gxx` and `go` and uploads each record as an artifact; any other native x86-64 host works the same way.
+`scripts/build-record-docker.sh` runs the script in a container with the images pinned by digest (Ubuntu 24.04 for C and
+C++, `golang:1.27.3` for Go) and passes the source commit in; on a machine that is not x86-64 it is only a functional
+check of the script. Nothing here runs Hermit or needs a server.
 
 ## Compilers
 
