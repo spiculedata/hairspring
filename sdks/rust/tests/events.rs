@@ -214,13 +214,14 @@ fn a_closed_stderr_pipe_does_not_kill_the_program_with_sigpipe() {
     // The reader is gone before the program starts, so the very first line (written before main) hits a broken pipe.
     let (reader, writer) = std::io::pipe().expect("a pipe");
     drop(reader);
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_hs_counter_locked"))
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_at-rust"))
+        .arg("fixed")
         .stderr(std::process::Stdio::from(writer))
         .output()
         .expect("program runs");
     assert!(out.status.success(), "{:?}", out.status);
     assert!(
-        String::from_utf8_lossy(&out.stdout).starts_with("final="),
+        String::from_utf8_lossy(&out.stdout).starts_with("LANGAT v1 lang=rust mode=fixed final="),
         "main did not run to its end: {:?}",
         String::from_utf8_lossy(&out.stdout)
     );

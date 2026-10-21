@@ -16,5 +16,5 @@ let _ = thread("writer", 0);
 * Documentation: [docs/rust-sdk.md](../../docs/rust-sdk.md) (API, environment, the linker-collected catalog, evidence, limits).
 * Example: `cargo run -p hairspring-sdk --example quickstart`.
 * Tests: `cargo test -p hairspring-sdk`; conformance against the reference parser: `cargo test -p hairspring-props --test rust_sdk`.
-* `samples/` are the programs the tests run; `fixtures/` holds the planted race (`counter_racy.rs`) and its locked twin
-  (`counter_locked.rs`).
+* `samples/` are the programs the tests run; `fixtures/lang_at/` is the planted race, one binary (`at-rust`) whose mode
+  is its first argument: `buggy`, `fixed` or `wide`.
