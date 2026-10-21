@@ -36,13 +36,15 @@ case "$variant" in
   cxx-clang)
     dir=cpp lang=cxx artifact=at-cxx-clang
     tool=${CXX:-clang++-18}
-    make_args="CXX=$tool SDK_CC=${SDK_CC:-clang-18} BUILD=$build"
+    SDK_CC=${SDK_CC:-clang-18}
+    make_args="CXX=$tool SDK_CC=$SDK_CC BUILD=$build"
     spin_re='<(_ZL12lang_at_spinmj)>:' worker_re='<(_ZN12_GLOBAL__N_16workerEjPK12lang_at_mode)>:'
     ;;
   cxx-gxx)
     dir=cpp lang=cxx artifact=at-cxx-gxx
     tool=${CXX:-g++-13}
-    make_args="CXX=$tool SDK_CC=${SDK_CC:-gcc-13} BUILD=$build"
+    SDK_CC=${SDK_CC:-gcc-13}
+    make_args="CXX=$tool SDK_CC=$SDK_CC BUILD=$build"
     spin_re='<(_ZL12lang_at_spinmj)>:' worker_re='<(_ZN12_GLOBAL__N_16workerEjPK12lang_at_mode)>:'
     ;;
   go)
@@ -61,12 +63,14 @@ mkdir -p "$(dirname "$out")" || exit 1
 : >"$out"
 fixtures=$root/$dir
 if [ "$variant" = go ]; then
-  binary=$fixtures/build/linux-amd64/$artifact
+  build_dir=$fixtures/build/linux-amd64
   make_target=release
 else
-  binary=$fixtures/$build/$artifact
+  build_dir=$fixtures/$build
   make_target=all
 fi
+binary=$build_dir/$artifact
+GO_PINNED=${GO_PINNED:-go1.27.3}
 failed=0
 
 say() { printf '%s\n' "$*" >>"$out"; }
@@ -103,12 +107,23 @@ extract() { awk -v re="$1" '$0 ~ re { on = 1 } on { print } on && /^$/ { exit }'
 # The make arguments are separate words on purpose.
 # shellcheck disable=SC2086
 build_twice() {
-  rm -rf "$fixtures/build"
-  make -C "$fixtures" "$make_target" $make_args || return 1
+  echo "Build flags include -g (debug info); the sources are mapped to relative paths (-ffile-prefix-map, -trimpath)"
+  echo "so the sha256 does not depend on the directory the tree is built in."
+  rm -rf "$build_dir" "$fixtures/$build-second"
+  GOCACHE=$(mktemp -d "$work/gocache.XXXXXX") make -C "$fixtures" "$make_target" $make_args || return 1
   first=$(sha256sum "$binary" | cut -d' ' -f1)
-  rm -rf "$fixtures/build"
-  make -C "$fixtures" "$make_target" $make_args >/dev/null || return 1
-  second=$(sha256sum "$binary" | cut -d' ' -f1)
+  # The second build uses a fresh Go build cache, so every package is compiled again rather than taken from the first
+  # build, and, for C and C++, a different build directory, which must not change the artifact.
+  second_binary=$binary
+  second_args=$make_args
+  if [ "$lang" != go ]; then
+    second_args="${make_args%BUILD=*}BUILD=$build-second"
+    second_binary=$fixtures/$build-second/$artifact
+  else
+    rm -rf "$build_dir"
+  fi
+  GOCACHE=$(mktemp -d "$work/gocache.XXXXXX") make -C "$fixtures" "$make_target" $second_args >/dev/null || return 1
+  second=$(sha256sum "$second_binary" | cut -d' ' -f1)
   echo "sha256 of $artifact, first build:  $first"
   echo "sha256 of $artifact, second build: $second"
   [ "$first" = "$second" ] || { echo "the two builds differ"; return 1; }
@@ -117,7 +132,17 @@ build_twice() {
 
 versions() {
   uname -srm
-  "$tool" --version | head -1
+  if [ "$lang" = go ]; then
+    got=$("$tool" version) || return 1
+    echo "$got"
+    case "$got" in
+      *" $GO_PINNED "*) echo "ok   the Go toolchain is the pinned $GO_PINNED" ;;
+      *) echo "FAIL the Go toolchain is not the pinned $GO_PINNED"; return 1 ;;
+    esac
+  else
+    "$tool" --version | head -1
+    [ -z "${SDK_CC:-}" ] || { echo "SDK library compiler: $SDK_CC"; "$SDK_CC" --version | head -1; }
+  fi
   ldd --version 2>/dev/null | head -1
   objdump --version | head -1
   echo "image digest: ${IMAGE_DIGEST:-<TO BE FILLED: not given>}"
@@ -129,12 +154,22 @@ disassembly() {
   extract "$worker_re" "$work/dis.s" >"$work/worker.s"
   [ -s "$work/spin.s" ] && [ -s "$work/worker.s" ] || { echo "the busy loop or the worker was not found"; return 1; }
   cat "$work/spin.s"
-  echo "--- worker, around the call to the busy loop"
-  grep -n -B8 -A8 'call.*spin' "$work/worker.s"
+  echo "--- worker, around every call to the busy loop (the compiler may emit one copy of the window per mode)"
+  grep -n -B12 -A12 'call.*spin' "$work/worker.s"
   sh "$here/check-disasm.sh" loop "$work/spin.s" || { echo "no backward branch in the busy loop"; return 1; }
   echo "ok   the busy loop has a backward branch"
-  sh "$here/check-disasm.sh" window "$work/worker.s" || { echo "a locked read-modify-write near the window, or no call"; return 1; }
-  echo "ok   no locked read-modify-write around the window"
+  # Every call to the busy loop must sit between a load and a store of the same address with nothing else between.
+  # C and C++ must also have a copy of the window that is not behind a mutex call (the buggy path). Go's gate is an
+  # interface call, so the unlocked path cannot be told apart by name there.
+  unlocked=1
+  [ "$lang" = go ] && unlocked=0
+  UNLOCKED_PATH=$unlocked sh "$here/check-disasm.sh" window "$work/worker.s" || { echo "a call to the busy loop is not a load -> call -> store of one address"; return 1; }
+  echo "ok   every call to the busy loop is load -> call -> store of the same address, with no other call or locked read-modify-write between"
+  if [ "$lang" = go ]; then
+    echo "note: in Go the counter store is an XCHG with a memory operand, an implicitly locked exchange. It is a separate"
+    echo "      instruction from the load and is not a read-modify-write of the counter (no LOCK XADD), which is what the"
+    echo "      contract requires of the window."
+  fi
 }
 
 # The test-only binary is built with the fixture's own compiler, as C++ for the C++ variants. It is never pinned.
@@ -152,14 +187,14 @@ native() {
 }
 
 events() {
-  strace -f -e trace=write -o "$work/strace.txt" "$binary" buggy >"$work/stdout.txt" 2>"$work/stderr.txt" || return 1
-  # The SDKs write their report to the events descriptor: stderr, or a private copy of it (the C SDK uses fd 200).
+  # -s 4096 so the whole line is in the trace. The SDKs write their report to the events descriptor: stderr, or a
+  # private copy of it (the C SDK uses fd 200, the Go SDK fd 3).
+  strace -f -s 4096 -e trace=write,writev -o "$work/strace.txt" "$binary" buggy >"$work/stdout.txt" 2>"$work/stderr.txt" || return 1
   written=$(grep -Ec 'write\([0-9]+, "HAIRSPRING_EVENT' "$work/strace.txt")
   lines=$(grep -c '^HAIRSPRING_EVENT' "$work/stderr.txt")
-  stdout_writes=$(grep -Ec 'write\(1, "LANGAT v1' "$work/strace.txt")
   echo "HAIRSPRING_EVENT lines on stderr: $lines; write calls that start one: $written"
-  echo "write(1) calls that carry the result line: $stdout_writes"
-  [ "$lines" -gt 0 ] && [ "$lines" -eq "$written" ] && [ "$stdout_writes" -eq 1 ]
+  [ "$lines" -gt 0 ] && [ "$lines" -eq "$written" ] || return 1
+  sh "$here/check-writes.sh" "$work/strace.txt"
 }
 
 goldens() {
@@ -183,7 +218,8 @@ trap 'rm -rf "$work"' EXIT
 
 say "# BUILD-RECORD: $artifact"
 say ""
-say "Generated by scripts/build-record.sh $variant. Source tree: \`$(git -C "$root" rev-parse HEAD 2>/dev/null || echo unknown)\`."
+source_commit=${SOURCE_COMMIT:-$(git -C "$root" rev-parse HEAD 2>/dev/null || echo unknown)}
+say "Generated by scripts/build-record.sh $variant. Source tree: \`$source_commit\`."
 say ""
 step B1 "toolchain, build command (in the log) and two builds with equal sha256" versions
 step B1 "the build, twice" build_twice
@@ -191,8 +227,14 @@ step B2 "the busy loop survived and the window's load and store are separate ins
 if [ "$lang" = go ]; then
   not_run B3 "seccomp self-test" "Not applicable to Go: its runtime makes system calls on other threads. The no-syscall window is a code-review statement: spin touches no memory and makes no call."
 else
+  say "B3 note: the self-test installs a seccomp-BPF filter that allows only exit, exit_group and rt_sigreturn"
+  say "(the same approach as the SDK's own no-syscall test), not SECCOMP_MODE_STRICT, and runs the window with W = 1000."
+  say ""
   step B3 "seccomp self-test (one window per iteration, only exit allowed)" seccomp
 fi
+say "Exit-3 paths: a closed stdout is exercised by B4 (exit 3 required). A failed thread creation cannot be injected"
+say "without hook code in the artifact, so it is covered by review of the abandoned-run path only."
+say ""
 step B4 "$runs native runs of buggy and fixed, wide as a contract check (at least two CPUs required)" native
 if command -v strace >/dev/null 2>&1; then
   step B5 "each HAIRSPRING_EVENT line is one write(2)" events

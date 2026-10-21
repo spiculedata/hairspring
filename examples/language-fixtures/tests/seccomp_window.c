@@ -1,9 +1,10 @@
 /* seccomp_window.c -- build-record check B3 (Linux only, test-only: never pinned, never transferred).
 **
 ** A fresh thread installs a seccomp-BPF filter that allows only exit, exit_group and rt_sigreturn, then runs the
-** fixture's window many times (load the counter, spin for the wide mode's number of rounds, store) and ends with a raw
+** fixture's window many times (load the counter, spin for W = LANG_AT_SPIN rounds, store) and ends with a raw
 ** exit. Any other system call inside the window kills the process, and the parent sees a signal instead of a clean
-** exit. Modelled on sdks/c/tests/test_nosyscall.c. It compiles as C and as C++ (the C++ fixtures are checked with the
+** exit. It uses a seccomp-BPF filter, like sdks/c/tests/test_nosyscall.c, rather than SECCOMP_MODE_STRICT; strict mode would
+** also allow read and write, which the window must not use either. It compiles as C and as C++ (the C++ fixtures are checked with the
 ** same file) and uses only the shared header's busy loop.
 */
 #if !defined(__linux__)

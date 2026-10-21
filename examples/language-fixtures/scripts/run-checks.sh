@@ -40,13 +40,16 @@ trap 'rm -rf "$tmp"' EXIT
 control="$tmp/control"
 # Only the fixed mode is rewritten, so the argument checks and the other modes still see the real artifact. The line
 # says mode=fixed, so the only thing wrong with the stand-in is that it loses updates.
+# The artifact path is written single-quoted, with any single quote in it escaped, so no path can end the quoting.
+quoted=$(printf '%s' "$artifact" | sed "s/'/'\\\\''/g")
 cat >"$control" <<EOF
 #!/bin/sh
 if [ "\$#" -eq 1 ] && [ "\$1" = fixed ]; then
-  "$artifact" buggy | sed 's/ mode=buggy / mode=fixed /'
+  line=\$('$quoted' buggy) || exit \$?
+  printf '%s\n' "\$line" | sed 's/ mode=buggy / mode=fixed /' || exit 3
   exit 0
 fi
-exec "$artifact" "\$@"
+exec '$quoted' "\$@"
 EOF
 chmod +x "$control"
 

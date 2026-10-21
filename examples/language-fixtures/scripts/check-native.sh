@@ -10,6 +10,8 @@
 #   - every run of buggy, fixed and wide (`runs` of buggy and fixed, $WIDE_RUNS of wide, default 10) exits 0 whatever
 #     the property says and prints exactly one stdout line,
 #     `LANGAT v1 lang=<id> mode=<mode> final=<20 digits> expect=0000000000000000<4000> order=<16 hex> rand=<16 hex>`;
+#   - with stdout on /dev/full (closed where there is no /dev/full) the artifact exits 3: the result line could not be
+#     written;
 #   - the protocol report on stderr has one evaluation each of <id>.counter_exact (witness values
 #     [final, 4000, 4, 1000]) and <id>.all_started, and no incomplete-catalog notice from the SDK's audit;
 #   - the detector and the program agree: the property is false exactly when final != 4000, and final never exceeds it.
@@ -106,6 +108,12 @@ one_run() {
     echo "FAIL $mode run $i: the protocol report lacks the assert lines for $property and $coverage" >&2
     return 1
   fi
+  for id in "$property" "$coverage"; do
+    if [ "$(grep -c "\"kind\":\"assert\".*\"id\":\"$id\"" "$tmp/err")" -ne 1 ]; then
+      echo "FAIL $mode run $i: $id has more than one assert line" >&2
+      return 1
+    fi
+  done
   for line in "$assert_line" "$start_line"; do
     if ! echo "$line" | grep -Eq '"hits": *1,'; then
       echo "FAIL $mode run $i: a property was not evaluated exactly once: $line" >&2
@@ -120,7 +128,11 @@ one_run() {
     echo "FAIL $mode run $i: the SDK's audit reports call sites missing from the catalog" >&2
     return 1
   fi
-  falses=$(echo "$assert_line" | sed 's/.*"falses": *\([0-9]*\).*/\1/')
+  falses=$(echo "$assert_line" | sed -n 's/.*"falses": *\([0-9][0-9]*\).*/\1/p')
+  if [ -z "$falses" ]; then
+    echo "FAIL $mode run $i: the falses counter of $property is missing or not a number: $assert_line" >&2
+    return 1
+  fi
   if [ "$falses" -gt 0 ] && [ "$final" -eq "$EXPECTED" ]; then
     echo "FAIL $mode run $i: property false but final=$final" >&2
     return 1
@@ -157,7 +169,30 @@ counted() {
   echo "$fired_total $exact_total"
 }
 
+# A result line that cannot be written is an internal failure: exit 3, and a reason on stderr. Stdout is /dev/full
+# (every write fails with ENOSPC) where that exists, which is Linux. Elsewhere stdout is closed, and a runtime that
+# reopens closed descriptors (Go does) writes the line to /dev/null and exits 0: that is a skip, not a failure.
+check_unwritable_stdout() {
+  if [ -w /dev/full ]; then
+    # shellcheck disable=SC2086  # $limit is a command and its argument on purpose
+    env -u HAIRSPRING_PROC -u HAIRSPRING_PROC_PID -u HAIRSPRING_EVENTS -u HAIRSPRING_EVENTS_FILE $limit "$artifact" fixed >/dev/full 2>"$tmp/err"
+  else
+    # shellcheck disable=SC2086
+    env -u HAIRSPRING_PROC -u HAIRSPRING_PROC_PID -u HAIRSPRING_EVENTS -u HAIRSPRING_EVENTS_FILE $limit "$artifact" fixed >&- 2>"$tmp/err"
+  fi
+  status=$?
+  if [ "$status" -eq 0 ] && [ ! -w /dev/full ]; then
+    echo "skip: with stdout closed the artifact exited 0 (no /dev/full here, and the runtime may reopen closed descriptors)"
+    return 0
+  fi
+  if [ "$status" -ne 3 ]; then
+    echo "FAIL an unwritable stdout: exit status $status, want 3" >&2
+    return 1
+  fi
+}
+
 check_usage || exit 1
+check_unwritable_stdout || exit 1
 buggy_counts=$(counted buggy "$runs") || exit 1
 fixed_counts=$(counted fixed "$runs") || exit 1
 wide_counts=$(counted wide "$wide_runs") || exit 1
