@@ -31,7 +31,7 @@ fn permutation_hashes() -> Vec<u64> {
         for b in (0..THREADS).filter(|&b| b != a) {
             for c in (0..THREADS).filter(|&c| c != a && c != b) {
                 let d = THREADS * (THREADS - 1) / 2 - a - b - c;
-                all.push(fnv1a64(format!("{a},{b},{c},{d},").as_bytes()));
+                all.push(fnv1a64(format!("{a}{b}{c}{d}").as_bytes()));
             }
         }
     }
@@ -152,7 +152,7 @@ fn any_argument_is_a_usage_error_with_nothing_on_stdout() {
 }
 
 #[test]
-fn a_closed_stdout_is_an_internal_failure_not_a_silent_success() {
+fn a_stdout_that_cannot_take_the_line_is_an_internal_failure_not_a_silent_success() {
     if !std::path::Path::new("/dev/full").exists() {
         return;
     }

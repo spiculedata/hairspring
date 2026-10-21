@@ -244,10 +244,19 @@ writes one line on stdout, with one write, and exits 0:
 PROBE v1 lang=rust lock_order=<16 hex> arrival=<16 hex> rand=<16 hex> vtime_ns=<20 digits> extra=<16 hex>
 ```
 
-`lock_order` is the FNV-1a 64 hash of the order the workers took the lock, `arrival` of the order they finished, `extra`
-of the map's iteration order (each number as decimal text followed by a comma), `rand` is one value from the standard
-library's random source, and `vtime_ns` is the monotonic clock difference between the start and the end of the run.
-Exit 3 is an internal invariant failure: a thread did not start or panicked, or the line could not be written.
+`lock_order` is the FNV-1a 64 hash of the order the workers took the lock and `arrival` of the order they finished (each
+as four ASCII digits, like the fixture's order hash), `extra` is the hash of the map's iteration order (each key as
+decimal text followed by a comma), `rand` is one value from the standard library's random source, and `vtime_ns` is the
+monotonic clock difference between the start and the end of the run. Exit 3 is an internal invariant failure: a thread
+did not start or panicked, or the line could not be written (a full or otherwise failing stdout). A closed stdout
+(EBADF) is different: Rust's standard library ignores it, so the program exits 0 and prints no line. That is harmless
+under the engine, where stdout is a pipe.
+
+Where the program runs under a deterministic scheduler that is given only a scheduling seed, the random keys of the
+standard library (from `getrandom`, so `rand` and `extra`) can be the same for every seed, because the scheduler's random
+seed is a separate setting. Equality of two same-seed runs still shows an entropy leak, and a difference between seeds
+would itself point to one. `rand` and `extra` come from the same per-thread key pair, so they are not independent
+detectors.
 
 Natively the thread order and the random value differ from run to run, so the native tests check the shape: the line has
 exactly six fields of the right width and alphabet, the two thread orders are hashes of a permutation of the four

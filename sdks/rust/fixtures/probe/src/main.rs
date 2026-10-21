@@ -8,7 +8,8 @@
 //!
 //! `PROBE v1 lang=rust lock_order=<16 hex> arrival=<16 hex> rand=<16 hex> vtime_ns=<20 digits> extra=<16 hex>`
 //!
-//! `lock_order`, `arrival` and `extra` are FNV-1a 64 hashes of the thread numbers (or map keys) in that order, `rand` is
+//! `lock_order`, `arrival` and `extra` are FNV-1a 64 hashes of the thread numbers (digits) or map keys (decimal text with
+//! commas) in that order, `rand` is
 //! one value from the standard library's random source, and `vtime_ns` is the monotonic clock difference between the
 //! start and the end of the run. Exit 3 is an internal invariant failure (a thread did not start or panicked, the line
 //! could not be written); exit 64 is a usage error (any argument).
@@ -19,7 +20,7 @@ mod workload;
 use std::io::Write;
 use std::process::ExitCode;
 
-use line::{format_line, hash_sequence, Fields};
+use line::{format_line, hash_digits, hash_sequence, Fields};
 use workload::{Invariant, Outcome};
 
 const EXIT_INVARIANT: u8 = 3;
@@ -42,8 +43,8 @@ fn main() -> ExitCode {
 
 fn fields_of(outcome: &Outcome) -> Fields {
     Fields {
-        lock_order: hash_sequence(&outcome.lock_order),
-        arrival: hash_sequence(&outcome.arrival),
+        lock_order: hash_digits(&outcome.lock_order),
+        arrival: hash_digits(&outcome.arrival),
         rand: outcome.rand,
         vtime_ns: outcome.elapsed_ns,
         extra: hash_sequence(&outcome.map_order),
@@ -78,8 +79,8 @@ mod tests {
     #[test]
     fn the_fields_hash_each_order_and_pass_the_rest_through() {
         let fields = fields_of(&outcome(&[0, 1, 2, 3], &[3, 2, 1, 0], &[5, 4]));
-        assert_eq!(fields.lock_order, hash_sequence(&[0, 1, 2, 3]));
-        assert_eq!(fields.arrival, hash_sequence(&[3, 2, 1, 0]));
+        assert_eq!(fields.lock_order, hash_digits(&[0, 1, 2, 3]));
+        assert_eq!(fields.arrival, hash_digits(&[3, 2, 1, 0]));
         assert_eq!(fields.extra, hash_sequence(&[5, 4]));
         assert_eq!((fields.rand, fields.vtime_ns), (7, 42));
     }

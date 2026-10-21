@@ -26,6 +26,12 @@ pub fn hash_sequence(items: &[u64]) -> u64 {
     fnv1a64(text.as_bytes())
 }
 
+/// The hash of a thread order (worker numbers 0 to 3) written as bare ASCII digits, like the fixtures' order hash.
+pub fn hash_digits(items: &[u64]) -> u64 {
+    let digits: Vec<u8> = items.iter().map(|&w| b'0' + (w % 10) as u8).collect();
+    fnv1a64(&digits)
+}
+
 /// `PROBE v1 lang=rust lock_order=<16 hex> arrival=<16 hex> rand=<16 hex> vtime_ns=<20 digits> extra=<16 hex>` and a
 /// newline.
 pub fn format_line(fields: &Fields) -> String {
@@ -51,6 +57,12 @@ mod tests {
         assert_eq!(hash_sequence(&[2, 0, 1, 3]), fnv1a64(b"2,0,1,3,"));
         assert_eq!(hash_sequence(&[10, 1]), fnv1a64(b"10,1,"));
         assert_eq!(hash_sequence(&[]), fnv1a64(b""));
+    }
+
+    #[test]
+    fn a_thread_order_hashes_as_bare_digits() {
+        assert_eq!(hash_digits(&[2, 0, 1, 3]), fnv1a64(b"2013"));
+        assert_ne!(hash_digits(&[0, 1, 2, 3]), hash_digits(&[3, 2, 1, 0]));
     }
 
     #[test]
