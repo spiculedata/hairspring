@@ -21,6 +21,19 @@ hs.thread("writer", 0)           # stable thread key "writer-0"
 Use it from the source tree with `PYTHONPATH=sdks/python/src`, or install it from `sdks/python` (`pip install ./sdks/python`).
 A runnable example is `sdks/python/examples/quickstart.py`.
 
+> **A site that never runs is invisible, not unmet.** Python cannot see a call site before it executes, so a
+> `reachable`, `sometimes` or `always` in code the run never reaches is simply absent from the report, and the run
+> cannot flag it as UNMET. That is the main thing those kinds exist to find. **Call `hs.declare(hs.Kind.REACHABLE, id,
+> msg)` once, at import time, for every site whose absence matters.**
+
+> **Evaluations made in a forked child are lost.** `os.fork()` and `multiprocessing` with the `fork` start method (the
+> default on Linux for Python 3.12 and 3.13) give the child a copy of the SDK's state, and only the process that started
+> the SDK reports. Everything a forked child evaluates is silently dropped: it is not reported and not counted in
+> `end.dropped`. Use `multiprocessing.get_context("spawn")` (or `"forkserver"`) for workers that assert; a spawned child
+> is a fresh interpreter that reports under its own tag `<parent>.s<pid>`. (A child marker that counted forked-child
+> evaluations would need the child to tell the parent, which the report path has no channel for, so this is documented
+> rather than half-fixed.)
+
 ## API
 
 | Function | Meaning | Trial-level failure | Run-level UNMET |
@@ -33,7 +46,7 @@ A runnable example is `sdks/python/examples/quickstart.py`.
 
 | Function | Meaning |
 |---|---|
-| `declare(kind, id, msg="")` | puts a site in the catalog without evaluating it (see "The catalog is built as the program runs") |
+| `declare(kind, id, msg="")` | puts a site in the catalog without evaluating it. **Needed for any site that might never run**, or it is invisible rather than unmet (see "The catalog is built as the program runs") |
 | `work(n)` | adds `n` to the process's operation count, reported as `work.ops` |
 | `thread(label, index)` | gives the calling thread the key `label-index`. Returns `False` if another thread has the key or the thread shares the overflow slot, and the thread then keeps its claim-order key `t#<n>`, flagged `key_stable:false`. Raises `ValueError` for an empty label or a key over 64 bytes. Call it before the thread does anything else |
 | `report()` | writes the report now (reason `explicit`); the first report wins, and evaluations after it are not reported |
@@ -44,7 +57,8 @@ A runnable example is `sdks/python/examples/quickstart.py`.
   missing values are 0). A fifth value, or a value that is not an integer, raises `TypeError` and counts nothing.
 * `id` is 1 to 128 bytes of UTF-8; bytes outside `[A-Za-z0-9._:/-]` are sent as `_` (as in the C SDK), so ids that
   differ only in such bytes are one id. `msg` is at most 512 bytes; bytes that are not printable ASCII, and `"` and `\`
-  are handled as in the C SDK (`?` and an escape). An empty or over-long id, or an over-long message, raises
+  are handled as in the C SDK (`?` and an escape). An empty or over-long id, an id containing a NUL character (the
+  wire form would stop there), or an over-long message, raises
   `ValueError` at the first evaluation. (The C SDK refuses these at compile time, the Rust SDK too; Python has no
   compile time, so the first run shows the mistake. Nothing is recorded for the call.)
 * The same id and kind from several places is one site: the report merges them into one `assert` line, and `end.sites`
@@ -130,9 +144,13 @@ installs a tracer that yields the interpreter lock after every opcode of the SDK
 unprotected read-modify-write lose updates: it fails when the lock is taken out.
 
 * A report is written from a **snapshot** taken under the lock, so every count, witness and thread total belongs to one
-  moment. A witness is only ever written behind a non-zero count (the parser rejects a line that pairs them), and the
-  evaluations the thread lines add up to equal the hits the `assert` lines add up to, in every snapshot. The tests take
-  snapshots while four threads evaluate and check both.
+  moment. A witness is only ever written behind a non-zero count (the parser rejects a line that pairs them). With one
+  kind per id, the evaluations the thread lines add up to equal the hits the `assert` lines add up to in every
+  snapshot, because both are changed inside one critical section. That equality is **not** promised in two cases: an id
+  used with two kinds (the `assert` line carries only the first kind's counts, so the other kind's evaluations are in
+  the thread totals but not in any `assert` line), and an asynchronous exception (`KeyboardInterrupt`, or one raised in
+  a thread with `PyThreadState_SetAsyncExc`) landing between the two updates. The tests take snapshots while four
+  threads evaluate and check the single-kind case.
 * The lock is reentrant because a signal handler, or a finaliser run by the garbage collector, can call the SDK on the
   thread that is inside the SDK's own critical section. With a plain lock that would hang the thread. With this one it
   costs, at worst, a witness taken from a half-updated site; counts stay exact for every finished call.
@@ -160,7 +178,10 @@ about 0.02). These are one machine's figures and say nothing about other hosts.
 * `buggy`: 4 threads, each doing 1,000 iterations of: read a shared integer attribute, run a busy loop of 1,000 rounds of
   pure Python (a multiply-add chain in the program's own `spin`), write back the value read plus one. The read and the
   write are separate operations, so an update is lost whenever the interpreter hands the lock to another thread inside
-  the loop. There is no system call, allocation, lock or SDK call between the read and the write.
+  the loop. There is no system call, lock or SDK call between the read and the write. It does allocate: big-integer
+arithmetic, a `range` and a call frame in every iteration. CPython offers no way around that for pure-Python code, so
+unlike the C fixture's window (which a seccomp test proves syscall-free) this window is "no system call and no SDK
+call", not "no allocation". The busy loop's result goes to `sink.value` after the store.
 * `fixed`: the same three steps under a `threading.Lock`.
 * `wide`: `buggy` with a busy loop ten times longer.
 
@@ -168,7 +189,17 @@ Properties: `py.counter_exact` (`always`, the final counter equals 4,000, witnes
 `py.all_started` (`sometimes`), each evaluated once in the main thread after the workers are joined. Output: one line on
 stdout, `LANGAT v1 lang=py mode=<mode> final=<20 digits> expect=<20 digits> order=<16 hex> rand=<16 hex>`, and exit 0
 whatever the property says (3 for an internal failure, 64 for a usage error). The workers wait at a start barrier.
-`--switch=1.0` as the second argument sets the thread switch interval to one second before any thread starts.
+`--switch=1.0` as the second argument sets the thread switch interval to one second before any thread starts. A failed
+stdout write exits 3 without a traceback and the report's `end.status` says 3, as in the C and Rust fixtures. The start
+barrier has no timeout: a worker that fails or cannot start aborts it, which wakes the others.
+
+The acceptance run starts the fixture as `python3 -I -B` with `PYTHONHASHSEED=0` in the environment. Under `-I`
+(isolated mode) `PYTHONHASHSEED` is ignored, so the variable has no effect there: string hash randomization stays on
+and its seed comes from the operating system (`getrandom`). That is harmless here, since nothing in the fixture or the
+SDK depends on hash order, but it is a source of per-run entropy the setting does not remove.
+
+The native self-check has no "skipped" result (exit 77) as the C, C++ and Go checks do: CPython switches threads on one
+CPU too, so the race needs no second CPU, and a racy program that never fires fails the check wherever it runs.
 
 **CPython's lock makes the race common, not rare.** The interpreter's default switch interval is 5 ms and a busy
 loop of pure Python is interruptible, so a thread is almost always preempted inside the window. Measured natively
@@ -191,6 +222,14 @@ unlocked counter and a `queue.Queue`, one stdout line (`PROBE v1 lang=py lock_or
 extra=...`) of hashes of the lock order, the finishing order, a random value, the elapsed monotonic time and the queue's
 drain order. It exists to ask whether those are a function of the scheduler's seed; it accepts the same `--switch=1.0`
 argument.
+
+A determinism check alone does not show that the interpreter switched threads at all (under a virtual clock the 5 ms
+switch interval may never elapse, and then every run is trivially identical). So the line ends with four more fields:
+`racy_final` and `racy_expect` (the unlocked counter after 4 threads x 200 read-spin-write rounds, and 800: their
+difference is the number of updates lost, and 0 means no switch ever landed inside a window) and `t_start_ns` and
+`t_end_ns` (the monotonic clock before the threads start and after they are joined; `vtime_ns` is their difference).
+The original six fields are unchanged. Natively the counter loses updates in essentially every run, and with
+`--switch=1.0` it loses none.
 
 ## Conformance
 

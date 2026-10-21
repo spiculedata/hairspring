@@ -77,25 +77,23 @@ class VerdictTests(unittest.TestCase):
         }
 
     def test_all_good(self) -> None:
-        status, _ = check.verdict(self.summaries(50, 0, 50), cpus=4)
+        status, _ = check.verdict(self.summaries(50, 0, 50))
         self.assertEqual(status, check.OK)
 
     def test_a_locked_twin_that_loses_an_update_fails(self) -> None:
-        status, messages = check.verdict(self.summaries(50, 1, 49), cpus=4)
+        status, messages = check.verdict(self.summaries(50, 1, 49))
         self.assertEqual(status, check.FAILED)
         self.assertTrue(any("locked twin" in m for m in messages))
 
-    def test_a_racy_program_that_never_fires_fails_on_several_cpus(self) -> None:
-        status, _ = check.verdict(self.summaries(0, 0, 50), cpus=4)
+    def test_a_racy_program_that_never_fires_fails_whatever_the_cpu_count(self) -> None:
+        # CPython's interpreter lock switches threads on one CPU as well: the race needs no second CPU, so there is no
+        # skipped result for this fixture (the C, C++ and Go fixtures have one; Python does not).
+        status, messages = check.verdict(self.summaries(0, 0, 50))
         self.assertEqual(status, check.FAILED)
+        self.assertTrue(any("never fired" in m for m in messages))
 
-    def test_a_racy_program_that_never_fires_on_one_cpu_is_skipped(self) -> None:
-        status, _ = check.verdict(self.summaries(0, 0, 50), cpus=1)
-        self.assertEqual(status, check.SKIPPED)
-
-    def test_a_skip_never_hides_a_failure_of_the_twin(self) -> None:
-        status, _ = check.verdict(self.summaries(0, 1, 49), cpus=1)
-        self.assertEqual(status, check.FAILED)
+    def test_there_is_no_skip_status(self) -> None:
+        self.assertFalse(hasattr(check, "SKIPPED"))
 
 
 if __name__ == "__main__":

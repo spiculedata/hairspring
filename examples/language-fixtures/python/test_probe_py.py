@@ -16,8 +16,10 @@ from pathlib import Path
 PROBE = Path(__file__).resolve().parent / "probe_py.py"
 LINE = re.compile(
     r"^PROBE v1 lang=py lock_order=([0-9a-f]{16}) arrival=([0-9a-f]{16}) rand=([0-9a-f]{16}) "
-    r"vtime_ns=(\d{20}) extra=([0-9a-f]{16})$"
+    r"vtime_ns=(\d{20}) extra=([0-9a-f]{16}) racy_final=(\d{20}) racy_expect=(\d{20}) "
+    r"t_start_ns=(\d{20}) t_end_ns=(\d{20})$"
 )
+RACY_EXPECT = 4 * 200
 
 
 def run(*args: str) -> subprocess.CompletedProcess[bytes]:
@@ -63,6 +65,42 @@ class OutputTests(unittest.TestCase):
         elapsed = int(match.group(4))  # type: ignore[union-attr]
         self.assertGreater(elapsed, 0)
         self.assertLess(elapsed, 120 * 10**9)
+
+
+class SwitchingProofTests(unittest.TestCase):
+    """The added fields show whether the interpreter really switched threads inside the racy window."""
+
+    def fields(self, *args: str) -> tuple[int, int, int, int, int]:
+        match = LINE.match(run(*args).stdout.decode().rstrip("\n"))
+        assert match is not None
+        return (
+            int(match.group(4)),
+            int(match.group(6)),
+            int(match.group(7)),
+            int(match.group(8)),
+            int(match.group(9)),
+        )
+
+    def test_the_racy_counter_is_bounded_and_the_clock_runs_forward(self) -> None:
+        vtime, final, expect, start, end = self.fields()
+        self.assertEqual(expect, RACY_EXPECT)
+        self.assertTrue(0 < final <= expect)
+        self.assertGreater(end, start)
+        self.assertEqual(vtime, end - start)
+
+    def test_natively_an_update_is_lost_in_some_run(self) -> None:
+        lost = [expect - final for _, final, expect, _, _ in (self.fields() for _ in range(5))]
+        self.assertTrue(any(n > 0 for n in lost), lost)
+
+    def test_with_one_second_slices_no_update_is_lost(self) -> None:
+        _, final, expect, _, _ = self.fields("--switch=1.0")
+        self.assertEqual(final, expect)
+
+    def test_the_existing_fields_come_first_and_keep_their_names(self) -> None:
+        text = run().stdout.decode()
+        order = ["lang=", "lock_order=", "arrival=", "rand=", "vtime_ns=", "extra=", "racy_final=", "racy_expect=", "t_start_ns=", "t_end_ns="]
+        positions = [text.index(name) for name in order]
+        self.assertEqual(positions, sorted(positions))
 
 
 class ContractTests(unittest.TestCase):

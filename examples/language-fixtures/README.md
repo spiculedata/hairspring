@@ -176,7 +176,8 @@ python3 python/check_native.py --runs 50 --switch-arm   # the numbers: how often
 line of hashes (lock order, finishing order, a random value, elapsed monotonic time, queue drain order).
 
 The self-check has the same rules as the others (the detector and the program agree on every run, the locked twin never
-fires, the racy program fires at least once, exit 77 "skipped" on a one-CPU process), and prints how often each mode
+fires, the racy program fires at least once; unlike the others there is no exit 77 "skipped", because the interpreter
+lock switches threads on one CPU too), and prints how often each mode
 fired and the spread of the final values. [docs/python-sdk.md](../../docs/python-sdk.md) records the numbers; in short,
 CPython's interpreter lock hands over every few milliseconds inside the busy loop, so `buggy` loses updates in
 essentially every run, and `--switch=1.0` removes the race.

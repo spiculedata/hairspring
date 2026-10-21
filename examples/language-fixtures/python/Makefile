@@ -17,7 +17,7 @@ test: unit native
 unit:
 	$(PYTHON) -m unittest discover -s . -p 'test_*.py'
 
-# Exit 77 means the racy check was skipped on a single-CPU host (the threads cannot overlap): reported, not a failure.
+# No "skipped" result as in the other fixtures: CPython's interpreter lock switches threads on one CPU as well.
 native:
-	$(PYTHON) check_native.py --runs $(RUNS) --switch-arm || [ $$? -eq 77 ]
-	$(PYTHON) check_native.py --runs $(CONTROL_RUNS) --control || [ $$? -eq 77 ]
+	$(PYTHON) check_native.py --runs $(RUNS) --switch-arm
+	$(PYTHON) check_native.py --runs $(CONTROL_RUNS) --control

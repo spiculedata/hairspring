@@ -10,8 +10,9 @@ the report has the assert lines of `py.counter_exact` and `py.all_started`; and 
 always ends at 4,000, and the racy program fires at least once. Prints one summary line per mode, with how often the
 race fired and the spread of the final values.
 
-Exit status: 0 when everything holds, 1 when not, 77 when the racy program never fired and this process may use only one
-CPU (threads cannot overlap there; the twin was still checked), 64 for a usage error.
+Exit status: 0 when everything holds, 1 when not, 64 for a usage error. There is no "skipped" status (77) as in the
+C, C++ and Go checks: CPython's interpreter lock switches threads on one CPU as well, so the race needs no second CPU
+and a racy program that never fires is a failure wherever it runs.
 
 `--control` feeds the racy program in as the "locked twin": the check must then FAIL, or it checks nothing.
 """
@@ -32,7 +33,6 @@ from pathlib import Path
 OK = 0
 FAILED = 1
 USAGE = 64
-SKIPPED = 77
 EXPECTED = 4000
 DEFAULT_RUNS = 50
 DEFAULT_TIMEOUT_SECONDS = 300
@@ -122,22 +122,15 @@ def summarise(mode: str, observations: Sequence[Observation]) -> Summary:
     )
 
 
-def verdict(summaries: dict[str, Summary], cpus: int) -> tuple[int, list[str]]:
+def verdict(summaries: dict[str, Summary]) -> tuple[int, list[str]]:
     """The exit status and the reasons, from the buggy and fixed summaries."""
     messages: list[str] = []
     fixed, buggy = summaries["fixed"], summaries["buggy"]
-    status = OK
     if fixed.fired != 0 or fixed.exact != fixed.runs:
         messages.append("FAIL the locked twin lost an update")
-        status = FAILED
     if buggy.fired == 0:
-        if cpus < 2:
-            messages.append(f"skip: the racy program never fired, and this process may use {cpus} CPU")
-            status = status if status != OK else SKIPPED
-        else:
-            messages.append(f"FAIL the racy program never fired in {buggy.runs} runs on {cpus} CPUs")
-            status = FAILED
-    return status, messages
+        messages.append(f"FAIL the racy program never fired in {buggy.runs} runs: the planted race is not reachable")
+    return (FAILED if messages else OK), messages
 
 
 def run_once(python: str, args: Sequence[str], timeout: float) -> RunResult:
@@ -157,13 +150,6 @@ def collect(python: str, mode: str, args: Sequence[str], runs: int, timeout: flo
         except (ContractError, subprocess.TimeoutExpired) as error:
             raise ContractError(f"{mode} run {number}: {error}") from error
     return summarise(mode, observations)
-
-
-def available_cpus() -> int:
-    try:
-        return len(os.sched_getaffinity(0))
-    except AttributeError:
-        return os.cpu_count() or 1
 
 
 def describe(s: Summary, label: str) -> str:
@@ -209,7 +195,7 @@ def main(argv: Sequence[str]) -> int:
     print(describe(wide, "wide"))
     if switch is not None:
         print(describe(switch, "buggy --switch=1.0 (informational)"))
-    status, messages = verdict({"buggy": buggy, "fixed": fixed}, available_cpus())
+    status, messages = verdict({"buggy": buggy, "fixed": fixed})
     for message in messages:
         print(message, file=sys.stderr if message.startswith("FAIL") else sys.stdout)
     if options.control:

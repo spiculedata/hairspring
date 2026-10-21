@@ -75,6 +75,26 @@ class CommandLineTests(unittest.TestCase):
         self.assertTrue(LINE.match(done.stdout.decode().strip()))
 
 
+class FailureTests(unittest.TestCase):
+    def test_a_failed_stdout_write_exits_3_without_a_traceback_and_the_report_says_so(self) -> None:
+        read_end, write_end = os.pipe()
+        os.close(read_end)  # stdout goes to a pipe nobody reads
+        env = {k: v for k, v in os.environ.items() if k not in CLEARED}
+        done = subprocess.run(
+            [sys.executable, "-I", "-B", str(FIXTURE), "fixed"],
+            stdout=write_end,
+            stderr=subprocess.PIPE,
+            env=env,
+            timeout=300,
+            check=False,
+        )
+        os.close(write_end)
+        self.assertEqual(done.returncode, 3)
+        self.assertNotIn(b"Traceback", done.stderr)
+        end = [e for e in events(done.stderr) if e["kind"] == "end"][0]
+        self.assertEqual(end["status"], 3)
+
+
 class FixedModeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.done = run("fixed")
@@ -179,6 +199,11 @@ class ContractTests(unittest.TestCase):
         spin = self._function("spin")
         names = {n.id for n in ast.walk(spin) if isinstance(n, ast.Name)}
         self.assertNotIn("hs", names)
+
+    def test_the_start_barrier_has_no_timeout(self) -> None:
+        # A plain barrier: a worker that cannot start aborts it, so nothing waits for a clock.
+        self.assertNotIn("TIMEOUT", self.source)
+        self.assertNotIn("timeout", self.source)
 
     def test_the_sdk_found_is_the_one_in_the_repository(self) -> None:
         self.assertTrue((SDK_SRC / "hairspring" / "__init__.py").is_file())

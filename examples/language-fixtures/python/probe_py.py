@@ -14,11 +14,19 @@ Four `threading.Thread`s share a `threading.Lock`, an unlocked check-then-act co
 It prints exactly one line on stdout and exits 0:
 
     PROBE v1 lang=py lock_order=<16 hex> arrival=<16 hex> rand=<16 hex> vtime_ns=<20 digits> extra=<16 hex>
+        racy_final=<20 digits> racy_expect=<20 digits> t_start_ns=<20 digits> t_end_ns=<20 digits>
 
-`lock_order` and `arrival` are FNV-1a 64 hashes of the thread numbers in that order, `rand` is 64 bits from the
-interpreter's random source (so an entropy leak shows as a difference between same-seed runs), `vtime_ns` is the
-monotonic clock difference between start and end, and `extra` hashes the order the queue drains in. `--switch=1.0`
-(the second profile) calls `sys.setswitchinterval(1.0)` before any thread starts. Usage error: exit 64.
+(one line). `lock_order` and `arrival` are FNV-1a 64 hashes of the thread numbers in that order, `rand` is 64 bits from
+the interpreter's random source (so an entropy leak shows as a difference between same-seed runs), `vtime_ns` is the
+monotonic clock difference between start and end, and `extra` hashes the order the queue drains in. Those six fields
+are the original contract.
+
+The last four fields show that the interpreter really switched threads inside the racy window, which a determinism
+check alone does not: `racy_final` is the unlocked counter after 4 threads x 200 read-spin-write rounds and
+`racy_expect` is 800, so `racy_expect - racy_final` is the number of updates lost (0 means no thread switch ever
+landed in a window); `t_start_ns` and `t_end_ns` are the monotonic clock before the threads start and after they are
+joined (`vtime_ns` is their difference), so a clock that never advances, or never reaches the switch interval, shows.
+`--switch=1.0` (the second profile) calls `sys.setswitchinterval(1.0)` before any thread starts. Usage error: exit 64.
 """
 
 from __future__ import annotations
@@ -32,8 +40,9 @@ import time
 from collections.abc import Sequence
 
 THREADS = 4
-ROUNDS = 100
-SPIN_ROUNDS = 500
+ROUNDS = 200
+SPIN_ROUNDS = 1000
+RACY_EXPECTED = THREADS * ROUNDS
 ITEMS_PER_THREAD = 3
 SWITCH_ARGUMENT = "--switch=1.0"
 SWITCH_INTERVAL_SECONDS = 1.0
@@ -101,10 +110,12 @@ class Probe:
                 return out
 
 
-def line(probe: Probe, rand: int, elapsed_ns: int) -> bytes:
+def line(probe: Probe, rand: int, start_ns: int, end_ns: int) -> bytes:
     text = (
         f"PROBE v1 lang=py lock_order={hash_of(probe.lock_order):016x} arrival={hash_of(probe.arrival):016x} "
-        f"rand={rand:016x} vtime_ns={elapsed_ns:020d} extra={hash_of(probe.drained()):016x}\n"
+        f"rand={rand:016x} vtime_ns={end_ns - start_ns:020d} extra={hash_of(probe.drained()):016x} "
+        f"racy_final={probe.counter.value:020d} racy_expect={RACY_EXPECTED:020d} "
+        f"t_start_ns={start_ns:020d} t_end_ns={end_ns:020d}\n"
     )
     return text.encode("ascii")
 
@@ -129,8 +140,8 @@ def main(argv: Sequence[str]) -> int:
         thread.start()
     for thread in threads:
         thread.join()
-    elapsed = time.monotonic_ns() - started
-    write_stdout(line(probe, random.getrandbits(64), elapsed))
+    ended = time.monotonic_ns()
+    write_stdout(line(probe, random.getrandbits(64), started, ended))
     return 0
 
 

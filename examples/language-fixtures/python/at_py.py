@@ -50,7 +50,6 @@ ITERATIONS = 1000
 WINDOW = 1000
 WINDOW_WIDE = 10000
 EXPECTED = THREADS * ITERATIONS
-BARRIER_TIMEOUT_SECONDS = 120
 SWITCH_ARGUMENT = "--switch=1.0"
 SWITCH_INTERVAL_SECONDS = 1.0
 EXIT_INVARIANT = 3
@@ -112,7 +111,9 @@ class Shared:
         self.arrival: list[int] = []
         self.arrival_lock = threading.Lock()
         self.failures: list[str] = []
-        self.barrier = threading.Barrier(THREADS, timeout=BARRIER_TIMEOUT_SECONDS)
+        # A plain barrier: a worker that fails (or cannot start) aborts it, which wakes the others, so nothing waits on a
+        # clock.
+        self.barrier = threading.Barrier(THREADS)
 
 
 def spin(rounds: int) -> int:
@@ -216,7 +217,11 @@ def main(argv: Sequence[str]) -> int:
     final = shared.state.counter
     hs.always(final == EXPECTED, f"{LANG}.counter_exact", "counter equals T*K", final, EXPECTED, THREADS, ITERATIONS)
     hs.sometimes(shared.started == THREADS, f"{LANG}.all_started", "all workers started", shared.started)
-    write_stdout(result_line(config, final, order_hash(shared.arrival), random.getrandbits(64)))
+    try:
+        write_stdout(result_line(config, final, order_hash(shared.arrival), random.getrandbits(64)))
+    except OSError as error:
+        print(f"invariant failure: the stdout line could not be written: {error}", file=sys.stderr)
+        hs.exit(EXIT_INVARIANT)
     return 0
 
 
