@@ -14,6 +14,10 @@ const SEEDS: [SeedSelection; 3] = [
     SeedSelection::Guided,
 ];
 
+fn no_failure(rated: u64) -> Subject {
+    Subject::NoFailure { rated, unrated: 0 }
+}
+
 fn builds() -> Vec<BuildRecord> {
     [false, true]
         .into_iter()
@@ -44,7 +48,7 @@ fn knowledge_sets() -> Vec<Vec<KnowledgeFlag>> {
 
 fn subjects() -> Vec<Subject> {
     vec![
-        Subject::NoFailure { rated: 4790 },
+        no_failure(4790),
         Subject::Failure {
             seed: 1016,
             state: FindingState::SingleRun,
@@ -206,17 +210,13 @@ fn an_arm_with_no_knowledge_list_produces_no_claim_and_is_listed_as_incomplete()
 fn an_empty_knowledge_list_is_a_declaration() {
     let l = label(PLAIN, &[], SeedSelection::Blind);
     assert!(l.declared());
-    assert!(generate(&l, &Subject::NoFailure { rated: 10 })
-        .text
-        .is_some());
+    assert!(generate(&l, &no_failure(10)).text.is_some());
 }
 
 #[test]
 fn the_strongest_phrase_is_unmodified_binary_blind_seeds_with_a_configuration_note() {
     let l = label(PLAIN, &[], SeedSelection::Blind);
-    let text = generate(&l, &Subject::NoFailure { rated: 4790 })
-        .text
-        .unwrap();
+    let text = generate(&l, &no_failure(4790)).text.unwrap();
     assert!(text.contains("unmodified binary, blind seeds"), "{text}");
     assert!(
         text.contains("declared configuration knowledge: none"),
@@ -246,7 +246,7 @@ fn targeted_workload_and_bug_shaped_invariant_always_appear_next_to_the_claim() 
 fn every_declared_flag_is_stated_in_the_note_and_the_chips() {
     for l in every_label() {
         let flags = l.knowledge.clone().unwrap();
-        let text = generate(&l, &Subject::NoFailure { rated: 9 }).text.unwrap();
+        let text = generate(&l, &no_failure(9)).text.unwrap();
         let chips = l.chips().join(" | ");
         for f in flags {
             assert!(text.contains(f.phrase()), "{text} lacks {}", f.phrase());
@@ -258,16 +258,22 @@ fn every_declared_flag_is_stated_in_the_note_and_the_chips() {
 #[test]
 fn a_zero_failure_claim_states_the_trial_count_and_the_upper_bound() {
     let l = label(PLAIN, &[], SeedSelection::Blind);
-    let text = generate(&l, &Subject::NoFailure { rated: 300 })
-        .text
-        .unwrap();
+    let text = generate(
+        &l,
+        &Subject::NoFailure {
+            rated: 300,
+            unrated: 0,
+        },
+    )
+    .text
+    .unwrap();
     assert!(
         text.starts_with("No trial failed a property in 300 rated trials"),
         "{text}"
     );
     assert!(
         text.contains(
-            "exact one-sided 95% upper bound on the failure rate: 0.99% (binomial, 0 of 300)"
+            "exact one-sided 95% upper bound on the failure rate: 1.00% (binomial, 0 of 300)"
         ),
         "{text}"
     );
@@ -278,7 +284,7 @@ fn a_zero_failure_claim_states_the_trial_count_and_the_upper_bound() {
 #[test]
 fn a_zero_failure_claim_over_few_trials_states_the_exact_bound() {
     let l = label(PLAIN, &[], SeedSelection::Blind);
-    let text = generate(&l, &Subject::NoFailure { rated: 1 }).text.unwrap();
+    let text = generate(&l, &no_failure(1)).text.unwrap();
     assert!(text.contains("95.00% (binomial, 0 of 1)"), "{text}");
     assert!(!text.contains("3/1") && !text.contains("at most"), "{text}");
 }
@@ -286,7 +292,7 @@ fn a_zero_failure_claim_over_few_trials_states_the_exact_bound() {
 #[test]
 fn a_claim_over_zero_rated_trials_is_never_generated() {
     let l = label(PLAIN, &[], SeedSelection::Blind);
-    let out = generate(&l, &Subject::NoFailure { rated: 0 });
+    let out = generate(&l, &no_failure(0));
     assert_eq!(out.text, None);
     assert!(!out.withheld.is_empty());
 }

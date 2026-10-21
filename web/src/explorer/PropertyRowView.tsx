@@ -6,22 +6,22 @@ import { seedPath } from '../router';
 import { seedsPath, type SeedFilters } from '../seeds/filters';
 import type { PropertyRow } from '../types';
 import { formatCount, seedListLabel, seenInInconclusive, statusLabel, statusMark } from '../wording';
+import { DEFAULT_ROOT_FONT_PX, ROW_CHROME_PX, rowHeightPx } from './rowHeight';
 
-/** Height of every row, which is what makes windowing a sum. */
-export const ROW_HEIGHT = 88;
-/** Vertical padding (2 x 8px) plus the 1px row border, set in explorer.css. */
-const ROW_CHROME = 17;
-/** Every cell's content sits in a block of exactly this height with overflow hidden, so no row can grow. */
-export const CLIP_HEIGHT = ROW_HEIGHT - ROW_CHROME;
+/** Height of every row at the default root font size; the table uses `rowHeightPx(root)` for the reader's own. */
+export const ROW_HEIGHT = rowHeightPx(DEFAULT_ROOT_FONT_PX);
+/** Every cell's content sits in a block of the row height less its chrome, with overflow hidden, so no row can grow. */
+export const clipHeightPx = (rowHeight: number): number => rowHeight - ROW_CHROME_PX;
+export const CLIP_HEIGHT = clipHeightPx(ROW_HEIGHT);
 const ID_CHARS = 96;
 const MSG_CHARS = 140;
 const LOC_CHARS = 80;
 
 export const kindLabel = (kind: string): string => kind.replace(/_/g, ' ');
 
-function Clip({ children }: { children: ReactNode }) {
+function Clip({ height, children }: { height: number; children: ReactNode }) {
   return (
-    <div className="cell-clip" style={{ height: CLIP_HEIGHT }}>
+    <div className="cell-clip" style={{ height }}>
       {children}
     </div>
   );
@@ -73,19 +73,30 @@ function listFilter(row: PropertyRow): SeedFilters {
 }
 
 /** One property as a table row. Guest strings (id, message, location) go through `GuestText` and nowhere else. */
-export function PropertyRowView({ row, rowIndex, runId }: { row: PropertyRow; rowIndex: number; runId?: string }) {
+export function PropertyRowView({
+  row,
+  rowIndex,
+  runId,
+  rowHeight = ROW_HEIGHT,
+}: {
+  row: PropertyRow;
+  rowIndex: number;
+  runId?: string;
+  rowHeight?: number;
+}) {
+  const clip = clipHeightPx(rowHeight);
   return (
-    <tr aria-rowindex={rowIndex} style={{ height: ROW_HEIGHT }}>
+    <tr aria-rowindex={rowIndex} style={{ height: rowHeight }}>
       <td className={`status status-${row.status}`}>
-        <Clip>
+        <Clip height={clip}>
           <span aria-hidden="true">{statusMark(row.status)}</span> {statusLabel(row.status)}
         </Clip>
       </td>
       <td>
-        <Clip>{kindLabel(row.kind)}</Clip>
+        <Clip height={clip}>{kindLabel(row.kind)}</Clip>
       </td>
       <th scope="row" className="prop-id">
-        <Clip>
+        <Clip height={clip}>
           <span className="clip-line prop-name">
             <GuestText text={row.guest.id} max={ID_CHARS} expandable={false} />
           </span>
@@ -96,7 +107,7 @@ export function PropertyRowView({ row, rowIndex, runId }: { row: PropertyRow; ro
         </Clip>
       </th>
       <td>
-        <Clip>
+        <Clip height={clip}>
           <RateCell cell={row.rate} />
           {row.unmet !== null && (
             <span className="clip-line unmet-note" title={row.unmet}>
@@ -109,7 +120,7 @@ export function PropertyRowView({ row, rowIndex, runId }: { row: PropertyRow; ro
         </Clip>
       </td>
       <td>
-        <Clip>
+        <Clip height={clip}>
           <span className="clip-line">
             <FirstFailingSeed runId={runId} seed={row.first_failing_seed} />
           </span>
@@ -117,7 +128,7 @@ export function PropertyRowView({ row, rowIndex, runId }: { row: PropertyRow; ro
         </Clip>
       </td>
       <td className="num">
-        <Clip>{formatCount(row.evals)}</Clip>
+        <Clip height={clip}>{formatCount(row.evals)}</Clip>
       </td>
     </tr>
   );

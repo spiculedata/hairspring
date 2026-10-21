@@ -2,7 +2,8 @@ import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { row } from './fixtures';
 import { COLUMN_KEYS, COLUMN_WIDTHS_PX, columnBudgetPx } from './columns';
-import { CLIP_HEIGHT, ROW_HEIGHT } from './PropertyRowView';
+import { CLIP_HEIGHT, PropertyRowView, ROW_HEIGHT } from './PropertyRowView';
+import { ROW_CHROME_PX, rowHeightPx } from './rowHeight';
 import { PropertyTable } from './PropertyTable';
 
 const many = (n: number) =>
@@ -121,11 +122,29 @@ describe('PropertyTable', () => {
     expect(body).toContain('clip-line');
   });
 
-  it('sets each column to its budgeted width, and the table to the budget so it scrolls instead of squeezing', () => {
+  it('sets each fixed column to its width, leaves one to take the rest, and the table minimum to the budget so it scrolls instead of squeezing', () => {
     const html = renderToString(<PropertyTable properties={[row()]} />);
-    const widths = [...html.matchAll(/<col style="width:(\d+)px"/g)].map((m) => Number(m[1]));
-    expect(widths).toEqual(COLUMN_KEYS.map((k) => COLUMN_WIDTHS_PX[k]));
+    const cols = [...html.matchAll(/<col(?: style="width:(\d+)px")?\/?>/g)].map((m) => (m[1] === undefined ? undefined : Number(m[1])));
+    expect(cols).toEqual(COLUMN_KEYS.map((k) => COLUMN_WIDTHS_PX[k]));
+    expect(cols.filter((w) => w === undefined)).toHaveLength(1);
     expect(html).toContain(`min-width:${columnBudgetPx()}px`);
+  });
+
+  it('sizes its rows for the reader\'s root font size, so a larger default does not clip the stacked rate cell', () => {
+    const worst = row({ status: 'unmet', failures_seen_in_inconclusive_trials: 3, unmet: 'x', rate: { kind: 'zero_events', basis: 'TrialsTrue', n: 4790, upper_bound: 0.0006 } });
+    const clipAt = (rootPx: number) => {
+      const html = renderToString(
+        <table>
+          <tbody>
+            <PropertyRowView row={worst} rowIndex={2} rowHeight={rowHeightPx(rootPx)} />
+          </tbody>
+        </table>,
+      );
+      return Number(/class="cell-clip" style="height:(\d+)px"/.exec(html)?.[1]);
+    };
+    expect(clipAt(16)).toBe(CLIP_HEIGHT);
+    expect(clipAt(20)).toBe(rowHeightPx(20) - ROW_CHROME_PX);
+    expect(clipAt(20)).toBeGreaterThan(clipAt(16));
   });
 
   it('tells a narrow screen that the table scrolls sideways', () => {

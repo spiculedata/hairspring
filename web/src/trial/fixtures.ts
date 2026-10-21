@@ -86,6 +86,7 @@ export function trialRow(over: Partial<TrialRow> = {}): TrialRow {
     class: 'violation',
     failing_count: 1,
     failing_idx: [0],
+    digest_unreadable: false,
     timed_out: false,
     degraded: false,
     perturbing: false,

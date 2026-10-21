@@ -439,6 +439,36 @@ fn a_clean_run_from_a_trusted_worker_with_a_declared_label_gets_a_generated_clai
 }
 
 #[test]
+fn a_claim_says_how_many_trials_were_not_rated_for_any_reason_not_only_inconclusive() {
+    let (svc, _store, engine) = setup();
+    let (remote, secret) = svc.register_remote_worker("remote", "{}").unwrap();
+    svc.set_worker_trust(&remote.id, true).unwrap();
+    let job = lease_with_budget(&svc, &engine, &remote.id, 4);
+    let ok = props_multi(&[("a.fine", AssertKind::Always, "fine", 4, 0)]);
+    let mut rec = Recorder::new();
+    let reports = vec![
+        rec.pass(1, &ok),
+        rec.pass(2, &ok),
+        rec.pass(3, &ok.clone().with_host_fault()),
+        rec.pass(4, &ok),
+    ];
+    svc.ingest_trials_with_secret(&job.job_id, &remote.id, Some(&secret), &reports)
+        .unwrap();
+    finish(&svc, &job, &remote.id, passed(4, Some(4)));
+    let p = svc
+        .property_page(&job.run_id, &PropertyQuery::default(), Some(&declared()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(p.header.trials_rated, Some(3));
+    let text = p.claim.text.as_deref().unwrap_or_default();
+    assert!(
+        text.starts_with("No trial failed a property in 3 rated trials (1 trial not rated);"),
+        "{:?} {text}",
+        p.claim.withheld
+    );
+}
+
+#[test]
 fn a_targeted_workload_flag_always_travels_with_the_generated_claim() {
     let (svc, run) = clean_run(true);
     let mut label = declared();
