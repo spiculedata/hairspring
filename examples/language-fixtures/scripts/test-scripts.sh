@@ -72,8 +72,10 @@ id=$lang
 vals="[$final,4000,4,1000]"
 [ "${FAKE:-}" = twovals ] && vals="[$final,4000,0,0]"
 [ "${FAKE:-}" = garbage ] && vals="[7,1,2,3]"
-thread="t#1"
+thread="t#5"
+[ "$lang" = go ] && thread="go"
 [ "${FAKE:-}" = workerthread ] && thread="worker-1"
+[ "${FAKE:-}" = workerkey ] && thread="t#2"
 hits=1
 [ "${FAKE:-}" = twice ] && hits=2
 
@@ -621,6 +623,9 @@ libcase "line 6 is not ticked when the stdout line check (L8) failed" 0 'lang=t;
 libcase "line 6 is not ticked when the native runs (B4) failed" 0 'lang=t; step L6 a true; step L8 a true; step B4 a false; alignment_checklist a b c; grep -q "^- \[ \] 6\. .*(not ticked: B4 FAIL)" "$body"'
 libcase "line 3 needs the constants check" 0 'lang=t; step B7 a true; step B4 a true; alignment_checklist a b c; grep -q "^- \[ \] 3\. .*(not ticked: L3 MISSING)" "$body"'
 libcase "lines 1, 3, 4 and 6 state what the tool does not check" 0 'lang=t; alignment_checklist a b c; grep -q "^- \[.\] 1\. .*not checked by the tool" "$body" && grep -q "^- \[.\] 3\. .*not checked by the tool" "$body" && grep -q "^- \[.\] 4\. .*not checked by the tool" "$body" && grep -q "^- \[.\] 6\. .*not checked by the tool" "$body"'
+libcase "line 4 names its known false accept" 0 'lang=t; alignment_checklist a b c; grep -q "^- \[.\] 4\. .*if (started == 4) log();" "$body"'
+libcase "line 3 says it checks constant values, not their use" 0 'lang=t; alignment_checklist a b c; grep -q "^- \[.\] 3\. .*constant values.*not that every mode uses them" "$body"'
+libcase "line 6 says exactly what the thread check is" 0 'lang=t; alignment_checklist a b c; grep -q "^- \[.\] 6\. .*key.*t#5.*Go: go" "$body"'
 libcase "line 9 needs the usage evidence as well" 0 'lang=t; step L9 a true; step B4 a true; alignment_checklist a b c; grep -q "^- \[ \] 9\. .*L2 MISSING" "$body"'
 
 # The source commit is labelled +dirty when the tree has uncommitted changes.
@@ -662,7 +667,11 @@ expect "constants evidence without a file is a usage error" 64 sh "$evidence" co
 # line 6: witness values need a parsable final in stdout, and the evaluating thread is not a worker
 expect "witness evidence rejects garbage stdout even when the vals look plausible" 1 sh "$evidence" witness t "$(sample garbage buggy)"
 expect "witness evidence rejects an assertion evaluated on a worker thread" 1 sh "$evidence" witness t "$(sample workerthread buggy)"
-expect "witness evidence prints the evaluating thread" 0 sh -c "sh '$evidence' witness t '$(sample racy buggy)' | grep -q 'evaluated on thread t#1'"
+expect "witness evidence prints the evaluating thread" 0 sh -c "sh '$evidence' witness t '$(sample racy buggy)' | grep -q 'evaluated on thread t#5'"
+expect "witness evidence rejects an assertion evaluated on a worker's claim-order key (t#2)" 1 sh "$evidence" witness t "$(sample workerkey buggy)"
+expect "witness evidence rejects each worker key t#1 to t#4" 0 sh -c "for k in 1 2 3 4; do sed 's/\"thread\":\"t#5\"/\"thread\":\"t#'\$k'\"/' '$(sample racy buggy).err' > '$tmp/k.err'; cp '$(sample racy buggy).out' '$tmp/k.out'; sh '$evidence' witness t '$tmp/k' >/dev/null 2>&1 && exit 1; done; exit 0"
+expect "witness evidence accepts the Go main thread key (go)" 0 sh "$evidence" witness go "$(sample racy buggy FAKE_LANG=go)"
+expect "witness evidence rejects a claim-order key for Go" 1 sh "$evidence" witness go "$(sample workerkey buggy FAKE_LANG=go)"
 
 # line 2: extra arguments are rejected for every language, Python alone accepts --switch=1.0
 expect "usage evidence rejects a program that accepts an extra argument" 1 env FAKE=extraok FAKE_STATE="$(newstate)" sh "$evidence" usage t "$fake"

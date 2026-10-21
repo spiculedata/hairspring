@@ -146,7 +146,9 @@ the workflow file and the commit it ran at, the runner image name and version), 
 uploads next to the record, so the bytes in the run are the bytes the record describes. The job then downloads what it
 uploaded and runs `scripts/verify-download.sh <artifact-dir> <record>`, a separate step that recomputes the sha256 of the
 downloaded bytes (for the Python package, its tree hash) and compares it with `SHA256SUMS` and with the record; run the
-same script on an artifact you downloaded yourself. Checks that a not-applicable language skips are shown as `N/A`, never
+same script on an artifact you downloaded yourself. The record is uploaded before that download check runs, so the
+downloaded-sha256 evidence is in the job summary of the "Verify the artifact as downloaded" step, not in the record: cite
+that step (run and variant) wherever the as-downloaded comparison is asked for. Checks that a not-applicable language skips are shown as `N/A`, never
 as `PASS`, and each checklist line names what the tool does not check (`not checked by the tool: ...`). The checks are strict: B2 requires every call to the busy loop to be a load,
 the call and a store of the same address (compilers may emit one copy of the window per mode), B5 requires every
 protocol line and the result line to be one complete write with a matching return value, and B1 builds twice (the second

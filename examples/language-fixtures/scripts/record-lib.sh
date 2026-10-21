@@ -295,10 +295,10 @@ alignment_checklist() {
   say ""
   tickline 1 "$1 (not checked by the tool: that no build tag or -D flag chooses the mode)" B1
   tickline 2 "$2" L2
-  tickline 3 "T = 4, K = 1000, W = 1000, W_wide = 10000 (read from the constants of the source, L3); wide differs from buggy only in the loop count (B7 shows the source; not checked by the tool: that nothing else differs)." B7 B4 L3
-  tickline 4 "Start barrier: each worker increments started, then waits until started == 4 (not checked by the tool: that the wait is in the same function as the increment; it checks that a wait follows the increment within six lines or in a function called there, and ignores comments and the sometimes() call)." L4
+  tickline 3 "T = 4, K = 1000, W = 1000, W_wide = 10000 (L3 checks the constant values in the source, not that every mode uses them; B2 shows the immediates of the window for the compiled languages); wide differs from buggy only in the loop count (B7 shows the source; not checked by the tool: that nothing else differs)." B7 B4 L3
+  tickline 4 "Start barrier: each worker increments started, then waits until started == 4 (not checked by the tool: that the wait is in the same function as the increment; it checks that a wait follows the increment within six lines or in a function called there, and ignores comments and the sometimes() call; known false accept: a line such as \`if (started == 4) log();\` after the increment is taken for a wait)." L4
   tickline 5 "The window: load; spin; store; nothing else between them (B2)." B2
-  tickline 6 "Main, after joining: always(final == T*K) with four witness values [final, 4000, 4, 1000], then sometimes(started == 4), each once (not checked by the tool: that the evaluating thread is exactly the main thread; it checks that it is not a worker thread)." L6 B4 L8
+  tickline 6 "Main, after joining: always(final == T*K) with four witness values [final, 4000, 4, 1000], then sometimes(started == 4), each once (L6 checks that the evaluating thread's key is the key the SDK gives the main thread, t#5 (Go: go), which the workers' keys t#1 to t#4 are not; not checked by the tool: which OS thread that key belongs to)." L6 B4 L8
   tickline 7 "Ids are \`$lang.counter_exact\` and \`$lang.all_started\`." L7
   tickline 8 "One stdout line in the contract form, one write; nothing else on stdout." L8 B5
   tickline 9 "Exit status 0 whatever the property says; 3 for an internal invariant failure; 64 for a usage error." L9 L2 B4

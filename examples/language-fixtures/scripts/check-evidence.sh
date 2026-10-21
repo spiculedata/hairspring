@@ -295,16 +295,17 @@ cmd_witness() {
   fi
   witness_id "$lang.counter_exact" always "$final" || status=1
   witness_id "$lang.all_started" sometimes "" || status=1
-  # The properties are evaluated by the main thread after the join. The tool checks that the evaluating thread is not one of
-  # the workers; it cannot tell the main thread from any other non-worker thread.
+  # The properties are evaluated by the main thread after the join. The SDKs give the four workers the claim-order keys
+  # t#1 to t#4 (and the stable keys worker-N once named), and the main thread, which claims its slot after them, t#5; Go
+  # sends no thread lines and reports the key "go". The check requires exactly the main thread's key.
   thread=$(grep "\"kind\":\"assert\".*\"id\":\"$lang.counter_exact\"" "$err" | sed -n 's/.*"thread":"\([^"]*\)".*/\1/p' | head -1)
   echo "$lang.counter_exact evaluated on thread $thread"
-  case "$thread" in
-    "" | worker*)
-      echo "FAIL $lang.counter_exact was not evaluated on the main thread (thread '$thread')" >&2
-      status=1
-      ;;
-  esac
+  main_key="t#5"
+  [ "$lang" = go ] && main_key="go"
+  if [ "$thread" != "$main_key" ]; then
+    echo "FAIL $lang.counter_exact was not evaluated on the main thread (thread '$thread', the main thread's key is '$main_key')" >&2
+    status=1
+  fi
   [ "$status" -ne 0 ] || echo "ok   each property is evaluated once, with the witness values [$final, $EXPECTED, 4, 1000] for $lang.counter_exact"
   return $status
 }
