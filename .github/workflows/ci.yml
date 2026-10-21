@@ -63,6 +63,23 @@ jobs:
       - name: Signal reports under AddressSanitizer and UBSan
         run: make asan-signals CC=${{ matrix.cc }}
 
+  rust-sdk:
+    name: Rust SDK (release, fat LTO)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_PROFILE_RELEASE_LTO: fat
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The debug run is part of the `rust` job above. This one checks the linker-collected catalog with optimisation,
+      # LTO and section garbage collection, and runs the seccomp "no system call, no allocation" check and the planted
+      # race natively on x86-64 Linux.
+      - name: Test
+        run: cargo test -p hairspring-sdk --locked --release
+
   go-example:
     name: Go example
     runs-on: ubuntu-latest

@@ -681,7 +681,8 @@ instead of a pipe. Use the events file for multi-process runs on macOS.
 
 ## Not done
 
-* Rust SDK, `hs_choice` and the tape (layout not agreed), `hairspring catalog <binary>` (C2), shared objects.
+* `hs_choice` and the tape (layout not agreed), `hairspring catalog <binary>` (C2), shared objects. (The Rust SDK is
+  in [rust-sdk.md](rust-sdk.md).)
 * Plan T2 (perf counters) and T3 (schedule perturbation under Hermit): need the Linux runner with perf and Hermit.
 * Verification of the C++ template behaviour under g++ on Linux after this change (the detection is tested with clang
   on macOS, with the section deliberately bypassed; the g++ run is pending).

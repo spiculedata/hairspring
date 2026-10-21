@@ -1,0 +1,74 @@
+[package]
+name = "hairspring-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "Hairspring guest SDK for Rust: in-source property assertions that speak guest protocol v1 (no dependencies)"
+license = "Apache-2.0"
+publish = false
+# Const functions that take `&mut` (the offline catalog text) need 1.83; the tests use `std::io::pipe` (1.87).
+rust-version = "1.87"
+autobins = false
+autoexamples = true
+
+# Sample programs. A binary's catalog holds every assertion compiled into it, so each scenario is its own binary:
+# the tests here and the conformance tests in hairspring-props run them and look at what they write.
+[[bin]]
+name = "hs_sample_basic"
+path = "samples/basic.rs"
+
+[[bin]]
+name = "hs_sample_merge"
+path = "samples/merge.rs"
+
+[[bin]]
+name = "hs_sample_fork"
+path = "samples/fork.rs"
+
+[[bin]]
+name = "hs_sample_generic"
+path = "samples/generic.rs"
+
+[[bin]]
+name = "hs_sample_threads"
+path = "samples/threads.rs"
+
+[[bin]]
+name = "hs_sample_exit_status"
+path = "samples/exit_status.rs"
+
+[[bin]]
+name = "hs_sample_empty"
+path = "samples/empty.rs"
+
+[[bin]]
+name = "hs_sample_limits"
+path = "samples/limits.rs"
+
+[[bin]]
+name = "hs_sample_conflict"
+path = "samples/conflict.rs"
+
+[[bin]]
+name = "hs_sample_spawn"
+path = "samples/spawn.rs"
+
+[[bin]]
+name = "hs_sample_big"
+path = "samples/big.rs"
+
+[[bin]]
+name = "hs_sample_audit"
+path = "samples/audit.rs"
+
+[[bin]]
+name = "hs_sample_nosyscall"
+path = "samples/nosyscall.rs"
+
+# The planted race and its locked twin (see docs/rust-sdk.md).
+[[bin]]
+name = "hs_counter_racy"
+path = "fixtures/counter_racy.rs"
+
+[[bin]]
+name = "hs_counter_locked"
+path = "fixtures/counter_locked.rs"
