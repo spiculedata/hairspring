@@ -1,18 +1,21 @@
 #!/bin/sh
 # Runs build-record.sh for one variant in a linux/amd64 container, the build lane's environment for the record.
 #
-#   build-record-docker.sh <c|cxx-clang|cxx-gxx|go> [out-file]
+#   build-record-docker.sh <c|cxx-clang|cxx-gxx|go|rust> [out-file]
 #
-# C and C++ use ubuntu:24.04 (gcc 13, g++ 13, clang 18, glibc 2.39: the box's toolchain); Go uses golang:1.27.3. Both
-# images are pinned by digest. The source commit is passed into the container as SOURCE_COMMIT. The repository is mounted read-only except the fixtures directory, whose
-# build/ directory receives the artifacts and the record. The container needs ptrace for strace (check B5) and an
-# unconfined seccomp profile for the seccomp self-test (check B3); both are granted to this container only.
+# C and C++ use ubuntu:24.04 (gcc 13, g++ 13, clang 18, glibc 2.39: the box's toolchain); Go uses golang:1.27.3; Rust
+# uses rust:1.99.1-bookworm with the musl target of the platform (TARGET overrides it). The C, C++ and Go images are
+# pinned by digest. The source commit is passed into the container as SOURCE_COMMIT. The repository is mounted read-only
+# except the fixtures directory, whose build/ directory receives the artifacts and the record (Rust needs the whole
+# workspace, so it mounts the whole repository read-only; its cargo output goes to a scratch directory). The container
+# needs ptrace for strace (check B5) and an unconfined seccomp profile for the seccomp self-test (check B3); both are
+# granted to this container only.
 # This runs on the build machine. It never touches the box and never runs Hermit.
 
 set -u
 
 if [ $# -lt 1 ]; then
-  echo "usage: $0 <c|cxx-clang|cxx-gxx|go> [out-file]" >&2
+  echo "usage: $0 <c|cxx-clang|cxx-gxx|go|rust> [out-file]" >&2
   exit 64
 fi
 variant=$1
@@ -23,7 +26,21 @@ platform=${PLATFORM:-linux/amd64}
 # Pinned by digest (the multi-platform index digests, resolved with `docker buildx imagetools inspect`).
 UBUNTU_IMAGE=ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
 GO_IMAGE=${GO_IMAGE:-golang:1.27.3@sha256:957861185dbf29d93668ace41e011d091c6e779953d47f0316ef2cc58e28fe2b}
-SOURCE_COMMIT=${SOURCE_COMMIT:-$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo unknown)}
+# shellcheck source=record-lib.sh
+. "$here/record-lib.sh"
+# A tree with uncommitted changes is labelled +dirty: the record then does not name a commit that can be checked out.
+SOURCE_COMMIT=${SOURCE_COMMIT:-$(source_commit_of "$repo")}
+
+RUST_IMAGE=${RUST_IMAGE:-rust:1.99.1-bookworm@sha256:e12566d5abc17a0da741628782cdb504b68b8961f5bfcf677936bf3e8b32de29}
+case "$platform" in
+  linux/arm64) default_target=aarch64-unknown-linux-musl ;;
+  *) default_target=x86_64-unknown-linux-musl ;;
+esac
+target=${TARGET:-$default_target}
+mounts="-v $repo/sdks:/repo/sdks:ro -v $repo/docs:/repo/docs:ro -v $fixtures:/repo/examples/language-fixtures"
+script="build-record.sh $variant"
+inside_out=/repo/examples/language-fixtures/build/record-$variant.md
+artifact_dir=/repo/examples/language-fixtures/build/artifacts
 
 case "$variant" in
   c | cxx-clang | cxx-gxx)
@@ -34,18 +51,31 @@ case "$variant" in
     image=$GO_IMAGE
     setup='apt-get update -qq && apt-get install -y -qq make binutils strace >/dev/null'
     ;;
+  rust)
+    image=$RUST_IMAGE
+    # Cargo needs the whole workspace, and the conformance tests build the C SDK inside its tree, so the container works
+    # on a copy of the repository; only the fixtures' build directory comes back out.
+    mkdir -p "$fixtures/build" || exit 1
+    setup="cp -R /src /repo && apt-get update -qq && apt-get install -y -qq binutils strace file >/dev/null && rustup target add $target"
+    mounts="-v $repo:/src:ro -v $fixtures/build:/out"
+    script="build-record-rust.sh"
+    inside_out=/out/record-$variant.md
+    artifact_dir=/out/artifacts
+    ;;
   *)
-    echo "usage: $0 <c|cxx-clang|cxx-gxx|go> [out-file]" >&2
+    echo "usage: $0 <c|cxx-clang|cxx-gxx|go|rust> [out-file]" >&2
     exit 64
     ;;
 esac
 
 digest=$image
-inside_out=/repo/examples/language-fixtures/build/record-$variant.md
+# The mounts are separate words on purpose.
+# shellcheck disable=SC2086
 docker run --rm --platform "$platform" --cap-add SYS_PTRACE --security-opt seccomp=unconfined \
-  -v "$repo/sdks:/repo/sdks:ro" -v "$repo/docs:/repo/docs:ro" -v "$fixtures:/repo/examples/language-fixtures" \
+  $mounts \
   -e IMAGE_DIGEST="$digest" -e PRODUCER="docker $platform, image $image" -e SOURCE_COMMIT="$SOURCE_COMMIT" -e RUNS="${RUNS:-50}" \
-  "$image" sh -c "$setup && sh /repo/examples/language-fixtures/scripts/build-record.sh $variant $inside_out"
+  -e TARGET="$target" -e RUST_PINNED="${RUST_PINNED:-1.99.1}" -e ARTIFACT_DIR="$artifact_dir" \
+  "$image" sh -c "$setup && sh /repo/examples/language-fixtures/scripts/$script $inside_out"
 rc=$?
 if [ $# -ge 2 ] && [ -f "$fixtures/build/record-$variant.md" ]; then
   cp "$fixtures/build/record-$variant.md" "$2"

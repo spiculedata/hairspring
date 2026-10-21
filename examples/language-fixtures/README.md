@@ -134,8 +134,22 @@ without a process. They run with `GOMAXPROCS=2` under `make test`.
 `scripts/build-record.sh <c|cxx-clang|cxx-gxx|go>` writes a Markdown record of an artifact's build checks: the
 toolchain and two builds with equal sha256 (B1), the disassembly of the busy loop and the window (B2), the seccomp
 self-test (B3, C and C++), the native runs on at least two CPUs (B4), `strace` of one run to show that every protocol
-line is one `write(2)` (B5), the SDK's own tests and conformance goldens (B6) and the source of the modes (B7). It ends
-with the alignment checklist to tick by hand. The checks are strict: B2 requires every call to the busy loop to be a load,
+line is one `write(2)` (B5), the SDK's own tests and conformance goldens (B6) and the source of the modes (B7). It then
+captures, from the built artifact, the evidence for the rest of the alignment checklist (`scripts/check-evidence.sh`): a
+run with a bad argument and a run with no argument (usage line on stderr, empty stdout, exit 64), the start-barrier
+source, the `always` and `sometimes` event lines of one native run with the witness values and one evaluation each, the
+property ids, one stdout line, the exit codes 0, 3 and 64, and a grep of the source for reads of the seed, `/proc`, the CPU
+count and the clock. The record ends with the checklist: a line is ticked (`[x]`) only when the evidence that proves it
+passed, and otherwise left open with the failing evidence named. The record also names its producer (the GitHub run id,
+the workflow file and the commit it ran at, the runner image name and version), the commit the artifacts were built from
+(`Source commit`, with `+dirty` added when the tree has uncommitted changes) and the sha256 of the artifact, which the job
+uploads next to the record, so the bytes in the run are the bytes the record describes. The job then downloads what it
+uploaded and runs `scripts/verify-download.sh <artifact-dir> <record>`, a separate step that recomputes the sha256 of the
+downloaded bytes (for the Python package, its tree hash) and compares it with `SHA256SUMS` and with the record; run the
+same script on an artifact you downloaded yourself. The record is uploaded before that download check runs, so the
+downloaded-sha256 evidence is in the job summary of the "Verify the artifact as downloaded" step, not in the record: cite
+that step (run and variant) wherever the as-downloaded comparison is asked for. Checks that a not-applicable language skips are shown as `N/A`, never
+as `PASS`, and each checklist line names what the tool does not check (`not checked by the tool: ...`). The checks are strict: B2 requires every call to the busy loop to be a load,
 the call and a store of the same address (compilers may emit one copy of the window per mode), B5 requires every
 protocol line and the result line to be one complete write with a matching return value, and B1 builds twice (the second
 time in a different build directory, with a fresh Go build cache) and requires equal sha256.
@@ -143,7 +157,8 @@ time in a different build directory, with a fresh Go build cache) and requires e
 **Records for the artifacts that are pinned for an acceptance run must come from a native x86-64 Linux host.** B3
 (seccomp) and B5 (strace) do not work under an emulated container, and B2 is x86-64 disassembly. The CI workflow has a
 manual `fixture-build-records` job (workflow_dispatch, ubuntu-24.04) that runs `build-record.sh` for `c`, `cxx-clang`,
-`cxx-gxx` and `go` and uploads each record as an artifact; any other native x86-64 host works the same way.
+`cxx-gxx` and `go` (and the Python and Rust scripts below) and uploads each record, and the artifact it describes, as
+artifacts; any other native x86-64 host works the same way.
 `-ffile-prefix-map` (and `-trimpath` in Go) covers the fixture's own sources only: the C SDK library keeps the absolute
 directory it was compiled in, so an artifact built on a CI runner and one built in a container differ in sha256. The
 pinned artifact therefore comes from one named producer, which the record states (`Producer:`). `scripts/build-record-docker.sh` runs the script in a container with the images pinned by digest (Ubuntu 24.04 for C and
@@ -163,6 +178,16 @@ monotonic clock; B4 is 50 native runs per mode, a negative control and the probe
 run and requires every protocol line and the result line to be one whole `write(2)` (`scripts/check-writes.sh`); B6 is the
 SDK's tests and conformance; B7 prints the modes. The CI workflow's manual `fixture-build-records` job runs it for
 `python` (Python 3.12 from `actions/setup-python`) next to the other variants.
+
+### Rust's build record
+
+`scripts/build-record-rust.sh` records `at-rust` (the static `x86_64-unknown-linux-musl` build of
+`sdks/rust/fixtures/lang_at`): B1 checks the toolchain version and that `hairspring-sdk` has no dependencies, then builds
+twice into different target directories (the checkout path is mapped away with `--remap-path-prefix`) and requires equal
+sha256; B2 disassembles the busy loop and every function that calls it; B3 does not apply (the SDK's own seccomp test runs
+in B6); B4 is 50 native runs per mode; B5 runs `strace -ff` on one buggy run; B6 is the SDK's tests in release plus the
+conformance tests; B7 prints the constants and the window of each mode. There is no probe program for Rust in the
+repository yet, so the record covers `at-rust` only. `scripts/build-record-docker.sh rust` runs it in a container.
 
 ## Compilers
 

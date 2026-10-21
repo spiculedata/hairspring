@@ -18,11 +18,28 @@ fake="$tmp/fake"
 cat >"$fake" <<'EOF'
 #!/bin/sh
 usage() {
-  echo "usage: fake buggy|fixed|wide" >&2
+  # The SDKs report to stderr at exit even after a usage error, so protocol lines may precede or follow the usage line.
+  [ "${FAKE:-}" = usageevents ] && echo 'HAIRSPRING_EVENT {"v":1,"kind":"hello"}' >&2
+  if [ "${FAKE:-}" = nousagetext ]; then
+    echo 'HAIRSPRING_EVENT {"v":1,"kind":"end"}' >&2
+  else
+    echo "usage: fake buggy|fixed|wide" >&2
+  fi
+  [ "${FAKE:-}" = usageout ] && echo "usage on stdout too"
   exit "${FAKE_USAGE_STATUS:-64}"
 }
 if [ "${FAKE:-}" = nousage ]; then
   [ $# -eq 1 ] || { echo "ignored" >&2; exit 0; }
+elif [ "${FAKE:-}" = extraok ]; then
+  # accepts any number of arguments after a valid mode
+  case ${1:-} in buggy | fixed | wide) ;; *) usage ;; esac
+elif [ "${FAKE:-}" = switchok ]; then
+  # like the Python fixture: an optional second argument of exactly --switch=1.0
+  [ $# -eq 1 ] || { [ $# -eq 2 ] && [ "$2" = "--switch=1.0" ]; } || usage
+  case $1 in buggy | fixed | wide) ;; *) usage ;; esac
+elif [ "${FAKE:-}" = switchany ]; then
+  [ $# -le 2 ] || usage
+  case ${1:-} in buggy | fixed | wide) ;; *) usage ;; esac
 else
   [ $# -eq 1 ] || usage
   case $1 in buggy | fixed | wide) ;; *) usage ;; esac
@@ -54,6 +71,11 @@ id=$lang
 [ "${FAKE:-}" = wrongid ] && id=cpp
 vals="[$final,4000,4,1000]"
 [ "${FAKE:-}" = twovals ] && vals="[$final,4000,0,0]"
+[ "${FAKE:-}" = garbage ] && vals="[7,1,2,3]"
+thread="t#5"
+[ "$lang" = go ] && thread="go"
+[ "${FAKE:-}" = workerthread ] && thread="worker-1"
+[ "${FAKE:-}" = workerkey ] && thread="t#2"
 hits=1
 [ "${FAKE:-}" = twice ] && hits=2
 
@@ -61,14 +83,28 @@ event() { # event <id> <falses> <vals> <hits>
   trues=$((1 - $2))
   fieldfalses="\"falses\":   $2"
   [ "${FAKE:-}" = nofalses ] && fieldfalses="\"falses\":null"
-  echo "HAIRSPRING_EVENT {\"v\":1,\"kind\":\"assert\",\"proc\":\"p1\",\"id\":\"$1\",\"hits\":   $4,\"trues\":   $trues,$fieldfalses,\"first_false\":null,\"first_true\":{\"thread\":\"t#1\",\"ord\":1,\"vals\":$3}}" >&2
+  echo "HAIRSPRING_EVENT {\"v\":1,\"kind\":\"assert\",\"proc\":\"p1\",\"id\":\"$1\",\"hits\":   $4,\"trues\":   $trues,$fieldfalses,\"first_false\":null,\"first_true\":{\"thread\":\"$thread\",\"ord\":1,\"vals\":$3}}" >&2
 }
+catalog() { # catalog <id> <type>
+  echo "HAIRSPRING_EVENT {\"v\":1,\"kind\":\"catalog\",\"proc\":\"p1\",\"id\":\"$1\",\"type\":\"$2\",\"must_hit\":true}" >&2
+}
+if [ "${FAKE:-}" != nocatalog ]; then
+  if [ "${FAKE:-}" = swaptype ]; then
+    catalog "$id.counter_exact" sometimes
+    catalog "$id.all_started" always
+  else
+    catalog "$id.counter_exact" always
+    catalog "$id.all_started" sometimes
+  fi
+fi
 event "$id.all_started" 0 "[4,0,0,0]" "$hits"
 event "$id.counter_exact" "$falses" "$vals" "$hits"
 [ "${FAKE:-}" = incomplete ] && echo "hairspring: incomplete catalog: 1 evaluation(s) ran at call sites that are missing from the catalog section" >&2
 
 [ "${FAKE:-}" = dupe ] && event "$id.counter_exact" 1 "[3990,4000,4,1000]" 1
-if ! printf "%s lang=%s mode=%s final=%0${digits}d expect=%020d order=0123456789abcdef rand=0123456789abcdef\n" "$head" "$lang" "$shown" "$final" 4000 2>/dev/null; then
+if [ "${FAKE:-}" = garbage ]; then
+  echo "garbage"
+elif ! printf "%s lang=%s mode=%s final=%0${digits}d expect=%020d order=0123456789abcdef rand=0123456789abcdef\n" "$head" "$lang" "$shown" "$final" 4000 2>/dev/null; then
   if [ "${FAKE:-}" != noexit3 ]; then
     echo "fake: cannot write the result line" >&2
     exit 3
@@ -166,12 +202,15 @@ clean="$tmp/clean.c"
 printf 'int main(void) { return 0; }\n' >"$clean"
 expect "check-sources accepts a clean source" 0 sh "$here/check-sources.sh" "$clean"
 for token in HAIRSPRING_SEED '/proc/self' sysconf nproc NumCPU hardware_concurrency clock_gettime gettimeofday 'time.Now' \
-  getenv os.Getenv sched_getaffinity get_nprocs 'std::chrono' ' time(0)' rdtsc runtime.GOMAXPROCS; do
+  getenv os.Getenv sched_getaffinity get_nprocs 'std::chrono' ' time(0)' rdtsc runtime.GOMAXPROCS \
+  available_parallelism 'Instant::now' SystemTime 'env::var'; do
   bad="$tmp/bad.c"
   printf 'void f(void) { use("%s"); }\n' "$token" >"$bad"
   expect "check-sources rejects $token" 1 sh "$here/check-sources.sh" "$bad"
 done
 expect "check-sources without a file is a usage error" 64 sh "$here/check-sources.sh"
+expect "check-sources names the files it searched when they are clean" 0 sh -c "sh '$here/check-sources.sh' '$clean' | grep -q 'no match in:.*clean.c'"
+expect "the real Rust fixture is clean" 0 sh "$here/check-sources.sh" "$here"/../../../sdks/rust/fixtures/lang_at/main.rs "$here"/../../../sdks/rust/fixtures/lang_at/window.rs "$here"/../../../sdks/rust/fixtures/lang_at/mode.rs "$here"/../../../sdks/rust/fixtures/lang_at/line.rs
 
 # check-disasm.sh: the build record's B2, on canned objdump text of a loop and of a worker's window.
 loop_ok="$tmp/loop_ok.s"
@@ -426,5 +465,307 @@ printf '# changed\n' >>"$tmp/sdk_copy/hairspring/_fmt.py"
 expect "stage-python stages changed sources" 0 env FIXTURE_DIR="$tmp/fx_copy" SDK_SRC="$tmp/sdk_copy" sh "$here/stage-python.sh" "$tmp/stage3" "$tmp/list3.txt"
 if [ "$(tail -1 "$tmp/list1.txt")" != "$(tail -1 "$tmp/list3.txt")" ]; then echo "ok   a changed byte changes the tree hash"; else echo "FAIL a changed byte did not change the tree hash"; failures=$((failures + 1)); fi
 expect "stage-python without arguments is a usage error" 64 sh "$here/stage-python.sh"
+
+# check-evidence.sh: the evidence a build record needs for checklist lines 2, 4, 6, 7, 8 and 9, captured from the artifact.
+evidence="$here/check-evidence.sh"
+# sample <FAKE value> <mode> [env...]: captures one run of the fake and prints the prefix of the captured files.
+sample() {
+  behaviour=$1
+  mode=$2
+  shift 2
+  prefix="$(newstate)/run"
+  env FAKE="$behaviour" FAKE_STATE="$(newstate)" "$@" sh "$evidence" capture "$fake" "$mode" "$prefix" >/dev/null 2>&1
+  echo "$prefix"
+}
+expect "capture records stdout, stderr and the exit status" 0 sh -c "p=\$(env FAKE_STATE='$(newstate)' sh '$evidence' capture '$fake' buggy '$tmp/cap' >/dev/null 2>&1; echo '$tmp/cap'); test -s \$p.out && test -s \$p.err && test \"\$(cat \$p.rc)\" = 0"
+expect "capture of a missing artifact fails" 1 sh "$evidence" capture "$tmp/no-such-program" buggy "$tmp/cap-missing"
+expect "evidence without a check is a usage error" 64 sh "$evidence"
+expect "evidence with an unknown check is a usage error" 64 sh "$evidence" other
+
+# line 2: a bad argument and no argument, each a usage line on stderr, empty stdout, exit 64
+expect "usage evidence passes for a conforming program" 0 env FAKE=racy FAKE_STATE="$(newstate)" sh "$evidence" usage t "$fake"
+expect "usage evidence rejects exit 2 instead of 64" 1 env FAKE=racy FAKE_USAGE_STATUS=2 FAKE_STATE="$(newstate)" sh "$evidence" usage t "$fake"
+expect "usage evidence rejects a program that ignores a bad argument" 1 env FAKE=nousage FAKE_STATE="$(newstate)" sh "$evidence" usage t "$fake"
+expect "usage evidence rejects a usage line on stdout" 1 env FAKE=usageout FAKE_STATE="$(newstate)" sh "$evidence" usage t "$fake"
+expect "usage evidence shows both runs and the exit status" 0 sh -c "env FAKE=racy FAKE_STATE='$(newstate)' sh '$evidence' usage t '$fake' | grep -c 'exit status: 64' | grep -qx 3"
+expect "usage evidence rejects stderr with protocol lines but no usage line" 1 env FAKE=nousagetext FAKE_STATE="$(newstate)" sh "$evidence" usage t "$fake"
+expect "usage evidence finds the usage line among protocol lines" 0 env FAKE=usageevents FAKE_STATE="$(newstate)" sh "$evidence" usage t "$fake"
+expect "usage evidence shows the usage line itself" 0 sh -c "env FAKE=usageevents FAKE_STATE='$(newstate)' sh '$evidence' usage t '$fake' | grep -q '^usage line: usage: fake buggy|fixed|wide'"
+
+# line 4: the start-barrier source excerpt
+barrier_c="$tmp/barrier.c"
+printf 'static unsigned started;\nstatic int wait_all(void) {\n  while (__atomic_load_n(&started, __ATOMIC_ACQUIRE) < LANG_AT_THREADS) {\n  }\n}\nvoid w(void) {\n  __atomic_fetch_add(&started, 1u, __ATOMIC_ACQ_REL);\n  wait_all();\n}\n' >"$barrier_c"
+barrier_rust="$tmp/barrier.rs"
+printf 'fn wait_for_all(&self) {\n    while self.started.load(SeqCst) < THREADS {\n    }\n}\nfn w(&self) {\n    self.started.fetch_add(1, SeqCst);\n    self.wait_for_all();\n}\n' >"$barrier_rust"
+barrier_go="$tmp/barrier.go"
+printf 'st.started.Add(1)\nfor st.started.Load() < Workers {\n}\n' >"$barrier_go"
+barrier_py="$tmp/barrier.py"
+printf 'with lock:\n    shared.started += 1\nshared.barrier.wait()\n' >"$barrier_py"
+barrier_none="$tmp/barrier_none.c"
+printf 'void w(void) { run(); }\n' >"$barrier_none"
+barrier_inc_only="$tmp/barrier_inc.c"
+printf 'void w(void) { __atomic_fetch_add(&started, 1u, __ATOMIC_ACQ_REL); }\n' >"$barrier_inc_only"
+barrier_wait_only="$tmp/barrier_wait.c"
+printf 'void w(void) { while (__atomic_load_n(&started, __ATOMIC_ACQUIRE) < LANG_AT_THREADS) {} }\n' >"$barrier_wait_only"
+expect "barrier evidence accepts the C increment and wait" 0 sh "$evidence" barrier "$barrier_c"
+expect "barrier evidence accepts the Rust increment and wait" 0 sh "$evidence" barrier "$barrier_rust"
+expect "barrier evidence accepts the Go increment and wait" 0 sh "$evidence" barrier "$barrier_go"
+expect "barrier evidence accepts the Python increment and Barrier.wait" 0 sh "$evidence" barrier "$barrier_py"
+expect "barrier evidence rejects a source with no barrier" 1 sh "$evidence" barrier "$barrier_none"
+expect "barrier evidence rejects an increment with no wait" 1 sh "$evidence" barrier "$barrier_inc_only"
+expect "barrier evidence rejects a wait with no increment" 1 sh "$evidence" barrier "$barrier_wait_only"
+expect "barrier evidence rejects the increment and the wait in different files" 1 sh "$evidence" barrier "$barrier_inc_only" "$barrier_wait_only"
+# A comparison of started inside the sometimes() call, or in a comment, is not a barrier.
+barrier_assert_only="$tmp/barrier_assert.c"
+printf 'void w(void) {\n  __atomic_fetch_add(&started, 1u, __ATOMIC_ACQ_REL);\n  run();\n}\nvoid m(void) {\n  HS_SOMETIMES(started == LANG_AT_THREADS, "c.all_started", "x", started);\n  /* while (started < LANG_AT_THREADS) wait */\n  // while (started < LANG_AT_THREADS) wait\n}\n' >"$barrier_assert_only"
+expect "barrier evidence rejects a wait that is only in an assertion call or a comment" 1 sh "$evidence" barrier "$barrier_assert_only"
+barrier_py_assert="$tmp/barrier_assert.py"
+printf 'with lock:\n    shared.started += 1\nrun()\nhs.sometimes(shared.started == THREADS, "py.all_started", "x", shared.started)\n# shared.barrier.wait()\n' >"$barrier_py_assert"
+expect "barrier evidence rejects a Python wait that is only an assertion or a comment" 1 sh "$evidence" barrier "$barrier_py_assert"
+barrier_far="$tmp/barrier_far.c"
+printf 'void w(void) {\n  __atomic_fetch_add(&started, 1u, __ATOMIC_ACQ_REL);\n  a();\n  b();\n  c();\n  d();\n  e();\n  f();\n  g();\n}\nvoid other(void) {\n  while (__atomic_load_n(&started, __ATOMIC_ACQUIRE) < LANG_AT_THREADS) {}\n}\n' >"$barrier_far"
+expect "barrier evidence rejects a wait in another function that the worker does not call" 1 sh "$evidence" barrier "$barrier_far"
+# Deleting the wait from a copy of each real fixture must not pass.
+nowait() { # nowait <name> <source> <line pattern of the wait>: a copy without the wait lines
+  grep -v "$3" "$2" >"$tmp/nowait.$1"
+  echo "$tmp/nowait.$1"
+}
+fixtures_dir="$here/.."
+expect "the C fixture without its barrier wait is rejected" 1 sh "$evidence" barrier "$(nowait c "$fixtures_dir/c/src/lost_update.c" '__atomic_load_n(&started')"
+expect "the C++ fixture without its barrier wait is rejected" 1 sh "$evidence" barrier "$(nowait cc "$fixtures_dir/cpp/src/lost_update.cc" 'started.load(std::memory_order_acquire) <')"
+expect "the Go fixture without its barrier wait is rejected" 1 sh "$evidence" barrier "$(nowait go "$fixtures_dir/go/internal/race/race.go" 'started.Load() < Workers')"
+expect "the Python fixture without its barrier wait is rejected" 1 sh "$evidence" barrier "$(nowait py "$fixtures_dir/python/at_py.py" 'barrier.wait()')"
+expect "the Rust fixture without its barrier wait is rejected" 1 sh "$evidence" barrier "$(nowait rs "$fixtures_dir/../../sdks/rust/fixtures/lang_at/window.rs" 'started.load(SeqCst) < THREADS')"
+expect "barrier evidence without a file is a usage error" 64 sh "$evidence" barrier
+expect "barrier evidence prints the matching lines with line numbers" 0 sh -c "sh '$evidence' barrier '$barrier_c' | grep -q 'fetch_add(&started'"
+expect "the real C fixture has a start barrier" 0 sh "$evidence" barrier "$here/../c/src/lost_update.c"
+expect "the real C++ fixture has a start barrier" 0 sh "$evidence" barrier "$here/../cpp/src/lost_update.cc"
+expect "the real Go fixture has a start barrier" 0 sh "$evidence" barrier "$here/../go/internal/race/race.go"
+expect "the real Python fixture has a start barrier" 0 sh "$evidence" barrier "$here/../python/at_py.py"
+expect "the real Rust fixture has a start barrier" 0 sh "$evidence" barrier "$here/../../../sdks/rust/fixtures/lang_at/window.rs"
+
+# lines 6 and 7: the always and sometimes event lines of one native run
+expect "witness evidence passes for a conforming run" 0 sh "$evidence" witness t "$(sample racy buggy)"
+expect "witness evidence passes for a fixed run" 0 sh "$evidence" witness t "$(sample racy fixed)"
+expect "witness evidence rejects two witness values" 1 sh "$evidence" witness t "$(sample twovals buggy)"
+expect "witness evidence rejects a property evaluated twice" 1 sh "$evidence" witness t "$(sample twice buggy)"
+expect "witness evidence rejects the wrong id prefix" 1 sh "$evidence" witness t "$(sample wrongid buggy)"
+expect "witness evidence rejects swapped catalog types" 1 sh "$evidence" witness t "$(sample swaptype buggy)"
+expect "witness evidence rejects a missing catalog" 1 sh "$evidence" witness t "$(sample nocatalog buggy)"
+expect "witness evidence rejects two assert lines for one id" 1 sh "$evidence" witness t "$(sample dupe buggy)"
+expect "witness evidence prints the always line with the witness values" 0 sh -c "sh '$evidence' witness t '$(sample racy fixed)' | grep -q '\"vals\":\[4000,4000,4,1000\]'"
+expect "witness evidence states the witness values it found" 0 sh -c "sh '$evidence' witness t '$(sample racy fixed)' | grep -q '^ok .*\[4000, 4000, 4, 1000\]'"
+expect "witness evidence names the catalog types" 0 sh -c "sh '$evidence' witness t '$(sample racy fixed)' | grep -q '\"type\":\"always\"'"
+expect "ids evidence passes for the two contract ids" 0 sh "$evidence" ids t "$(sample racy buggy)"
+expect "ids evidence rejects the cpp prefix for C++" 1 sh "$evidence" ids cxx "$(sample wrongid buggy FAKE_LANG=cxx)"
+expect "ids evidence accepts the cxx prefix for C++" 0 sh "$evidence" ids cxx "$(sample racy buggy FAKE_LANG=cxx)"
+expect "ids evidence lists the ids" 0 sh -c "sh '$evidence' ids t '$(sample racy buggy)' | grep -q 't.counter_exact' "
+
+# line 8: one sample stdout line
+expect "stdout-line evidence passes for the contract line" 0 sh "$evidence" stdout-line t buggy "$(sample racy buggy)"
+expect "stdout-line evidence rejects the old line" 1 sh "$evidence" stdout-line t buggy "$(sample oldline buggy)"
+expect "stdout-line evidence rejects an extra line" 1 sh "$evidence" stdout-line t buggy "$(sample extraline buggy)"
+expect "stdout-line evidence rejects a line that names the wrong mode" 1 sh "$evidence" stdout-line t fixed "$(sample wrongmode fixed)"
+expect "stdout-line evidence rejects a short final" 1 sh "$evidence" stdout-line t buggy "$(sample shortfinal buggy)"
+expect "stdout-line evidence prints the line" 0 sh -c "sh '$evidence' stdout-line t buggy '$(sample racy buggy)' | grep -q '^LANGAT v1 lang=t mode=buggy '"
+
+# line 9: exit codes 0, 3 and 64
+if [ -w /dev/full ]; then
+  expect "exit-code evidence passes for a conforming program" 0 env FAKE=racy FAKE_STATE="$(newstate)" sh "$evidence" exit-codes t "$fake"
+  expect "exit-code evidence rejects a program that survives an unwritable stdout" 1 env FAKE=noexit3 FAKE_STATE="$(newstate)" sh "$evidence" exit-codes t "$fake"
+else
+  echo "skip exit-code evidence (no /dev/full here)"
+fi
+expect "exit-code evidence rejects a non-zero exit from a normal run" 1 env FAKE=badexit FAKE_STATE="$(newstate)" sh "$evidence" exit-codes t "$fake"
+expect "exit-code evidence rejects usage status 2" 1 env FAKE=racy FAKE_USAGE_STATUS=2 FAKE_STATE="$(newstate)" sh "$evidence" exit-codes t "$fake"
+
+# record-lib.sh: the shared pieces of the build-record scripts (steps, verdicts, ticked checklist lines, producer fields)
+libcase() { # libcase <name> <wanted exit> <snippet run after sourcing the library with a fresh work directory>
+  lname=$1
+  lwanted=$2
+  lsnippet=$3
+  expect "$lname" "$lwanted" sh -c '. "$1/record-lib.sh"; work=$(mktemp -d "$2/w.XXXXXX"); out=$work/record.md; record_init; '"$lsnippet" lib "$here" "$tmp"
+}
+libcase "a passing step has the verdict PASS" 0 'step B1 t true; [ "$(verdict B1)" = PASS ]'
+libcase "a failing step has the verdict FAIL and sets the failed flag" 0 'step B1 t false; [ "$(verdict B1)" = FAIL ] && [ "$failed" = 1 ]'
+libcase "one failing step among several makes the id FAIL" 0 'step B1 a true; step B1 b false; step B1 c true; [ "$(verdict B1)" = FAIL ]'
+libcase "a step that was not run has the verdict NOT-RUN and does not pass" 0 'not_run B5 t why; [ "$(verdict B5)" = NOT-RUN ]'
+libcase "a check that does not apply passes" 0 'not_applicable B3 t why; [ "$(verdict B3)" = PASS ]'
+libcase "an id with no step is MISSING" 0 '[ "$(verdict B9)" = MISSING ]'
+libcase "a step records the command and its output in the record" 0 'step B1 "the title" echo hello; grep -q "^### B1 the title: PASS" "$body" && grep -q "^hello" "$body"'
+libcase "a ticked line names the evidence that proves it" 0 'step B1 t true; tickline 1 "One artifact." B1; grep -q "^- \[x\] 1. One artifact. (proved by B1)" "$body"'
+libcase "a failing proof leaves the line unticked and shows the failure" 0 'step B1 t false; tickline 1 "One artifact." B1; grep -q "^- \[ \] 1. One artifact. (not ticked: B1 FAIL)" "$body"'
+libcase "missing evidence leaves the line unticked" 0 'tickline 2 "Usage." L2; grep -q "^- \[ \] 2. Usage. (not ticked: L2 MISSING)" "$body"'
+libcase "only the failing ids are listed" 0 'step B1 a true; step B2 b false; not_run B5 c why; tickline 3 "x" B1 B2 B5; grep -q "(not ticked: B2 FAIL, B5 NOT-RUN)" "$body"'
+libcase "a line needing several ids is ticked when all pass" 0 'step B1 a true; step B7 b true; not_applicable B3 c why; tickline 3 "x" B1 B3 B7; grep -q "^- \[x\] 3. x (proved by B1, B3 (N/A), B7)" "$body"'
+libcase "producer fields from a GitHub Actions run" 0 'GITHUB_RUN_ID=12345 GITHUB_SERVER_URL=https://github.com GITHUB_REPOSITORY=o/r GITHUB_WORKFLOW_REF=o/r/.github/workflows/ci.yml@refs/heads/b GITHUB_WORKFLOW_SHA=abc123 ImageOS=ubuntu24 ImageVersion=20261018.339.1 SOURCE_COMMIT=def456 PRODUCER="GitHub Actions" producer_block >"$work/p"; grep -q "^GitHub run: 12345 (https://github.com/o/r/actions/runs/12345)" "$work/p" && grep -q "^Workflow file: .github/workflows/ci.yml, run at commit .abc123." "$work/p" && grep -q "^Runner image: ubuntu24 20261018.339.1" "$work/p" && grep -q "^Source commit: .def456. (the commit the artifacts were built from)" "$work/p" && ! grep -q "Source tree" "$work/p"'
+libcase "producer fields outside GitHub say so" 0 'unset GITHUB_RUN_ID GITHUB_WORKFLOW_REF GITHUB_WORKFLOW_SHA ImageOS ImageVersion; SOURCE_COMMIT=def456 producer_block >"$work/p"; grep -q "^GitHub run: <TO BE FILLED" "$work/p" && grep -q "^Runner image: <TO BE FILLED" "$work/p" && grep -q "^Source commit: .def456." "$work/p"'
+libcase "publishing an artifact copies it with a SHA256SUMS line and prints its sha256" 0 'printf x >"$work/bin"; ARTIFACT_DIR=$work/up; export ARTIFACT_DIR; sha=$(publish_artifact "$work/bin" at-x); [ "$sha" = 2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881 ] && cmp -s "$work/bin" "$work/up/at-x" && grep -q "^$sha  at-x$" "$work/up/SHA256SUMS"'
+libcase "publishing without an artifact directory still prints the sha256" 0 'printf x >"$work/bin"; unset ARTIFACT_DIR; sha=$(publish_artifact "$work/bin" at-x); [ "$sha" = 2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881 ]'
+libcase "publishing a missing file fails" 1 'unset ARTIFACT_DIR; publish_artifact "$work/none" at-x'
+libcase "publishing a staged tree copies the files; SHA256SUMS lists them and checks with sha256sum -c, the tree hash is in a file of its own" 0 'mkdir -p "$work/tree/sub"; printf a >"$work/tree/a"; printf b >"$work/tree/sub/b"; ARTIFACT_DIR=$work/up; export ARTIFACT_DIR; publish_tree "$work/tree" pkg abc >/dev/null; cmp -s "$work/tree/sub/b" "$work/up/pkg/sub/b" && ! grep -q "^tree" "$work/up/SHA256SUMS" && grep -q "^3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d  pkg/sub/b$" "$work/up/SHA256SUMS" && [ "$(cat "$work/up/pkg.tree")" = abc ] && cd "$work/up" && if command -v sha256sum >/dev/null; then sha256sum -c SHA256SUMS; else shasum -a 256 -c SHA256SUMS; fi'
+libcase "starting a record clears an old SHA256SUMS in the artifact directory" 0 'mkdir -p "$work/up"; echo old >"$work/up/SHA256SUMS"; ARTIFACT_DIR=$work/up; export ARTIFACT_DIR; record_init; ! grep -q old "$work/up/SHA256SUMS"'
+libcase "equal hashes pass" 0 'equal_hashes at-x aa aa'
+libcase "different hashes fail" 1 'equal_hashes at-x aa bb'
+libcase "an empty first hash (no binary) fails" 1 'equal_hashes at-x "" ""'
+libcase "an empty second hash fails" 1 'equal_hashes at-x aa ""'
+libcase "empty output to show fails" 1 'printf "" | require_lines'
+libcase "non-empty output to show passes and is repeated" 0 'printf "x\n" | require_lines | grep -qx x'
+libcase "a check that does not apply is labelled N/A, not PASS" 0 'not_applicable B3 t why; [ "$(verdict_label B3)" = N/A ]'
+libcase "a check with a passing step and a part that does not apply is labelled PASS+N/A" 0 'not_applicable B2 t why; step B2 t true; [ "$(verdict_label B2)" = PASS+N/A ]'
+libcase "a plain pass is labelled PASS" 0 'step B1 t true; [ "$(verdict_label B1)" = PASS ]'
+libcase "the verdicts line says N/A for a check that does not apply" 0 'step B1 t true; not_applicable B3 t why; record_title=t; record_generated_by=g; finish_record >/dev/null; grep -q "^Verdicts: B1 PASS, B3 N/A" "$out"'
+libcase "a check that does not apply and needs a review statement says it is not yet made" 0 'not_applicable B3 t why yes; grep -q "Required by the spec and not yet made \[I\]" "$body"'
+libcase "a check that does not apply and needs no review statement does not say that" 0 'not_applicable B2 t why; ! grep -q "not yet made" "$body"'
+libcase "line 10 shows N/A in its proved-by text" 0 'lang=t; for i in B1 B2 B4 B5 B6 B7; do step $i t true; done; not_applicable B3 t why yes; alignment_checklist a b c; grep -q "^- \[x\] 10\. .*B3 (N/A)" "$body"'
+libcase "line 10 names the review statements that are required and not yet made" 0 'lang=t; for i in B1 B2 B4 B5 B6 B7; do step $i t true; done; not_applicable B3 t why yes; alignment_checklist a b c; grep -q "^- \[x\] 10\. .*not checked by the tool: .*code-review statement" "$body"'
+libcase "line 6 is not ticked when the stdout line check (L8) failed" 0 'lang=t; step L6 a true; step B4 a true; step L8 a false; alignment_checklist a b c; grep -q "^- \[ \] 6\. .*(not ticked: L8 FAIL)" "$body"'
+libcase "line 6 is not ticked when the native runs (B4) failed" 0 'lang=t; step L6 a true; step L8 a true; step B4 a false; alignment_checklist a b c; grep -q "^- \[ \] 6\. .*(not ticked: B4 FAIL)" "$body"'
+libcase "line 3 needs the constants check" 0 'lang=t; step B7 a true; step B4 a true; alignment_checklist a b c; grep -q "^- \[ \] 3\. .*(not ticked: L3 MISSING)" "$body"'
+libcase "lines 1, 3, 4 and 6 state what the tool does not check" 0 'lang=t; alignment_checklist a b c; grep -q "^- \[.\] 1\. .*not checked by the tool" "$body" && grep -q "^- \[.\] 3\. .*not checked by the tool" "$body" && grep -q "^- \[.\] 4\. .*not checked by the tool" "$body" && grep -q "^- \[.\] 6\. .*not checked by the tool" "$body"'
+libcase "line 4 names its known false accept" 0 'lang=t; alignment_checklist a b c; grep -q "^- \[.\] 4\. .*if (started == 4) log();" "$body"'
+libcase "line 3 says it checks constant values, not their use" 0 'lang=t; alignment_checklist a b c; grep -q "^- \[.\] 3\. .*constant values.*not that every mode uses them" "$body"'
+libcase "line 6 says exactly what the thread check is" 0 'lang=t; alignment_checklist a b c; grep -q "^- \[.\] 6\. .*key.*t#5.*Go: go" "$body"'
+libcase "line 9 needs the usage evidence as well" 0 'lang=t; step L9 a true; step B4 a true; alignment_checklist a b c; grep -q "^- \[ \] 9\. .*L2 MISSING" "$body"'
+
+# The source commit is labelled +dirty when the tree has uncommitted changes.
+gitrepo="$tmp/gitrepo"
+mkdir -p "$gitrepo"
+git -C "$gitrepo" init -q
+printf 'x\n' >"$gitrepo/f"
+git -C "$gitrepo" add f
+git -C "$gitrepo" -c user.email=t@example.com -c user.name=t commit -q -m first
+expect "a clean tree gives the plain commit" 0 sh -c ". '$here/record-lib.sh'; c=\$(source_commit_of '$gitrepo'); [ \"\$c\" = \"\$(git -C '$gitrepo' rev-parse HEAD)\" ]"
+printf 'y\n' >>"$gitrepo/f"
+expect "a modified tracked file gives a +dirty commit" 0 sh -c ". '$here/record-lib.sh'; c=\$(source_commit_of '$gitrepo'); [ \"\$c\" = \"\$(git -C '$gitrepo' rev-parse HEAD)+dirty\" ]"
+git -C "$gitrepo" checkout -q f
+printf 'z\n' >"$gitrepo/untracked"
+expect "an untracked file gives a +dirty commit" 0 sh -c ". '$here/record-lib.sh'; c=\$(source_commit_of '$gitrepo'); [ \"\$c\" = \"\$(git -C '$gitrepo' rev-parse HEAD)+dirty\" ]"
+expect "a directory that is not a repository gives unknown" 0 sh -c ". '$here/record-lib.sh'; [ \"\$(source_commit_of '$tmp')\" = unknown ]"
+
+# line 3: the constants T = 4, K = 1000, W = 1000, W_wide = 10000 are asserted per language
+expect "constants evidence passes for the C header" 0 sh "$evidence" constants c "$fixtures_dir/common/lang_at.h"
+expect "constants evidence passes for the C++ header" 0 sh "$evidence" constants cxx "$fixtures_dir/common/lang_at.h"
+expect "constants evidence passes for the Go fixture" 0 sh "$evidence" constants go "$fixtures_dir/go/internal/race/race.go"
+expect "constants evidence passes for the Rust fixture" 0 sh "$evidence" constants rust "$fixtures_dir/../../sdks/rust/fixtures/lang_at/mode.rs"
+expect "constants evidence passes for the Python fixture" 0 sh "$evidence" constants py "$fixtures_dir/python/at_py.py"
+sed 's/LANG_AT_SPIN 1000u/LANG_AT_SPIN 2000u/' "$fixtures_dir/common/lang_at.h" >"$tmp/lang_at_w2000.h"
+expect "a C window of 2000 is rejected" 1 sh "$evidence" constants c "$tmp/lang_at_w2000.h"
+sed 's/LANG_AT_ITERS 1000u/LANG_AT_ITERS 999u/' "$fixtures_dir/common/lang_at.h" >"$tmp/lang_at_k999.h"
+expect "a C iteration count of 999 is rejected" 1 sh "$evidence" constants c "$tmp/lang_at_k999.h"
+sed 's/\(Spin  *= *\)1000 /\12000 /' "$fixtures_dir/go/internal/race/race.go" >"$tmp/race_w2000.go"
+expect "a Go window of 2000 is rejected" 1 sh "$evidence" constants go "$tmp/race_w2000.go"
+sed 's/WINDOW: u64 = 1_000/WINDOW: u64 = 2_000/' "$fixtures_dir/../../sdks/rust/fixtures/lang_at/mode.rs" >"$tmp/mode_w2000.rs"
+expect "a Rust window of 2000 is rejected" 1 sh "$evidence" constants rust "$tmp/mode_w2000.rs"
+sed 's/WINDOW_WIDE: u64 = 10_000/WINDOW_WIDE: u64 = 20_000/' "$fixtures_dir/../../sdks/rust/fixtures/lang_at/mode.rs" >"$tmp/mode_wide.rs"
+expect "a Rust wide window of 20000 is rejected" 1 sh "$evidence" constants rust "$tmp/mode_wide.rs"
+sed 's/^WINDOW = 1000/WINDOW = 2000/' "$fixtures_dir/python/at_py.py" >"$tmp/at_py_w2000.py"
+expect "a Python window of 2000 is rejected" 1 sh "$evidence" constants py "$tmp/at_py_w2000.py"
+expect "constants evidence rejects a file without the constants" 1 sh "$evidence" constants rust "$clean"
+expect "constants evidence without a file is a usage error" 64 sh "$evidence" constants rust
+
+# line 6: witness values need a parsable final in stdout, and the evaluating thread is not a worker
+expect "witness evidence rejects garbage stdout even when the vals look plausible" 1 sh "$evidence" witness t "$(sample garbage buggy)"
+expect "witness evidence rejects an assertion evaluated on a worker thread" 1 sh "$evidence" witness t "$(sample workerthread buggy)"
+expect "witness evidence prints the evaluating thread" 0 sh -c "sh '$evidence' witness t '$(sample racy buggy)' | grep -q 'evaluated on thread t#5'"
+expect "witness evidence rejects an assertion evaluated on a worker's claim-order key (t#2)" 1 sh "$evidence" witness t "$(sample workerkey buggy)"
+expect "witness evidence rejects each worker key t#1 to t#4" 0 sh -c "for k in 1 2 3 4; do sed 's/\"thread\":\"t#5\"/\"thread\":\"t#'\$k'\"/' '$(sample racy buggy).err' > '$tmp/k.err'; cp '$(sample racy buggy).out' '$tmp/k.out'; sh '$evidence' witness t '$tmp/k' >/dev/null 2>&1 && exit 1; done; exit 0"
+expect "witness evidence accepts the Go main thread key (go)" 0 sh "$evidence" witness go "$(sample racy buggy FAKE_LANG=go)"
+expect "witness evidence rejects a claim-order key for Go" 1 sh "$evidence" witness go "$(sample workerkey buggy FAKE_LANG=go)"
+
+# line 2: extra arguments are rejected for every language, Python alone accepts --switch=1.0
+expect "usage evidence rejects a program that accepts an extra argument" 1 env FAKE=extraok FAKE_STATE="$(newstate)" sh "$evidence" usage t "$fake"
+expect "usage evidence shows the extra-argument run" 0 sh -c "env FAKE=racy FAKE_STATE='$(newstate)' sh '$evidence' usage t '$fake' | grep -q 'buggy extra'"
+expect "switch evidence passes for a program that accepts exactly --switch=1.0" 0 env FAKE=switchok FAKE_STATE="$(newstate)" sh "$evidence" switch t "$fake"
+expect "switch evidence rejects a program that does not accept --switch=1.0" 1 env FAKE=racy FAKE_STATE="$(newstate)" sh "$evidence" switch t "$fake"
+expect "switch evidence rejects a program that accepts any second argument" 1 env FAKE=switchany FAKE_STATE="$(newstate)" sh "$evidence" switch t "$fake"
+if command -v python3 >/dev/null 2>&1; then
+  stage_py="$tmp/stage_py"
+  sh "$here/stage-python.sh" "$stage_py" "$tmp/list_py.txt" >/dev/null 2>&1
+  printf '#!/bin/sh\nexec python3 -I -B "%s/at_py.py" "$@"\n' "$stage_py" >"$tmp/at-py"
+  chmod +x "$tmp/at-py"
+  expect "the real Python fixture passes the usage evidence (extra arguments rejected)" 0 sh "$evidence" usage py "$tmp/at-py"
+  expect "the real Python fixture accepts --switch=1.0 and rejects --switch=2 and extra arguments" 0 sh "$evidence" switch py "$tmp/at-py"
+else
+  echo "skip the real Python usage and switch evidence (no python3)"
+fi
+
+# line 11: a missing or unreadable source file fails, directories are searched whole, more patterns are forbidden
+expect "check-sources fails on a file that does not exist" 1 sh "$here/check-sources.sh" /nonexistent/file.c
+expect "check-sources-python fails on a file that does not exist" 1 sh "$here/check-sources-python.sh" /nonexistent/file.py
+expect "check-sources fails when one of two files is missing" 1 sh "$here/check-sources.sh" "$clean" /nonexistent/file.c
+srcdir="$tmp/srcdir"
+mkdir -p "$srcdir/sub"
+printf 'int f(void) { return 0; }\n' >"$srcdir/a.c"
+printf 'package x\n' >"$srcdir/sub/b.go"
+expect "check-sources searches every file of a directory" 0 sh "$here/check-sources.sh" "$srcdir"
+printf 'void g(void) { getenv("X"); }\n' >"$srcdir/sub/c.rs"
+expect "check-sources finds a forbidden read in a file below a directory" 1 sh "$here/check-sources.sh" "$srcdir"
+mkdir -p "$tmp/emptydir"
+expect "check-sources fails on a directory with no sources" 1 sh "$here/check-sources.sh" "$tmp/emptydir"
+printf 'package x\nfunc f() { time.Now() }\n' >"$srcdir/sub/d_test.go"
+rm -f "$srcdir/sub/c.rs"
+expect "check-sources leaves Go test files out of a directory search" 0 sh "$here/check-sources.sh" "$srcdir"
+for token in 'os.LookupEnv' 'os.Environ()' 'time.Since' 'clock()' 'timespec_get'; do
+  bad="$tmp/bad2.c"
+  printf 'void f(void) { use("%s"); }\n' "$token" >"$bad"
+  expect "check-sources rejects $token" 1 sh "$here/check-sources.sh" "$bad"
+done
+
+# the build record scripts' own helpers: a verification of the artifact as downloaded
+dl="$tmp/dl"
+mkdir -p "$dl/fixture-x"
+printf 'binary-bytes' >"$dl/fixture-x/at-x"
+dlsha=$(printf 'binary-bytes' | { if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi; } | cut -d' ' -f1)
+printf '%s  at-x\n' "$dlsha" >"$dl/fixture-x/SHA256SUMS"
+printf '# BUILD-RECORD: at-x\n\nArtifact: at-x, sha256 %s\n' "$dlsha" >"$dl/record.md"
+expect "verify-download accepts an artifact whose bytes match SHA256SUMS and the record" 0 sh "$here/verify-download.sh" "$dl/fixture-x" "$dl/record.md"
+printf 'binary-bytez' >"$dl/fixture-x/at-x"
+expect "verify-download rejects changed bytes" 1 sh "$here/verify-download.sh" "$dl/fixture-x" "$dl/record.md"
+printf 'binary-bytes' >"$dl/fixture-x/at-x"
+printf '# BUILD-RECORD: at-x\n\nArtifact: at-x, sha256 %s\n' "0000000000000000000000000000000000000000000000000000000000000000" >"$dl/record-bad.md"
+expect "verify-download rejects a record that names another sha256" 1 sh "$here/verify-download.sh" "$dl/fixture-x" "$dl/record-bad.md"
+expect "verify-download rejects a record with no artifact line" 1 sh "$here/verify-download.sh" "$dl/fixture-x" "$clean"
+expect "verify-download without arguments is a usage error" 64 sh "$here/verify-download.sh"
+expect "verify-download rejects a missing directory" 1 sh "$here/verify-download.sh" "$dl/none" "$dl/record.md"
+# a package: per-file lines in SHA256SUMS, the tree hash in a file of its own
+pk="$tmp/pk"
+mkdir -p "$pk/art"
+cp -R "$stage_py" "$pk/art/at-py" 2>/dev/null
+treehash=$(tail -1 "$tmp/list_py.txt" | awk '{print $2}')
+if [ -d "$pk/art/at-py" ] && [ -n "$treehash" ]; then
+  (cd "$pk/art" && find at-py -type f | LC_ALL=C sort | while read -r f; do printf '%s  %s\n' "$(if command -v sha256sum >/dev/null; then sha256sum "$f"; else shasum -a 256 "$f"; fi | cut -d' ' -f1)" "$f"; done >SHA256SUMS)
+  printf '%s\n' "$treehash" >"$pk/art/at-py.tree"
+  printf '# BUILD-RECORD: p\n\nArtifact: at-py, tree hash (x) %s\n' "$treehash" >"$pk/record.md"
+  expect "verify-download recomputes the tree hash of a package and accepts it" 0 sh "$here/verify-download.sh" "$pk/art" "$pk/record.md"
+  printf '# changed\n' >>"$pk/art/at-py/at_py.py"
+  expect "verify-download rejects a package with a changed file" 1 sh "$here/verify-download.sh" "$pk/art" "$pk/record.md"
+fi
+
+# check-disasm: with the mutex inlined (a lock cmpxchg), an unlocked copy of the window must still exist
+window_inline_locked="$tmp/window_inline_locked.s"
+cat >"$window_inline_locked" <<'EOF'
+0000000000002900 <worker>:
+    2910:	lock cmpxchg %ecx,(%r14)
+    2915:	mov    0x20(%r12),%r13
+    291a:	mov    $0x3e8,%edi
+    291f:	call   2a50 <spin>
+    2924:	inc    %r13
+    2927:	mov    %r13,0x20(%r12)
+    292c:	xchg   %eax,(%r14)
+    2930:	ret
+EOF
+window_inline_both="$tmp/window_inline_both.s"
+{
+  cat "$window_inline_locked"
+  i=0
+  while [ "$i" -lt 10 ]; do printf '    2940:\tnop\n'; i=$((i + 1)); done
+  printf '    2950:\tmov    0x20(%%r12),%%r15\n    2955:\tmov    $0x3e8,%%edi\n    295a:\tcall   2a50 <spin>\n    295f:\tinc    %%r15\n    2962:\tmov    %%r15,0x20(%%r12)\n    2966:\tret\n'
+} >"$window_inline_both"
+expect "check-disasm: a window that is only behind an inline lock has no unlocked path" 1 env UNLOCKED_PATH=1 sh "$here/check-disasm.sh" window "$window_inline_locked"
+expect "check-disasm: an inline-locked copy and an unlocked copy are both found" 0 env UNLOCKED_PATH=1 sh "$here/check-disasm.sh" window "$window_inline_both"
+
+libcase "a staged package is identified by its tree hash in the artifact line" 0 'record_title=t; record_generated_by=g; artifact_name=at-py; artifact_sha_label="tree hash"; artifact_sha=bb; finish_record >/dev/null; grep -q "^Artifact: at-py, tree hash bb" "$out"'
+libcase "the finished record starts with the title, then the producer fields and the verdicts, then the steps" 0 'step B1 t true; step B2 t false; record_title="BUILD-RECORD: at-x"; record_generated_by="Generated by x."; artifact_name=at-x; artifact_sha=aa; finish_record >/dev/null; [ "$(head -1 "$out")" = "# BUILD-RECORD: at-x" ] && grep -q "^Verdicts: B1 PASS, B2 FAIL" "$out" && grep -q "^Artifact: at-x, sha256 aa" "$out" && grep -q "the box gets exactly those bytes" "$out" && [ "$(grep -n "^Verdicts" "$out" | cut -d: -f1)" -lt "$(grep -n "^### B1" "$out" | cut -d: -f1)" ]'
 
 exit $failures
