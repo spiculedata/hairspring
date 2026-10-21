@@ -19,7 +19,7 @@ sha256 identifies what ran in every arm.
 | `at-c` | `make -C c` | `buggy`, `fixed`, `wide` |
 | `at-cxx-clang`, `at-cxx-gxx` | `make -C cpp` (clang++ or g++) | `buggy`, `fixed`, `wide` |
 | `at-go` | `make -C go` | `buggy`, `fixed`, `wide` |
-| `python/at_py.py` (no build; the file is the artifact) | `make -C python` | `buggy`, `fixed`, `wide`, and `--switch=1.0` as an optional second argument |
+| `python/at_py.py` (with `python/probe_py.py` and the SDK package) | nothing to build; `scripts/stage-python.sh` stages and hashes it | `buggy`, `fixed`, `wide`, and `--switch=1.0` as an optional second argument |
 
 - `buggy`: the planted race, no lock.
 - `fixed`: the same program with a mutex held across the read-modify-write (`pthread_mutex_t`, `std::mutex` with
@@ -149,6 +149,20 @@ directory it was compiled in, so an artifact built on a CI runner and one built 
 pinned artifact therefore comes from one named producer, which the record states (`Producer:`). `scripts/build-record-docker.sh` runs the script in a container with the images pinned by digest (Ubuntu 24.04 for C and
 C++, `golang:1.27.3` for Go) and passes the source commit in; on a machine that is not x86-64 it is only a functional
 check of the script. Nothing here runs Hermit or needs a server.
+
+### Python's build record
+
+Python has nothing to compile, and the acceptance run pins a package (the fixture, the probe and the `hairspring/` SDK
+directory), not one module. `scripts/build-record-python.sh` writes the same kind of record with the checks that make
+sense for an interpreter: B1 stages the package twice (`scripts/stage-python.sh`), lists every file with its sha256 and
+a tree hash, and requires the two listings to be equal; B2 checks the window on the syntax tree instead of a
+disassembly (the disassembly and the seccomp self-test, B3, do not apply); the forbidden-reads check
+(`scripts/check-sources-python.sh`) searches `at_py.py` and `probe_py.py` for the seed, `/proc`, the CPU count, the
+environment and the clock, and allows `time.monotonic_ns` in the probe alone because its output line carries the
+monotonic clock; B4 is 50 native runs per mode, a negative control and the probe line; B5 runs `strace -ff` on one buggy
+run and requires every protocol line and the result line to be one whole `write(2)` (`scripts/check-writes.sh`); B6 is the
+SDK's tests and conformance; B7 prints the modes. The CI workflow's manual `fixture-build-records` job runs it for
+`python` (Python 3.12 from `actions/setup-python`) next to the other variants.
 
 ## Compilers
 
