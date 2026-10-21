@@ -26,13 +26,18 @@ echo "hermit: virtual-time epoch=fake" >&2
 FAKE_SCHED_SEED=$seed exec "$@"
 "#;
 
+/// A new empty directory, never handed out twice in this process. The clock alone is not enough: on macOS it ticks in
+/// microseconds, so tests starting together can read the same time, and would then share (and overwrite) one another's
+/// fake executables.
 pub fn scratch(name: &str) -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
     let dir = std::env::temp_dir().join(format!(
-        "hairspring-rf-{name}-{}-{nanos}",
+        "hairspring-rf-{name}-{}-{n}-{nanos}",
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).unwrap();
