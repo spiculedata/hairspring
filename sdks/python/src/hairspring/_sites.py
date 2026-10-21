@@ -32,6 +32,9 @@ def check_id(raw: object) -> None:
     size = len(raw.encode("utf-8"))
     if not 1 <= size <= _fmt.ID_MAX:
         raise ValueError(f"an assertion id is 1 to {_fmt.ID_MAX} bytes, not {size}")
+    if "\0" in raw:
+        # The wire form stops at a NUL, so the id would be sent shortened or empty.
+        raise ValueError("an assertion id must not contain a NUL character")
 
 
 def check_msg(raw: object) -> None:
@@ -86,6 +89,12 @@ class Site:
         self.first_false: WitnessRecord | None = None
 
 
+UNTRACKED = Site("", Kind.REACHABLE, "", "", 0)
+"""Stands in the lookup for an id the table had no room for, so the hot path recognises it without registering again."""
+# How many spellings (as the caller wrote them) the lookup remembers, sites and refused ids together.
+MAX_REMEMBERED = 2 * MAX_DISTINCT
+
+
 class SiteTable:
     def __init__(self) -> None:
         self._raw: dict[tuple[str, Kind], Site] = {}
@@ -106,16 +115,26 @@ class SiteTable:
         sent = _fmt.sanitize_ident(raw_id, _fmt.ID_MAX)
         existing = self._by_sent.get((sent, kind))
         if existing is not None:
-            self._raw[(raw_id, kind)] = existing
+            self._remember(raw_id, kind, existing)
             return existing
         if sent not in self._ids and len(self._ids) >= MAX_DISTINCT:
+            self._remember(raw_id, kind, UNTRACKED)
             return None
         site = Site(sent, kind, msg, file, line)
         self._by_sent[(sent, kind)] = site
-        self._raw[(raw_id, kind)] = site
+        self._remember(raw_id, kind, site)
         self._ids.add(sent)
         self._order.append(site)
         return site
+
+    def _remember(self, raw_id: str, kind: Kind, site: Site) -> None:
+        """Cache a spelling for the lock-free lookup. Past the bound it is not cached: that call takes the slow path
+        again, which is correct, only slower."""
+        if len(self._raw) < MAX_REMEMBERED:
+            self._raw[(raw_id, kind)] = site
+
+    def remembered(self) -> int:
+        return len(self._raw)
 
     def all(self) -> tuple[Site, ...]:
         """Every site in registration order."""

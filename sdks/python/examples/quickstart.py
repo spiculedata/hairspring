@@ -7,7 +7,8 @@ import threading
 
 import hairspring as hs
 
-# A site that is never reached is invisible unless it is declared, so declare the ones that matter once, up front.
+# IMPORTANT: a site that never runs is invisible (not "unmet") unless it is declared. Declare every site whose absence
+# matters, once, at import time, like this one (it is never evaluated below, and the report still lists it).
 hs.declare(hs.Kind.REACHABLE, "quickstart.recovery.ran", "recovery ran")
 
 balance = 100

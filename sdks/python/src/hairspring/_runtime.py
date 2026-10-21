@@ -22,7 +22,7 @@ from ._lines import AssertRow, CatalogRow, EndReason, WitnessOut
 from ._output import Sink, open_sink
 from ._report import Snapshot, write_report
 from ._secure import is_privileged
-from ._sites import ZERO_VALS, Site, SiteTable, WitnessRecord, pack_vals
+from ._sites import UNTRACKED, ZERO_VALS, Site, SiteTable, WitnessRecord, pack_vals
 from ._slots import Slot, SlotTable
 
 _MASK64 = (1 << 64) - 1
@@ -133,7 +133,7 @@ class Runtime:
         """The site for an id and kind, registered (with the caller's location) if it is new."""
         site = self._sites.lookup(id_, kind)
         if site is not None:
-            return site
+            return None if site is UNTRACKED else site
         file, line = _where(depth + 1)
         with self._lock:
             return self._sites.register(kind, id_, msg, file, line)
@@ -166,7 +166,7 @@ class Runtime:
         except AttributeError:
             slot = self._claim_slot()
         with self._lock:
-            if site is None:
+            if site is None or site is UNTRACKED:
                 self._dropped += 1  # more distinct ids than the catalog holds
                 return
             slot.evals += 1

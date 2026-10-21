@@ -92,6 +92,8 @@ class PublicApiTests(unittest.TestCase):
     def test_bad_arguments_are_errors(self) -> None:
         with self.assertRaises(ValueError):
             hs.always(True, "")
+        with self.assertRaises(ValueError):
+            hs.always(False, "\0x")
         with self.assertRaises(TypeError):
             hs.always(True, 5)  # type: ignore[arg-type]
         with self.assertRaises(TypeError):

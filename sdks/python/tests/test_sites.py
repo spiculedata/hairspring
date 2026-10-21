@@ -1,14 +1,14 @@
 import unittest
 
 from hairspring._kinds import Kind
-from hairspring._sites import MAX_DISTINCT, SiteTable, check_id, check_msg, pack_vals
+from hairspring._sites import MAX_DISTINCT, UNTRACKED, SiteTable, check_id, check_msg, pack_vals
 
 
 class CheckTests(unittest.TestCase):
     def test_an_id_is_one_to_128_bytes(self) -> None:
         check_id("a")
         check_id("x" * 128)
-        for bad in ("", "x" * 129, "é" * 65):
+        for bad in ("", "x" * 129, "é" * 65, "\0x", "x\0", "\0"):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 check_id(bad)
 
@@ -94,6 +94,20 @@ class TableTests(unittest.TestCase):
         self.assertIsNone(table.register(Kind.REACHABLE, "one.more", "", "f.py", 1))
         # A second kind for a known id is still a conflict the engine must see, not an excess.
         self.assertIsNotNone(table.register(Kind.ALWAYS, "id.0", "", "f.py", 1))
+
+    def test_an_id_past_the_cap_is_remembered_so_it_is_not_registered_again_on_every_call(self) -> None:
+        table = SiteTable()
+        for i in range(MAX_DISTINCT):
+            table.register(Kind.REACHABLE, f"id.{i}", "", "f.py", 1)
+        self.assertIsNone(table.register(Kind.REACHABLE, "over", "", "f.py", 1))
+        self.assertIs(table.find(("over", Kind.REACHABLE)), UNTRACKED)
+
+    def test_the_spellings_remembered_for_one_id_are_bounded(self) -> None:
+        table = SiteTable()
+        for i in range(2 * MAX_DISTINCT + 10):  # stays below the surrogate range
+            self.assertIsNotNone(table.register(Kind.ALWAYS, "a" + chr(0x4E00 + i), "", "f.py", 1))
+        self.assertEqual(len(table.all()), 1)
+        self.assertLessEqual(table.remembered(), 2 * MAX_DISTINCT)
 
     def test_a_new_site_starts_with_nothing_recorded(self) -> None:
         site = SiteTable().register(Kind.ALWAYS, "a", "", "f.py", 1)

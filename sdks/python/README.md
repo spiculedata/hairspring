@@ -14,8 +14,13 @@ hs.work(1)
 hs.thread("writer", 0)
 ```
 
-A site is catalogued when it first runs; `hs.declare(hs.Kind.REACHABLE, id, msg)` puts one in the catalog earlier, so a
-site that is never reached is reported as unmet.
+**A site that never runs is invisible, not unmet.** A site is catalogued when it first runs; call
+`hs.declare(hs.Kind.REACHABLE, id, msg)` once, at import time, for every site whose absence matters, or a run that never
+reaches it cannot report it as unmet.
+
+**Evaluations made in a forked child are lost** (`os.fork()`, and `multiprocessing` with the `fork` start method, the
+default on Linux for Python 3.12 and 3.13): only the process that started the SDK reports, and nothing is counted in
+`end.dropped` for the child. Use `multiprocessing.get_context("spawn")` for workers that assert.
 
 * Documentation: [docs/python-sdk.md](../../docs/python-sdk.md) (API, environment, processes and threads, thread safety,
   the planted race, evidence, limits).
