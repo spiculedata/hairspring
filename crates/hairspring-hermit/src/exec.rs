@@ -169,7 +169,7 @@ fn kill_group(pid: u32) {
 
 /// A bare program name is looked up on the *caller's* PATH. The guest gets a pinned PATH, and Rust would
 /// otherwise search that one, missing e.g. `~/.cargo/bin/hermit`.
-fn resolve_bin(bin: &std::path::Path) -> std::path::PathBuf {
+pub(crate) fn resolve_bin(bin: &std::path::Path) -> std::path::PathBuf {
     if bin.components().count() != 1 {
         return bin.to_path_buf();
     }

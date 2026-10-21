@@ -146,6 +146,10 @@ A bundle is a small text file: `seed`, `build`, `target`, `backend`, `param.*` a
 recorded choices). Values are percent-escaped so they cannot inject fields. Replay refuses a bundle recorded
 against different code where it can tell (the WASM module hash, the Hermit output hash).
 
+A bundle that records an execution environment (a fixed list of `param.host.*`, `param.hermit.*`, `param.env.*` and
+`param.target.*` names) starts with `hairspring-bundle v3`; every other bundle is still written as v2, so older readers keep
+working. Readers accept v1, v2 and v3. See [Recorded environment](determinism.md#recorded-environment).
+
 ## Point addresses and hashes
 
 `hairspring_core::point` is a pure library for naming a place inside a trial. An address is

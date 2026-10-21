@@ -3,6 +3,7 @@
 pub mod bundle;
 pub mod demo;
 pub mod doctor;
+pub mod environment;
 pub mod explore;
 pub mod point;
 pub mod replay;

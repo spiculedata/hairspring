@@ -15,11 +15,15 @@
 mod backend;
 mod capture;
 mod env;
+mod environment_probe;
 mod events;
 mod exec;
 mod head_tail;
+mod hermit_version;
+pub mod host_identity;
 mod line_scan;
 mod property_verdict;
+mod replay_environment;
 mod safe_open;
 mod schedule_set;
 mod summary;

@@ -160,10 +160,7 @@ impl Backend for SimBackend {
                 .ok_or_else(|| EngineError::Replay("action not enabled".to_string()))?;
             state = state.apply(action);
         }
-        Ok(ReplayOutcome {
-            reproduced: state.violated(),
-            steps,
-        })
+        Ok(ReplayOutcome::new(state.violated(), steps))
     }
 
     fn doctor(

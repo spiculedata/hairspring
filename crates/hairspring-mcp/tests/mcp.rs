@@ -528,3 +528,27 @@ fn replay_needs_the_run_role_because_it_executes_target_code() {
         "{r}"
     );
 }
+
+#[test]
+fn replay_bundle_takes_an_explicit_environment_override_and_checks_its_type() {
+    let s = server();
+    let r = rpc(&s, Role::Read, "tools/list", json!({}));
+    let replay = r["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "replay_bundle")
+        .unwrap();
+    assert_eq!(
+        replay["inputSchema"]["properties"]["allow_environment_change"]["type"],
+        "boolean"
+    );
+    let bundle = "hairspring-bundle v2\nseed=1\nbuild=x\npath=\n";
+    let bad = tool(
+        &s,
+        Role::Run,
+        "replay_bundle",
+        json!({"bundle": bundle, "allow_environment_change": "yes"}),
+    );
+    assert!(!bad["error"].is_null(), "{bad}");
+}

@@ -23,6 +23,9 @@ pub enum EngineError {
     InvalidBundle(String),
     Replay(String),
     Backend(String),
+    /// Replay was refused because the host differs from the one the bundle was recorded on in a way that makes the
+    /// recorded schedule unreliable. The caller can retry with `ReplayOptions::allow_environment_change`.
+    EnvironmentMismatch(String),
 }
 
 impl fmt::Display for EngineError {
@@ -35,6 +38,7 @@ impl fmt::Display for EngineError {
             EngineError::InvalidBundle(m) => write!(f, "invalid bundle: {m}"),
             EngineError::Replay(m) => write!(f, "replay failed: {m}"),
             EngineError::Backend(m) => write!(f, "backend error: {m}"),
+            EngineError::EnvironmentMismatch(m) => write!(f, "environment mismatch: {m}"),
         }
     }
 }

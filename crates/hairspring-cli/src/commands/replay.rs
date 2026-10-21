@@ -1,6 +1,7 @@
 use crate::cli::ReplayArgs;
 use crate::ctx::{CmdResult, Ctx};
 use hairspring_core::bundle::Bundle;
+use hairspring_engine::backend::ReplayOptions;
 use hairspring_service::MAX_BUNDLE_BYTES;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -34,7 +35,14 @@ pub fn run(ctx: &Ctx, args: &ReplayArgs, out: &mut dyn Write) -> CmdResult<i32> 
         return Err(format!("bundle exceeds {MAX_BUNDLE_BYTES} bytes").into());
     }
     let bundle = Bundle::decode(&text).map_err(|e| format!("invalid bundle: {e}"))?;
-    let replay = hairspring_service::sanitize::replay_steps(ctx.engine.replay(&bundle)?);
+    let options = ReplayOptions {
+        allow_environment_change: args.allow_environment_change,
+    };
+    let replay =
+        hairspring_service::sanitize::replay_steps(ctx.engine.replay_with(&bundle, options)?);
+    for warning in &replay.warnings {
+        writeln!(out, "warning: {warning}")?;
+    }
     writeln!(
         out,
         "replaying {} steps on target `{}` (backend {})",
@@ -48,6 +56,12 @@ pub fn run(ctx: &Ctx, args: &ReplayArgs, out: &mut dyn Write) -> CmdResult<i32> 
     if replay.reproduced {
         writeln!(out, "reproduced: the property is still violated")?;
         Ok(crate::EXIT_VIOLATION)
+    } else if replay.environment_changed {
+        writeln!(
+            out,
+            "inconclusive: not reproduced, but the environment differs from the recording; this does not show the bug is fixed"
+        )?;
+        Ok(crate::EXIT_INCONCLUSIVE)
     } else {
         writeln!(
             out,

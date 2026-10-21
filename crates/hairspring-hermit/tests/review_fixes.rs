@@ -131,7 +131,8 @@ fn replaying_a_promoted_hang_where_hangs_are_no_longer_violations_says_so() {
 #[test]
 fn a_rerun_that_cannot_start_is_reported_with_the_spawn_error() {
     // Seed 1 violates, then the fake removes its own execute bit, so every confirmation rerun fails to spawn.
-    let fake = "#!/bin/sh\nchmod -x \"$0\"\nshift\nwhile [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n";
+    // (Only a `run` does it: the backend also runs `--version` once, before the first trial, to record the version.)
+    let fake = "#!/bin/sh\n[ \"$1\" = run ] && chmod -x \"$0\"\nshift\nwhile [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n";
     let out = run_once(&engine(
         &scratch("rerun-spawn"),
         fake,
