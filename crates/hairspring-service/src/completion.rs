@@ -21,6 +21,9 @@ pub enum RunCompletion {
     TimeOrStepLimited { trials_run: u64, trials_budget: u64 },
     /// Ended before its limits by whoever called `complete`, or the trial rows do not match what the worker said it ran.
     EndedEarly,
+    /// The run's digest allowance was used up, so some trials hold an empty stand-in digest and their data is missing.
+    /// Not something its caller did. Read from the store, so only [`Service::completion_for`] returns it.
+    DigestAllowanceUsedUp,
     /// Ended in an error or was cancelled.
     Aborted,
 }
@@ -37,6 +40,9 @@ impl RunCompletion {
                 trials_budget,
             } => format!("time- or step-limited ({trials_run} of {trials_budget} trials)"),
             RunCompletion::EndedEarly => "ended early: trial data is incomplete".to_owned(),
+            RunCompletion::DigestAllowanceUsedUp => {
+                "digest allowance used up: trial data is incomplete".to_owned()
+            }
             RunCompletion::Aborted => "aborted".to_owned(),
         }
     }
@@ -111,6 +117,20 @@ pub fn completion_of(run: &RunRecord) -> RunCompletion {
             trials_budget: b.max_trials,
         },
         _ => RunCompletion::Complete,
+    }
+}
+
+impl crate::Service {
+    /// [`completion_of`], except that a run that stored an empty stand-in for any digest says its digest allowance was
+    /// used up instead of "ended early", which would blame its caller. Such a run still withholds every UNMET result.
+    pub fn completion_for(&self, run: &RunRecord) -> crate::Result<RunCompletion> {
+        let base = completion_of(run);
+        if base == RunCompletion::EndedEarly
+            && self.store.run_digest_use(&run.id)?.capped_trials > 0
+        {
+            return Ok(RunCompletion::DigestAllowanceUsedUp);
+        }
+        Ok(base)
     }
 }
 

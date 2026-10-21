@@ -134,7 +134,7 @@ export interface Excluded {
 }
 
 export type RunCompletion =
-  | { kind: 'running' | 'complete' | 'stopped_at_first_failure' | 'ended_early' | 'aborted' }
+  | { kind: 'running' | 'complete' | 'stopped_at_first_failure' | 'ended_early' | 'digest_allowance_used_up' | 'aborted' }
   | { kind: 'time_or_step_limited'; trials_run: number; trials_budget: number };
 
 export interface RunHeader {

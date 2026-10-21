@@ -169,6 +169,8 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(3) => {
+            // A version 3 schema is looked at, as on SQLite, and not repaired by the upgrade.
+            verify_objects(tx, 3, &V3_TABLES)?;
             tx.batch_execute(MIGRATE_V3_TO_V4)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
@@ -184,7 +186,12 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
 
 /// Reports a current schema that lost one of its tables or a version 3 index instead of repairing it.
 fn verify_current(tx: &mut Transaction<'_>) -> Result<()> {
-    for table in V3_TABLES.into_iter().chain(V4_TABLES) {
+    let tables: Vec<&str> = V3_TABLES.into_iter().chain(V4_TABLES).collect();
+    verify_objects(tx, SCHEMA_VERSION, &tables)
+}
+
+fn verify_objects(tx: &mut Transaction<'_>, version: i32, tables: &[&str]) -> Result<()> {
+    for table in tables {
         let row = tx.query_one(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables \
              WHERE table_schema = current_schema() AND table_name = $1)",
@@ -192,7 +199,7 @@ fn verify_current(tx: &mut Transaction<'_>) -> Result<()> {
         )?;
         if !row.get::<_, bool>(0) {
             return Err(StoreError::Backend(format!(
-                "database schema version {SCHEMA_VERSION} is incomplete: table {table} is missing"
+                "database schema version {version} is incomplete: table {table} is missing"
             )));
         }
     }
@@ -203,7 +210,7 @@ fn verify_current(tx: &mut Transaction<'_>) -> Result<()> {
         )?;
         if !row.get::<_, bool>(0) {
             return Err(StoreError::Backend(format!(
-                "database schema version {SCHEMA_VERSION} is incomplete: index {index} is missing"
+                "database schema version {version} is incomplete: index {index} is missing"
             )));
         }
     }

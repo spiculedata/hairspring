@@ -145,6 +145,8 @@ pub struct TrialRow {
     pub digest_unreadable: bool,
     /// The run's digest allowance was used up, so this trial's digest was replaced by an empty one and the trial
     /// counts toward no statistic. `failing_count` is zero because nothing was kept, not because nothing failed.
+    /// Derived from the stored reason, which only the server writes with that start (workers cannot send it), not from
+    /// a stored flag: a database written by a build that wrote a different marker would not show it here.
     pub digest_capped: bool,
     pub timed_out: bool,
     pub degraded: bool,

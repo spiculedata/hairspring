@@ -95,6 +95,47 @@ fn a_run_that_replaced_a_digest_does_not_finish_as_complete() {
     let run = store.get_run(&job.run_id).unwrap().unwrap();
     assert!(run.ingest_incomplete, "a stand-in hides what the trial saw");
     assert_eq!(completion_of(&run), RunCompletion::EndedEarly);
+    // Readers are told the true reason, not that the run was ended early, and UNMET stays withheld.
+    let completion = svc.completion_for(&run).unwrap();
+    assert_eq!(completion, RunCompletion::DigestAllowanceUsedUp);
+    assert_eq!(
+        completion.label(),
+        "digest allowance used up: trial data is incomplete"
+    );
+    assert!(!completion.allows_unmet(true));
+    let page = svc
+        .property_page(&job.run_id, &Default::default(), None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(page.header.completion, RunCompletion::DigestAllowanceUsedUp);
+    assert!(
+        page.notes.iter().any(|n| n.contains("digest allowance")),
+        "{:?}",
+        page.notes
+    );
+    assert!(page.notes.iter().all(|n| !n.contains("ended early")));
+}
+
+#[test]
+fn a_timed_out_trial_over_the_allowance_keeps_what_the_worker_reported() {
+    let mut rec = Recorder::new();
+    let p = props("c.id", AssertKind::Always, 3, 0);
+    let first = rec.pass(1, &p);
+    let timed_out = rec.trial(
+        2,
+        &p,
+        hairspring_engine::trial_log::ReportedVerdict::Inconclusive,
+        true,
+    );
+    let (svc, _store, engine) = tight(std::slice::from_ref(&first));
+    let job = lease_with_budget(&svc, &engine, &local(), 2);
+    svc.ingest_trials(&job.job_id, &local(), &[first, timed_out])
+        .unwrap();
+    let row = svc.trial_detail(&job.run_id, 1).unwrap().unwrap().trial;
+    assert!(row.digest_capped);
+    assert!(row.timed_out, "the worker said it timed out");
+    assert!(!row.rated && !row.claimable);
+    assert_eq!(row.verdict, "inconclusive");
 }
 
 #[test]

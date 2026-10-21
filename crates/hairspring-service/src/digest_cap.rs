@@ -39,10 +39,6 @@ pub(crate) fn stand_in(trial: &NewTrial) -> NewTrial {
         .collect();
     NewTrial {
         reason,
-        timed_out: false,
-        degraded: false,
-        perturbing: false,
-        report_missing: false,
         rated: false,
         claimable: false,
         max_idx: None,
@@ -95,8 +91,11 @@ mod tests {
         );
         assert_eq!(s.detail, t.detail);
         assert_eq!(s.behaviour_hash, t.behaviour_hash);
-        assert!(!s.rated && !s.claimable && !s.timed_out && !s.degraded);
-        assert!(!s.perturbing && !s.report_missing);
+        assert!(!s.rated && !s.claimable);
+        assert!(
+            s.timed_out && s.degraded && s.perturbing && s.report_missing,
+            "what the worker reported about the trial is kept"
+        );
         assert_eq!(s.max_idx, None);
         assert!(s.on_digest_cap.is_none());
     }

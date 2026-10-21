@@ -188,6 +188,9 @@ pub enum IngestOutcome {
     RunNotOpen,
     /// The batch broke a rule; nothing was written.
     Rejected(String),
+    /// A digest would pass the run's digest allowance and its trial offered no stand-in; nothing was written. Send the
+    /// batch again with [`NewTrial::on_digest_cap`] set on every trial.
+    NeedsStandIn,
 }
 
 /// Per-property statistics for one run, as columns. Rates are never stored: `rate_k` and `rate_n` are.

@@ -171,6 +171,12 @@ pub trait Store: Send + Sync {
     /// Stores one batch of catalog changes and trial rows for the job's run, all or nothing. Idempotent on `seq`: a
     /// row already stored with identical content is counted as a duplicate; one that differs rejects the batch.
     /// `worker_trusted` is recorded on every row as a snapshot.
+    ///
+    /// The digest allowance (`batch.digest_bytes_cap`) is checked under the run's lock. A trial whose digest would pass
+    /// it is stored as its `on_digest_cap` stand-in. The store **trusts that stand-in** (it checks only that it is the
+    /// same sequence number and seed and passes the field limits, not what the digest means), so only code that has
+    /// validated the original may build it. With none offered the answer is `NeedsStandIn` and nothing is written. A
+    /// re-sent trial is compared with the row as it was stored: equal to the trial, or to its offered stand-in.
     fn ingest_trials(
         &self,
         job_id: &str,

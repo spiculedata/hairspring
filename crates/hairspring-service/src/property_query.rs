@@ -4,7 +4,7 @@ use crate::properties::{status_name, stored_summary};
 use crate::query::*;
 use crate::scan::{presence, Flow};
 use crate::view::*;
-use crate::{completion_of, Result, RunCompletion, Service, ServiceError};
+use crate::{Result, RunCompletion, Service, ServiceError};
 use hairspring_props::claim_text::Label;
 use hairspring_props::honesty::{headline, rate_cell, unmet_text};
 use hairspring_props::{PropertyStat, PropertyStatus, TrialDigest};
@@ -110,6 +110,10 @@ fn notes(
             "The run ended early or its trial rows do not match what the worker reported: its trial data is incomplete, so no UNMET result is stated."
                 .to_owned(),
         ),
+        RunCompletion::DigestAllowanceUsedUp => out.push(
+            "The run's digest allowance was used up: some trials hold an empty stand-in digest and are counted in no statistic, so its trial data is incomplete and no UNMET result is stated."
+                .to_owned(),
+        ),
         RunCompletion::TimeOrStepLimited { .. } if all_workers_trusted => out.push(format!(
             "The run was {}: results are for the trials it ran, and UNMET is stated for those trials.",
             completion.label()
@@ -139,7 +143,12 @@ fn notes(
             summary.conflict_trials, summary.kind_mismatches
         ));
     }
-    if run.ingest_incomplete && !matches!(completion, RunCompletion::EndedEarly) {
+    if run.ingest_incomplete
+        && !matches!(
+            completion,
+            RunCompletion::EndedEarly | RunCompletion::DigestAllowanceUsedUp
+        )
+    {
         out.push("The stored trial rows may be incomplete.".to_owned());
     }
     out
@@ -164,7 +173,7 @@ impl Service {
         let Some(run) = self.store.get_run(run_id)? else {
             return Ok(None);
         };
-        let completion = completion_of(&run);
+        let completion = self.completion_for(&run)?;
         let (summary, counts) = stored_summary(&run);
         let trust = self.run_trust(run_id)?;
         let unverified_worker_data = !trust.as_ref().is_some_and(|t| t.all_trusted);
@@ -263,7 +272,7 @@ impl Service {
         let Some(run) = self.store.get_run(run_id)? else {
             return Ok(None);
         };
-        let completion = completion_of(&run);
+        let completion = self.completion_for(&run)?;
         let all_trusted = self.run_trust(run_id)?.is_some_and(|t| t.all_trusted);
         let Some((_, stat)) = self
             .indexed_stats(run_id)?

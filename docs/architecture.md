@@ -150,11 +150,17 @@ many trials rewrites no existing row. A run with no row in either table has used
   hold `ServiceConfig::digest_bytes_per_run` bytes (default `MAX_DIGEST_BYTES_PER_RUN`, 64 MiB; the value is a
   proposal). Every read of a run decodes its digests, and a registered worker could otherwise store up to 1 MiB per
   trial. A trial whose digest would pass the allowance is **not refused and not dropped**: the server stores the same
-  trial (sequence number, seed, verdict, counters, kept detail and output) with an empty digest marked as excluded, and
-  starts its reason with `DIGEST_CAPPED_REASON`. The trial is not rated, so it counts toward no statistic, the trial
-  list and detail show `digest_capped`, and the run finishes marked `ingest_incomplete`, so it makes no must-hit claim
-  and its headline says it ended early. A worker cannot send that reason text itself. Sending a batch again after a
-  replacement changes nothing.
+  trial (sequence number, seed, verdict, counters, kept detail and output, and every flag the worker reported such as
+  `timed_out` or `degraded`) with an empty digest marked as excluded, and starts its reason with
+  `DIGEST_CAPPED_REASON`. Only the digest, the ratings (`rated`, `claimable`) and the reason change. The trial counts
+  toward no statistic, the trial list and detail show `digest_capped`, and the run finishes marked `ingest_incomplete`,
+  so it makes no must-hit claim. Its completion reads `digest_allowance_used_up` ("digest allowance used up: trial
+  data is incomplete"), not "ended early", which would blame its caller. A worker cannot send that reason text itself,
+  so `digest_capped` is derived from the reason prefix rather than from a stored flag; a build that changed the
+  prefix would stop showing old rows as capped (the run-level count in `run_digest_use` would still be right). Sending
+  a batch again after a replacement changes nothing.
+  The service builds the stand-ins only when the batch could pass the allowance by what it knows; otherwise the store
+  asks for them (`NeedsStandIn`) and the batch is sent once more. The store trusts the stand-in it is given.
 - `run_coverage`: the run's coverage series (`GET /api/runs/{id}/coverage`), worked out once when its job finishes and
   stored with it. A read of a finished run scans no trials, in this process or after a restart. A run finished before
   version 4, or whose stored series cannot be used, is scanned once on first read and then served from memory. A run
@@ -163,8 +169,14 @@ many trials rewrites no existing row. A run with no row in either table has used
 `Store::reporters_of` names the worker behind each failing seed from the seed index, reading only the seed, sequence
 number and worker columns of the matching rows. The claim gate used to page through whole trial rows for this.
 
-Opening a version 3 database adds the two tables in the same transaction as the version bump. An older release
-refuses a version 4 database; the offline downgrade above removes the two tables.
+The coverage series and the property fold each read the run's digests once when its job finishes, while the job's
+lease is still held, so no trial can be added between them; a read of the finished run then scans nothing.
+
+Opening a version 3 database adds the two tables in the same transaction as the version bump, and a version 3 database
+that lost one of its own tables or indexes is refused rather than repaired, on both backends. An older release refuses
+a version 4 database; the offline downgrade above removes the two tables. **Stop every older (version 3) server and
+worker before upgrading**: a version 3 process that is still running does not know the allowance and neither writes
+nor clears `run_digest_use`, so runs it ingests meanwhile are not counted.
 
 ## Bundles
 

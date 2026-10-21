@@ -12,10 +12,11 @@ pub fn run_all_explorer(make: &dyn Fn() -> std::sync::Arc<dyn Store>) {
     reporters_refuse_an_unbounded_request(&*make());
     a_digest_over_the_allowance_is_replaced_and_marked(&*make());
     replaced_digests_count_against_the_allowance(&*make());
-    a_digest_over_the_allowance_without_a_replacement_rejects_the_batch(&*make());
+    a_digest_over_the_allowance_without_a_replacement_asks_for_one_and_writes_nothing(&*make());
     a_resent_batch_with_a_replaced_digest_is_a_duplicate(&*make());
     a_replacement_must_describe_the_same_trial(&*make());
     a_new_attempt_starts_the_digest_allowance_again(&*make());
+    concurrent_batches_never_overshoot_the_digest_allowance(make());
     the_coverage_series_is_stored_with_the_finished_run(&*make());
     a_cancelled_run_keeps_no_coverage_series(&*make());
 }
@@ -223,16 +224,18 @@ fn replaced_digests_count_against_the_allowance(s: &dyn Store) {
     );
 }
 
-fn a_digest_over_the_allowance_without_a_replacement_rejects_the_batch(s: &dyn Store) {
+fn a_digest_over_the_allowance_without_a_replacement_asks_for_one_and_writes_nothing(
+    s: &dyn Store,
+) {
     let (r, job) = leased(s, "w1");
     let mut bare = trial(1);
     bare.digest = vec![1; 8];
     let out = ingest(s, &job, "w1", &capped_batch(vec![sized(0, 4), bare], 10));
-    assert!(matches!(out, IngestOutcome::Rejected(_)), "{out:?}");
+    assert_eq!(out, IngestOutcome::NeedsStandIn);
     assert_eq!(
         s.count_trials(&r.id).unwrap(),
         0,
-        "a rejected batch writes nothing"
+        "a refused batch writes nothing"
     );
 }
 
@@ -334,6 +337,44 @@ fn a_new_attempt_starts_the_digest_allowance_again(s: &dyn Store) {
         },
         "the earlier attempt's rows and its use of the allowance are gone"
     );
+}
+
+/// Eight writers send batches for one run at once against an allowance that holds ten 4-byte digests. The allowance
+/// is read under the run's lock, so exactly ten originals are kept whatever the interleaving; a read before the lock
+/// would let two writers both see room and keep more.
+fn concurrent_batches_never_overshoot_the_digest_allowance(s: std::sync::Arc<dyn Store>) {
+    const WRITERS: u64 = 8;
+    const PER_BATCH: u64 = 5;
+    const CAP: u64 = 40;
+    let (r, job) = leased(&*s, "w1");
+    ingest(&*s, &job, "w1", &capped_batch(vec![], CAP));
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(WRITERS as usize));
+    let handles: Vec<_> = (0..WRITERS)
+        .map(|w| {
+            let (s, job, barrier) = (s.clone(), job.clone(), barrier.clone());
+            std::thread::spawn(move || {
+                let trials = (w * PER_BATCH..(w + 1) * PER_BATCH)
+                    .map(|q| sized(q, 4))
+                    .collect();
+                let b = TrialBatch {
+                    catalog: vec![],
+                    ..capped_batch(trials, CAP)
+                };
+                barrier.wait();
+                s.ingest_trials(&job.id, "w1", true, &b, 20).unwrap()
+            })
+        })
+        .collect();
+    for h in handles {
+        assert_eq!(h.join().unwrap(), applied(PER_BATCH as u32, 0));
+    }
+    let rows = s.list_trials(&r.id, None, 100).unwrap();
+    let originals = rows.iter().filter(|t| t.digest.len() == 4).count() as u64;
+    assert_eq!(originals, CAP / 4, "exactly the digests that fit were kept");
+    let held: u64 = rows.iter().map(|t| t.digest.len() as u64).sum();
+    let used = s.run_digest_use(&r.id).unwrap();
+    assert_eq!(used.bytes, held, "the counter matches what is stored");
+    assert_eq!(used.capped_trials, WRITERS * PER_BATCH - CAP / 4);
 }
 
 fn finish(s: &dyn Store, job: &Job, coverage: Option<&str>) -> FinishOutcome {

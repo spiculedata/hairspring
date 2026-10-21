@@ -293,7 +293,9 @@ impl Service {
                 }
             }
         };
-        // The coverage series is worked out here, once, so no read of the finished run has to scan its trials.
+        // The coverage series is worked out here, once, so no read of the finished run has to scan its trials. It is a
+        // second pass over the digests next to the fold above, not part of it: the job's lease is still held, so no
+        // trial can arrive between the two, and a series that is missing or fails is simply worked out on first read.
         let coverage_json = if held > 0 && self.run_is_open(run_id)? {
             self.coverage_to_store(run_id)
         } else {

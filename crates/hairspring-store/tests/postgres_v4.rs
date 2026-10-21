@@ -136,6 +136,23 @@ fn a_version_four_schema_that_lost_a_table_is_reported_not_repaired() {
 }
 
 #[test]
+fn a_version_three_schema_missing_a_version_three_table_is_refused_not_repaired() {
+    let Some(url) = url() else { return };
+    let schema = new_schema("v4l3");
+    make_v3_schema(&url, &schema);
+    let mut c = admin(&url);
+    c.batch_execute(&format!("DROP TABLE \"{schema}\".tree_branches"))
+        .unwrap();
+    let err = PgStore::connect_in_schema(&url, &schema, 1)
+        .err()
+        .expect("must refuse");
+    assert!(err.to_string().contains("tree_branches"), "{err}");
+    assert_eq!(recorded_version(&mut c, &schema), 3, "left at version 3");
+    assert!(!table_exists(&mut c, &schema, "tree_branches"));
+    assert!(!table_exists(&mut c, &schema, "run_digest_use"));
+}
+
+#[test]
 fn a_version_three_schema_still_downgrades_to_two() {
     let Some(url) = url() else { return };
     let schema = new_schema("v4d3");

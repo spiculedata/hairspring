@@ -309,6 +309,7 @@ enum Placed {
     Inserted,
     Duplicate,
     Rejected(String),
+    NeedsStandIn,
 }
 
 /// Stores one trial of a batch, or recognises it as one already stored. Charges the digest it stores to `run`.
@@ -328,6 +329,10 @@ fn place_trial(
     }
     if let Some(stored) = existing_trial(tx, run_id, t.seq)? {
         if !stored.same_as_stored_form_of(t) {
+            // The stored row may be a stand-in this resend did not offer; ask for the offer before calling it a conflict.
+            if t.on_digest_cap.is_none() && run.digest.capped_trials > 0 {
+                return Ok(Placed::NeedsStandIn);
+            }
             return Ok(Placed::Rejected(format!(
                 "trial {} was already stored with different content",
                 t.seq
@@ -338,12 +343,7 @@ fn place_trial(
     let (form, replaced) = match digest_form(t, run.digest.bytes, batch.digest_bytes_cap) {
         DigestForm::Original(t) => (t, false),
         DigestForm::Replaced(stand_in) => (stand_in, true),
-        DigestForm::Refused => {
-            return Ok(Placed::Rejected(format!(
-                "trial {} would pass the run's digest allowance and offers no stand-in",
-                t.seq
-            )))
-        }
+        DigestForm::Refused => return Ok(Placed::NeedsStandIn),
     };
     let kept = keep(tx, form, run.kept_bytes, batch.kept_bytes_cap)?;
     run.kept_bytes += kept.bytes;
@@ -413,6 +413,7 @@ pub(crate) fn ingest(
             Placed::Inserted => inserted += 1,
             Placed::Duplicate => duplicates += 1,
             Placed::Rejected(why) => return Ok(IngestOutcome::Rejected(why)),
+            Placed::NeedsStandIn => return Ok(IngestOutcome::NeedsStandIn),
         }
     }
     tx.execute(

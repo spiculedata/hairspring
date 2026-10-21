@@ -303,7 +303,7 @@ impl Service {
             .filter_map(|s| s.first_failure.as_ref().map(|f| f.seed))
             .min();
         let trusted = self.run_trust(&run.id)?.is_some_and(|t| t.all_trusted);
-        let completion = completion_of(run);
+        let completion = self.completion_for(run)?;
         Ok(Some(PropertySummary {
             catalog_size: run.catalog_size,
             counts,

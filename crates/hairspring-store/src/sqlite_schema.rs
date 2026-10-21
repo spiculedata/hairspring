@@ -164,9 +164,19 @@ fn ensure_secret_column(conn: &Connection) -> Result<()> {
 /// write rows; a database that lost a table or an index is reported, not repaired (the children query names its
 /// index, so a missing one would otherwise fail later, at the first read).
 fn verify_current(conn: &Connection) -> Result<()> {
-    let wanted = V3_TABLES
+    let tables: Vec<&str> = V3_TABLES.into_iter().chain(V4_TABLES).collect();
+    verify_objects(conn, SCHEMA_VERSION, &tables)
+}
+
+/// A version 3 database is looked at the same way before version 4 is added: the upgrade does not quietly recreate
+/// a version 3 table or index that went missing, on either backend.
+fn verify_v3(conn: &Connection) -> Result<()> {
+    verify_objects(conn, 3, &V3_TABLES)
+}
+
+fn verify_objects(conn: &Connection, version: i64, tables: &[&str]) -> Result<()> {
+    let wanted = tables
         .iter()
-        .chain(V4_TABLES.iter())
         .map(|t| ("table", *t))
         .chain(V3_INDEXES.iter().map(|i| ("index", *i)));
     for (kind, name) in wanted {
@@ -177,7 +187,7 @@ fn verify_current(conn: &Connection) -> Result<()> {
         )?;
         if present == 0 {
             return Err(StoreError::Backend(format!(
-                "database schema version {SCHEMA_VERSION} is incomplete: {kind} {name} is missing"
+                "database schema version {version} is incomplete: {kind} {name} is missing"
             )));
         }
     }
@@ -194,7 +204,11 @@ fn upgrade(conn: &Connection, from: i64) -> Result<()> {
     if from == 2 {
         ensure_secret_column(conn)?;
     }
-    conn.execute_batch(MIGRATE_V2_TO_V3)?;
+    if from == 3 {
+        verify_v3(conn)?;
+    } else {
+        conn.execute_batch(MIGRATE_V2_TO_V3)?;
+    }
     conn.execute_batch(MIGRATE_V3_TO_V4)?;
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())

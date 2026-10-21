@@ -156,6 +156,20 @@ fn a_version_four_database_that_lost_a_table_is_reported_not_repaired() {
 }
 
 #[test]
+fn a_version_three_database_missing_a_version_three_table_is_refused_not_repaired() {
+    let path = temp_db("v3-lost");
+    make_v3_database(&path);
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch("DROP TABLE tree_branches").unwrap();
+    let err = SqliteStore::open(&path).err().expect("must refuse");
+    assert!(err.to_string().contains("tree_branches"), "{err}");
+    assert_eq!(user_version(&conn), 3, "left at version 3");
+    assert!(!table_exists(&conn, "tree_branches"), "not recreated");
+    assert!(!table_exists(&conn, "run_digest_use"), "no half upgrade");
+    cleanup(&path);
+}
+
+#[test]
 fn a_version_three_database_still_downgrades_to_two() {
     let path = temp_db("down-from-3");
     make_v3_database(&path);
