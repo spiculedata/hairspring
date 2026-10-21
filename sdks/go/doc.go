@@ -26,8 +26,8 @@
 // a line. If HAIRSPRING_EVENTS_FILE names a file, the lines go there instead. The file is opened for append and must
 // be a regular file (a FIFO or device is refused without blocking). A symbolic link as the last path component is
 // refused on Unix; a link in a directory component is followed, and a non-Unix build follows links everywhere. The
-// variable is ignored in a program started with elevated rights (AT_SECURE on Linux, else differing real and effective
-// ids). If the file cannot be used the report falls back to standard error and the end line counts the failure in
+// variable is ignored in a program started with elevated rights (AT_SECURE on Linux, where an auxv that cannot be read
+// counts as privileged; elsewhere differing real and effective ids). If the file cannot be used the report falls back to standard error and the end line counts the failure in
 // "dropped". HAIRSPRING_EVENTS=off writes nothing.
 //
 // The report goes to a private copy of standard error, so a closed reader costs the report (the write fails with

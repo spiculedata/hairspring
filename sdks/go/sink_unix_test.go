@@ -5,6 +5,7 @@ package hairspring
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,11 +16,74 @@ import (
 
 // TestMain doubles as the child program of the closed-stderr test.
 func TestMain(m *testing.M) {
-	if os.Getenv("HS_TEST_CHILD") == "closed-stderr" {
+	switch os.Getenv("HS_TEST_CHILD") {
+	case "closed-stderr":
 		h := Always("child.site", "runs in a child process")
 		os.Exit(Main(func() int { h.Check(true, Vals{}); return 3 }))
+	case "low-descriptors-closed":
+		os.Exit(lowDescriptorsChild())
+	case "stderr-closed":
+		os.Exit(stderrClosedChild())
 	}
 	os.Exit(m.Run())
+}
+
+// lowDescriptorsChild closes fd 0 and fd 1 so that dup of fd 2 would return 0 (or 1), then reports through its exit
+// status whether the private copy landed above 2. Exit 0 is success.
+func lowDescriptorsChild() int {
+	if syscall.Close(0) != nil || syscall.Close(1) != nil {
+		return 10
+	}
+	f, err := privateCopy(2)
+	if err != nil {
+		return 11
+	}
+	if f.Fd() <= 2 {
+		return 12
+	}
+	if _, err := f.Write([]byte("")); err != nil {
+		return 13
+	}
+	return 0
+}
+
+// stderrClosedChild closes fd 2 and reports whether privateStderr falls back to os.Stderr instead of a bad copy.
+func stderrClosedChild() int {
+	if syscall.Close(2) != nil {
+		return 10
+	}
+	if privateStderr() != io.Writer(os.Stderr) {
+		return 11
+	}
+	return 0
+}
+
+func runChild(t *testing.T, mode string) int {
+	t.Helper()
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), "HS_TEST_CHILD="+mode)
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if err == nil {
+		return 0
+	}
+	if !errors.As(err, &exit) {
+		t.Fatalf("child did not run: %v", err)
+	}
+	return exit.ExitCode()
+}
+
+func TestPrivateCopyNeverLandsOnFD0To2WhenLowDescriptorsAreClosed(t *testing.T) {
+	// 11: privateCopy gave up; 12: the copy is on 0, 1 or 2.
+	if code := runChild(t, "low-descriptors-closed"); code != 0 {
+		t.Fatalf("child exit %d, want 0 (a copy above fd 2 even when dup would return 0)", code)
+	}
+}
+
+func TestPrivateStderrFallsBackToStandardErrorWhenFD2IsClosed(t *testing.T) {
+	if code := runChild(t, "stderr-closed"); code != 0 {
+		t.Fatalf("child exit %d, want 0", code)
+	}
 }
 
 // By default Go ends a program that writes to a closed pipe on fd 1 or 2 with SIGPIPE. A report to a closed reader

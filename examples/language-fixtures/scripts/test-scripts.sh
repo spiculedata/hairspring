@@ -38,4 +38,23 @@ expect "run-checks treats the skip as success on one CPU" 0 env LANG_AT_CPUS=1 s
 expect "run-checks fails on several CPUs" 1 env LANG_AT_CPUS=4 sh "$here/run-checks.sh" t "$fake" "$fake" 3
 expect "a wrong lang id is a contract failure, not a skip" 1 env LANG_AT_CPUS=1 sh "$here/check-native.sh" other "$fake" "$fake" 3
 
+# A stand-in for check-native.sh that passes the first time and reports "skipped" the second time (the negative control).
+stub="$tmp/stub-check"
+cat >"$stub" <<EOF
+#!/bin/sh
+n=\$(cat "$tmp/calls" 2>/dev/null || echo 0)
+echo \$((n + 1)) >"$tmp/calls"
+[ "\$n" -eq 0 ] && exit 0
+exit 77
+EOF
+rm -f "$tmp/calls"
+out=$(CHECK_NATIVE="$stub" sh "$here/run-checks.sh" t a b 1 2>&1)
+rc=$?
+if [ "$rc" -eq 0 ] && echo "$out" | grep -q "skip" && ! echo "$out" | grep -q "rejects"; then
+  echo "ok   a skipped negative control is reported as skipped, not as a rejection"
+else
+  echo "FAIL a skipped negative control: exit $rc, output: $out"
+  failures=$((failures + 1))
+fi
+
 exit $failures

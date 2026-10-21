@@ -44,15 +44,26 @@ func privateStderr() io.Writer {
 	return os.Stderr
 }
 
+// privateCopy duplicates fd onto a descriptor above 2. dup returns the lowest free number, so when the program has
+// closed fd 0, 1 or 2 the copy would land there: on fd 1 or 2 it would get the SIGPIPE behaviour it is meant to
+// avoid, and fd 0 is the program's input. The low numbers dup hands out are held until one above 2 comes back, then
+// released.
 func privateCopy(fd int) (*os.File, error) {
-	copied, err := syscall.Dup(fd)
-	if err != nil {
-		return nil, err
+	var held []int
+	defer func() {
+		for _, h := range held {
+			_ = syscall.Close(h)
+		}
+	}()
+	for {
+		copied, err := syscall.Dup(fd)
+		if err != nil {
+			return nil, err
+		}
+		if copied > 2 {
+			syscall.CloseOnExec(copied)
+			return os.NewFile(uintptr(copied), "hairspring-report"), nil
+		}
+		held = append(held, copied)
 	}
-	if copied <= 2 { // fd 1 or 2 had been closed: the copy would get the SIGPIPE behaviour it is meant to avoid
-		_ = syscall.Close(copied)
-		return nil, fmt.Errorf("hairspring: no descriptor above 2 for the report")
-	}
-	syscall.CloseOnExec(copied)
-	return os.NewFile(uintptr(copied), "hairspring-report"), nil
 }

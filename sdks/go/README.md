@@ -40,7 +40,8 @@ per line. `HAIRSPRING_EVENTS_FILE=path` sends it to a file instead:
 - `O_NOFOLLOW` covers the last path component only, so a symbolic link in a directory component is followed, and a
   non-Unix build follows links everywhere;
 - ignored in a program started with elevated rights (`AT_SECURE` from `/proc/self/auxv` on Linux, which also covers
-  file capabilities; elsewhere, differing real and effective ids);
+  file capabilities, and an auxv that cannot be read counts as privileged; elsewhere, differing real and effective
+  ids);
 - if the file cannot be used the report falls back to standard error and `end.dropped` counts it.
 
 `HAIRSPRING_EVENTS=off` writes nothing.
