@@ -152,8 +152,8 @@ Each check ends as `pass`, `fail`, `inconclusive` or `skipped`, with counts of t
 not be judged. A rerun that cannot be judged (a timeout, a Hermit fault, an events fault) is counted apart and is never a
 pass or a miss. A check that did not run because the caller cancelled, or the wall budget (`--wall-secs`, at most 600)
 was used up, is stored as `skipped` and says why. The budget and the cancel reach every run, the replay and each skid
-retry included: a run is given only what is left of the budget (at least one second), and a replay the budget cut short
-is `inconclusive`, never a miss.
+retry included: a run is given only what is left of the budget (at least one second), and a rerun, replay or control the budget cut short
+is `inconclusive`, never a miss, a hang or (where a hang is the bug) a violation.
 
 **Cancelling.** A cancelled confirmation is recorded as `skipped` only for a caller that uses the progress callback (the
 server and the embedded engine). `hairspring confirm` on the command line has no signal handling: Ctrl-C stops
@@ -215,14 +215,14 @@ comfort.
 **Storage and retries.** A confirmation is stored under an id derived from its content (the failure, the runner and
 every check), so a retry of the same report stores nothing twice; a new confirmation differs at least in its times.
 Checks list by time and then by the order they were written. A failure holds at most 200 checks: a confirmation that
-would pass that drops the oldest whole confirmations to make room, so the newest checks are always kept. Text is cut by
+would pass that drops the oldest whole confirmations to make room, so the newest checks are kept; untrusted confirmations go before trusted ones. A report the cap already dropped can be sent again and is stored as the newest. (No remote reporting path exists yet, so neither is reachable today.) Text is cut by
 bytes (after JSON escaping) to fit the 16 KiB column, so a long or wide-character value is shortened and never refuses a
 confirmation.
 
 **Known limitation: sweep violations.** A sweep (the search over many seeds) stores a failure row only for the lowest
-failing seed. `hairspring confirm` confirms the stored failures, so other seeds that violated a property in the same
-sweep have no row and cannot be confirmed, and the run's claim is derived only from the seeds that have one. A violation
-that was seen only on a higher seed is not confirmed by this pipeline.
+failing seed. The claim gate needs every first-failure seed of the run to be confirmed, and a seed that failed in the
+sweep but has no row cannot be confirmed by this pipeline, so such a run can open no claim at all. Deferred, not
+implemented.
 
 **Other limits.** SQLite allows one writer at a time: two processes confirming at once can get `SQLITE_BUSY` and should
 retry. The local runner label comes from the process, so it is not the same worker identity in the CLI and in the embedded
