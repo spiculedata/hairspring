@@ -303,3 +303,16 @@ fn the_finding_names_the_confirmation_it_comes_from() {
     let first = checks.checks.iter().find(|c| c.kind == "bundle_replay");
     assert_eq!(first.map(|c| c.confirmation_id.clone()), Some(from));
 }
+
+#[test]
+fn an_untrusted_newer_confirmation_cannot_withdraw_a_trusted_claim() {
+    let rig = rig();
+    record(&rig, true, &[rerun(true), replay(true)]);
+    let miss = CheckResult::new(CheckKind::SameSeedRerun, CheckStatus::Fail)
+        .with_counts(0, 3, 0)
+        .with_times(50, 60);
+    record(&rig, false, &[miss]);
+    let p = page(&rig);
+    assert!(p.claim.allowed, "{:?}", p.claim.withheld);
+    assert!(p.claim.text.is_some());
+}

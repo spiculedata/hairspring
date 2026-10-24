@@ -367,3 +367,14 @@ fn a_runner_label_is_cut_by_bytes_on_a_character_boundary() {
 fn the_engine_and_the_store_agree_on_how_long_a_column_may_be() {
     assert_eq!(MAX_COLUMN_BYTES, hairspring_store::MAX_CHECK_TEXT_BYTES);
 }
+
+#[test]
+fn an_empty_runner_label_is_a_bad_request_not_a_server_error() {
+    let rig = rig();
+    let err = rig
+        .svc
+        .record_confirmation(&rig.failure, "", false, &[good(CheckKind::SameSeedRerun)])
+        .unwrap_err();
+    assert!(matches!(err, ServiceError::InvalidRequest(_)), "{err:?}");
+    assert_eq!(stored(&rig), 0);
+}

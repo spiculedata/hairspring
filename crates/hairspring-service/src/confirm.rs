@@ -143,6 +143,11 @@ impl Service {
         let clean = confirm_sanitize::checks(reported)?;
         let checks = clean.iter().map(new_check).collect::<Result<Vec<_>>>()?;
         let runner = cut_bytes(runner, MAX_CHECK_TAG_BYTES);
+        if runner.is_empty() {
+            return Err(ServiceError::InvalidRequest(
+                "the runner label must not be empty".to_string(),
+            ));
+        }
         let confirmation_id =
             NewConfirmation::content_id(failure_id, &runner, runner_trusted, &checks);
         let new = NewConfirmation {

@@ -8,7 +8,7 @@
 use super::pace::Pace;
 use crate::backend::HermitBackend;
 use crate::exec::{ProcessSpec, SpawnError, Trial};
-use crate::trace::{skid_overshoot, Verdict};
+use crate::trace::{classify, skid_overshoot, Verdict};
 use std::time::Duration;
 
 /// The run that was kept and how it came about.
@@ -100,5 +100,17 @@ pub(super) fn run(
             doubled: false,
             timeout,
         },
+    }
+}
+
+impl Attempt {
+    /// Whether the kept run timed out only because the wall budget gave it less than its own limit. That says nothing
+    /// about the program, even where a hang is the bug, so it is never a hang, a violation or a miss.
+    pub(super) fn clipped_by_budget(&self, own_limit: Duration) -> bool {
+        self.timeout < own_limit
+            && self
+                .trial
+                .as_ref()
+                .is_ok_and(|t| matches!(classify(t, self.timeout.as_secs()), Verdict::Hang(_)))
     }
 }

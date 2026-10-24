@@ -153,3 +153,26 @@ fn a_skid_overshoot_is_not_retried_once_the_caller_has_cancelled() {
     assert_eq!(checks[0].status, CheckStatus::Inconclusive);
     assert_eq!(checks[1].status, CheckStatus::Skipped);
 }
+
+#[test]
+fn a_skid_retry_is_given_only_what_is_left_of_the_wall_budget() {
+    let rig = skid_rig("skid-budget");
+    let bundle = rig.bundle();
+    rig.set("count", "0");
+    rig.set("skid_left", "5");
+    // The first run overshoots at once; the retry would sleep five seconds, far past the two second budget.
+    rig.set("sleep", "5");
+    rig.set("sleep_from", "2");
+    let req = ConfirmRequest {
+        reruns: 1,
+        wall_secs: 2,
+        ..ConfirmRequest::default()
+    };
+    let started = std::time::Instant::now();
+    rig.engine.confirm(&bundle, &req, &mut |_| true).unwrap();
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(4000),
+        "{:?}",
+        started.elapsed()
+    );
+}

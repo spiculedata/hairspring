@@ -57,13 +57,9 @@ pub(super) fn check(
         );
     }
     let environment = ctx.backend.environment(control);
-    let a = attempt::run(
-        ctx.backend,
-        control,
-        ctx.seed,
-        ctx.backend.trial_timeout(control),
-        pace,
-    );
+    let own_limit = ctx.backend.trial_timeout(control);
+    let a = attempt::run(ctx.backend, control, ctx.seed, own_limit, pace);
+    let clipped = a.clipped_by_budget(own_limit);
     pace.ran("control".to_string());
     let result = ctx
         .result(kind, CheckStatus::Inconclusive, started)
@@ -89,6 +85,12 @@ pub(super) fn check(
     } else {
         result
     };
+    if clipped {
+        return result.with_counts(0, 0, 1).with_detail(
+            "inconclusive",
+            "the wall budget ended the control before it finished, so it says nothing",
+        );
+    }
     judge(ctx.backend, control, a.timeout, a.trial, result)
 }
 

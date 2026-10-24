@@ -282,3 +282,27 @@ fn a_version_four_schema_still_downgrades_to_two() {
     assert_eq!((report.from_version, report.to_version), (4, 2));
     assert_eq!(recorded_version(&mut admin(&url), &schema), 2);
 }
+
+#[test]
+fn a_current_schema_whose_checks_table_predates_the_seq_column_is_refused_with_the_fix() {
+    let Some(url) = url() else { return };
+    let schema = new_schema("v5q");
+    drop(PgStore::connect_in_schema(&url, &schema, 1).unwrap());
+    let mut c = admin(&url);
+    c.batch_execute(&format!(
+        "ALTER TABLE \"{schema}\".failure_checks DROP COLUMN seq"
+    ))
+    .unwrap();
+    let err = PgStore::connect_in_schema(&url, &schema, 1)
+        .err()
+        .expect("must refuse");
+    let text = err.to_string();
+    assert!(
+        text.contains("seq") && text.contains("failure_checks"),
+        "{text}"
+    );
+    assert!(
+        text.contains("drop") || text.contains("DROP"),
+        "says how to recreate it: {text}"
+    );
+}

@@ -153,20 +153,18 @@ pub(super) fn check(ctx: &Ctx, pace: &mut Pace) -> CheckResult {
     let mut tally = Tally::default();
     let mut first: Option<First> = None;
     let mut stopped = None;
+    let own_limit = ctx.backend.trial_timeout(ctx.p);
     for i in 0..ctx.req.reruns {
         stopped = pace.stop();
         if stopped.is_some() {
             break;
         }
-        let a = attempt::run(
-            ctx.backend,
-            ctx.p,
-            ctx.seed,
-            ctx.backend.trial_timeout(ctx.p),
-            pace,
-        );
+        let a = attempt::run(ctx.backend, ctx.p, ctx.seed, own_limit, pace);
         let outcome = match (&a.trial, skid_text(&a)) {
             (Err(_), _) => Rerun::Inconclusive("Hermit could not be started (host fault)"),
+            (Ok(_), _) if a.clipped_by_budget(own_limit) => {
+                Rerun::Inconclusive("the wall budget ended the rerun before it finished")
+            }
             (Ok(_), Some(why)) => Rerun::Inconclusive(why),
             (Ok(t), None) => judge(ctx, t, &first),
         };
@@ -175,7 +173,11 @@ pub(super) fn check(ctx: &Ctx, pace: &mut Pace) -> CheckResult {
             if let Some(s) = &t.schedule {
                 tally.add_artefact(s.fingerprint.clone());
             }
-            if first.is_none() && !a.doubled && judged_failure_or_pass(ctx, t) {
+            if first.is_none()
+                && !a.doubled
+                && !a.clipped_by_budget(own_limit)
+                && judged_failure_or_pass(ctx, t)
+            {
                 first = Some(First {
                     hash: behaviour_hash(t),
                     fingerprint: t.schedule.as_ref().map(|s| s.fingerprint.clone()),

@@ -9,6 +9,7 @@ pub fn run_all_checks(make: &dyn Fn() -> Arc<dyn Store>) {
     a_confirmation_that_does_not_fit_is_stored_not_at_all(&*make());
     the_number_of_checks_in_one_confirmation_is_capped(&*make());
     a_full_failure_drops_its_oldest_confirmations_for_a_new_one(&*make());
+    a_full_failure_drops_untrusted_confirmations_before_trusted_ones(&*make());
     confirmations_written_in_the_same_millisecond_list_in_the_order_written(&*make());
     a_confirmations_id_follows_its_content(&*make());
     later_confirmations_list_after_earlier_ones(&*make());
@@ -324,4 +325,31 @@ pub fn concurrent_identical_confirmations_store_once(s: Arc<dyn Store>) {
         .count();
     assert_eq!(stored, 1, "{outcomes:?}");
     assert_eq!(s.list_failure_checks(&f.id).unwrap().len(), 2);
+}
+
+/// The cap makes room from untrusted confirmations first, so a runner nobody trusts cannot push a trusted one out.
+pub fn a_full_failure_drops_untrusted_confirmations_before_trusted_ones(s: &dyn Store) {
+    let f = failure(s);
+    let per = vec![check("same_seed_rerun", "pass"); MAX_CHECKS_PER_CONFIRMATION];
+    let mut trusted = confirmation("conf_trusted", &f.id, per.clone());
+    trusted.runner_trusted = true;
+    s.add_confirmation(&trusted, 1).unwrap();
+    let rounds = MAX_CHECKS_PER_FAILURE as usize / MAX_CHECKS_PER_CONFIRMATION - 1;
+    for i in 0..rounds {
+        let mut c = confirmation(&format!("conf_u{i}"), &f.id, per.clone());
+        c.runner_trusted = false;
+        s.add_confirmation(&c, 10 + i as i64).unwrap();
+    }
+    let mut newest = confirmation("conf_new", &f.id, pair());
+    newest.runner_trusted = false;
+    s.add_confirmation(&newest, 999).unwrap();
+    let rows = s.list_failure_checks(&f.id).unwrap();
+    assert!(
+        rows.iter().any(|r| r.confirmation_id == "conf_trusted"),
+        "kept"
+    );
+    assert!(
+        rows.iter().all(|r| r.confirmation_id != "conf_u0"),
+        "dropped"
+    );
 }

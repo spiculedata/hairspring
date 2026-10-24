@@ -126,3 +126,58 @@ fn the_detail_says_when_reruns_were_compared_with_the_first_rerun() {
         without[0].detail
     );
 }
+
+fn hang_is_the_bug(name: &str) -> (Rig, hairspring_core::bundle::Bundle) {
+    let rig = rig(
+        name,
+        RigOptions {
+            hang_is_violation: true,
+            ..RigOptions::default()
+        },
+    );
+    let bundle = rig.bundle();
+    rig.set("count", "0");
+    (rig, bundle)
+}
+
+#[test]
+fn a_rerun_the_wall_budget_cut_short_is_inconclusive_even_where_a_hang_is_the_bug() {
+    let (rig, bundle) = hang_is_the_bug("clip-rerun");
+    rig.set("sleep", "5");
+    let req = ConfirmRequest {
+        reruns: 1,
+        wall_secs: 1,
+        ..ConfirmRequest::default()
+    };
+    let checks = rig.engine.confirm(&bundle, &req, &mut |_| true).unwrap();
+    let c = &checks[0].counts;
+    assert_eq!(
+        (c.passed, c.failed, c.inconclusive),
+        (0, 0, 1),
+        "{:?}",
+        checks[0]
+    );
+    assert_eq!(checks[0].status, CheckStatus::Inconclusive);
+}
+
+#[test]
+fn a_control_the_wall_budget_cut_short_is_inconclusive_not_control_failed() {
+    let (rig, bundle) = hang_is_the_bug("clip-control");
+    // The rerun and the replay are quick; the control (the third call) would take five seconds.
+    rig.set("sleep", "5");
+    rig.set("sleep_from", "3");
+    let req = ConfirmRequest {
+        reruns: 1,
+        wall_secs: 3,
+        control: Some("fixed".into()),
+        ..ConfirmRequest::default()
+    };
+    let checks = rig.engine.confirm(&bundle, &req, &mut |_| true).unwrap();
+    let control = checks
+        .iter()
+        .find(|c| c.kind == CheckKind::FixedControl)
+        .unwrap();
+    assert_eq!(control.status, CheckStatus::Inconclusive, "{control:?}");
+    assert_eq!(control.counts.failed, 0);
+    assert_ne!(finding_status(&checks), FindingStatus::ControlFailed);
+}

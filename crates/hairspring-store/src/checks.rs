@@ -182,12 +182,17 @@ pub(crate) fn validate(new: &NewConfirmation) -> Result<()> {
 }
 
 /// The confirmations to drop so that `adding` more checks fit under the per-failure cap. `held` lists the failure's
-/// confirmations oldest first, each with its number of checks. Whole confirmations go, oldest first: a half-kept
-/// confirmation would be read as a different one, and the newest checks are the ones worth keeping.
-pub(crate) fn to_drop(held: &[(String, u64)], adding: usize) -> Vec<String> {
-    let mut total: u64 = held.iter().map(|(_, n)| n).sum::<u64>() + adding as u64;
+/// confirmations oldest first, each with its number of checks and whether its runner was trusted. Whole confirmations
+/// go (a half-kept one would be read as a different one), untrusted ones first and oldest first within each kind, so a
+/// runner nobody trusts cannot push a trusted confirmation out.
+pub(crate) fn to_drop(held: &[(String, u64, bool)], adding: usize) -> Vec<String> {
+    let mut total: u64 = held.iter().map(|(_, n, _)| n).sum::<u64>() + adding as u64;
     let mut dropped = Vec::new();
-    for (id, n) in held {
+    let untrusted_first = held
+        .iter()
+        .filter(|(_, _, trusted)| !trusted)
+        .chain(held.iter().filter(|(_, _, trusted)| *trusted));
+    for (id, n, _) in untrusted_first {
         if total <= MAX_CHECKS_PER_FAILURE {
             break;
         }

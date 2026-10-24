@@ -83,14 +83,18 @@ pub(crate) fn add(c: &mut Client, new: &NewConfirmation, now: i64) -> Result<Con
             )))
         };
     }
-    let held: Vec<(String, u64)> = tx
+    let held: Vec<(String, u64, bool)> = tx
         .query(
-            "SELECT confirmation_id, COUNT(*) FROM failure_checks WHERE failure_id=$1 \
+            "SELECT confirmation_id, COUNT(*), BOOL_OR(runner_trusted) FROM failure_checks WHERE failure_id=$1 \
              GROUP BY confirmation_id ORDER BY MIN(created_at), MIN(seq)",
             &[&new.failure_id],
         )?
         .iter()
-        .map(|r| (r.get::<_, String>(0), r.get::<_, i64>(1) as u64))
+        .map(|r| (
+                r.get::<_, String>(0),
+                r.get::<_, i64>(1) as u64,
+                r.get::<_, bool>(2),
+            ))
         .collect();
     for id in to_drop(&held, new.checks.len()) {
         tx.execute(

@@ -97,6 +97,8 @@ pub struct RigOptions {
     /// The failing target hangs on the first run after a test creates `hang_once` in the rig's directory, and times
     /// out after two seconds.
     pub hangs_once: bool,
+    /// Both targets treat a timeout as the bug.
+    pub hang_is_violation: bool,
 }
 
 impl Default for RigOptions {
@@ -110,6 +112,7 @@ impl Default for RigOptions {
             extra_env: vec![],
             guest_env: vec![],
             hangs_once: false,
+            hang_is_violation: false,
         }
     }
 }
@@ -126,6 +129,7 @@ fn process(
     scheduler: SchedulerSpec,
     env: BTreeMap<String, String>,
     trial_timeout_secs: Option<u64>,
+    hang_is_violation: bool,
 ) -> TargetSpec {
     TargetSpec {
         name: name.into(),
@@ -137,7 +141,7 @@ fn process(
             hermit_args,
             trial_timeout_secs,
             scheduler,
-            hang_is_violation: false,
+            hang_is_violation,
             parallelism: 1,
         },
         budget: Budget {
@@ -168,6 +172,7 @@ pub fn rig(name: &str, o: RigOptions) -> Rig {
         o.scheduler.clone(),
         guest_env.clone(),
         o.hangs_once.then_some(2),
+        o.hang_is_violation,
     );
     let fixed = process(
         "fixed",
@@ -176,6 +181,7 @@ pub fn rig(name: &str, o: RigOptions) -> Rig {
         o.scheduler,
         guest_env,
         None,
+        o.hang_is_violation,
     );
     let settings = HermitSettings {
         bin,

@@ -220,7 +220,27 @@ fn verify_current(tx: &mut Transaction<'_>) -> Result<()> {
         .chain(V5_TABLES)
         .collect();
     let indexes: Vec<&str> = V3_INDEXES.into_iter().chain(V5_INDEXES).collect();
-    verify_objects(tx, SCHEMA_VERSION, &tables, &indexes)
+    verify_objects(tx, SCHEMA_VERSION, &tables, &indexes)?;
+    verify_checks_seq(tx)
+}
+
+/// A development database created at an earlier draft of version 5 has `failure_checks` without `seq`. It opens, but
+/// every read of the checks would fail with an opaque database error, so it is refused here with the way out.
+fn verify_checks_seq(tx: &mut Transaction<'_>) -> Result<()> {
+    let row = tx.query_one(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = current_schema() AND table_name = 'failure_checks' AND column_name = 'seq')",
+        &[],
+    )?;
+    if row.get::<_, bool>(0) {
+        return Ok(());
+    }
+    Err(StoreError::Backend(
+        "database schema version 5 is incomplete: failure_checks has no `seq` column (it was created by an earlier draft of version 5). \
+         It holds only stored confirmation checks: run `DROP TABLE failure_checks` in this schema and open the database again, \
+         or reset the development database"
+            .to_string(),
+    ))
 }
 
 fn verify_objects(

@@ -95,12 +95,16 @@ pub(crate) fn add(
     }
     let held = {
         let mut stmt = tx.prepare(
-            "SELECT confirmation_id, COUNT(*) FROM failure_checks WHERE failure_id=? \
+            "SELECT confirmation_id, COUNT(*), MAX(runner_trusted) FROM failure_checks WHERE failure_id=? \
              GROUP BY confirmation_id ORDER BY MIN(created_at), MIN(rowid)",
         )?;
         let rows = stmt
             .query_map([&new.failure_id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)? as u64,
+                    r.get::<_, i64>(2)? != 0,
+                ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows
