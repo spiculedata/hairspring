@@ -866,6 +866,117 @@ expect "check-probe-writes counts stdout writes across the per-thread files" 1 s
 expect "check-probe-writes rejects a stdout line written with writev" 1 sh "$here/check-probe-writes.sh" "$pw_writev"
 expect "check-probe-writes rejects a writev to stdout beside a write" 1 sh "$here/check-probe-writes.sh" "$pw_writev_extra"
 
+# check-probe-writes.sh --any-fd: the .NET runtime duplicates descriptor 1 for its console stream, so the line is written to
+# another descriptor (real trace: write(24, "PROBE v1 ...")). With the flag the line is found on any descriptor; writes of
+# other things (thread names, wake-up bytes) are ignored, and the rest of the rules are unchanged.
+pw_dup_ok="$tmp/pw_dup_ok.txt"
+cat >"$pw_dup_ok" <<'EOF'
+write(13, "*", 1)                       = 1
+write(14, ".NET Finalizer", 14)         = 14
+write(24, "PROBE v1 lang=dotnet lock_order=0123456789abcdef arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef\n", 149) = 149
+write(4, "\1", 1)                       = 1
+EOF
+pw_dup_two="$tmp/pw_dup_two.txt"
+cat >"$pw_dup_two" <<'EOF'
+write(24, "PROBE v1 lang=dotnet lock_order=0123456789abcdef ", 49) = 49
+write(24, "arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef\n", 100) = 100
+EOF
+pw_dup_short="$tmp/pw_dup_short.txt"
+cat >"$pw_dup_short" <<'EOF'
+write(24, "PROBE v1 lang=dotnet lock_order=0123456789abcdef arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef\n", 149) = 20
+EOF
+pw_dup_none="$tmp/pw_dup_none.txt"
+printf 'write(14, ".NET Finalizer", 14)         = 14\n' >"$pw_dup_none"
+pw_dup_writev="$tmp/pw_dup_writev.txt"
+cat >"$pw_dup_writev" <<'EOF'
+writev(24, [{iov_base="PROBE v1 lang=dotnet lock_order=0123456789abcdef arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef\n", iov_len=149}], 1) = 149
+EOF
+pw_dup_event="$tmp/pw_dup_event.txt"
+{ printf 'write(200, "HAIRSPRING_EVENT {\\"v\\":1}\\n", 24) = 24\n'; cat "$pw_dup_ok"; } >"$pw_dup_event"
+expect "check-probe-writes --any-fd accepts the line on a duplicated descriptor among internal writes" 0 sh "$here/check-probe-writes.sh" --any-fd "$pw_dup_ok"
+expect "check-probe-writes without --any-fd rejects a line that is not on descriptor 1" 1 sh "$here/check-probe-writes.sh" "$pw_dup_ok"
+expect "check-probe-writes --any-fd rejects a line written in two pieces" 1 sh "$here/check-probe-writes.sh" --any-fd "$pw_dup_two"
+expect "check-probe-writes --any-fd rejects a short write" 1 sh "$here/check-probe-writes.sh" --any-fd "$pw_dup_short"
+expect "check-probe-writes --any-fd rejects a run with no line" 1 sh "$here/check-probe-writes.sh" --any-fd "$pw_dup_none"
+expect "check-probe-writes --any-fd rejects a writev of the line" 1 sh "$here/check-probe-writes.sh" --any-fd "$pw_dup_writev"
+expect "check-probe-writes --any-fd rejects a protocol line" 1 sh "$here/check-probe-writes.sh" --any-fd "$pw_dup_event"
+expect "check-probe-writes --any-fd still accepts the plain descriptor-1 line" 0 sh "$here/check-probe-writes.sh" --any-fd "$pw_ok"
+expect "check-probe-writes --any-fd without a file is a usage error" 64 sh "$here/check-probe-writes.sh" --any-fd
+
+# check-sources-dotnet.sh: the .NET probe must not read the seed, /proc, the CPU count, the environment or the clock (it alone
+# may read the stopwatch counter, once, when --allow-stopwatch is given).
+dn_clean="$tmp/dn_clean.cs"
+printf 'using System.Threading;\nclass C { void F() { new Thread(() => { }).Start(); } }\n' >"$dn_clean"
+expect "check-sources-dotnet accepts a clean source" 0 sh "$here/check-sources-dotnet.sh" "$dn_clean"
+for token in HAIRSPRING_SEED '/proc/self/stat' 'Environment.GetEnvironmentVariable("X")' 'Environment.GetEnvironmentVariables()' \
+  'Environment.ExpandEnvironmentVariables("x")' 'Environment.ProcessorCount' 'Thread.GetCurrentProcessorId()' 'DateTime.Now' 'DateTime.UtcNow' \
+  'DateTime.Today' 'DateTimeOffset.Now' 'DateTimeOffset.UtcNow' 'Environment.TickCount' 'Environment.TickCount64' \
+  'TimeProvider.System.GetUtcNow()' 'Process.GetCurrentProcess()' 'Stopwatch.StartNew()' 'Stopwatch.GetTimestamp()'; do
+  dn_bad="$tmp/dn_bad.cs"
+  printf 'class C { void F() { var x = %s; } }\n' "$token" >"$dn_bad"
+  expect "check-sources-dotnet rejects $token" 1 sh "$here/check-sources-dotnet.sh" "$dn_bad"
+done
+dn_clock="$tmp/dn_clock.cs"
+printf 'class C { long F() => System.Diagnostics.Stopwatch.GetTimestamp(); long G() => System.Diagnostics.Stopwatch.Frequency; }\n' >"$dn_clock"
+expect "check-sources-dotnet accepts Stopwatch.GetTimestamp and Frequency when they are allowed" 0 sh "$here/check-sources-dotnet.sh" --allow-stopwatch "$dn_clock"
+for token in 'Stopwatch.StartNew()' 'new Stopwatch()' 'Stopwatch.GetElapsedTime(1, 2)' 'Stopwatch.IsHighResolution'; do
+  printf 'class C { void F() { var x = System.Diagnostics.%s; } }\n' "$token" >"$dn_bad"
+  expect "check-sources-dotnet --allow-stopwatch still rejects $token" 1 sh "$here/check-sources-dotnet.sh" --allow-stopwatch "$dn_bad"
+done
+for token in HAIRSPRING_SEED '/proc/self' 'Environment.ProcessorCount' 'DateTime.UtcNow' 'Environment.GetEnvironmentVariable("X")'; do
+  printf 'class C { void F() { var x = %s; var t = System.Diagnostics.Stopwatch.GetTimestamp(); } }\n' "$token" >"$dn_bad"
+  expect "check-sources-dotnet --allow-stopwatch still rejects $token" 1 sh "$here/check-sources-dotnet.sh" --allow-stopwatch "$dn_bad"
+done
+expect "check-sources-dotnet without a file is a usage error" 64 sh "$here/check-sources-dotnet.sh"
+expect "check-sources-dotnet --allow-stopwatch without a file is a usage error" 64 sh "$here/check-sources-dotnet.sh" --allow-stopwatch
+expect "check-sources-dotnet fails on a missing file" 1 sh "$here/check-sources-dotnet.sh" "$tmp/no-such-file.cs"
+dn_dir="$tmp/dn_dir"
+mkdir -p "$dn_dir/obj"
+cp "$dn_clean" "$dn_dir/Clean.cs"
+printf 'class D { long F() => System.Environment.TickCount64; }\n' >"$dn_dir/obj/Generated.cs"
+expect "check-sources-dotnet searches a directory but not its build output" 0 sh "$here/check-sources-dotnet.sh" "$dn_dir"
+printf 'class D { long F() => System.Environment.TickCount64; }\n' >"$dn_dir/Dirty.cs"
+expect "check-sources-dotnet finds a forbidden read in a file of a directory" 1 sh "$here/check-sources-dotnet.sh" "$dn_dir"
+dnroot="$here/../dotnet"
+expect "the real .NET probe is clean apart from the stopwatch" 0 sh "$here/check-sources-dotnet.sh" --allow-stopwatch "$dnroot/src"
+expect "the real .NET probe is rejected when the stopwatch is not allowed" 1 sh "$here/check-sources-dotnet.sh" "$dnroot/src"
+
+# check-stopwatch-use.sh: exactly one Stopwatch.GetTimestamp, no aliased import of Stopwatch
+sw_one="$tmp/sw_one.cs"
+printf 'using System.Diagnostics;\nclass C { long F() => Stopwatch.GetTimestamp(); }\n' >"$sw_one"
+sw_two="$tmp/sw_two.cs"
+printf 'using System.Diagnostics;\nclass C { long F() => Stopwatch.GetTimestamp() + Stopwatch.GetTimestamp(); }\n' >"$sw_two"
+sw_alias="$tmp/sw_alias.cs"
+printf 'using S = System.Diagnostics.Stopwatch;\nclass C { long F() => System.Diagnostics.Stopwatch.GetTimestamp(); }\n' >"$sw_alias"
+sw_static="$tmp/sw_static.cs"
+printf 'using static System.Diagnostics.Stopwatch;\nclass C { long F() => System.Diagnostics.Stopwatch.GetTimestamp(); }\n' >"$sw_static"
+sw_none="$tmp/sw_none.cs"
+printf 'class C { }\n' >"$sw_none"
+expect "check-stopwatch-use accepts exactly one Stopwatch.GetTimestamp" 0 sh "$here/check-stopwatch-use.sh" "$sw_one"
+expect "check-stopwatch-use rejects two reads" 1 sh "$here/check-stopwatch-use.sh" "$sw_two"
+expect "check-stopwatch-use rejects an aliased import" 1 sh "$here/check-stopwatch-use.sh" "$sw_alias"
+expect "check-stopwatch-use rejects a static import" 1 sh "$here/check-stopwatch-use.sh" "$sw_static"
+expect "check-stopwatch-use rejects a file with no read" 1 sh "$here/check-stopwatch-use.sh" "$sw_none"
+expect "check-stopwatch-use without a file is a usage error" 64 sh "$here/check-stopwatch-use.sh"
+expect "the real .NET probe has exactly one Stopwatch.GetTimestamp" 0 sh "$here/check-stopwatch-use.sh" "$dnroot/src/Clock.cs"
+# No other source file of the probe may read the clock at all.
+expect "no other source of the .NET probe mentions Stopwatch" 1 sh -c "grep -l Stopwatch '$dnroot'/src/*.cs | grep -v 'src/Clock.cs'"
+
+# profile-env.sh: the probe's environment profiles, read from profiles.manifest
+pe_manifest="$tmp/pe.manifest"
+printf '# comment\n\na DOTNET_ROOT=@DOTNET_ROOT@\nb DOTNET_X=1\nb DOTNET_Y=2\n' >"$pe_manifest"
+expect "profile-env prints arm a" 0 sh -c "[ \"\$(sh '$here/../dotnet/profile-env.sh' a /rt '$pe_manifest')\" = 'DOTNET_ROOT=/rt' ]"
+expect "profile-env prints arm a then the b lines for arm b" 0 sh -c "[ \"\$(sh '$here/../dotnet/profile-env.sh' b /rt '$pe_manifest')\" = 'DOTNET_ROOT=/rt
+DOTNET_X=1
+DOTNET_Y=2' ]"
+printf 'a DOTNET_ROOT=@DOTNET_ROOT@\nb DOTNET_X = 1\n' >"$tmp/pe_bad.manifest"
+expect "profile-env rejects a malformed line even for arm a" 1 sh "$here/../dotnet/profile-env.sh" a /rt "$tmp/pe_bad.manifest"
+printf 'c DOTNET_X=1\n' >"$tmp/pe_arm.manifest"
+expect "profile-env rejects a line for an unknown arm" 1 sh "$here/../dotnet/profile-env.sh" b /rt "$tmp/pe_arm.manifest"
+expect "profile-env fails on a missing manifest" 1 sh "$here/../dotnet/profile-env.sh" a /rt "$tmp/no-such.manifest"
+expect "profile-env with one argument is a usage error" 64 sh "$here/../dotnet/profile-env.sh" a
+expect "profile-env with an unknown arm is a usage error" 64 sh "$here/../dotnet/profile-env.sh" z /rt
+
 libcase "a record without an alignment checklist does not claim a count of ticked lines" 0 'record_title=t; record_generated_by=g; artifact_name=p; artifact_sha=aa; record_no_checklist=1; finish_record >/dev/null; ! grep -q "Checklist lines ticked" "$out"'
 libcase "a record with an alignment checklist states how many lines are ticked" 0 'record_title=t; record_generated_by=g; artifact_name=p; artifact_sha=aa; finish_record >/dev/null; grep -q "^Checklist lines ticked: 0 of 11." "$out"'
 

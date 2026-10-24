@@ -1,11 +1,11 @@
 #!/bin/sh
 # Runs build-record.sh for one variant in a linux/amd64 container, the build lane's environment for the record.
 #
-#   build-record-docker.sh <c|cxx-clang|cxx-gxx|go|rust|rust-probe> [out-file]
+#   build-record-docker.sh <c|cxx-clang|cxx-gxx|go|rust|rust-probe|dotnet-probe> [out-file]
 #
 # C and C++ use ubuntu:24.04 (gcc 13, g++ 13, clang 18, glibc 2.39: the box's toolchain); Go uses golang:1.27.3; Rust
-# uses rust:1.99.1-bookworm with the musl target of the platform (TARGET overrides it). The C, C++ and Go images are
-# pinned by digest. The source commit is passed into the container as SOURCE_COMMIT. The repository is mounted read-only
+# uses rust:1.99.1-bookworm with the musl target of the platform (TARGET overrides it); the .NET probe uses the .NET SDK
+# 10.0.402 image (runtime 10.0.13). The C, C++, Go, Rust and .NET images are pinned by digest. The source commit is passed into the container as SOURCE_COMMIT. The repository is mounted read-only
 # except the fixtures directory, whose build/ directory receives the artifacts and the record (Rust needs the whole
 # workspace, so it mounts the whole repository read-only; its cargo output goes to a scratch directory). The container
 # needs ptrace for strace (check B5) and an unconfined seccomp profile for the seccomp self-test (check B3); both are
@@ -15,7 +15,7 @@
 set -u
 
 if [ $# -lt 1 ]; then
-  echo "usage: $0 <c|cxx-clang|cxx-gxx|go|rust|rust-probe> [out-file]" >&2
+  echo "usage: $0 <c|cxx-clang|cxx-gxx|go|rust|rust-probe|dotnet-probe> [out-file]" >&2
   exit 64
 fi
 variant=$1
@@ -32,6 +32,8 @@ GO_IMAGE=${GO_IMAGE:-golang:1.27.3@sha256:957861185dbf29d93668ace41e011d091c6e77
 SOURCE_COMMIT=${SOURCE_COMMIT:-$(source_commit_of "$repo")}
 
 RUST_IMAGE=${RUST_IMAGE:-rust:1.99.1-bookworm@sha256:e12566d5abc17a0da741628782cdb504b68b8961f5bfcf677936bf3e8b32de29}
+# The .NET SDK that ships runtime 10.0.13 (SDK 10.0.402), pinned by the image index digest.
+DOTNET_IMAGE=${DOTNET_IMAGE:-mcr.microsoft.com/dotnet/sdk:10.0.402@sha256:747cbade5bfd918a175ac32f8f1d931edec2c7d0d5397a3de72eaef1ac1f66d2}
 case "$platform" in
   linux/arm64) default_target=aarch64-unknown-linux-musl ;;
   *) default_target=x86_64-unknown-linux-musl ;;
@@ -63,8 +65,13 @@ case "$variant" in
     inside_out=/out/record-$variant.md
     artifact_dir=/out/artifacts
     ;;
+  dotnet-probe)
+    image=$DOTNET_IMAGE
+    setup='apt-get update -qq && apt-get install -y -qq strace file >/dev/null'
+    script="build-record-probe-dotnet.sh"
+    ;;
   *)
-    echo "usage: $0 <c|cxx-clang|cxx-gxx|go|rust|rust-probe> [out-file]" >&2
+    echo "usage: $0 <c|cxx-clang|cxx-gxx|go|rust|rust-probe|dotnet-probe> [out-file]" >&2
     exit 64
     ;;
 esac
@@ -76,6 +83,7 @@ docker run --rm --platform "$platform" --cap-add SYS_PTRACE --security-opt secco
   $mounts \
   -e IMAGE_DIGEST="$digest" -e PRODUCER="docker $platform, image $image" -e SOURCE_COMMIT="$SOURCE_COMMIT" -e RUNS="${RUNS:-50}" \
   -e TARGET="$target" -e RUST_PINNED="${RUST_PINNED:-1.99.1}" -e ARTIFACT_DIR="$artifact_dir" \
+  -e SDK_PINNED="${SDK_PINNED:-10.0.402}" -e RUNTIME_PINNED="${RUNTIME_PINNED:-10.0.13}" \
   "$image" sh -c "$setup && sh /repo/examples/language-fixtures/scripts/$script $inside_out"
 rc=$?
 if [ $# -ge 2 ] && [ -f "$fixtures/build/record-$variant.md" ]; then

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Build-record check B5 for a probe program, on `strace -ff -s 4096 -e trace=write,writev -o <prefix>` output of one run.
 #
-#   check-probe-writes.sh <strace-file>...
+#   check-probe-writes.sh [--any-fd] <strace-file>...
 #
 # `strace -ff -o` writes one file per thread (<prefix>.<pid>), and a line has no pid column. A call that blocks is printed as
 # `write(..., N <unfinished ...>` and finished later in the same file as `<... write resumed>) = N`; the two halves are
@@ -16,8 +16,16 @@
 
 set -u
 
+# --any-fd is for the .NET probe: the runtime duplicates descriptor 1 for its console stream, so the line is written to
+# another descriptor (write(24, "PROBE v1 ...")). With it the line is looked for on any descriptor, a write that does not
+# begin with PROBE v1 (the runtime's own thread names and wake-up bytes) is ignored, and every other rule is unchanged.
+any_fd=0
+if [ "${1:-}" = "--any-fd" ]; then
+  any_fd=1
+  shift
+fi
 if [ $# -lt 1 ]; then
-  echo "usage: $0 <strace-file>..." >&2
+  echo "usage: $0 [--any-fd] <strace-file>..." >&2
   exit 64
 fi
 for file in "$@"; do
@@ -27,7 +35,7 @@ for file in "$@"; do
   fi
 done
 
-awk '
+awk -v anyfd="$any_fd" '
   # The key of a line: its file, and its pid column when it has one.
   function key() { return FILENAME SUBSEP (($1 ~ /^[0-9]+$/) ? $1 : "") }
   /<unfinished \.\.\.>$/ {
@@ -43,11 +51,13 @@ awk '
     delete pending[key()]
   }
   /HAIRSPRING_EVENT/ { events++ }
-  /(^|[^a-z])writev\(1,/ { vectors++ }
-  match($0, /(^|[^a-z])write\(1, "/) {
+  anyfd == 0 && /(^|[^a-z])writev\(1,/ { vectors++ }
+  anyfd == 1 && /(^|[^a-z])writev\([0-9]+, .*PROBE v1 / { vectors++ }
+  match($0, anyfd ? "(^|[^a-z])write\\([0-9]+, \"" : "(^|[^a-z])write\\(1, \"") {
     rest = substr($0, RSTART + RLENGTH)
     if (!match(rest, /"(\.\.\.)?, [0-9]+\) += -?[0-9]+/)) next
     body = substr(rest, 1, RSTART - 1)
+    if (anyfd && body !~ /^PROBE v1 /) next
     tail = substr(rest, RSTART)
     count = tail; sub(/^"(\.\.\.)?, /, "", count); sub(/\).*$/, "", count)
     ret = tail; sub(/^.*= */, "", ret)
