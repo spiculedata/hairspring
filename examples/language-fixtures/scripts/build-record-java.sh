@@ -8,7 +8,9 @@
 # build directories, two time zones) and requires equal sha256 (B1), checks that the entries are sorted and carry the fixed
 # timestamp, reads the window off the bytecode (B2: what the source compiles to; the JIT is not covered, see the record),
 # searches the sources for forbidden reads, checks that every JVM flag profile is valid and runs the program under it,
-# runs the native self-check 50 times per mode (B4), runs strace -ff on one buggy run per profile and without flags (B5),
+# runs every mode under -XX:+PrintCompilation and requires that neither worker loop is ever compiled (F3), checks that the
+# probe's classes in the jar are byte-identical to the probe-only jar's (F4), runs the native self-check 50 times per mode
+# with the default flags and under each profile's flags (B4), runs strace -ff on one buggy run per profile and without flags (B5),
 # runs the SDK's own tests and conformance (B6) and prints the source of the modes (B7). It then captures the evidence for
 # the rest of the alignment checklist from the built artifact and ticks each checklist line only when the evidence that
 # proves it passed (record-lib.sh). Nothing here runs Hermit or touches the box. Exits 1 if any step failed.
@@ -113,6 +115,31 @@ jar_layout() {
   unzip -p "$jar" META-INF/MANIFEST.MF
 }
 
+# The probe's classes in lang-at.jar are the same bytes as in the probe-only jar (the other artifact, with its own record):
+# javac output for a source does not depend on the other sources in the run, and this proves it for this build. Every class of
+# the probe-only jar must be in lang-at.jar with the same sha256.
+probe_classes_identical() {
+  probe_build=$work/probe-build
+  rm -rf "$probe_build"
+  TZ=UTC make -C "$javadir" jar BUILD="$probe_build" JAVA_HOME="${JAVA_HOME:-}" >/dev/null || return 1
+  unzip -Z1 "$probe_build/lang-at.jar" | grep '\.class$' >"$work/probe-classes.txt" || { echo "FAIL the probe-only jar holds no class"; return 1; }
+  mismatch=0
+  while IFS= read -r entry; do
+    unzip -p "$probe_build/lang-at.jar" "$entry" >"$work/probe-class-a.bin" || return 1
+    unzip -p "$jar" "$entry" >"$work/probe-class-b.bin" || { echo "FAIL $entry is not in $artifact"; mismatch=1; continue; }
+    first=$(hash_file "$work/probe-class-a.bin")
+    second=$(hash_file "$work/probe-class-b.bin")
+    if [ "$first" = "$second" ]; then
+      echo "ok   $entry  sha256 $first  (identical in the probe-only jar and in $artifact)"
+    else
+      echo "FAIL $entry differs: probe-only jar $first, $artifact $second"
+      mismatch=1
+    fi
+  done <"$work/probe-classes.txt"
+  [ "$mismatch" -eq 0 ] || return 1
+  echo "ok   all $(wc -l <"$work/probe-classes.txt" | tr -d ' ') probe classes in $artifact are byte-identical to the probe-only jar's"
+}
+
 # B2 on the bytecode: what the source compiles to. The JIT is covered by the note below the step, not by this check.
 window() {
   "$javap" -c -p -cp "$build_one/classes" langat.Race >"$work/javap.txt" || return 1
@@ -130,11 +157,20 @@ profiles() {
   JAVA=$java ARM_RUNS=$arm_runs sh "$here/check-java-arms.sh" --exact "$javadir/profiles.tsv" "$jar"
 }
 
-# B4: the whole contract natively, 50 runs of buggy and fixed, wide as a contract check, a negative control. The default
-# JVM flags (the JIT on), as a person would run it; the two flag profiles are exercised by the previous step.
+# F3: run-time evidence for the JIT. Every mode under -XX:+PrintCompilation, with the default flags and under each profile:
+# neither worker loop (racyIterations, lockedIterations) may be compiled, normally or by on-stack replacement.
+jit_compiles() {
+  JAVA=$java sh "$here/check-java-compiled.sh" "$javadir/profiles.tsv" "$jar"
+}
+
+# B4: the whole contract natively, 50 runs of buggy and fixed, wide as a contract check, a negative control. First with the
+# default JVM flags (the JIT on), as a person would run it, then once under each flag profile's flags (JAVA_FLAGS, which the
+# at-java wrapper reads when it runs).
 native() {
   make -C "$javadir" "$build_one/at-java" AT_BUILD="$build_one" JAVA_HOME="${JAVA_HOME:-}" >/dev/null || return 1
-  LANG_AT_REQUIRE_PARALLEL=1 sh "$here/run-checks.sh" "$lang" "$build_one/at-java" "$runs"
+  echo "--- default flags"
+  LANG_AT_REQUIRE_PARALLEL=1 sh "$here/run-checks.sh" "$lang" "$build_one/at-java" "$runs" || return 1
+  LANG_AT_REQUIRE_PARALLEL=1 sh "$here/run-java-profile-checks.sh" "$javadir/profiles.tsv" "$build_one/at-java" "$runs"
 }
 
 # -ff writes one trace file per process or thread, so nothing interleaves; they are joined before the check. -s 4096 so the
@@ -207,12 +243,19 @@ say "and its class entries listed one by one in sorted order. B1 builds it twice
 say "The JDK is part of the build: another JDK build can give another jar. The pinned artifact comes from one named producer:"
 say "the one named above."
 say ""
-say "The JIT and the window (read this before B2): the window is a load of a plain field, a busy loop and a store of that field."
+say "The JIT and the window (read this before B2): the window is a load of a plain field, a call of spin and a store of that field."
 say "Nothing in the language stops a compiler from moving the plain load past the busy loop or keeping the counter in a register,"
-say "which would remove the window. The interpreter (arm a) and the C1 compiler (arm b) do not do that; C2 might, for a loop it"
-say "compiles, and the worker loops (1,000 iterations) are too short to be compiled by default. B2 below reads the bytecode, which"
-say "says what the source compiles to; it cannot say what a JIT makes of it. The native runs (B4) and the profile runs are the"
-say "evidence that the race fires for the arm that ran."
+say "which would remove the window; HotSpot can only do that to code it compiles. It compiles a method (or a loop in it, by"
+say "on-stack replacement) when the method's invocation and loop back-edge counters pass a threshold, and those counters are per"
+say "method, summed over all threads: racyIterations is called 4 times and its loop passes 4 x 1,000 = 4,000 times in all, below"
+say "the thresholds (about 60,000 back-edges for C1 at tier 3, about 10,700 with -XX:-TieredCompilation). The margin is not a"
+say "guarantee, so F3 runs every mode under -XX:+PrintCompilation, with the default flags and under each profile, and requires"
+say "that neither worker loop is ever compiled. B2 below reads the bytecode, which says what the source compiles to; the"
+say "native runs (B4, with the default flags and under each profile's flags) and the profile runs are the evidence that the race"
+say "fires for the arm that ran."
+say ""
+say "Probe classes: the classes of the probe (langat.Probe and its helpers) in lang-at.jar are byte-identical to the classes in"
+say "the probe-only jar (the other artifact); F4 compares them one by one by sha256."
 say ""
 step B1 "toolchain, build command and dependencies" versions
 step B1 "the build, twice (two directories, two time zones), with equal sha256" build_twice
@@ -224,14 +267,16 @@ fi
 step B1 "the jar's layout: sorted entries, one timestamp, the manifest, the shaded SDK" jar_layout
 not_applicable B2 "disassembly of the busy loop and the window" "Not applicable as stated: there is no machine code in the artifact, the JVM compiles it at run time (or interprets it, which is arm a), and what it makes of the window is not recorded here. The next step reads the bytecode instead." yes
 step B2 "the window in the bytecode: a load of the counter, one call of spin, a store; no other call, no monitor in the unlocked loop, no allocation" window
-not_applicable B3 "seccomp self-test" "Not applicable to Java: the JVM makes system calls on other threads (garbage collector, compiler, signal dispatcher), so a filter that allows only exit would kill it. The no-syscall window is a code-review statement: the window is the bytecode shown in B2, a getfield, one invokestatic of spin and a putfield, none of which calls the operating system in the interpreter or in C1-compiled code." yes
+not_applicable B3 "seccomp self-test" "Not applicable to Java: the JVM makes system calls on other threads (garbage collector, compiler, signal dispatcher), so a filter that allows only exit would kill it. The window is not free of other activity, and this record does not say it is: \`spin\` is called inside the window (B2 shows one invokestatic of it between the load and the store). Under arm b (-XX:-BackgroundCompilation) the calling thread can wait for a compile of \`spin\` to finish, which is a lock wait inside the window, and under both arms a worker can be stopped at a safepoint inside \`spin\`'s loop. Both only make the race easier to reach: they give the other workers more time to run between the load and the store. Whether any such stop was seen, and what it means for the signature of the race, is for the reviewer to say; this record does not." yes
 step F1 "forbidden reads: no seed, /proc, environment, CPU count, process table or clock in the fixture's sources" forbidden_reads
 step F2 "the flag profiles: every flag is valid, no JVM warning, fixed is exact and the lines are clean under each" profiles
+step F3 "the JIT: under -XX:+PrintCompilation, with the default flags and under each profile, neither worker loop is ever compiled" jit_compiles
+step F4 "the probe's classes in $artifact are byte-identical to the probe-only jar's" probe_classes_identical
 say "Exit-3 paths: a stdout that cannot be written is exercised by B4 (exit 3 required, on /dev/full). A thread that cannot be started"
 say "cannot be injected without hook code in the artifact; the fixture's own tests (T1) cover the failure paths of \`Main.run\` with a"
 say "workload that throws, and the abort path of the barrier."
 say ""
-step B4 "$runs native runs of buggy and fixed, wide as a contract check, a negative control (at least two CPUs required)" native
+step B4 "$runs native runs of buggy and fixed, wide as a contract check, a negative control, with the default flags and under each profile (at least two CPUs required)" native
 if command -v strace >/dev/null 2>&1; then
   step B5 "each HAIRSPRING_EVENT line is one write(2), and the result line is exactly one write, without flags and under each profile" events
 else

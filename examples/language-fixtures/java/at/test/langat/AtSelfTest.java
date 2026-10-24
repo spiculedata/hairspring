@@ -178,6 +178,15 @@ public final class AtSelfTest {
             yes(Race.spin(1000) != Race.spin(1001), "different rounds, different value");
             yes(Race.spin(0) != Race.spin(1), "the accumulator moves");
         });
+        check("race: spin computes the rotate-multiply sequence, with the rotation written out", () -> {
+            for (int rounds : new int[] {0, 1, 2, 7, 64, 1000}) {
+                long acc = 0xcbf29ce484222325L;
+                for (int i = 0; i < rounds; i++) {
+                    acc = (Long.rotateLeft(acc, 7) ^ i) * 0x5851f42d4c957f2dL;
+                }
+                equal(acc, Race.spin(rounds));
+            }
+        });
         check("race: the locked mode never loses an update and every worker arrives once", () -> {
             for (int run = 0; run < 20; run++) {
                 RaceResult result = Race.run(Mode.FIXED, 200);

@@ -1246,6 +1246,57 @@ expect "java arms: a file with no profile fails" 1 env JAVA="$arms_java" sh "$he
 expect "java arms: an unreadable profile file fails" 1 env JAVA="$arms_java" sh "$here/check-java-arms.sh" "$tmp/none.tsv" "$tmp/fake.jar"
 expect "java arms: without arguments is a usage error" 64 sh "$here/check-java-arms.sh"
 
+# check-java-compiled.sh: -XX:+PrintCompilation must never name the two worker loops, under the default flags and each profile.
+compiled_java="$tmp/compiled-java"
+cat >"$compiled_java" <<'EOF2'
+#!/bin/sh
+# FAKE_JAVA: workerloop (a worker loop is compiled), nocompiles (PrintCompilation prints nothing), exit1 (the program fails).
+interp=0
+for a in "$@"; do
+  [ "$a" = -Xint ] && interp=1
+  mode=$a
+done
+[ "${FAKE_JAVA:-}" = exit1 ] && exit 1
+if [ "$interp" -eq 0 ] && [ "${FAKE_JAVA:-}" != nocompiles ]; then
+  echo '     42   17       3       java.lang.String::hashCode (55 bytes)'
+  [ "$mode" = wide ] && echo '    130   40 %     3       langat.Race::spin @ 8 (30 bytes)'
+fi
+[ "${FAKE_JAVA:-}" = workerloop ] && [ "$mode" = fixed ] && [ "$interp" -eq 0 ] && echo '    900   99 %     3       langat.Race::lockedIterations @ 21 (66 bytes)'
+[ "${FAKE_JAVA:-}" = workerracy ] && [ "$mode" = buggy ] && [ "$interp" -eq 0 ] && echo '    900   98       3       langat.Race::racyIterations (66 bytes)'
+printf 'LANGAT v1 lang=java mode=%s final=%020d expect=%020d order=0123456789abcdef rand=0123456789abcdef\n' "$mode" 4000 4000
+exit 0
+EOF2
+chmod +x "$compiled_java"
+cjc() { # cjc <name> <wanted exit> <FAKE_JAVA value> [profiles file]
+  expect "check-java-compiled $1" "$2" env FAKE_JAVA="$3" JAVA="$compiled_java" sh "$here/check-java-compiled.sh" "${4:-$profiles_tsv}" "$tmp/fake.jar"
+}
+cjc "accepts runs in which neither worker loop is compiled" 0 ""
+cjc "rejects a compiled locked worker loop (an OSR compile)" 1 workerloop
+cjc "rejects a compiled unlocked worker loop" 1 workerracy
+cjc "rejects a PrintCompilation that prints nothing (the check could not see a compile)" 1 nocompiles
+cjc "rejects a program that fails" 1 exit1
+cjc "rejects a missing profiles file" 1 "" "$tmp/none.tsv"
+expect "check-java-compiled without arguments is a usage error" 64 sh "$here/check-java-compiled.sh"
+expect "check-java-compiled names the default flags and each profile" 0 sh -c "env JAVA='$compiled_java' sh '$here/check-java-compiled.sh' '$profiles_tsv' '$tmp/fake.jar' | grep -c '^arm ' | grep -qx 3"
+
+# run-java-profile-checks.sh: run-checks.sh once per profile, with that profile's flags in JAVA_FLAGS.
+rc_stub="$tmp/rc-stub"
+cat >"$rc_stub" <<'EOF2'
+#!/bin/sh
+echo "$JAVA_FLAGS|$*" >>"$RC_LOG"
+[ "${RC_FAIL:-}" = b ] && case $JAVA_FLAGS in *TieredStopAtLevel*) exit 1 ;; esac
+exit 0
+EOF2
+chmod +x "$rc_stub"
+: >"$tmp/rc.log"
+expect "run-java-profile-checks passes when every profile passes" 0 env RC_LOG="$tmp/rc.log" RUN_CHECKS="$rc_stub" sh "$here/run-java-profile-checks.sh" "$profiles_tsv" /x/at-java 7
+expect "run-java-profile-checks runs arm a with its flags, the language, the artifact and the run count" 0 grep -Fq -- '-Xint -XX:+UseSerialGC -XX:ActiveProcessorCount=1 -XX:-UsePerfData -Xshare:off|java /x/at-java 7' "$tmp/rc.log"
+expect "run-java-profile-checks runs arm b with its flags" 0 grep -q -- '^-XX:TieredStopAtLevel=1 .*|java /x/at-java 7$' "$tmp/rc.log"
+expect "run-java-profile-checks fails when one profile fails" 1 env RC_FAIL=b RC_LOG="$tmp/rc.log" RUN_CHECKS="$rc_stub" sh "$here/run-java-profile-checks.sh" "$profiles_tsv" /x/at-java
+expect "run-java-profile-checks still runs the other profiles after a failure" 0 sh -c "env RC_FAIL=b RC_LOG='$tmp/rc2.log' RUN_CHECKS='$rc_stub' sh '$here/run-java-profile-checks.sh' '$profiles_tsv' /x/at-java; [ \$(wc -l <'$tmp/rc2.log') -eq 2 ]"
+expect "run-java-profile-checks with no profile fails" 1 env RC_LOG="$tmp/rc.log" RUN_CHECKS="$rc_stub" sh "$here/run-java-profile-checks.sh" "$tmp/no_profiles.tsv" /x/at-java
+expect "run-java-profile-checks without arguments is a usage error" 64 sh "$here/run-java-profile-checks.sh"
+
 # check-window-java.sh: the window in the bytecode (javap -c -p text of langat.Race): a load of the counter, one call of
 # spin, a store of the counter, and nothing else that calls, locks or allocates between them.
 jw_good="$tmp/jw_good.txt"

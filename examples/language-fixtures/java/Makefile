@@ -8,9 +8,12 @@
 # The lost-update fixture (class langat.Main, the Java SDK in sdks/java shaded in; sources in at/) has its own targets:
 #
 #   make at-jar       build/at/lang-at.jar (the SDK, the probe and the fixture, one reproducible jar)
-#   make at-test      the fixture's self-test, source check, native self-checks and the two JVM flag profiles
+#   make at-test      the fixture's self-test, source check, native self-checks (default flags and each profile's), the
+#                     PrintCompilation check and the two JVM flag profiles
 #   make at-selftest  only the self-test of the fixture's classes
-#   make at-native    only the native self-checks (see ../README.md) and the negative control
+#   make at-native    only the native self-checks (see ../README.md) and the negative control, with the default JVM flags
+#   make at-profile-native  the same self-checks once under each profile's JVM flags
+#   make at-compiled  -XX:+PrintCompilation: neither worker loop is ever compiled, with the default flags and each profile
 #   make at-arms      each JVM flag profile of profiles.tsv: valid flags, a clean run of fixed, how often buggy fires
 #
 # Needs a JDK 21: JAVA_HOME selects it (the acceptance run pins Temurin 21.0.12.1+1; `java -version` shows which one this is).
@@ -29,7 +32,7 @@ JAVAC_FLAGS = --release 21 -Xlint:all -Werror -encoding UTF-8 -proc:none
 SOURCES := $(sort $(wildcard src/langat/*.java))
 TEST_SOURCES := $(sort $(wildcard test/langat/*.java))
 
-.PHONY: jar test selftest native flags clean FORCE at-jar at-test at-selftest at-sources at-native at-arms
+.PHONY: jar test selftest native flags clean FORCE at-jar at-test at-selftest at-sources at-native at-profile-native at-compiled at-arms
 
 jar: $(BUILD)/lang-at.jar
 
@@ -115,7 +118,7 @@ $(AT_BUILD)/test-classes/.built: $(AT_BUILD)/classes/.built $(AT_BUILD)/build-id
 	$(JAVAC) $(JAVAC_FLAGS) -cp $(AT_BUILD)/classes -d $(AT_BUILD)/test-classes $(AT_TEST_SOURCES)
 	touch $@
 
-at-test: at-selftest at-sources at-native at-arms
+at-test: at-selftest at-sources at-native at-profile-native at-compiled at-arms
 
 # Run with HAIRSPRING_EVENTS=off so the SDK writes no report for the evaluations the tests make.
 at-selftest: $(AT_BUILD)/test-classes/.built
@@ -129,6 +132,14 @@ at-sources:
 # check, and a negative control: the racy program standing in for fixed must be rejected.
 at-native: $(AT_BUILD)/at-java
 	sh ../scripts/run-checks.sh java $(AT_BUILD)/at-java $(RUNS)
+
+# The same self-checks under each profile's JVM flags (the at-java wrapper reads JAVA_FLAGS when it runs).
+at-profile-native: $(AT_BUILD)/at-java
+	sh ../scripts/run-java-profile-checks.sh profiles.tsv $(AT_BUILD)/at-java $(RUNS)
+
+# The JIT never compiled the two worker loops (see Race.java and ../scripts/check-java-compiled.sh).
+at-compiled: $(AT_BUILD)/lang-at.jar
+	JAVA="$(JAVA)" sh ../scripts/check-java-compiled.sh profiles.tsv $(AT_BUILD)/lang-at.jar
 
 at-arms: $(AT_BUILD)/lang-at.jar
 	JAVA="$(JAVA)" ARM_RUNS=$(ARM_RUNS) sh ../scripts/check-java-arms.sh profiles.tsv $(AT_BUILD)/lang-at.jar
