@@ -44,40 +44,49 @@ fn line_of_view(c: &CheckView) -> CheckLine {
     }
 }
 
-/// The checks of the confirmation that was just stored: the newest one.
-fn newest_confirmation(checks: &FailureChecks) -> Vec<CheckLine> {
-    let Some(last) = checks.checks.last() else {
-        return Vec::new();
-    };
+/// The checks of the confirmation the finding is derived from, which is the one just stored unless that one did not
+/// finish (its wall budget ran out): then the finding comes from an earlier one, and those are its lines.
+fn source_confirmation(checks: &FailureChecks) -> Vec<CheckLine> {
     checks
         .checks
         .iter()
-        .filter(|c| c.confirmation_id == last.confirmation_id)
+        .filter(|c| Some(&c.confirmation_id) == checks.confirmation_id.as_ref())
         .map(line_of_view)
         .collect()
 }
 
-/// Confirms one stored failure and prints what its checks now say.
+/// Whether the newest stored confirmation is not the one the finding comes from.
+fn newest_is_set_aside(checks: &FailureChecks) -> bool {
+    match (checks.checks.last(), &checks.confirmation_id) {
+        (Some(last), Some(source)) => &last.confirmation_id != source,
+        _ => false,
+    }
+}
+
+/// Confirms one stored failure and returns what its checks now say.
 fn confirm_stored(
     ctx: &Ctx,
     svc: &Service,
     failure_id: &str,
     req: &ConfirmRequest,
-    json: bool,
-    out: &mut dyn Write,
-) -> CmdResult<i32> {
-    let checks = svc.confirm_failure(&ctx.engine, failure_id, req, &mut |_| true)?;
-    if json {
-        writeln!(out, "{}", serde_json::to_string(&checks)?)?;
-    } else {
-        writeln!(out, "failure {failure_id}")?;
-        write_confirmation(
+) -> CmdResult<FailureChecks> {
+    Ok(svc.confirm_failure(&ctx.engine, failure_id, req, &mut |_| true)?)
+}
+
+fn write_stored(out: &mut dyn Write, checks: &FailureChecks) -> CmdResult<i32> {
+    writeln!(out, "failure {}", checks.failure_id)?;
+    if newest_is_set_aside(checks) {
+        writeln!(
             out,
-            &newest_confirmation(&checks),
-            &checks.finding,
-            checks.environment_pinned,
+            "this confirmation did not finish (cancelled, or out of time), so the finding comes from the last one that did; its checks are shown"
         )?;
     }
+    write_confirmation(
+        out,
+        &source_confirmation(checks),
+        &checks.finding,
+        checks.environment_pinned,
+    )?;
     Ok(exit_code(&checks.finding))
 }
 
@@ -140,7 +149,12 @@ pub fn run(ctx: &Ctx, args: &ConfirmArgs, out: &mut dyn Write) -> CmdResult<i32>
     let svc = ctx.service()?;
     let input = args.input.as_str();
     if input.starts_with(FAILURE_ID_PREFIX) {
-        return confirm_stored(ctx, &svc, input, &req, args.json, out);
+        let checks = confirm_stored(ctx, &svc, input, &req)?;
+        if args.json {
+            writeln!(out, "{}", serde_json::to_string(&checks)?)?;
+            return Ok(exit_code(&checks.finding));
+        }
+        return write_stored(out, &checks);
     }
     if input.starts_with(RUN_ID_PREFIX) {
         let detail = svc
@@ -149,16 +163,21 @@ pub fn run(ctx: &Ctx, args: &ConfirmArgs, out: &mut dyn Write) -> CmdResult<i32>
         if detail.failures.is_empty() {
             return Err(format!("run `{input}` has no failure to confirm").into());
         }
-        let mut code = crate::EXIT_OK;
+        let mut all = Vec::new();
         for failure in &detail.failures {
-            code = code.max(confirm_stored(
-                ctx,
-                &svc,
-                &failure.id,
-                &req,
-                args.json,
-                out,
-            )?);
+            all.push(confirm_stored(ctx, &svc, &failure.id, &req)?);
+        }
+        if args.json {
+            // One document however many failures the run has: an array with an entry per failure.
+            writeln!(out, "{}", serde_json::to_string(&all)?)?;
+            return Ok(all
+                .iter()
+                .map(|c| exit_code(&c.finding))
+                .fold(crate::EXIT_OK, i32::max));
+        }
+        let mut code = crate::EXIT_OK;
+        for checks in &all {
+            code = code.max(write_stored(out, checks)?);
         }
         return Ok(code);
     }

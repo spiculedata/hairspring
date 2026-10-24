@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-const FAKE_HERMIT: &str = "#!/bin/sh\n[ \"$1\" = \"--version\" ] && { echo 'fake-hermit 0.0'; exit 0; }\nshift\nseed=0\nwhile [ \"$1\" != \"--\" ]; do case \"$1\" in --sched-seed=*) seed=${1#--sched-seed=};; esac; shift; done\nshift\nFAKE_SCHED_SEED=$seed exec \"$@\"\n";
+const FAKE_HERMIT: &str = "#!/bin/sh\n[ \"$1\" = \"--version\" ] && { echo 'fake-hermit 0.0'; exit 0; }\n[ -f \"$(dirname \"$0\")/sleep\" ] && sleep 3\nshift\nseed=0\nwhile [ \"$1\" != \"--\" ]; do case \"$1\" in --sched-seed=*) seed=${1#--sched-seed=};; esac; shift; done\nshift\nFAKE_SCHED_SEED=$seed exec \"$@\"\n";
 const BUG: &str = "[ $((FAKE_SCHED_SEED % 5)) -eq 3 ] && { echo 'HAIRSPRING_VIOLATION: lost update'; exit 1; }; echo ok";
 const PROJECT: &str = "[target.svc]\nkind = \"process\"\ncommand = [\"/bin/sh\", \"-c\", \"[ $((FAKE_SCHED_SEED % 5)) -eq 3 ] && { echo 'HAIRSPRING_VIOLATION: lost update'; exit 1; }; echo ok\"]\n[target.svc.budget]\nmax_trials = 20\n[target.fixed]\nkind = \"process\"\ncommand = [\"/bin/sh\", \"-c\", \"echo fixed\"]\n";
 
@@ -254,8 +254,61 @@ fn json_output_is_the_stored_answer() {
     let o = p.run(&["confirm", &p.run_id, "--json"]);
     assert_eq!(o.status.code(), Some(1), "{}", text(&o));
     let v: Value = serde_json::from_slice(&o.stdout).expect("one JSON document");
-    assert_eq!(v["finding"], "confirmed");
-    assert_eq!(v["checks"][0]["kind"], "same_seed_rerun");
+    let only = &v
+        .as_array()
+        .expect("an array: one entry per failure of the run")[0];
+    assert_eq!(only["finding"], "confirmed");
+    assert_eq!(only["checks"][0]["kind"], "same_seed_rerun");
+    let failure = only["failure_id"].as_str().unwrap();
+    let single = p.run(&["confirm", failure, "--json"]);
+    let v: Value = serde_json::from_slice(&single.stdout).expect("one JSON document");
+    assert_eq!(v["finding"], "confirmed", "a failure id gives one object");
+}
+
+#[test]
+fn json_for_a_run_with_several_failures_is_one_document() {
+    use hairspring_store::{NewFailure, SqliteStore, Store};
+    let p = project("jsonmany");
+    {
+        let store = SqliteStore::open(&p.dir.join(".hairspring/hairspring.db")).unwrap();
+        let first = store.list_failures(&p.run_id).unwrap().remove(0);
+        store
+            .add_failure(
+                &NewFailure {
+                    run_id: p.run_id.clone(),
+                    target: first.target.clone(),
+                    message: "another".into(),
+                    original_len: first.original_len,
+                    shrunk_len: first.shrunk_len,
+                    bundle_hash: first.bundle_hash.clone(),
+                    steps_json: "[]".into(),
+                },
+                first.created_at + 1,
+            )
+            .unwrap();
+    }
+    let o = p.run(&["confirm", &p.run_id, "--json"]);
+    let out = String::from_utf8_lossy(&o.stdout).to_string();
+    assert_eq!(o.status.code(), Some(1), "{}", text(&o));
+    let v: Value = serde_json::from_str(out.trim()).expect("exactly one JSON document");
+    assert_eq!(v.as_array().map(Vec::len), Some(2), "{out}");
+}
+
+#[test]
+fn the_lines_shown_are_those_of_the_confirmation_the_finding_comes_from() {
+    let p = project("source");
+    let first = p.run(&["confirm", &p.run_id]);
+    assert_eq!(first.status.code(), Some(1), "{}", text(&first));
+    // A confirmation cut short by its wall budget cannot revert the finished one, so the finding, and the lines
+    // printed for it, are still the first confirmation's.
+    std::fs::write(p.dir.join("sleep"), "").unwrap();
+    let o = p.run(&["confirm", &p.run_id, "--wall-secs", "1"]);
+    let out = text(&o);
+    assert_eq!(o.status.code(), Some(1), "{out}");
+    assert!(out.contains("finding: confirmed"), "{out}");
+    assert!(out.contains("3 passed, 0 failed, 0 inconclusive"), "{out}");
+    assert!(!out.contains("skipped"), "{out}");
+    assert!(out.contains("did not finish"), "{out}");
 }
 
 #[test]

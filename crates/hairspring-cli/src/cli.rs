@@ -93,7 +93,7 @@ pub struct ReplayArgs {
 
 #[derive(Args)]
 #[command(
-    after_help = "Checks, in order: same-seed reruns (default 3, each compared on behaviour hash, schedule fingerprint and failing property), a replay of the bundle with its environment check, then a fixed-version control (--control) and Hermit's strict determinism verify (--strict-verify) when asked for. Every check is recorded; for a run or failure id the results are stored and `hairspring show` summarises them.\n\nFinding: candidate -> reproduced (reruns repeat it) -> confirmed (and the replay does) -> verified (and the strict verify agrees), or not_reproducible, or control_failed (the fixed build still fails at the seed).\n\nExit codes:\n  1 confirmed or verified: the failure repeats\n  0 not_reproducible: it did not repeat on the environment it was recorded in\n  2 error, including a request over the limits\n  3 inconclusive: reproduced on reruns only, a check could not run or the environment differs from the recording, or the control failed; none of these shows the bug is fixed"
+    after_help = "Checks, in order: same-seed reruns (default 3, each compared on behaviour hash, schedule fingerprint and failing property), a replay of the bundle with its environment check, then a fixed-version control (--control) and Hermit's strict determinism verify (--strict-verify) when asked for. Every check is recorded; for a run or failure id the results are stored and `hairspring show` summarises them.\n\nFinding: candidate -> rerun_repeated (reruns repeat it) -> confirmed (and the replay does) -> verified (and the strict verify agrees), or not_reproducible, or control_failed (the fixed build still fails at the seed).\n\nExit codes:\n  1 confirmed or verified: the failure repeats\n  0 not_reproducible: it did not repeat on the environment it was recorded in\n  2 error, including a request over the limits\n  3 inconclusive: rerun_repeated (reruns only), a check could not run or the environment differs from the recording, or the control failed; none of these shows the bug is fixed"
 )]
 pub struct ConfirmArgs {
     /// A run id (run_...) or failure id (fail_...) whose results are stored, or a bundle file, `-` for stdin or a stored
@@ -114,7 +114,8 @@ pub struct ConfirmArgs {
     /// Wall-clock budget for the whole confirmation in seconds, 1 to 600; checks that do not fit are skipped.
     #[arg(long, default_value_t = hairspring_engine::confirm::DEFAULT_WALL_SECS)]
     pub wall_secs: u64,
-    /// Print the stored answer as one JSON document.
+    /// Print the stored answer as one JSON document: an object for a failure id or a bundle, an array with an entry per
+    /// failure for a run id.
     #[arg(long)]
     pub json: bool,
 }

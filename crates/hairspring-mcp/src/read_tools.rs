@@ -228,8 +228,46 @@ fn trial(server: &McpServer, args: &Value) -> Result<Value, Failed> {
     Ok(v)
 }
 
+/// The answer with its oldest checks left out until it fits one reply. The checks the finding is derived from stay, so
+/// the answer can still be read; `checks_omitted` says how many were dropped, and the REST endpoint serves them all.
+fn fit_checks(mut v: Value) -> Value {
+    if reply_cost(&v) <= MAX_REPLY_BYTES {
+        return v;
+    }
+    let source = v["confirmation_id"].clone();
+    let all = v["checks"].as_array().cloned().unwrap_or_default();
+    let is_source = |c: &Value| !source.is_null() && c["confirmation_id"] == source;
+    let mut kept: Vec<bool> = all.iter().map(is_source).collect();
+    let pick = |kept: &[bool]| -> Vec<Value> {
+        all.iter()
+            .zip(kept)
+            .filter(|(_, keep)| **keep)
+            .map(|(c, _)| c.clone())
+            .collect()
+    };
+    // Newest first: add checks back from the end while the answer still fits.
+    for i in (0..all.len()).rev() {
+        if kept[i] {
+            continue;
+        }
+        kept[i] = true;
+        v["checks"] = Value::Array(pick(&kept));
+        if reply_cost(&v) > MAX_REPLY_BYTES {
+            kept[i] = false;
+        }
+    }
+    v["checks"] = Value::Array(pick(&kept));
+    v["truncated"] = json!(true);
+    v["checks_omitted"] = json!(all.len() - kept.iter().filter(|k| **k).count());
+    v["truncated_note"] = json!(
+        "the oldest checks were left out to keep the whole response under 64 KiB; GET /api/failures/{id}/checks serves them all"
+    );
+    v
+}
+
 /// The stored confirmation checks of one failure and where they leave it. A failure holds at most
-/// [`hairspring_store::MAX_CHECKS_PER_FAILURE`] checks, each bounded, so the answer is bounded without paging.
+/// [`hairspring_store::MAX_CHECKS_PER_FAILURE`] checks, each bounded, and the answer is cut to one reply if they are
+/// more than that holds.
 fn failure_checks(server: &McpServer, args: &Value) -> Result<Value, Failed> {
     let id = req_str(args, "failure_id")?;
     if !failure_id(id) {
@@ -237,7 +275,10 @@ fn failure_checks(server: &McpServer, args: &Value) -> Result<Value, Failed> {
             "`failure_id` has an invalid format".to_string(),
         ));
     }
-    to_value(server.service().failure_checks(id)?, "failure")
+    Ok(fit_checks(to_value(
+        server.service().failure_checks(id)?,
+        "failure",
+    )?))
 }
 
 /// Runs one of the read tools. `None` when `name` is not one of them.
