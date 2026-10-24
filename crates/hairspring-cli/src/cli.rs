@@ -97,6 +97,10 @@ pub struct DoctorArgs {
     pub seeds: u32,
     #[arg(long, default_value_t = 200)]
     pub steps: usize,
+    /// Report whether this machine meets the `process` backend's prerequisites (Hermit, perf counters, ptrace),
+    /// instead of checking targets. Exits 4 when it cannot run here.
+    #[arg(long)]
+    pub process_backend: bool,
 }
 
 #[derive(Args)]

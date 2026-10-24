@@ -346,6 +346,45 @@ jobs:
       - name: Unit tests
         run: make -C examples/glibc-condlock unit
 
+  # The install scripts (scripts/install.sh, scripts/install-hermit.sh): lint, tests with fake commands, and dry runs on a
+  # real Ubuntu image. Nothing here builds Hermit.
+  install-scripts:
+    name: Install scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shellcheck
+        run: shellcheck -S warning scripts/*.sh
+      - name: Script tests
+        run: bash scripts/test-scripts.sh
+      - name: Install the build libraries the Hermit installer looks for
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq pkg-config libunwind-dev liblzma-dev
+      # Verifies the replay patch's sha256 and the build prerequisites, then stops before cloning or building.
+      - name: Hermit installer dry run
+        run: bash scripts/install-hermit.sh install --dry-run --install-toolchain --prefix "$RUNNER_TEMP/hermit"
+      - name: CLI installer dry run
+        run: bash scripts/install.sh --dry-run
+      - name: Docker test plan
+        run: bash scripts/test-install-docker.sh --dry-run
+
+  # The install path on clean Ubuntu images, including the slow Hermit build from source. Manual only. Hermit cannot run
+  # in a container without performance counters, so the test also checks that `check` and `doctor --process-backend` say
+  # so clearly.
+  install-clean-machine:
+    name: Clean-machine install (${{ matrix.image }})
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["ubuntu:24.04", "ubuntu:22.04"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install, build and check in a fresh container
+        run: bash scripts/test-install-docker.sh --with-hermit-build --distro ${{ matrix.image }}
+
   web:
     name: Web UI
     runs-on: ubuntu-latest

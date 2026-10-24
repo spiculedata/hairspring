@@ -1,0 +1,185 @@
+name: Release
+
+# Builds the `hairspring` command line for Linux x86-64 and macOS arm64 when a version tag is pushed, and attaches the
+# binaries and a SHA256SUMS file to a DRAFT GitHub release for a maintainer to review and publish. It publishes nothing
+# to any package registry. The workflow never creates a tag; it only reacts to one.
+
+on:
+  push:
+    tags: ["v*"]
+
+# No permissions by default; each job asks for what it needs.
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  web:
+    name: Web UI
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      # The UI is embedded into the server binary at compile time, so both builds below need it.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 7
+
+  linux-x86_64:
+    name: Linux x86-64 (Ubuntu 22.04, glibc)
+    needs: web
+    runs-on: ubuntu-latest
+    # An older glibc than the runner's, so the binary runs on more distributions.
+    container: ubuntu:22.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends build-essential ca-certificates curl git pkg-config
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # The same Rust version ci.yml pins for the SDK artifacts. A `uses:` ref cannot read a variable, so it is
+      # written in each place: change release.yml and ci.yml together.
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+      - name: Test
+        run: cargo test --locked -p hairspring-cli
+      - name: Build
+        run: cargo build --release --locked -p hairspring-cli
+      - name: Smoke test
+        run: |
+          target/release/hairspring --version
+          mkdir -p "$RUNNER_TEMP/doctor"
+          cd "$RUNNER_TEMP/doctor"
+          "$GITHUB_WORKSPACE/target/release/hairspring" doctor
+      - name: Record the toolchain and the glibc the binary needs
+        run: |
+          needed="$(objdump -T target/release/hairspring | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1)"
+          {
+            echo "### Linux x86-64"
+            echo "- rustc: $(rustc --version)"
+            echo "- built on: $(. /etc/os-release && echo "$PRETTY_NAME"), $(ldd --version | head -n 1)"
+            echo "- newest glibc symbol the binary needs: $needed"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Stage the asset
+        run: |
+          mkdir -p dist
+          cp target/release/hairspring dist/hairspring-linux-x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: asset-linux-x86_64
+          path: dist/hairspring-linux-x86_64
+          if-no-files-found: error
+          retention-days: 7
+
+  macos-arm64:
+    name: macOS arm64
+    needs: web
+    runs-on: macos-14
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # The same Rust version ci.yml pins for the SDK artifacts. A `uses:` ref cannot read a variable, so it is
+      # written in each place: change release.yml and ci.yml together.
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+      - name: Test
+        run: cargo test --locked -p hairspring-cli
+      - name: Build
+        run: cargo build --release --locked -p hairspring-cli
+      - name: Smoke test
+        run: |
+          target/release/hairspring --version
+          mkdir -p "$RUNNER_TEMP/doctor"
+          cd "$RUNNER_TEMP/doctor"
+          "$GITHUB_WORKSPACE/target/release/hairspring" doctor
+      - name: Record the toolchain
+        run: |
+          {
+            echo "### macOS arm64"
+            echo "- rustc: $(rustc --version)"
+            echo "- built on: $(sw_vers -productName) $(sw_vers -productVersion), $(uname -m)"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Stage the asset
+        run: |
+          mkdir -p dist
+          cp target/release/hairspring dist/hairspring-macos-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: asset-macos-arm64
+          path: dist/hairspring-macos-arm64
+          if-no-files-found: error
+          retention-days: 7
+
+  draft-release:
+    name: Draft release
+    needs: [linux-x86_64, macos-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: asset-*
+          merge-multiple: true
+          path: dist
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum hairspring-linux-x86_64 hairspring-macos-arm64 > SHA256SUMS
+          cat SHA256SUMS
+      - name: Create the draft release
+        env:
+          TAG: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          {
+            echo "Binaries of the \`hairspring\` command line built from ${TAG} (commit ${COMMIT})."
+            echo
+            echo "- \`hairspring-linux-x86_64\`: Linux x86-64, built on Ubuntu 22.04."
+            echo "- \`hairspring-macos-arm64\`: macOS on Apple silicon."
+            echo "- \`SHA256SUMS\`: check a download with \`sha256sum -c SHA256SUMS\`. The checksums come from the same"
+            echo "  place as the binaries, so they catch a corrupted download but do not prove who built it. To pin a"
+            echo "  hash you obtained some other way, pass it to the installer with \`--sha256\`."
+            echo
+            echo "\`scripts/install.sh --version ${TAG}\` downloads the right asset, verifies it and installs it."
+            echo "The \`process\` backend needs Linux x86-64 and a separately built Hermit; see docs/quickstart.md."
+          } > notes.md
+          gh release create "$TAG" --draft --verify-tag --title "$TAG" --notes-file notes.md \
+            dist/hairspring-linux-x86_64 dist/hairspring-macos-arm64 dist/SHA256SUMS
