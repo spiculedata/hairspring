@@ -2,7 +2,7 @@
 # language with three modes (buggy, fixed, wide). See README.md.
 #
 #   make test     build and self-check C (with $(CC)), C++ (clang++ unless CXX is given), Go and Python
-#   make test-java  the Java probe (needs a JDK 21; not part of `make test`)
+#   make test-java  the Java probe and the Java fixture (needs a JDK 21; not part of `make test`)
 #   make clean
 
 .PHONY: test test-scripts test-c test-cpp test-go test-python test-java test-dotnet clean
@@ -27,7 +27,7 @@ test-python:
 	$(MAKE) -C python test
 
 test-java:
-	$(MAKE) -C java test flags
+	$(MAKE) -C java test flags at-test
 
 # The BCL-only .NET probe: unit checks, build, native tests.
 test-dotnet:

@@ -158,6 +158,30 @@ jobs:
         env:
           HS_REQUIRE_PYTHON: "1"
 
+  java-sdk:
+    name: Java SDK
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      # Any JDK 21: the unit tests and the sample programs do not check a hash.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Version
+        run: java -version
+      # JDK classes only, no framework: the self-test, and the sample programs run as real processes.
+      - name: Test
+        run: make -C sdks/java test
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # With HS_REQUIRE_JAVA set, a missing or too old JDK fails these tests instead of skipping them.
+      - name: Conformance tests against the Java SDK
+        run: cargo test -p hairspring-props --test java_sdk
+        env:
+          HS_REQUIRE_JAVA: "1"
+
   language-fixtures:
     name: Language fixtures (${{ matrix.name }})
     runs-on: ubuntu-24.04
@@ -202,7 +226,7 @@ jobs:
       # Native checks only: one program per language. Its buggy mode must lose an update at least once in 50 runs,
       # its fixed mode never, and its wide mode must follow the same output contract.
       - name: Build and self-check
-        run: make -C examples/language-fixtures/${{ matrix.dir }} test ${{ matrix.dir == 'java' && 'flags' || '' }} ${{ matrix.args }}
+        run: make -C examples/language-fixtures/${{ matrix.dir }} test ${{ matrix.dir == 'java' && 'flags at-test' || '' }} ${{ matrix.args }}
       # Go only: the race detector (needs cgo) finds no data race in the fixture.
       - name: Race detector
         if: matrix.dir == 'go'
@@ -213,8 +237,9 @@ jobs:
   # Each job uploads the record and, next to it, the artifact it describes (the binary, or the staged Python package,
   # with a SHA256SUMS file): the record states the sha256 of exactly those bytes. The Rust variant covers at-rust;
   # the rust-probe variant covers probe-rust, the std-only probe program; the java-probe variant covers lang-at.jar, the
-  # JDK-only probe program; the dotnet-probe variant covers probe-dotnet (LangAtProbe.dll with its runtimeconfig.json and
-  # deps.json), built with the pinned .NET SDK.
+  # JDK-only probe program; the java variant covers lang-at.jar of the Java fixture (the Java SDK shaded in); the
+  # dotnet-probe variant covers probe-dotnet (LangAtProbe.dll with its runtimeconfig.json and deps.json), built with the
+  # pinned .NET SDK.
   fixture-build-records:
     name: Fixture build record (${{ matrix.variant }})
     if: github.event_name == 'workflow_dispatch'
@@ -223,7 +248,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [c, cxx-clang, cxx-gxx, go, python, rust, rust-probe, java-probe, dotnet-probe]
+        variant: [c, cxx-clang, cxx-gxx, go, python, rust, rust-probe, java-probe, java, dotnet-probe]
     env:
       GOTOOLCHAIN: local
       GOPROXY: "off"
@@ -239,16 +264,17 @@ jobs:
         if: matrix.variant == 'python'
         with:
           python-version: "3.12"
+      # Python and Java run the SDK's conformance tests against the reference parser, which needs cargo.
       - uses: dtolnay/rust-toolchain@stable
-        if: matrix.variant == 'python'
+        if: matrix.variant == 'python' || matrix.variant == 'java'
       # The pinned Rust toolchain and the static musl target of the artifact.
       - uses: dtolnay/rust-toolchain@1.99.1
         if: matrix.variant == 'rust' || matrix.variant == 'rust-probe'
         with:
           targets: x86_64-unknown-linux-musl
-      # The pinned Temurin 21 JDK of the Java probe (the record fails if the JDK is not the pinned build).
+      # The pinned Temurin 21 JDK of the Java probe and the Java fixture (the record fails if the JDK is not the pinned build).
       - uses: actions/setup-java@v4
-        if: matrix.variant == 'java-probe'
+        if: matrix.variant == 'java-probe' || matrix.variant == 'java'
         with:
           distribution: temurin
           java-version: "21.0.12+101.0.LTS"
@@ -258,10 +284,10 @@ jobs:
         with:
           dotnet-version: 10.0.402
       - name: Install the toolchains
-        if: matrix.variant != 'go' && matrix.variant != 'python' && matrix.variant != 'rust' && matrix.variant != 'rust-probe' && matrix.variant != 'java-probe' && matrix.variant != 'dotnet-probe'
+        if: matrix.variant != 'go' && matrix.variant != 'python' && matrix.variant != 'rust' && matrix.variant != 'rust-probe' && matrix.variant != 'java-probe' && matrix.variant != 'java' && matrix.variant != 'dotnet-probe'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-13 g++-13 clang-18 strace binutils
       - name: Install strace
-        if: matrix.variant == 'go' || matrix.variant == 'python' || matrix.variant == 'rust' || matrix.variant == 'rust-probe' || matrix.variant == 'java-probe' || matrix.variant == 'dotnet-probe'
+        if: matrix.variant == 'go' || matrix.variant == 'python' || matrix.variant == 'rust' || matrix.variant == 'rust-probe' || matrix.variant == 'java-probe' || matrix.variant == 'java' || matrix.variant == 'dotnet-probe'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq strace binutils file unzip
       # Python has no compiler: the record stages the package (fixture, probe and SDK) twice and compares file hashes.
       - name: Build record (Python)
@@ -284,6 +310,13 @@ jobs:
           PRODUCER: GitHub Actions ubuntu-24.04 (native x86-64)
           ARTIFACT_DIR: ${{ runner.temp }}/artifact
         run: IMAGE_DIGEST="runner image $ImageOS $ImageVersion (no digest available)" sh examples/language-fixtures/scripts/build-record-probe-java.sh "$RUNNER_TEMP/record-java-probe.md"
+      # lang-at.jar of the Java fixture (the Java SDK shaded in), built twice with the pinned JDK.
+      - name: Build record (Java)
+        if: matrix.variant == 'java'
+        env:
+          PRODUCER: GitHub Actions ubuntu-24.04 (native x86-64)
+          ARTIFACT_DIR: ${{ runner.temp }}/artifact
+        run: IMAGE_DIGEST="runner image $ImageOS $ImageVersion (no digest available)" sh examples/language-fixtures/scripts/build-record-java.sh "$RUNNER_TEMP/record-java.md"
       # probe-dotnet, published twice from two copies of the sources.
       - name: Build record (.NET probe)
         if: matrix.variant == 'dotnet-probe'
@@ -299,7 +332,7 @@ jobs:
           ARTIFACT_DIR: ${{ runner.temp }}/artifact
         run: IMAGE_DIGEST="runner image $ImageOS $ImageVersion (no digest available)" sh examples/language-fixtures/scripts/build-record-rust.sh "$RUNNER_TEMP/record-rust.md"
       - name: Build record
-        if: matrix.variant != 'python' && matrix.variant != 'rust' && matrix.variant != 'rust-probe' && matrix.variant != 'java-probe' && matrix.variant != 'dotnet-probe'
+        if: matrix.variant != 'python' && matrix.variant != 'rust' && matrix.variant != 'rust-probe' && matrix.variant != 'java-probe' && matrix.variant != 'java' && matrix.variant != 'dotnet-probe'
         env:
           PRODUCER: GitHub Actions ubuntu-24.04 (native x86-64)
           ARTIFACT_DIR: ${{ runner.temp }}/artifact

@@ -1,10 +1,11 @@
 #!/bin/sh
 # Runs build-record.sh for one variant in a linux/amd64 container, the build lane's environment for the record.
 #
-#   build-record-docker.sh <c|cxx-clang|cxx-gxx|go|rust|rust-probe|java-probe|dotnet-probe> [out-file]
+#   build-record-docker.sh <c|cxx-clang|cxx-gxx|go|rust|rust-probe|java-probe|java|dotnet-probe> [out-file]
 #
 # C and C++ use ubuntu:24.04 (gcc 13, g++ 13, clang 18, glibc 2.39: the box's toolchain); Go uses golang:1.27.3; Rust
-# uses rust:1.99.1-bookworm with the musl target of the platform (TARGET overrides it); the Java probe uses ubuntu:24.04 with
+# uses rust:1.99.1-bookworm with the musl target of the platform (TARGET overrides it); the Java probe and the Java fixture
+# use ubuntu:24.04 with
 # the pinned Temurin 21.0.12.1+1 tarball, downloaded and checked against its sha256; the .NET probe uses the .NET SDK
 # 10.0.402 image (runtime 10.0.13). The C, C++, Go, Ubuntu, Rust and .NET images are pinned by digest. The source commit
 # is passed into the container as SOURCE_COMMIT. The repository is mounted read-only
@@ -17,7 +18,7 @@
 set -u
 
 if [ $# -lt 1 ]; then
-  echo "usage: $0 <c|cxx-clang|cxx-gxx|go|rust|rust-probe|java-probe|dotnet-probe> [out-file]" >&2
+  echo "usage: $0 <c|cxx-clang|cxx-gxx|go|rust|rust-probe|java-probe|java|dotnet-probe> [out-file]" >&2
   exit 64
 fi
 variant=$1
@@ -81,15 +82,17 @@ case "$variant" in
     setup='apt-get update -qq && apt-get install -y -qq strace file >/dev/null'
     script="build-record-probe-dotnet.sh"
     ;;
-  java-probe)
-    # The pinned Temurin tarball is downloaded inside the container and its sha256 checked before it is extracted.
+  java-probe | java)
+    # The pinned Temurin tarball is downloaded inside the container and its sha256 checked before it is extracted. The
+    # java variant (the fixture with the Java SDK) skips the SDK's conformance tests, which need cargo: the CI job runs them.
     image=$UBUNTU_IMAGE
     setup="apt-get update -qq && apt-get install -y -qq make binutils strace unzip curl ca-certificates >/dev/null && curl -fsSL -o /tmp/jdk.tar.gz $JDK_URL && echo '$JDK_SHA256  /tmp/jdk.tar.gz' | sha256sum -c - && mkdir /opt/jdk && tar -xzf /tmp/jdk.tar.gz -C /opt/jdk --strip-components=1"
     script="build-record-probe-java.sh"
+    [ "$variant" = java ] && script="build-record-java.sh"
     extra_env="-e JAVA_HOME=/opt/jdk"
     ;;
   *)
-    echo "usage: $0 <c|cxx-clang|cxx-gxx|go|rust|rust-probe|java-probe|dotnet-probe> [out-file]" >&2
+    echo "usage: $0 <c|cxx-clang|cxx-gxx|go|rust|rust-probe|java-probe|java|dotnet-probe> [out-file]" >&2
     exit 64
     ;;
 esac
