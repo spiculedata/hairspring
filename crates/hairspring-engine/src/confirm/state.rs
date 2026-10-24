@@ -122,13 +122,25 @@ fn finished(checks: &[CheckResult]) -> bool {
     checks.iter().all(|c| c.status != CheckStatus::Skipped)
 }
 
+/// A check that ran and failed. A skipped check is not a failure.
+fn missed(checks: &[CheckResult]) -> bool {
+    checks.iter().any(|c| c.status == CheckStatus::Fail)
+}
+
 /// The finding's state from its confirmations, oldest first. The state is derived from ONE confirmation, never from a
 /// mix of checks taken at different times: the newest that finished, or, when none did, the newest, with its skipped
-/// checks counting for nothing. A confirmation that was cancelled therefore cannot revert an earlier finished one.
+/// checks counting for nothing. A confirmation that was cancelled therefore cannot revert an earlier finished one,
+/// with one exception: a newer unfinished confirmation holding a check that ran and failed (a real miss, whatever was
+/// skipped after it) withdraws the finding, and the newest such confirmation is the one read.
 pub fn standing(confirmations: &[Vec<CheckResult>]) -> Standing {
-    let chosen = confirmations
+    let finished_at = confirmations.iter().rposition(|c| finished(c));
+    let newer = finished_at.map_or(0, |i| i + 1);
+    let withdrawn = confirmations[newer..]
         .iter()
-        .rposition(|c| finished(c))
+        .rposition(|c| missed(c))
+        .map(|i| newer + i);
+    let chosen = withdrawn
+        .or(finished_at)
         .or(confirmations.len().checked_sub(1));
     match chosen {
         Some(i) => Standing {

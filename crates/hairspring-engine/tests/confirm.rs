@@ -393,3 +393,35 @@ fn what_is_stored_fits_the_column_even_for_wide_and_escaped_text() {
     assert!(r.command.len() <= MAX_COLUMN_BYTES);
     assert!(!r.detail.is_empty(), "some of it is kept");
 }
+
+#[test]
+fn a_newer_confirmation_whose_reruns_failed_withdraws_an_older_finding_even_if_a_later_check_was_skipped(
+) {
+    let missed_then_skipped = vec![
+        check(CheckKind::SameSeedRerun, CheckStatus::Fail),
+        skipped(CheckKind::StrictVerify),
+    ];
+    let s = standing(&[complete(), missed_then_skipped]);
+    assert_eq!(s.status, FindingStatus::NotReproducible);
+    assert_eq!(s.confirmation, Some(1));
+}
+
+#[test]
+fn a_newer_control_that_failed_withdraws_it_too() {
+    let newer = vec![
+        check(CheckKind::SameSeedRerun, CheckStatus::Pass),
+        replay(CheckStatus::Pass, false),
+        check(CheckKind::FixedControl, CheckStatus::Fail),
+        skipped(CheckKind::StrictVerify),
+    ];
+    let s = standing(&[complete(), newer]);
+    assert_eq!(s.status, FindingStatus::ControlFailed);
+}
+
+#[test]
+fn a_newer_confirmation_with_only_skipped_checks_still_reverts_nothing() {
+    let nothing_ran = vec![skipped(CheckKind::SameSeedRerun)];
+    let s = standing(&[complete(), nothing_ran]);
+    assert_eq!(s.status, FindingStatus::Confirmed);
+    assert_eq!(s.confirmation, Some(0));
+}
