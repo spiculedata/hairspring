@@ -136,14 +136,18 @@ See [Recorded environment](determinism.md#recorded-environment) for the fields a
 
 ## What is supported
 
-| Language | SDK | Fixture | Status |
-|---|---|---|---|
-| C | [`sdks/c`](../sdks/c), [c-sdk.md](c-sdk.md) | `examples/language-fixtures/c` | supported |
-| C++ | the C SDK (clang++ is the supported compiler; see c-sdk.md for g++) | `examples/language-fixtures/cpp` | supported |
-| Go | [`sdks/go`](../sdks/go) | `examples/language-fixtures/go`, `examples/go-sql-cancel` | supported |
-| Rust | [`sdks/rust`](../sdks/rust), [rust-sdk.md](rust-sdk.md) | `sdks/rust/fixtures` | supported |
-| Python | [`sdks/python`](../sdks/python), [python-sdk.md](python-sdk.md) | `examples/language-fixtures/python` | **not supported yet** as a `process` target |
-| Java | none | none | **not supported yet** |
+| Language | SDK | Fixture | SDK / fixture exists | Run under Hermit (evidence) |
+|---|---|---|---|---|
+| C | [`sdks/c`](../sdks/c), [c-sdk.md](c-sdk.md) | `examples/language-fixtures/c` | yes | yes, see the [glibc showcase](showcase-glibc-lost-wakeup.md) |
+| C++ | the C SDK (clang++ is the supported compiler; see c-sdk.md for g++) | `examples/language-fixtures/cpp` | yes | not yet confirmed |
+| Go | [`sdks/go`](../sdks/go) | `examples/language-fixtures/go`, `examples/go-sql-cancel` | yes | yes, see the [Go showcase](showcase-go-sql-cancel-race.md) |
+| Rust | [`sdks/rust`](../sdks/rust), [rust-sdk.md](rust-sdk.md) | `sdks/rust/fixtures` | yes | not yet run under Hermit |
+| Python | [`sdks/python`](../sdks/python), [python-sdk.md](python-sdk.md) | `examples/language-fixtures/python` | yes | single-threaded CPython only; **not supported yet** as a `process` target |
+| Java | in progress | in progress | a probe program only; SDK and fixture in progress | not yet run under Hermit |
+| .NET | none | none | a probe program only; no SDK | not yet run under Hermit |
+
+"SDK / fixture exists" means the code and its tests are in this repository. Only the last column says whether a
+program in that language has been run under Hermit.
 
 A program does not need an SDK to be run: the backend runs any Linux command and treats a non-zero exit as a failure.
 An SDK adds named properties (`always`, `sometimes`, `reachable`) that are tracked across trials.
