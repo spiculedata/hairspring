@@ -1,4 +1,6 @@
+use crate::seed_range::SeedRange;
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use hairspring_engine::config::MAX_TRIALS_CAP;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -63,7 +65,7 @@ pub enum Format {
 pub struct TestArgs {
     /// Targets to run (default: all).
     pub targets: Vec<String>,
-    /// Exploration seed (default: random; always printed).
+    /// Exploration seed (default: random; always printed). A sweep runs consecutive seeds from this one.
     #[arg(long)]
     pub seed: Option<u64>,
     /// Override the step budget.
@@ -72,6 +74,20 @@ pub struct TestArgs {
     /// Override the wall-clock budget in seconds.
     #[arg(long)]
     pub budget_secs: Option<u64>,
+    /// Run the whole trial budget past every failure and store every trial, so the report can state a rate with an
+    /// interval. Without it a run stops at its first confirmed failure.
+    #[arg(long)]
+    pub sweep: bool,
+    /// How many trials a sweep runs (default: the target's own budget, at most 10000).
+    #[arg(
+        long,
+        requires = "sweep",
+        value_parser = clap::value_parser!(u64).range(1..=MAX_TRIALS_CAP)
+    )]
+    pub trials: Option<u64>,
+    /// The seeds a sweep runs, as FIRST..END with END left out (for example 100..200 is 100 trials).
+    #[arg(long, requires = "sweep", conflicts_with_all = ["seed", "trials"])]
+    pub seeds: Option<SeedRange>,
     #[arg(long, value_enum, default_value = "text")]
     pub format: Format,
     /// Where to write bundle files for failures.

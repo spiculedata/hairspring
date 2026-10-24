@@ -1,5 +1,6 @@
 use crate::RunCompletion;
 use hairspring_engine::config::Budget;
+use hairspring_engine::mode::RunMode;
 use hairspring_engine::report::Step;
 use hairspring_store::{Contributor, RunRecord};
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,9 @@ pub(crate) struct JobPayload {
     pub target: String,
     pub seed: u64,
     pub budget: Option<Budget>,
+    /// Absent in jobs queued before sweeps existed, which are searches.
+    #[serde(default)]
+    pub mode: RunMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +115,10 @@ pub struct LeasedJob {
     pub target: String,
     pub seed: u64,
     pub budget: Option<Budget>,
+    /// Whether the run stops at its first confirmed failure or runs its whole budget. A worker that predates sweeps
+    /// does not read it and runs a search; the server notices that from the trial rows it receives.
+    #[serde(default)]
+    pub mode: RunMode,
 }
 
 /// Access level of a caller. Higher roles include every lower one.

@@ -29,6 +29,7 @@ pub fn to_text(target: &str, outcome: &RunOutcome) -> String {
             outcome.steps_executed, outcome.trials, outcome.elapsed_ms
         )),
     }
+    out.push_str(&crate::format_sweep::section(outcome));
     out.push_str(&crate::format_rate::section(outcome));
     out.push_str(&crate::format_props::sections(outcome));
     out

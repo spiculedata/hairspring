@@ -3,7 +3,9 @@ use hairspring_core::bundle::Bundle;
 use hairspring_engine::config::{Budget, Config, TargetKind, TargetSpec};
 use hairspring_engine::engine::{Engine, RunRequest};
 use hairspring_engine::erased::Registry;
+use hairspring_engine::mode::RunMode;
 use hairspring_engine::report::RunStatus;
+use hairspring_engine::trial_log::ReportedVerdict;
 use hairspring_engine::EngineError;
 use hairspring_wasm::{RunResult, VmConfig, WasmBackend, WasmSettings, WasmVm};
 use std::collections::BTreeMap;
@@ -612,4 +614,101 @@ fn replay_clamps_the_fuel_a_bundle_asks_for() {
         "a hostile fuel value must not pin a CPU: {:?}",
         started.elapsed()
     );
+}
+
+// ---- sweep mode ----
+fn sweep(wat: &str, name: &str, trials: u64) -> hairspring_engine::report::RunOutcome {
+    let (e, _p) = engine_for(wat, name, budget(trials));
+    e.run(
+        &RunRequest::new("w", 1).with_mode(RunMode::Sweep),
+        &mut |_| true,
+    )
+    .unwrap()
+}
+
+/// Whether the lost-update module fails at `seed`, worked out on the VM without the engine.
+fn lost_update_fails_at(seed: u64) -> bool {
+    let mut vm = WasmVm::new(LOST_UPDATE.as_bytes(), seed, vec![], cfg()).unwrap();
+    !matches!(vm.run(), RunResult::Exit(0))
+}
+
+#[test]
+fn a_sweep_runs_every_seed_and_stores_a_row_for_each_one() {
+    let out = sweep(LOST_UPDATE, "sweep-rows", 30);
+    assert_eq!(out.trials, 30, "{out:?}");
+    assert_eq!(out.trial_log.len(), 30);
+    let expected: Vec<bool> = (1..=30).map(lost_update_fails_at).collect();
+    assert!(
+        expected.contains(&true) && expected.contains(&false),
+        "the fixture must both fail and pass over these seeds"
+    );
+    for (i, row) in out.trial_log.iter().enumerate() {
+        assert_eq!((row.seq, row.seed), (i as u64, 1 + i as u64));
+        let want = if expected[i] {
+            ReportedVerdict::Violation
+        } else {
+            ReportedVerdict::Pass
+        };
+        assert_eq!(row.verdict, want, "seed {}", row.seed);
+    }
+    let summary = out.sweep.unwrap();
+    let failing = expected.iter().filter(|f| **f).count() as u64;
+    assert_eq!(
+        (summary.violations, summary.passes),
+        (failing, 30 - failing)
+    );
+}
+
+#[test]
+fn a_sweep_reports_the_lowest_failing_seed_and_its_bundle_replays() {
+    let (e, _p) = engine_for(LOST_UPDATE, "sweep-lowest", budget(30));
+    let out = e
+        .run(
+            &RunRequest::new("w", 1).with_mode(RunMode::Sweep),
+            &mut |_| true,
+        )
+        .unwrap();
+    assert_eq!(out.status, RunStatus::Failed);
+    assert!(!out.stopped_at_first_failure);
+    let lowest = (1..=30).find(|s| lost_update_fails_at(*s)).unwrap();
+    let f = out.failure.unwrap();
+    let b = Bundle::decode(&f.bundle).unwrap();
+    assert_eq!(b.seed, lowest);
+    assert!(e.replay(&b).unwrap().reproduced);
+}
+
+#[test]
+fn a_sweep_of_a_correct_module_passes_all_its_trials() {
+    let out = sweep(ATOMIC, "sweep-atomic", 40);
+    assert_eq!(out.status, RunStatus::Passed, "{out:?}");
+    let summary = out.sweep.unwrap();
+    assert_eq!(
+        (summary.trials, summary.passes, summary.violations),
+        (40, 40, 0)
+    );
+}
+
+#[test]
+fn a_sweep_can_be_cancelled_between_trials() {
+    let (e, _p) = engine_for(ATOMIC, "sweep-cancel", budget(50));
+    let mut calls = 0;
+    let out = e
+        .run(
+            &RunRequest::new("w", 1).with_mode(RunMode::Sweep),
+            &mut |_| {
+                calls += 1;
+                calls < 4
+            },
+        )
+        .unwrap();
+    assert_eq!(out.error.as_deref(), Some("cancelled"));
+    assert_eq!((out.trials, out.trial_log.len()), (4, 4));
+}
+
+#[test]
+fn search_mode_is_unchanged_and_stores_no_trial_rows() {
+    let (e, _p) = engine_for(LOST_UPDATE, "sweep-search", budget(30));
+    let out = e.run(&RunRequest::new("w", 1), &mut |_| true).unwrap();
+    assert!(out.stopped_at_first_failure);
+    assert!(out.sweep.is_none() && out.trial_log.is_empty());
 }

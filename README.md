@@ -130,6 +130,25 @@ the Go SDK in [`sdks/go`](sdks/go), the Rust SDK in [`sdks/rust`](sdks/rust) ([d
 the Python SDK in [`sdks/python`](sdks/python) ([docs/python-sdk.md](docs/python-sdk.md)) and the Java SDK in
 [`sdks/java`](sdks/java) ([docs/java-sdk.md](docs/java-sdk.md)).
 
+### Measure a failure rate (sweep)
+
+A normal run stops at its first confirmed failure. That finds a bug, but it cannot say how often the bug happens. A
+sweep runs the whole trial budget past every failure and stores every trial:
+
+```bash
+hairspring test checkout --sweep --trials 1000 --seed 1   # trials at seeds 1 to 1000
+hairspring test checkout --sweep --seeds 5000..5500       # seeds 5000 to 5499 (END is not run)
+```
+
+The report gives the violations out of the rated trials with a Wilson 95% interval (with no violation, an exact upper
+bound instead), names the lowest failing seeds, and lists timeouts, trials with unusable output and trials that failed
+in the host apart: they are never in the denominator and never counted as passes. The first ten violations are each
+confirmed by re-running their seed, and the trial's row says whether the rerun reproduced it. The exit code is 1 when
+any trial was a violation. `--trials` is at most 10,000, and a sweep also ends at `--budget-secs`; for a simulation
+target a trial is one exploration round and the rounds share `--budget-steps`, so raise it to run more of them (the
+report says when a sweep ended before its trial budget). Over HTTP, send `"mode": "sweep"` to
+`POST /api/runs`; over MCP, pass `mode` and `max_trials` to `start_run`. Without a mode a run is a search, as before.
+
 ## For AI agents (MCP)
 
 `hairspring mcp` (stdio) or `POST /mcp` (HTTP) expose the loop an agent needs: `list_targets`, `start_run`,

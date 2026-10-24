@@ -2,7 +2,7 @@
 //! detail and output tails.
 use crate::exec::Trial;
 use crate::trace::{behaviour_hash, Verdict};
-use hairspring_engine::trial_log::{ReportedVerdict, TrialReport};
+use hairspring_engine::trial_log::{one_line, ReportedVerdict, TrialReport, MAX_REASON_CHARS};
 use hairspring_props::record::TrialRecord;
 use hairspring_props::{CatalogUpdate, DigestFlags, TrialDigest, TrialProps};
 
@@ -14,8 +14,6 @@ pub const DETAIL_SAMPLE_EVERY: u64 = 100;
 pub const OUTPUT_TAIL_BYTES: usize = 64 * 1024;
 /// Largest kept output record once serialised; the tails shrink until it fits.
 pub const MAX_OUTPUT_JSON_BYTES: usize = 128 * 1024;
-/// Longest reason kept, in characters.
-pub const MAX_REASON_CHARS: usize = 500;
 /// Lines Hermit itself writes to stderr; they say nothing about the guest.
 const HERMIT_LINE_PREFIX: &str = "hermit:";
 
@@ -44,14 +42,16 @@ fn verdict_parts(v: &Verdict) -> (ReportedVerdict, &str) {
     }
 }
 
-/// One line of at most [`MAX_REASON_CHARS`] characters: control characters become spaces, runs of spaces collapse.
-fn one_line(text: &str) -> String {
-    let spaced: String = text
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
-    let collapsed = spaced.split_whitespace().collect::<Vec<_>>().join(" ");
-    collapsed.chars().take(MAX_REASON_CHARS).collect()
+/// `reason` followed by `note`, within [`MAX_REASON_CHARS`]: it is the reason that is cut, never the note, so a long
+/// reason cannot hide what was said about the trial.
+pub fn with_note(reason: &str, note: &str) -> String {
+    const SEPARATOR: &str = " | ";
+    if reason.is_empty() {
+        return one_line(note);
+    }
+    let room = MAX_REASON_CHARS.saturating_sub(note.chars().count() + SEPARATOR.len());
+    let head: String = reason.chars().take(room).collect();
+    format!("{head}{SEPARATOR}{note}")
 }
 
 fn keeps_detail(seq: u64, seed: u64, verdict: ReportedVerdict, degraded: bool) -> bool {
@@ -158,5 +158,29 @@ pub fn build(
         digest: digest.encode(),
         detail,
         output: keep.then(|| output_json(trial)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_note_follows_the_reason_and_stands_alone_when_there_is_none() {
+        assert_eq!(
+            with_note("boom", "rerun reproduced 3/3"),
+            "boom | rerun reproduced 3/3"
+        );
+        assert_eq!(
+            with_note("", "rerun reproduced 3/3"),
+            "rerun reproduced 3/3"
+        );
+    }
+
+    #[test]
+    fn a_long_reason_is_cut_before_the_note_is() {
+        let text = with_note(&"x".repeat(900), "not confirmed");
+        assert_eq!(text.chars().count(), MAX_REASON_CHARS);
+        assert!(text.ends_with(" | not confirmed"), "{text}");
     }
 }

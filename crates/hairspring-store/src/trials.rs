@@ -167,10 +167,13 @@ pub struct TrialDigestRow {
     pub digest: Vec<u8>,
 }
 
-/// The part of a trial the seed strip needs: its verdict and the flags that decide its class. No digest, no text.
+/// The part of a trial the seed strip needs: its verdict, its seed and the flags that decide its class. No digest, no
+/// text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrialStripRow {
     pub seq: u64,
+    /// The scheduling seed, as a bit pattern like the stored column.
+    pub seed: u64,
     pub verdict: TrialVerdict,
     pub rated: bool,
     pub degraded: bool,

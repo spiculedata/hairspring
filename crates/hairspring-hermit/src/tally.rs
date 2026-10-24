@@ -4,7 +4,8 @@ use crate::property_verdict;
 use crate::schedule_set::ScheduleSet;
 use crate::trace::Verdict;
 use crate::trial_log::{self, Counted};
-use hairspring_engine::report::RunOutcome;
+use hairspring_engine::report::{FailureReport, RunOutcome};
+use hairspring_engine::sweep::{assemble, assemble_error, SweepEnd};
 use hairspring_engine::trial_log::TrialReport;
 use hairspring_props::limits::MAX_IDS_PER_RUN;
 use hairspring_props::{
@@ -41,6 +42,18 @@ pub struct Tally {
     /// One record per judged trial, in judging order.
     log: Vec<TrialReport>,
     observer: Option<Arc<dyn TrialObserver>>,
+    /// What a sweep may hold in memory; `None` for a search, whose log is as long as the search lasted.
+    bounds: Option<SweepBounds>,
+    /// Bytes of kept detail and output, and of digests, the log holds so far.
+    kept_bytes: u64,
+    digest_bytes: u64,
+}
+
+/// The most bytes a sweep's trial log holds, so a long sweep cannot exhaust the host's memory.
+#[derive(Debug, Clone, Copy)]
+struct SweepBounds {
+    kept: u64,
+    digest: u64,
 }
 
 impl Tally {
@@ -49,6 +62,56 @@ impl Tally {
             observer,
             ..Tally::default()
         }
+    }
+
+    /// A tally for a sweep, which keeps a record of every trial of its budget until it finishes, within `bounds`. Kept
+    /// detail and output beyond `bounds.kept` are left off the records that follow (the records stay). Digests are
+    /// never left off: they carry the property statistics, and a catalog update must reach the server before a digest
+    /// refers to it. When they reach `bounds.digest` the sweep ends instead ([`Tally::digests_full`]), so it holds
+    /// no more than the bound plus one batch of trials.
+    pub fn for_sweep(observer: Option<Arc<dyn TrialObserver>>, kept: u64, digest: u64) -> Tally {
+        Tally {
+            bounds: Some(SweepBounds { kept, digest }),
+            ..Tally::new(observer)
+        }
+    }
+
+    /// Whether a sweep's digests have reached their bound, so it should stop after the trials it has.
+    pub fn digests_full(&self) -> bool {
+        self.bounds.is_some_and(|b| self.digest_bytes >= b.digest)
+    }
+
+    /// Applies a sweep's bound on kept detail and output to the record of one more trial, and counts its digest.
+    fn bounded(&mut self, report: TrialReport) -> TrialReport {
+        let Some(bounds) = self.bounds else {
+            return report;
+        };
+        self.digest_bytes = self.digest_bytes.saturating_add(report.digest.len() as u64);
+        let kept = (report.detail.as_ref().map_or(0, String::len)
+            + report.output.as_ref().map_or(0, String::len)) as u64;
+        if self.kept_bytes.saturating_add(kept) > bounds.kept {
+            return TrialReport {
+                detail: None,
+                output: None,
+                ..report
+            };
+        }
+        self.kept_bytes = self.kept_bytes.saturating_add(kept);
+        report
+    }
+
+    /// Adds `note` to the reason of the trial numbered `seq`, which was judged before.
+    pub fn note_confirmation(&mut self, seq: u64, note: &str) {
+        self.log = std::mem::take(&mut self.log)
+            .into_iter()
+            .map(|r| match r.seq == seq {
+                true => TrialReport {
+                    reason: trial_log::with_note(&r.reason, note),
+                    ..r
+                },
+                false => r,
+            })
+            .collect();
     }
 
     /// Records a finished trial: tells the observer, folds its properties into the run and logs a record of it for the
@@ -77,8 +140,9 @@ impl Tally {
             self.schedules.insert(&schedule.fingerprint);
             self.work = self.work.saturating_add(schedule.syscalls);
         }
-        self.log
-            .push(trial_log::build(seq, seed, trial, verdict, record));
+        let report = trial_log::build(seq, seed, trial, verdict, record);
+        let report = self.bounded(report);
+        self.log.push(report);
     }
 
     /// The records of the trials judged so far.
@@ -89,11 +153,55 @@ impl Tally {
 
     /// Attaches the trial records to an outcome that ends the run without going through the property methods.
     pub fn with_log(&self, outcome: RunOutcome) -> RunOutcome {
-        outcome.with_trial_log(self.log.clone())
+        // An outcome that already carries the log (a sweep's) is not given a second copy of it.
+        match outcome.trial_log.is_empty() {
+            true => outcome.with_trial_log(self.log.clone()),
+            false => outcome,
+        }
     }
 
     pub fn pass(&mut self) {
         self.trials += 1;
+    }
+
+    /// A trial that was a violation, in a sweep, which goes on after it.
+    pub fn violation(&mut self) {
+        self.trials += 1;
+    }
+
+    /// A trial that failed in the host, in a sweep, which goes on after it (up to a limit).
+    pub fn infra_trial(&mut self) {
+        self.trials += 1;
+    }
+
+    /// The outcome of a sweep that ran to the end of its budget (or of its wall-clock time): `Failed` with the report
+    /// of its lowest failing seed when any trial violated, `Passed` otherwise, and an error when it rated nothing.
+    /// Every judged trial is in the outcome's log, and the properties are those of the trials that ran.
+    pub fn finish_sweep(&self, started: Instant, failure: Option<FailureReport>) -> RunOutcome {
+        let (distinct, work) = self.schedule_stats();
+        let outcome =
+            assemble(self.sweep_end(started, failure)).with_schedule_stats(distinct, work);
+        match outcome.status {
+            hairspring_engine::report::RunStatus::Passed => self.with_properties(outcome),
+            _ => self.with_partial_properties(outcome),
+        }
+    }
+
+    /// The outcome of a sweep that had to stop with an error: the trials judged so far are kept.
+    pub fn sweep_error(&self, started: Instant, message: impl Into<String>) -> RunOutcome {
+        let (distinct, work) = self.schedule_stats();
+        let outcome = assemble_error(message, self.sweep_end(started, None))
+            .with_schedule_stats(distinct, work);
+        self.with_partial_properties(outcome)
+    }
+
+    fn sweep_end(&self, started: Instant, failure: Option<FailureReport>) -> SweepEnd {
+        SweepEnd {
+            rows: self.log.clone(),
+            failure,
+            steps_executed: self.trials,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        }
     }
 
     /// The distinct schedules seen and the work done. Once the run has seen more schedules than it remembers, the
@@ -382,6 +490,82 @@ mod tests {
         let out = tally.finish(started);
         assert_eq!(out.status, RunStatus::Error);
         assert!(out.elapsed_ms >= 250, "{}", out.elapsed_ms);
+    }
+
+    fn failing(stdout_bytes: usize) -> Trial {
+        Trial {
+            exit_code: Some(1),
+            stdout: "x".repeat(stdout_bytes),
+            ..Trial::default()
+        }
+    }
+
+    fn violation() -> Verdict {
+        Verdict::Violation("boom".into())
+    }
+
+    #[test]
+    fn a_search_keeps_every_output_whatever_its_size() {
+        let mut tally = Tally::new(None);
+        for i in 0..3 {
+            tally.on_trial(i, i, &failing(600), &violation());
+        }
+        assert!(tally.trial_log().iter().all(|r| r.output.is_some()));
+    }
+
+    #[test]
+    fn a_sweep_keeps_detail_and_output_only_up_to_its_memory_bound() {
+        let mut tally = Tally::for_sweep(None, 1000, u64::MAX);
+        for i in 0..3 {
+            tally.on_trial(i, i, &failing(600), &violation());
+        }
+        let log = tally.trial_log();
+        assert!(log[0].output.is_some(), "the first trial fits the bound");
+        for later in &log[1..] {
+            assert!(later.output.is_none() && later.detail.is_none());
+            assert_eq!(
+                later.verdict,
+                hairspring_engine::trial_log::ReportedVerdict::Violation
+            );
+            assert_eq!(later.exit_code, Some(1), "the row itself is kept");
+        }
+    }
+
+    #[test]
+    fn a_sweep_says_when_its_digests_reach_their_bound_and_never_alters_a_digest() {
+        let first = trial(report("a.id", "always", 3, 0));
+        let mut probe = Tally::for_sweep(None, u64::MAX, u64::MAX);
+        probe.on_trial(0, 1, &first, &Verdict::Pass);
+        let size = probe.trial_log()[0].digest.len() as u64;
+        assert!(
+            !probe.digests_full(),
+            "no bound is reached with room to spare"
+        );
+
+        let mut tally = Tally::for_sweep(None, u64::MAX, size + 1);
+        tally.on_trial(0, 1, &first, &Verdict::Pass);
+        assert!(!tally.digests_full(), "one digest is below the bound");
+        tally.on_trial(1, 2, &first, &Verdict::Pass);
+        assert!(tally.digests_full(), "two digests are past it");
+        assert_eq!(tally.trial_log()[0], probe.trial_log()[0]);
+    }
+
+    #[test]
+    fn a_search_never_reports_its_digests_as_full() {
+        let mut tally = Tally::new(None);
+        tally.on_trial(0, 1, &trial(report("a.id", "always", 3, 0)), &Verdict::Pass);
+        assert!(!tally.digests_full());
+    }
+
+    #[test]
+    fn a_confirmation_note_is_added_to_the_reason_of_the_trial_it_is_about() {
+        let mut tally = Tally::for_sweep(None, u64::MAX, u64::MAX);
+        tally.on_trial(0, 5, &failing(1), &violation());
+        tally.on_trial(1, 6, &failing(1), &violation());
+        tally.note_confirmation(1, "rerun reproduced 3/3");
+        let log = tally.trial_log();
+        assert_eq!(log[0].reason, "boom");
+        assert_eq!(log[1].reason, "boom | rerun reproduced 3/3");
     }
 
     #[test]

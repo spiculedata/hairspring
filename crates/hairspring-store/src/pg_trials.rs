@@ -536,7 +536,7 @@ pub(crate) fn list_trial_strip_rows(
 ) -> Result<Vec<TrialStripRow>> {
     let (after, limit) = (after_bound(after), i64::from(limit));
     Ok(c.query(
-        "SELECT seq, verdict, rated, degraded, report_missing FROM trials \
+        "SELECT seq, verdict, rated, degraded, report_missing, seed FROM trials \
          WHERE run_id=$1 AND seq>$2 ORDER BY seq LIMIT $3",
         &[&run_id, &after, &limit],
     )?
@@ -545,6 +545,7 @@ pub(crate) fn list_trial_strip_rows(
         let verdict: String = r.get(1);
         TrialStripRow {
             seq: r.get::<_, i64>(0) as u64,
+            seed: r.get::<_, i64>(5) as u64,
             verdict: TrialVerdict::parse(&verdict).unwrap_or(TrialVerdict::Infra),
             rated: r.get(2),
             degraded: r.get(3),

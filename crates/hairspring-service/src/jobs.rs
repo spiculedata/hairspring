@@ -6,6 +6,7 @@ use crate::{Result, Service, ServiceError};
 use hairspring_engine::backend::Progress;
 use hairspring_engine::config::Budget;
 use hairspring_engine::engine::{Engine, RunRequest};
+use hairspring_engine::mode::RunMode;
 use hairspring_engine::report::{RunOutcome, RunStatus};
 use hairspring_store::{
     now_ms, FinishOutcome, JobResult, JobStatus, NewEvent, NewFailure, RunState, RunStats,
@@ -89,6 +90,7 @@ impl Service {
                 target: payload.target,
                 seed: payload.seed,
                 budget: payload.budget,
+                mode: payload.mode,
             }));
         }
     }
@@ -189,10 +191,10 @@ impl Service {
             }
             None => None,
         };
-        let budget = serde_json::from_str::<JobPayload>(&job.payload_json)
-            .ok()
-            .and_then(|p| p.budget);
-        let stats = self.run_stats(&job.run_id, job.attempts, &clean, reported, budget)?;
+        let payload = serde_json::from_str::<JobPayload>(&job.payload_json).ok();
+        let budget = payload.as_ref().and_then(|p| p.budget);
+        let mode = payload.map_or(RunMode::Search, |p| p.mode);
+        let stats = self.run_stats(&job.run_id, job.attempts, &clean, reported, (budget, mode))?;
         let event_payload_json = finished_payload(state, Some(&clean));
         let result = JobResult {
             state,
@@ -243,7 +245,7 @@ impl Service {
         attempt: u32,
         clean: &RunOutcome,
         reported: Option<u64>,
-        budget: Option<Budget>,
+        (budget, mode): (Option<Budget>, RunMode),
     ) -> Result<RunStats> {
         // Rows an earlier attempt left belong to a run that is over; they are removed when this job finishes.
         let stale = self
@@ -262,11 +264,12 @@ impl Service {
         // A run that passed without holding as many trials as it was asked for ended early. If it ended on its
         // wall-clock or step limit, the server's own clock and the step count say so, nothing is missing, and its
         // result stands for the trials it ran. Otherwise whoever called `complete` stopped it, and the trials it never
-        // ran cannot back a claim.
+        // ran cannot back a claim. A sweep that failed is held to the same rule: it does not stop at a failure, so
+        // fewer trials than its budget without a limit means its worker did (one that predates sweeps does).
         let uses_rows = held > 0 || reported.is_some();
-        let short = clean.status == RunStatus::Passed
-            && uses_rows
-            && budget.is_some_and(|b| held < b.max_trials);
+        let ran_to_the_end = clean.status == RunStatus::Passed
+            || (mode.is_sweep() && clean.status == RunStatus::Failed);
+        let short = ran_to_the_end && uses_rows && budget.is_some_and(|b| held < b.max_trials);
         let limited = match budget {
             Some(b) if short => {
                 let started = self.store.get_run(run_id)?.and_then(|r| r.started_at);
@@ -305,7 +308,8 @@ impl Service {
             inconclusive: clean.inconclusive,
             distinct_schedules: clean.distinct_schedules,
             work: clean.work,
-            stopped_at_first_failure: clean.status == RunStatus::Failed,
+            // From the run's own mode, not from anything in the outcome: a sweep does not stop at a failure.
+            stopped_at_first_failure: clean.status == RunStatus::Failed && !mode.is_sweep(),
             ingest_incomplete: incomplete,
             property_summary_json,
             properties,
@@ -375,6 +379,7 @@ impl Service {
             target: job.target.clone(),
             seed: job.seed,
             budget: job.budget,
+            mode: job.mode,
         };
         let abort = Cell::new(Abort::None);
         let done = AtomicBool::new(false);
@@ -434,9 +439,19 @@ impl Service {
         Ok(true)
     }
 
-    /// Starts a run and drives the queue until that run is finished (CLI / local mode).
+    /// Starts a run that stops at its first failure and drives the queue until it is finished (CLI / local mode).
     pub fn run_sync(&self, engine: &Engine, req: &StartRun) -> Result<RunDetail> {
-        let run = self.start_run(engine, req)?;
+        self.run_sync_with_mode(engine, req, RunMode::Search)
+    }
+
+    /// Starts a run in `mode` and drives the queue until it is finished.
+    pub fn run_sync_with_mode(
+        &self,
+        engine: &Engine,
+        req: &StartRun,
+        mode: RunMode,
+    ) -> Result<RunDetail> {
+        let run = self.start_run_with_mode(engine, req, mode)?;
         let worker = Service::local_worker_id();
         let deadline = Instant::now() + SYNC_MAX_WAIT;
         loop {

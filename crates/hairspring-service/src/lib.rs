@@ -22,6 +22,7 @@ mod query;
 pub mod sanitize;
 mod scan;
 mod strip_query;
+mod sweep;
 mod trial_class;
 mod trial_query;
 mod types;
@@ -46,6 +47,7 @@ use hairspring_core::bundle::Bundle;
 pub use hairspring_engine::backend::ReplayOptions;
 use hairspring_engine::config::TargetKind;
 use hairspring_engine::engine::Engine;
+use hairspring_engine::mode::RunMode;
 use hairspring_engine::report::{FailureReport, ReplayOutcome, RunOutcome, RunStatus, Step};
 use hairspring_store::{
     now_ms, random_seed, EventRecord, FailureRecord, NewEvent, NewRun, RunRecord, RunState, Store,
@@ -178,7 +180,18 @@ impl Service {
             .collect()
     }
 
+    /// Starts a run that stops at its first confirmed failure.
     pub fn start_run(&self, engine: &Engine, req: &StartRun) -> Result<RunRecord> {
+        self.start_run_with_mode(engine, req, RunMode::Search)
+    }
+
+    /// Starts a run in `mode`: a sweep runs its whole trial budget past every failure and stores every trial.
+    pub fn start_run_with_mode(
+        &self,
+        engine: &Engine,
+        req: &StartRun,
+        mode: RunMode,
+    ) -> Result<RunRecord> {
         if req.target.is_empty() || req.target.len() > MAX_TARGET_LEN {
             return Err(ServiceError::InvalidRequest(
                 "target must be 1-64 characters".to_string(),
@@ -198,6 +211,7 @@ impl Service {
             seed: req.seed.unwrap_or_else(random_seed),
             // The budget the run is held to is recorded in full, so it does not depend on the target's default later.
             budget: Some(req.budget.unwrap_or(spec.budget).clamp()),
+            mode,
         };
         let json = serde_json::to_string(&payload)
             .map_err(|e| ServiceError::InvalidRequest(e.to_string()))?;
@@ -310,6 +324,7 @@ impl Service {
             .property_summary_json
             .as_deref()
             .and_then(|j| serde_json::from_str(j).ok());
+        let sweep = self.sweep_summary(&run)?;
         Ok(Some(RunOutcome {
             status,
             steps_executed: run.steps,
@@ -325,6 +340,7 @@ impl Service {
             property_run,
             trial_log: Vec::new(),
             trials_reported: None,
+            sweep,
         }))
     }
 

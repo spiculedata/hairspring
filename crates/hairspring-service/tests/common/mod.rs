@@ -53,6 +53,25 @@ pub fn lease_with_budget(svc: &Service, engine: &Engine, worker: &str, trials: u
     svc.lease(worker).unwrap().expect("a job")
 }
 
+/// A sweep run with a budget of `trials` trials, leased by `worker`.
+pub fn lease_sweep(svc: &Service, engine: &Engine, worker: &str, trials: u64) -> LeasedJob {
+    svc.start_run_with_mode(
+        engine,
+        &StartRun {
+            target: "lock-lease".into(),
+            seed: Some(1),
+            budget: Some(hairspring_engine::config::Budget {
+                max_steps: 1000,
+                max_trials: trials,
+                wall_secs: 30,
+            }),
+        },
+        hairspring_engine::mode::RunMode::Sweep,
+    )
+    .unwrap();
+    svc.lease(worker).unwrap().expect("a job")
+}
+
 pub fn props(id: &str, kind: AssertKind, trues: u64, falses: u64) -> TrialProps {
     let ev = |j: String| format!("HAIRSPRING_EVENT {j}\n");
     let must_hit = kind.must_hit();

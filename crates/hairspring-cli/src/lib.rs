@@ -10,6 +10,7 @@ mod cli;
 mod commands;
 mod ctx;
 mod host;
+mod seed_range;
 mod timefmt;
 
 use clap::Parser;

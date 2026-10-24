@@ -45,6 +45,7 @@ pub use head_tail::Omitted;
 pub use hermit_version::probe as probe_hermit_version;
 pub use tally::TrialObserver;
 
+use hairspring_engine::sweep::{MAX_DIGEST_BYTES_IN_MEMORY, MAX_KEPT_BYTES_IN_MEMORY};
 use hairspring_props::limits::DEFAULT_MAX_EVENT_BYTES_PER_TRIAL;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -80,6 +81,14 @@ pub struct HermitSettings {
     /// 4 MiB (about 4,900 ids at roughly 850 bytes each). The buffer grows as events arrive, so only trials that emit
     /// events spend memory.
     pub max_event_bytes: usize,
+    /// Most bytes of kept trial detail and output a sweep holds while it runs; the trials after that keep their records
+    /// but not these parts.
+    pub sweep_kept_bytes: u64,
+    /// Most bytes of trial digests a sweep holds while it runs. A sweep that reaches it ends there, after the batch of
+    /// trials in progress (so a run may hold up to one batch more), and the server marks it incomplete: it ran fewer
+    /// trials than its budget without having run out of time. The default is the server's own allowance of stored
+    /// digests.
+    pub sweep_digest_bytes: u64,
 }
 
 /// Memory-backed and not `/tmp`, so Hermit accepts it and the files cost nothing.
@@ -102,6 +111,8 @@ impl Default for HermitSettings {
             events_file: false,
             events_dir: None,
             max_event_bytes: DEFAULT_MAX_EVENT_BYTES_PER_TRIAL,
+            sweep_kept_bytes: MAX_KEPT_BYTES_IN_MEMORY,
+            sweep_digest_bytes: MAX_DIGEST_BYTES_IN_MEMORY,
         }
     }
 }

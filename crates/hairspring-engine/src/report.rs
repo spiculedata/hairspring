@@ -1,3 +1,4 @@
+use crate::sweep::SweepSummary;
 use crate::trial_log::TrialReport;
 use hairspring_props::{PropertyStat, RunSummary};
 use serde::{Deserialize, Serialize};
@@ -76,9 +77,21 @@ pub struct RunOutcome {
     /// How many trial records the worker says it sent. The server compares it with the rows it holds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trials_reported: Option<u64>,
+    /// How every trial of a sweep ended. `None` for a run that stops at its first failure, which has no rate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sweep: Option<SweepSummary>,
 }
 
 impl RunOutcome {
+    /// Marks the outcome as a sweep's and attaches its summary. A sweep never stops at its first failure.
+    pub fn with_sweep(self, summary: SweepSummary) -> Self {
+        RunOutcome {
+            sweep: Some(summary),
+            stopped_at_first_failure: false,
+            ..self
+        }
+    }
+
     /// Attaches the run's property statistics.
     pub fn with_properties(self, properties: Vec<PropertyStat>, run: RunSummary) -> Self {
         RunOutcome {
@@ -159,6 +172,7 @@ impl RunOutcome {
             property_run: None,
             trial_log: Vec::new(),
             trials_reported: None,
+            sweep: None,
         }
     }
     pub fn failed(
@@ -182,6 +196,7 @@ impl RunOutcome {
             property_run: None,
             trial_log: Vec::new(),
             trials_reported: None,
+            sweep: None,
         }
     }
     pub fn error(message: impl Into<String>) -> Self {
@@ -200,6 +215,7 @@ impl RunOutcome {
             property_run: None,
             trial_log: Vec::new(),
             trials_reported: None,
+            sweep: None,
         }
     }
 }

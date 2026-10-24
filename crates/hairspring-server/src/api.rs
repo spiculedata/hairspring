@@ -11,6 +11,7 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use hairspring_engine::config::Budget;
+use hairspring_engine::mode::RunMode;
 use hairspring_mcp::validate;
 use hairspring_service::{Role, ServiceError, StartRun};
 use serde::de::DeserializeOwned;
@@ -91,6 +92,8 @@ pub struct CreateRun {
     target: String,
     seed: Option<u64>,
     budget: Option<Budget>,
+    /// `search` (the default: stop at the first confirmed failure) or `sweep` (run the whole trial budget).
+    mode: Option<RunMode>,
 }
 
 pub async fn create_run(
@@ -100,13 +103,14 @@ pub async fn create_run(
 ) -> Result<Response, ApiError> {
     caller.need(Role::Run)?;
     let run = blocking(move || {
-        s.svc.start_run(
+        s.svc.start_run_with_mode(
             &s.engine,
             &StartRun {
                 target: body.target,
                 seed: body.seed,
                 budget: body.budget,
             },
+            body.mode.unwrap_or_default(),
         )
     })
     .await?;

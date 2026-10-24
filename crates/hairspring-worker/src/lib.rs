@@ -249,6 +249,7 @@ fn execute(
         target: job.target.clone(),
         seed: job.seed,
         budget: job.budget,
+        mode: job.mode,
     };
     let interrupted = Cell::new(false);
     let done = AtomicBool::new(false);

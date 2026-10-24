@@ -155,11 +155,12 @@ struct Checked {
     rows: Vec<CatalogRowRecord>,
 }
 
-fn check_report(r: &TrialReport, catalog: RunCatalog) -> Result<(Checked, RunCatalog)> {
+/// `limit` is the number of trials the run was started with: a record numbered at or past it is not one of its trials.
+fn check_report(r: &TrialReport, catalog: RunCatalog, limit: u64) -> Result<(Checked, RunCatalog)> {
     let label = |what: &str| invalid(format!("trial {}: {what}", r.seq));
-    if r.seq >= MAX_TRIALS_CAP {
+    if r.seq >= limit.min(MAX_TRIALS_CAP) {
         return Err(label(
-            "sequence number is past the most trials a run may have",
+            "sequence number is past the trials this run was started with",
         ));
     }
     if r.reason.chars().count() > MAX_TRIAL_REASON_CHARS || !is_plain_text(&r.reason, usize::MAX) {
@@ -348,9 +349,10 @@ impl Service {
             return Err(invalid("the run is already finished"));
         }
         let mut catalog = self.catalog_for(&run, &job)?;
+        let limit = crate::sweep::trial_limit(&job.payload_json);
         let (mut trials, mut rows) = (Vec::with_capacity(reports.len()), Vec::new());
         for r in reports {
-            let (checked, next) = check_report(r, catalog)?;
+            let (checked, next) = check_report(r, catalog, limit)?;
             catalog = next;
             rows.extend(checked.rows);
             trials.push(checked.trial);
