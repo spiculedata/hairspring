@@ -996,7 +996,9 @@ expect "check-jdk-version without a pin is a usage error" 64 sh "$here/check-jdk
 # check-sources-java.sh: more clocks and random sources, system properties, /sys and reflection.
 for token in 'Calendar.getInstance()' 'OffsetDateTime.now()' 'InstantSource.system()' 'Year.now()' 'YearMonth.now()' 'MonthDay.now()' \
   'System.getProperty("os.name")' 'System.getProperties()' '"/sys/devices/system/cpu"' 'Class.forName("x")' 'x.getDeclaredMethod("m")' \
-  'f.setAccessible(true)' 'ThreadLocalRandom.current()' 'Math.random()' 'new SecureRandom()' 'UUID.randomUUID()'; do
+  'f.setAccessible(true)' 'ThreadLocalRandom.current()' 'Math.random()' 'new SecureRandom()' 'UUID.randomUUID()' \
+  'new SplittableRandom()' 'RandomGenerator.getDefault()' 'RandomGeneratorFactory.of("L64X128MixRandom")' \
+  'Runtime.getRuntime().exec("ls")' 'new ProcessBuilder("ls")'; do
   jbad="$tmp/Bad2.java"
   printf 'class Bad2 { Object f() { return %s; } }\n' "$token" >"$jbad"
   expect "check-sources-java rejects $token" 1 sh "$here/check-sources-java.sh" "$jbad"

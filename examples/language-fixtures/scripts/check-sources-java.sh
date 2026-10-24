@@ -7,7 +7,8 @@
 # The contract forbids these inputs outside the language runtime and the stated random source: the seed (HAIRSPRING_SEED),
 # /proc, the environment (System.getenv), the CPU count (availableProcessors), the process table (ProcessHandle,
 # ProcessBuilder), management beans, system properties, files under /sys/, reflection, other random sources
-# (ThreadLocalRandom, Math.random, SecureRandom, UUID.randomUUID) and the clock (System.currentTimeMillis, Instant.now,
+# (ThreadLocalRandom, Math.random, SecureRandom, UUID.randomUUID, SplittableRandom, RandomGenerator.getDefault,
+# RandomGeneratorFactory), running programs (ProcessBuilder, Runtime.exec) and the clock (System.currentTimeMillis, Instant.now,
 # LocalDateTime.now, OffsetDateTime, InstantSource, Calendar, Clock, Date, Year.now).
 # `--allow-nano-time` is for the probe alone: its output line carries the monotonic clock difference between the start and
 # the end of the run (vtime_ns), so System.nanoTime is allowed there, exactly twice (the start and the end), and nothing
@@ -31,7 +32,7 @@ if [ $# -lt 1 ]; then
   exit 64
 fi
 
-forbidden='HAIRSPRING_SEED|/proc|getenv|availableProcessors|ProcessHandle|ProcessBuilder|currentTimeMillis|Instant\.now|LocalDateTime|ZonedDateTime|LocalDate\.now|LocalTime\.now|Clock\.|java\.util\.Date|new Date|ManagementFactory|import static java\.lang\.System|Calendar\.getInstance|OffsetDateTime|InstantSource|Year\.now|YearMonth\.now|MonthDay\.now|System\.getProperty|System\.getProperties|/sys/|Class\.forName|getDeclaredMethod|getDeclaredField|setAccessible|ThreadLocalRandom|Math\.random|SecureRandom|UUID\.randomUUID'
+forbidden='HAIRSPRING_SEED|/proc|getenv|availableProcessors|ProcessHandle|ProcessBuilder|currentTimeMillis|Instant\.now|LocalDateTime|ZonedDateTime|LocalDate\.now|LocalTime\.now|Clock\.|java\.util\.Date|new Date|ManagementFactory|import static java\.lang\.System|Calendar\.getInstance|OffsetDateTime|InstantSource|Year\.now|YearMonth\.now|MonthDay\.now|System\.getProperty|System\.getProperties|/sys/|Class\.forName|getDeclaredMethod|getDeclaredField|setAccessible|ThreadLocalRandom|Math\.random|SecureRandom|UUID\.randomUUID|SplittableRandom|RandomGenerator\.getDefault|RandomGeneratorFactory|getRuntime\(\)\.exec'
 nano='nanoTime'
 if [ "$allow_nano" -eq 0 ]; then
   forbidden="$forbidden|$nano"
