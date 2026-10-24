@@ -214,6 +214,9 @@ keys in iteration order, `rand` is the first value of a new `java.util.Random` (
 `System.nanoTime()`), and `vtime_ns` is the monotonic clock difference between the start and the end of the run. Exit 3
 means an internal failure (a thread did not start or died, or the line could not be written).
 
+The jar names `langat.Probe` as its `Main-Class` because it holds the probe alone; a jar that also holds another program
+must not.
+
 `java/profiles.tsv` lists the JVM flag profiles the program is run with (two profiles, arm `a` and arm `b`); the flags are
 not part of the jar. The jar is built with `javac --release 21 -Xlint:all -Werror` and written with a fixed entry timestamp
 and its entries in sorted order, so two builds with the same JDK give the same bytes.
