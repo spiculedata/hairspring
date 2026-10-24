@@ -91,6 +91,7 @@ common/lang_at.h       the parts C and C++ share: parameters, modes, busy loop, 
 c/                     src/lost_update.c, Makefile
 cpp/                   src/lost_update.cc, Makefile (clang++ by default; CXX=g++ works)
 go/                    main.go, internal/race (the program and its unit tests), Makefile
+dotnet/                the BCL-only .NET probe: src, selftest, test_probe.sh, profiles.manifest, Makefile
 tests/seccomp_window.c test-only: the window makes no system call (used by the build record, Linux only)
 scripts/check-native.sh  the native self-check of one artifact; run-checks.sh adds the negative control;
                        check-sources.sh, check-disasm.sh; test-scripts.sh tests all of them with a fake program
@@ -197,6 +198,48 @@ six-field line and the exit status; B5 runs `strace -ff` on one run and requires
 (`scripts/check-probe-writes.sh`); the probe's own tests run in release. B2, B3, B6 and B7 belong to the AT programs and
 are marked not applicable, and the record has no alignment checklist. The CI workflow's manual `fixture-build-records`
 job runs it as the `rust-probe` variant; `scripts/build-record-docker.sh rust-probe` runs it in a container.
+
+## The .NET probe
+
+[`dotnet/`](dotnet) holds `LangAtProbe`, a BCL-only program (no SDK, no packages, no property) used to check how .NET
+threads are scheduled. It takes no argument. Four `System.Threading.Thread` workers each take a lock once (lock order),
+run an unlocked read-spin-write on a plain counter, and queue their number when they finish (arrival order); four tasks
+that each await `Task.Delay(1)` queue their number (completion order, the `extra` field). It prints one line, written
+with one `write(2)` to stdout, and exits 0:
+
+```
+PROBE v1 lang=dotnet lock_order=<16 hex> arrival=<16 hex> rand=<16 hex> vtime_ns=<20 digits> extra=<16 hex>
+```
+
+`lock_order`, `arrival` and `extra` are FNV-1a 64 hashes of the worker numbers as bare digits; `rand` is 64 bits from
+`Random.Shared`; `vtime_ns` is the difference of two `Stopwatch.GetTimestamp()` readings, the program's only clock read.
+Any argument is a usage error (exit 64); an internal failure, such as a worker that did not start or a stdout that cannot
+be written, exits 3.
+
+The output is framework-dependent: `LangAtProbe.dll` with its `.runtimeconfig.json` and `.deps.json`, run as
+`dotnet LangAtProbe.dll`. The project sets the options that keep the build reproducible (`Deterministic`,
+`ContinuousIntegrationBuild`, no debug symbols, no source revision in the assembly, no apphost).
+[`dotnet/profiles.manifest`](dotnet/profiles.manifest) lists the environment variables of the two runtime profiles
+(arm a: `DOTNET_ROOT` only; arm b: plus `DOTNET_TieredCompilation=0`, `DOTNET_EnableWriteXorExecute=0`,
+`DOTNET_gcServer=0` and `DOTNET_PROCESSOR_COUNT=1`); `dotnet/profile-env.sh` prints one arm.
+
+```sh
+make -C dotnet test      # the unit checks (selftest/), the build, then test_probe.sh against the built program
+make test-dotnet         # the same, from this directory (not part of `make test`: it needs the .NET 10 SDK)
+```
+
+`scripts/build-record-probe-dotnet.sh` records `probe-dotnet`: B1 publishes it twice from two copies of the sources in
+different directories (with different file times) and requires equal sha256 for each of the three files and checks that
+the restore resolved no library; the SDK and runtime versions are checked against the pinned 10.0.402 and 10.0.13; a
+source check (`scripts/check-sources-dotnet.sh`) allows `Stopwatch.GetTimestamp` (exactly once,
+`scripts/check-stopwatch-use.sh`) and no other clock, seed, `/proc`, CPU count or environment read; B4 is native runs that
+check only the format of the line and the exit status, under the base environment and under each profile; B5 runs
+`strace -ff` on one run per profile and requires the line to be one `write(2)` (`scripts/check-probe-writes.sh --any-fd`:
+the runtime duplicates descriptor 1 for its console stream, so the line appears on another descriptor); the
+unit checks run on a clean copy. B2, B3, B6 and B7 are marked not applicable, and the record has no alignment checklist.
+The artifact is identified by the tree hash of its three files. The CI workflow's manual `fixture-build-records` job runs
+it as the `dotnet-probe` variant (with the pinned SDK from `actions/setup-dotnet`);
+`scripts/build-record-docker.sh dotnet-probe` runs it in a container whose image is pinned by digest.
 
 ## Compilers
 

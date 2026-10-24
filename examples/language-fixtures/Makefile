@@ -4,8 +4,9 @@
 #   make test     build and self-check C (with $(CC)), C++ (clang++ unless CXX is given), Go and Python
 #   make clean
 
-.PHONY: test test-scripts test-c test-cpp test-go test-python clean
+.PHONY: test test-scripts test-c test-cpp test-go test-python test-dotnet clean
 
+# test-dotnet needs the .NET 10 SDK and is not part of `make test`.
 test: test-scripts test-c test-cpp test-go test-python
 
 # The check scripts themselves, with a fake program.
@@ -24,7 +25,12 @@ test-go:
 test-python:
 	$(MAKE) -C python test
 
+# The BCL-only .NET probe: unit checks, build, native tests.
+test-dotnet:
+	$(MAKE) -C dotnet test
+
 clean:
 	$(MAKE) -C c clean
 	$(MAKE) -C cpp clean
 	$(MAKE) -C go clean
+	$(MAKE) -C dotnet clean
