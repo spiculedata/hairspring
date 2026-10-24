@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The probe's unit checks: BCL only, no test framework, no packages. It compiles the probe's sources (except Program.cs,
+       which holds the entry point) next to its own and exits non-zero when a check fails. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>LangAt.SelfTest</RootNamespace>
+    <UseAppHost>false</UseAppHost>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../src/*.cs" Exclude="../src/Program.cs" />
+  </ItemGroup>
+
+</Project>
