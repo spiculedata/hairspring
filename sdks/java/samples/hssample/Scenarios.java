@@ -9,7 +9,7 @@ import java.util.List;
 final class Scenarios {
     static final List<String> NAMES = List.of(
             "basic", "merge", "threads", "exit_status", "plain_exit", "raises", "halt", "big", "spawn", "conflict",
-            "empty", "limits", "explicit", "daemon", "close_err", "daemon_report");
+            "empty", "limits", "explicit", "daemon", "close_err", "daemon_report", "err_after_report");
 
     private static final String LONG_MSG = "a deliberately long message so that each catalog line is large and two processes "
             + "writing at once have a real chance of interleaving if a line were ever split across write calls; padding "
@@ -44,6 +44,7 @@ final class Scenarios {
             case "daemon" -> daemon();
             case "close_err" -> closeErr();
             case "daemon_report" -> daemonReport();
+            case "err_after_report" -> errAfterReport();
             default -> throw new IllegalArgumentException(name);
         };
     }
@@ -187,6 +188,16 @@ final class Scenarios {
         Thread reporter = new Thread(Hairspring::report);
         reporter.setDaemon(true);
         reporter.start();
+        return 0;
+    }
+
+    /** The program writes to System.err after an explicit report: those lines must not overwrite the report. */
+    private static int errAfterReport() {
+        Hairspring.reachable("err_after_report.site", "reached before the report");
+        Hairspring.report();
+        for (int i = 0; i < 20; i++) {
+            System.err.println("the program writes to standard error after the report, line " + i);
+        }
         return 0;
     }
 }

@@ -143,25 +143,55 @@ final class OutputTests {
             }
             Check.raises(IOException.class, () -> openWithin(devnull));
         });
-        s.add("output: standard error is reopened as the SDK's own channel and appended to", () -> {
+        s.add("output: while descriptor 2 is valid the line goes through it, not through the second channel", () -> {
+            Path dir = scratch();
+            try {
+                Path file = dir.resolve("err");
+                Files.writeString(file, "");
+                ByteArrayOutputStream descriptor2 = new ByteArrayOutputStream();
+                Sink sink = StderrSink.open(java.util.List.of(file), descriptor2, () -> true, true);
+                Check.yes(sink.writeLine(bytes("a\n")), "a");
+                Check.equal("a\n", descriptor2.toString(StandardCharsets.US_ASCII));
+                Check.equal("", Files.readString(file));
+            } finally {
+                remove(dir);
+            }
+        });
+        s.add("output: once descriptor 2 is closed the line goes to the second channel, appended", () -> {
             Path dir = scratch();
             try {
                 Path file = dir.resolve("err");
                 Files.writeString(file, "before\n");
-                ByteArrayOutputStream fallback = new ByteArrayOutputStream();
-                Sink sink = StderrSink.open(java.util.List.of(dir.resolve("missing"), file), fallback);
+                ByteArrayOutputStream descriptor2 = new ByteArrayOutputStream();
+                boolean[] valid = {true};
+                Sink sink = StderrSink.open(java.util.List.of(dir.resolve("missing"), file), descriptor2, () -> valid[0], true);
+                valid[0] = false;
                 Check.yes(sink.writeLine(bytes("a\n")), "a");
                 Check.yes(sink.writeLine(bytes("b\n")), "b");
                 sink.close();
                 Check.equal("before\na\nb\n", Files.readString(file));
-                Check.equal("", fallback.toString(StandardCharsets.US_ASCII));
+                Check.equal("", descriptor2.toString(StandardCharsets.US_ASCII));
+            } finally {
+                remove(dir);
+            }
+        });
+        s.add("output: a regular file behind descriptor 2 is never reopened (it may be a file the JVM has open read-only)", () -> {
+            Path dir = scratch();
+            try {
+                Path file = dir.resolve("err");
+                Files.writeString(file, "keep\n");
+                ByteArrayOutputStream descriptor2 = new ByteArrayOutputStream();
+                Sink sink = StderrSink.open(java.util.List.of(file), descriptor2, () -> false, false);
+                sink.writeLine(bytes("a\n"));
+                sink.close();
+                Check.equal("keep\n", Files.readString(file));
             } finally {
                 remove(dir);
             }
         });
         s.add("output: without a usable path to descriptor 2 the stream on it is used", () -> {
             ByteArrayOutputStream fallback = new ByteArrayOutputStream();
-            Sink sink = StderrSink.open(java.util.List.of(Path.of("/nonexistent-dir-for-hairspring/fd2")), fallback);
+            Sink sink = StderrSink.open(java.util.List.of(Path.of("/nonexistent-dir-for-hairspring/fd2")), fallback, () -> false, true);
             Check.yes(sink.writeLine(bytes("x\n")), "written");
             Check.equal("x\n", fallback.toString(StandardCharsets.US_ASCII));
         });

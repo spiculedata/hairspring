@@ -51,7 +51,8 @@ final class Recorder {
     static Recorder start() {
         Map<String, String> env = System.getenv();
         Output.Opened opened = Output.open(
-                env, Secure.isPrivileged(), StderrSink.open(StderrSink.OWN_PATHS, new FileOutputStream(FileDescriptor.err)));
+                env, Secure.isPrivileged(), StderrSink.open(
+                        StderrSink.OWN_PATHS, new FileOutputStream(FileDescriptor.err), FileDescriptor.err::valid, false));
         Recorder recorder = fromEnvironment(env, opened.sink(), opened.dropped(), ProcessHandle.current().pid());
         recorder.installShutdownHook();
         return recorder;

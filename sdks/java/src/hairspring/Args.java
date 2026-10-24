@@ -25,7 +25,9 @@ final class Args {
     static void checkMsg(String raw) {
         Objects.requireNonNull(raw, "an assertion message must not be null");
         if ((long) raw.length() * MAX_UTF8_BYTES_PER_UNIT <= Fmt.MSG_MAX) {
-            return; // short enough that it cannot be over the limit: no encoding, so a known site's call allocates nothing
+            // Short enough that it cannot be over the limit: no encoding, so a known site's call allocates nothing. A
+            // longer message (over 170 characters) is encoded to be measured, which allocates, on every call.
+            return;
         }
         int size = Fmt.utf8(raw).length;
         if (size > Fmt.MSG_MAX) {

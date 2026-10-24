@@ -79,18 +79,27 @@ Each also has a form without `msg` and `vals`.
 | `HAIRSPRING_PROC_PID` | set for children by `prepare`; do not set it |
 | `HAIRSPRING_SIGNAL_REPORT` | **not supported**: ignored, and `hello.signal_handlers` is always false |
 
-The report goes to standard error through the SDK's own channel, not through `System.err`, so a program that replaces
-`System.err` or `System.out` cannot redirect it. At start the SDK opens descriptor 2 again, through
-`/proc/self/fd/2` (`/dev/fd/2` where there is no `/proc`), in append mode: a second descriptor that is the SDK's own.
-This matters because `System.err.close()` makes the JDK point descriptor 2 at `/dev/null`; a report written to descriptor 2
-at exit would then disappear without a trace. With the second descriptor the report still arrives. The second descriptor
-is a new open file description: on a pipe or a terminal it is the same stream; on a regular file (`2>file`) the SDK appends
-at the end of the file instead of sharing the program's write offset, so a program that also writes to that file through
-another descriptor after the report can overwrite it. If neither path can be opened (standard error is a socket, the
-descriptor directory is missing) the SDK falls back to `FileOutputStream(FileDescriptor.err)`, and then a program that
-closes `System.err` loses the report. Unlike the C, Rust and Python SDKs the JVM has no way to duplicate a descriptor,
-so a program that closes or reuses descriptor 2 by other means (native code) after the SDK started cannot take the
-report's channel away, but one that does so before the SDK first runs can.
+The report goes to standard error through descriptor 2, with one `write(2)` per line, and not through `System.err`, so a
+program that replaces `System.err` or `System.out` cannot redirect it.
+
+A program can take descriptor 2 away: `System.err.close()` (or `FileDescriptor.err.close()`) makes the JDK point descriptor 2
+at `/dev/null`, and a report written there would be lost without a trace. The JVM cannot duplicate a descriptor, so at start
+the SDK opens descriptor 2 a second time, through `/proc/self/fd/2` (`/dev/fd/2` where there is no `/proc`) in append mode,
+and writes to that second descriptor only once `FileDescriptor.err` has become invalid. Until then every line goes through
+descriptor 2, like the program's own writes. The second descriptor is opened only when descriptor 2 is **not a regular
+file**, for two reasons:
+
+* Reopening a path gives the access the path allows, not the access descriptor 2 had. A JVM started with standard error
+  closed (`2>&-`) gets its first open file, a JDK file opened read-only, as descriptor 2; reopening it for writing would
+  write the report into the JDK.
+* On a regular file (`2>file`) the second descriptor appends at the end instead of sharing the program's write offset, so
+  the program's own later writes to `System.err` would overwrite the report.
+
+So: with standard error a pipe or a terminal, a program that closes `System.err` still delivers the report. With standard
+error a regular file, or with a program that closes descriptor 2 by other means (native code) or that started the JVM with
+standard error closed, a program that closes `System.err` loses the report (the line writes fail and `end` is missing); the
+program still exits normally. Unlike the C, Rust and Python SDKs there is no private copy kept at a high descriptor number.
+If neither path can be opened (standard error is a socket, there is no descriptor directory) the SDK uses descriptor 2 only.
 
 ## What is written, and when
 

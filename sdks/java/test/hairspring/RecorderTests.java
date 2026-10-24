@@ -194,9 +194,9 @@ final class RecorderTests {
             Thread.sleep(300);
             Check.no(hookReturned.get(), "the hook returned while the report was half written");
             sink.release.countDown();
-            hook.join(10_000);
+            hook.join(2_000); // woken by the writer finishing, not by the 5 second bound
+            Check.yes(hookReturned.get(), "the hook returned promptly once the report was done");
             explicit.join(10_000);
-            Check.yes(hookReturned.get(), "the hook returned once the report was done");
             Check.equal(1, sink.inner.ofKind("end").size());
         });
         s.add("recorder: ids and messages at their limits are accepted", () -> {

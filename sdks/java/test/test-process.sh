@@ -97,10 +97,31 @@ rc=$(sample daemon)
 expect "daemon: exit 0 and a complete report" is "$rc$(lines_of hello)$(lines_of end)" 011
 expect "daemon: every protocol line is whole" is "$(grep -c '^HAIRSPRING_EVENT {.*}$' "$tmp/err")" "$(grep -c '^HAIRSPRING_EVENT' "$tmp/err")"
 
-# a program that closes System.err does not lose the report: the SDK keeps its own channel to descriptor 2 (Linux and macOS)
-rc=$(sample close_err)
-expect "close_err: exit 0 and a complete report" is "$rc$(lines_of hello)$(lines_of end)" 011
+# a program that closes System.err does not lose the report when standard error is a pipe or a terminal: the SDK keeps its
+# own channel to it. (A regular file behind descriptor 2 is never reopened, see the next tests.)
+# shellcheck disable=SC2086
+( "$java" $flags -cp "$classes:$samples" hssample.Sample close_err >"$tmp/out"; echo $? >"$tmp/rc" ) 2>&1 | cat >"$tmp/err"
+expect "close_err: exit 0 and a complete report on a pipe" is "$(cat "$tmp/rc")$(lines_of hello)$(lines_of end)" 011
 expect "close_err: both sites are in the report" is "$(lines_of catalog)" 2
+
+# the program's own writes to standard error after an explicit report do not overwrite it (standard error is a file)
+rc=$(sample err_after_report)
+expect "err_after_report: exit 0" is "$rc" 0
+expect "err_after_report: the whole report survives the program's later writes" is "$(lines_of hello)$(lines_of end)$(grep -c '^HAIRSPRING_EVENT' "$tmp/err")" 116
+expect "err_after_report: so do the program's own lines" is "$(grep -c 'the program writes to standard error' "$tmp/err")" 20
+
+# standard error is a file the program has open for reading only (the JVM launched with 2>&- can get such a file as descriptor
+# 2): nothing may be written to it, and the program still exits 0
+printf 'a file that must not change\n' >"$tmp/readonly"
+chmod 444 "$tmp/readonly"
+cp "$tmp/readonly" "$tmp/readonly.before"
+# shellcheck disable=SC2086
+"$java" $flags -cp "$classes:$samples" hssample.Sample basic >"$tmp/out" 2<"$tmp/readonly"
+expect "read-only fd 2: the program exits 0" is "$?" 0
+expect "read-only fd 2: the file is untouched" cmp -s "$tmp/readonly" "$tmp/readonly.before"
+# shellcheck disable=SC2086
+"$java" $flags -cp "$classes:$samples" hssample.Sample basic >"$tmp/out" 2>&-
+expect "closed fd 2: the program exits 0" is "$?" 0
 
 # an explicit report from a daemon thread is finished before the JVM exits
 rc=$(sample daemon_report)
