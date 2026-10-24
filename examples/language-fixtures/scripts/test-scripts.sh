@@ -866,6 +866,83 @@ expect "check-probe-writes counts stdout writes across the per-thread files" 1 s
 expect "check-probe-writes rejects a stdout line written with writev" 1 sh "$here/check-probe-writes.sh" "$pw_writev"
 expect "check-probe-writes rejects a writev to stdout beside a write" 1 sh "$here/check-probe-writes.sh" "$pw_writev_extra"
 
+# check-sources-java.sh: the Java probe must not read the scheduler seed, /proc, the environment, the CPU count, the process
+# table or the clock (System.nanoTime twice, the start and the end of the run, only when allowed).
+jclean="$tmp/Clean.java"
+printf 'class Clean { long f() { return 1L; } }\n' >"$jclean"
+expect "check-sources-java accepts a clean source" 0 sh "$here/check-sources-java.sh" "$jclean"
+for token in HAIRSPRING_SEED '/proc/self/stat' 'System.getenv("X")' 'System.getenv()' 'Runtime.getRuntime().availableProcessors()' \
+  'ProcessHandle.current()' 'new ProcessBuilder("ls")' 'System.currentTimeMillis()' 'Instant.now()' 'LocalDateTime.now()' \
+  'Clock.systemUTC()' 'new java.util.Date()' 'ManagementFactory.getRuntimeMXBean()' 'System.nanoTime()'; do
+  jbad="$tmp/Bad.java"
+  printf 'class Bad { Object f() { return %s; } }\n' "$token" >"$jbad"
+  expect "check-sources-java rejects $token" 1 sh "$here/check-sources-java.sh" "$jbad"
+done
+jtwo="$tmp/Two.java"
+printf 'class Two { long f() { long a = System.nanoTime(); long b = System.nanoTime(); return b - a; } }\n' >"$jtwo"
+jone="$tmp/One.java"
+printf 'class One { long f() { return System.nanoTime(); } }\n' >"$jone"
+jthree="$tmp/Three.java"
+printf 'class Three { long f() { return System.nanoTime() + System.nanoTime() + System.nanoTime(); } }\n' >"$jthree"
+jalias="$tmp/Alias.java"
+printf 'import static java.lang.System.nanoTime;\nclass Alias { long f() { long a = nanoTime(); return System.nanoTime() - a; } }\n' >"$jalias"
+expect "check-sources-java accepts exactly two System.nanoTime reads when they are allowed" 0 sh "$here/check-sources-java.sh" --allow-nano-time "$jtwo"
+expect "check-sources-java rejects one read when two are required" 1 sh "$here/check-sources-java.sh" --allow-nano-time "$jone"
+expect "check-sources-java rejects three reads" 1 sh "$here/check-sources-java.sh" --allow-nano-time "$jthree"
+expect "check-sources-java rejects a static import that hides a read" 1 sh "$here/check-sources-java.sh" --allow-nano-time "$jalias"
+jboth="$tmp/Both.java"
+printf 'class Both { long f() { System.currentTimeMillis(); long a = System.nanoTime(); return System.nanoTime() - a; } }\n' >"$jboth"
+expect "check-sources-java --allow-nano-time still rejects the wall clock" 1 sh "$here/check-sources-java.sh" --allow-nano-time "$jboth"
+expect "check-sources-java without a file is a usage error" 64 sh "$here/check-sources-java.sh"
+expect "check-sources-java with a missing file fails" 1 sh "$here/check-sources-java.sh" "$tmp/NoSuch.java"
+expect "check-sources-java searches a directory" 0 sh "$here/check-sources-java.sh" --allow-nano-time "$here"/../java/src
+expect "the real Java probe is rejected when System.nanoTime is not allowed" 1 sh "$here/check-sources-java.sh" "$here"/../java/src
+
+# check-java-profiles.sh: every flag profile is a valid set of JVM options, and a run under it prints the one probe line and
+# nothing else (a JVM warning goes to stdout by default, which would break the one-line contract). A fake java stands in.
+fakejava="$tmp/fakejava"
+cat >"$fakejava" <<'EOF'
+#!/bin/sh
+case "$*" in
+  *-version*)
+    [ "${FAKE:-}" = badflag ] && { echo "Unrecognized VM option 'Nope'" >&2; exit 1; }
+    [ "${FAKE:-}" = versionwarn ] && echo "OpenJDK 64-Bit Server VM warning: Option X was deprecated" >&2
+    echo 'openjdk version "21.0.12.1" 2026-07-21 LTS' >&2
+    exit 0
+    ;;
+esac
+[ "${FAKE:-}" = warn ] && echo "OpenJDK 64-Bit Server VM warning: something"
+[ "${FAKE:-}" = noisy ] && echo "noise" >&2
+[ "${FAKE:-}" = fail ] && exit 1
+[ "${FAKE:-}" = twolines ] && echo "second line"
+printf 'PROBE v1 lang=java lock_order=0123456789abcdef arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef\n'
+exit 0
+EOF
+chmod +x "$fakejava"
+profiles="$tmp/profiles.tsv"
+printf '# comment\na\t-Xint -XX:+UseSerialGC\nb\t-XX:TieredStopAtLevel=1\n' >"$profiles"
+jarfile="$tmp/fake.jar"
+: >"$jarfile"
+cjp() { # cjp <name> <wanted exit> <FAKE value> [profiles file]
+  expect "check-java-profiles $1" "$2" env FAKE="$3" JAVA="$fakejava" sh "$here/check-java-profiles.sh" "${4:-$profiles}" "$jarfile"
+}
+cjp "accepts profiles that a JVM accepts and that print one clean line" 0 ""
+cjp "rejects a flag the JVM refuses" 1 badflag
+cjp "rejects a JVM warning printed by -version" 1 versionwarn
+cjp "rejects a JVM warning on stdout in front of the line" 1 warn
+cjp "rejects output on stderr" 1 noisy
+cjp "rejects a failing probe" 1 fail
+cjp "rejects a second stdout line" 1 twolines
+printf '# nothing\n' >"$tmp/empty.tsv"
+cjp "rejects a profiles file with no profile" 1 "" "$tmp/empty.tsv"
+cjp "rejects a missing profiles file" 1 "" "$tmp/no-such.tsv"
+expect "check-java-profiles without arguments is a usage error" 64 sh "$here/check-java-profiles.sh"
+expect "check-java-profiles prints each arm and its flags" 0 sh -c "FAKE= JAVA='$fakejava' sh '$here/check-java-profiles.sh' '$profiles' '$jarfile' | grep -q 'arm b: -XX:TieredStopAtLevel=1'"
+# The real manifest of flags: exactly the two profiles of the experiment, no other flag.
+expect "the real profiles.tsv names arm a with the base flags" 0 grep -Fxq "$(printf 'a\t-Xint -XX:+UseSerialGC -XX:ActiveProcessorCount=1 -XX:-UsePerfData -Xshare:off')" "$here/../java/profiles.tsv"
+expect "the real profiles.tsv names arm b with the JIT-limited flags" 0 grep -Fxq "$(printf 'b\t-XX:TieredStopAtLevel=1 -XX:-BackgroundCompilation -XX:CICompilerCount=1 -XX:+UseSerialGC -XX:ActiveProcessorCount=1 -XX:-UsePerfData -Xshare:off')" "$here/../java/profiles.tsv"
+expect "the real profiles.tsv has two profiles and nothing else but comments" 0 sh -c "test \$(grep -vc '^#' '$here/../java/profiles.tsv') -eq 2"
+
 libcase "a record without an alignment checklist does not claim a count of ticked lines" 0 'record_title=t; record_generated_by=g; artifact_name=p; artifact_sha=aa; record_no_checklist=1; finish_record >/dev/null; ! grep -q "Checklist lines ticked" "$out"'
 libcase "a record with an alignment checklist states how many lines are ticked" 0 'record_title=t; record_generated_by=g; artifact_name=p; artifact_sha=aa; finish_record >/dev/null; grep -q "^Checklist lines ticked: 0 of 11." "$out"'
 
