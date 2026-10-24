@@ -155,7 +155,9 @@ can tell.
 Over HTTP, send `"mode": "sweep"` to `POST /api/runs`; over MCP, pass `mode` and `max_trials` to `start_run`. The
 finished run's `sweep` field (in `GET /api/runs/{id}` and the MCP `get_run`) holds the counts and the first failing
 seeds, counted by the server from the stored trials. It is left out for a search, for a run still going, and for a
-sweep that was stopped before its budget without reaching a limit (counts only, never a rate). `sweep_partial` is true
+sweep that is marked incomplete and holds fewer trials than its budget, whatever the reason (counts only, never a
+rate). It is kept for a sweep that ran its whole budget even if the server had to replace some trial digests (its
+property statistics are then incomplete, its verdict counts are not). `sweep_partial` is true
 when the sweep ended in an error or was cancelled: its counts are those of whatever ran, so a client that states a rate
 must check it and the run's state. REST and MCP accept a first seed near the top of the 64-bit range and wrap round
 to 0, while the CLI refuses such a sweep. Without a mode a run is a search, as before.

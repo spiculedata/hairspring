@@ -248,9 +248,21 @@ fn tiny_allowance() -> (
     std::sync::Arc<dyn hairspring_store::Store>,
     hairspring_engine::engine::Engine,
 ) {
+    tiny_allowance_of(1)
+}
+
+/// A service whose per-run digest allowance is `bytes`. A trial row's digest is 4 bytes, so 5 holds one and replaces
+/// the rest.
+fn tiny_allowance_of(
+    bytes: u64,
+) -> (
+    hairspring_service::Service,
+    std::sync::Arc<dyn hairspring_store::Store>,
+    hairspring_engine::engine::Engine,
+) {
     let (svc, store, engine) = setup();
     let svc = svc.with_config(hairspring_service::ServiceConfig {
-        digest_bytes_per_run: 1,
+        digest_bytes_per_run: bytes,
         ..hairspring_service::ServiceConfig::default()
     });
     (svc, store, engine)
@@ -284,24 +296,35 @@ fn a_sweep_that_ran_its_whole_budget_keeps_its_summary_when_only_its_digests_wer
 }
 
 #[test]
-fn a_short_sweep_that_also_had_capped_digests_is_still_labelled_by_the_digest_allowance() {
-    // completion_for makes this split; the summary follows it, so the two cannot disagree.
-    let (svc, store, engine) = tiny_allowance();
+fn a_short_sweep_with_capped_digests_withholds_its_summary_and_rate_on_every_surface() {
+    // The label says "digest allowance used up" (any stand-in does), but the run also stopped short of its budget
+    // with no limit the server can verify, so what its rows hold depends on how it stopped.
+    let (svc, store, engine) = tiny_allowance_of(5);
     let job = lease_sweep(&svc, &engine, WORKER, 10);
-    svc.ingest_trials(&job.job_id, WORKER, &rows(&[Pass, Pass]))
+    svc.ingest_trials(&job.job_id, WORKER, &rows(&[Pass, Pass, Pass]))
         .unwrap();
     let outcome = RunOutcome {
-        trials_reported: Some(2),
-        ..RunOutcome::passed(2, 2, 5)
+        trials_reported: Some(3),
+        ..RunOutcome::passed(3, 3, 5)
     };
     finish(&svc, &job, WORKER, outcome);
     let run = store.get_run(&job.run_id).unwrap().unwrap();
-    let completion = svc.completion_for(&run).unwrap();
-    let detail = svc.get_run(&job.run_id).unwrap().unwrap();
     assert_eq!(
-        detail.sweep.is_some(),
-        completion == RunCompletion::DigestAllowanceUsedUp
+        svc.completion_for(&run).unwrap(),
+        RunCompletion::DigestAllowanceUsedUp,
+        "the label is the allowance's, as for any run with a stand-in"
     );
+    let detail = svc.get_run(&job.run_id).unwrap().unwrap();
+    assert!(detail.sweep.is_none() && !detail.sweep_partial);
+    // REST and MCP serve this value as it is.
+    let json = serde_json::to_value(&detail).unwrap();
+    assert!(json.get("sweep").is_none(), "{json}");
+    let stored = svc.outcome(&job.run_id).unwrap().unwrap();
+    assert!(stored.rate_withheld && stored.sweep.is_none());
+    let text = to_text("lock-lease", &stored);
+    assert!(text.contains("counts only, not a rate"), "{text}");
+    assert!(!text.contains("hits:") && !text.contains('%'), "{text}");
+    assert!(!text.contains("upper bound"), "{text}");
 }
 
 #[test]

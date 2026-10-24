@@ -144,9 +144,11 @@ change: the trial rows added in version 2 already hold every verdict.
   stops at the first failure) is marked `ingest_incomplete`, like a short pass; for a failed sweep only the server's clock
   counts as a limit, never the worker's own step count. Such a run (`EndedEarly` in the completion label) has no
   `sweep` summary, and its report states counts only, not a rate, whatever its status (`RunOutcome::rate_withheld`,
-  set when the server rebuilds the stored run; not stored). The split is `completion_for`'s: a run that is incomplete
-  only because the server replaced digests by stand-ins (`DigestAllowanceUsedUp`) keeps its summary and its rate, since
-  the summary reads verdicts and seeds. `sweep_partial` on the run marks a summary from a sweep that ended in an error or
+  set when the server rebuilds the stored run; not stored). The same holds for a run labelled `DigestAllowanceUsedUp`
+  (any stand-in gives that label) that also holds fewer rows than its budget: it stopped short with no limit the server
+  can verify, so its summary is withheld too. Only a run that ran its whole budget and is incomplete solely because the
+  server replaced digests by stand-ins keeps its summary and its rate, since the summary reads verdicts and seeds. A
+  time-limited sweep that also had stand-ins is withheld as well (the label cannot tell the two apart). `sweep_partial` on the run marks a summary from a sweep that ended in an error or
   was cancelled. A worker's record numbered at or past the run's trial budget is refused, and so
   is a sweep record whose seed is not the run's first seed plus its number (wrapping), so a worker cannot name an
   arbitrary failing seed. A sweep summary that contradicts itself or the trial count is refused, and the worker's
@@ -158,8 +160,9 @@ change: the trial rows added in version 2 already hold every verdict.
   a catalog update must reach the server before a digest refers to it). Instead, a sweep whose digests reach 64 MiB, the
   server's own per-run allowance (`MAX_DIGEST_BYTES_PER_RUN`; a test keeps the two equal), ends after the batch in
   progress, so it holds at most one batch more. It then holds fewer rows than its budget without having run out of time,
-  so the server marks it incomplete and it makes no must-hit claim (its label reads "ended early", which does not name
-  the memory limit). The worker cannot see the server's configurable allowance (`digest_bytes_per_run`): a server
+  so the server marks it incomplete, withholds its summary and rate, and it makes no must-hit claim. Its label does not
+  name the memory limit: it reads "ended early", or "digest allowance used up" when the server also used stand-ins,
+  whichever the case, and the summary is withheld either way. The worker cannot see the server's configurable allowance (`digest_bytes_per_run`): a server
   configured below the default applies its stand-ins as described below, and a worker's `sweep_digest_bytes` should be
   lowered to match if its memory matters more than the stand-ins.
 - **Simulation rounds.** A simulation trial is one exploration round of up to 100,000 steps, and the rounds share the

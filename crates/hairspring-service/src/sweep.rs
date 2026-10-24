@@ -43,6 +43,16 @@ pub(crate) fn row_rules(payload_json: &str) -> RowRules {
     RowRules { limit, seed_base }
 }
 
+/// Whether the run holds fewer trials than its budget asked for. `completion_for` labels any run with a stand-in digest
+/// "digest allowance used up", even one that also stopped short, so an incomplete run is held back here as well when it
+/// is short: only a full-budget run whose sole problem is capped digests keeps its summary.
+fn short_of_budget(run: &RunRecord) -> bool {
+    serde_json::from_str::<JobPayload>(&run.config_json)
+        .ok()
+        .and_then(|p| p.budget)
+        .is_some_and(|b| run.trials < b.max_trials.max(1))
+}
+
 fn reported(v: TrialVerdict) -> ReportedVerdict {
     match v {
         TrialVerdict::Pass => ReportedVerdict::Pass,
@@ -60,13 +70,14 @@ impl Service {
     /// sweeps stops at the first failure), so what its rows hold depends on how it stopped and is not the figure of a
     /// sweep. A run that is incomplete only because digests were replaced by stand-ins
     /// ([`RunCompletion::DigestAllowanceUsedUp`]) keeps its summary: the summary reads verdicts and seeds, which the
-    /// stand-ins leave alone. The split is the one [`Service::completion_for`] makes, so a run's label and its summary
-    /// cannot disagree.
+    /// stand-ins leave alone, but only when the run also ran its whole trial budget (see [`short_of_budget`]).
     pub(crate) fn sweep_summary(&self, run: &RunRecord) -> Result<Option<SweepSummary>> {
         if !mode_of(&run.config_json).is_sweep() {
             return Ok(None);
         }
-        if run.ingest_incomplete && self.completion_for(run)? == RunCompletion::EndedEarly {
+        if run.ingest_incomplete
+            && (short_of_budget(run) || self.completion_for(run)? == RunCompletion::EndedEarly)
+        {
             return Ok(None);
         }
         let mut summary = SweepSummary::default();

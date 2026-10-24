@@ -316,15 +316,17 @@ fn a_sweep_where_every_trial_timed_out_is_an_error_that_keeps_its_rows() {
 
 #[test]
 fn confirmations_stop_when_the_wall_clock_budget_is_spent() {
-    // Four violating trials run side by side in 0.7 s; each confirmation then takes three more runs of 0.7 s, so the
-    // one-second budget is gone after the first one.
+    // The margins are chosen so a loaded machine cannot flip the outcome. Sleeps only ever run longer than asked, so:
+    // the first confirmation starts after at least 0.6 s and, to be skipped, would need 1.4 s more (the batch would
+    // have to take over 2 s); and the second starts after at least 0.6 + 3 x 0.6 = 2.4 s, past the 2 s budget, with
+    // 0.4 s to spare that slowness can only widen.
     let o = Opts {
         trials: 4,
         parallelism: 4,
-        wall_secs: 1,
+        wall_secs: 2,
         ..Opts::default()
     };
-    let script = "sleep 0.7; echo 'HAIRSPRING_VIOLATION: slow'; exit 1";
+    let script = "sleep 0.6; echo 'HAIRSPRING_VIOLATION: slow'; exit 1";
     let started = std::time::Instant::now();
     let out = run(
         &engine(&scratch("confirm-wall"), PASSTHROUGH, script, o, &[]),
@@ -345,10 +347,11 @@ fn confirmations_stop_when_the_wall_clock_budget_is_spent() {
             row(&out, seed)
         );
     }
-    // The bound, pinned: the budget (1 s), plus the batch that was already running (0.7 s), plus the one confirmation
-    // that had started (repro_runs = 3 reruns of 0.7 s each). A confirmation is checked before it starts, not between
-    // its reruns, so this is the most a sweep overruns its wall-clock budget by (plus process start-up).
-    let bound = std::time::Duration::from_millis(1000 + 700 + 3 * 700 + 2500);
+    // The documented bound: the budget (2 s), plus the batch that was already running (0.6 s), plus the one
+    // confirmation that had started (repro_runs = 3 reruns of 0.6 s each). A confirmation is checked before it starts,
+    // not between its reruns. The 5 s slack is for process start-up on a loaded CI machine, so this is only a guard
+    // against a runaway; the row assertions above are what catch a missing budget check.
+    let bound = std::time::Duration::from_millis(2000 + 600 + 3 * 600 + 5000);
     assert!(
         started.elapsed() < bound,
         "{:?} is past the documented bound {bound:?}",

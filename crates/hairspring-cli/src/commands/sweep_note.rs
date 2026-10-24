@@ -12,6 +12,11 @@ pub fn note(completion: &RunCompletion, trials: u64, budget: u64) -> Option<Stri
         RunCompletion::EndedEarly => Some(format!(
             "note: stopped after {of} without reaching a limit the server can verify (a cancel, a worker that predates sweeps, or a worker memory limit); counts only, no rate is stated"
         )),
+        // The label is the allowance's whenever a stand-in exists, so a short run needs saying: the server cannot tell
+        // whether a limit was reached, and states no rate.
+        RunCompletion::DigestAllowanceUsedUp if trials < budget => Some(format!(
+            "note: stopped after {of}, and the server's digest allowance was also used up, so it cannot tell whether a limit was reached; counts only, no rate is stated"
+        )),
         RunCompletion::DigestAllowanceUsedUp => Some(format!(
             "note: the server's digest allowance was used up, so property statistics are incomplete; the {of} that ran are counted by verdict and seed"
         )),
@@ -62,6 +67,14 @@ mod tests {
             !text.contains("reached its step or wall-clock limit"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn capped_digests_on_a_short_sweep_say_no_rate_is_stated() {
+        let text = note(&RunCompletion::DigestAllowanceUsedUp, 3, 10).unwrap();
+        assert!(text.contains("stopped after 3 of 10 trials"), "{text}");
+        assert!(text.contains("digest allowance was also used up"), "{text}");
+        assert!(text.contains("no rate is stated"), "{text}");
     }
 
     #[test]
