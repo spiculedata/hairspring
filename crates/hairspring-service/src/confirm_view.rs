@@ -2,8 +2,7 @@
 //! `guest`, which is untrusted like every other text that starts outside this process.
 use crate::{Result, ServiceError};
 use hairspring_engine::confirm::{
-    environment_pinned, finding_status, CheckCounts, CheckKind, CheckResult, CheckStatus,
-    FindingStatus,
+    standing, CheckCounts, CheckKind, CheckResult, CheckStatus, FindingStatus,
 };
 use hairspring_store::CheckRecord;
 use serde::{Deserialize, Serialize};
@@ -42,10 +41,13 @@ pub struct CheckView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FailureChecks {
     pub failure_id: String,
-    /// `candidate`, `reproduced`, `confirmed`, `verified`, `not_reproducible` or `control_failed`, derived from the
-    /// checks below and nothing else.
+    /// `candidate`, `rerun_repeated`, `confirmed`, `verified`, `not_reproducible` or `control_failed`, derived from
+    /// one confirmation among the checks below and nothing else.
     pub finding: String,
-    /// The checks ran in the environment the bundle recorded, and it still matched.
+    /// The confirmation `finding` is derived from: the newest that finished (nothing skipped), or the newest when none
+    /// did. `None` for a failure with no checks.
+    pub confirmation_id: Option<String>,
+    /// The checks of that confirmation ran in the environment the bundle recorded, and it still matched.
     pub environment_pinned: bool,
     pub checks: Vec<CheckView>,
 }
@@ -90,12 +92,76 @@ fn result_of(record: &CheckRecord) -> Result<Option<CheckResult>> {
     ))
 }
 
-fn results_of(records: &[CheckRecord]) -> Result<Vec<CheckResult>> {
-    let mut results = Vec::new();
+/// The stored checks of one confirmation, with who ran them.
+struct Group {
+    id: String,
+    runner: String,
+    trusted: bool,
+    results: Vec<CheckResult>,
+}
+
+/// The confirmations in `records`, oldest first. Rows are kept together by confirmation, in the order the store lists
+/// them (creation time, then the order they were written), and a confirmation is placed where its first row is.
+fn groups_of(records: &[CheckRecord]) -> Result<Vec<Group>> {
+    let mut groups: Vec<Group> = Vec::new();
     for record in records {
-        results.extend(result_of(record)?);
+        let position = match groups.iter().position(|g| g.id == record.confirmation_id) {
+            Some(p) => p,
+            None => {
+                groups.push(Group {
+                    id: record.confirmation_id.clone(),
+                    runner: record.runner.clone(),
+                    trusted: record.runner_trusted,
+                    results: Vec::new(),
+                });
+                groups.len() - 1
+            }
+        };
+        groups[position].results.extend(result_of(record)?);
     }
-    Ok(results)
+    groups.retain(|g| !g.results.is_empty());
+    Ok(groups)
+}
+
+/// What the checks leave a failure as, and the confirmation that says so.
+pub(crate) struct Derived {
+    pub status: FindingStatus,
+    pub pinned: bool,
+    pub confirmation_id: Option<String>,
+    pub runner: String,
+    pub runner_trusted: bool,
+}
+
+fn derive_from(groups: &[&Group]) -> Derived {
+    let sets: Vec<Vec<CheckResult>> = groups.iter().map(|g| g.results.clone()).collect();
+    let found = standing(&sets);
+    let from = found.confirmation.map(|i| groups[i]);
+    Derived {
+        status: found.status,
+        pinned: found.pinned,
+        confirmation_id: from.map(|g| g.id.clone()),
+        runner: from.map(|g| g.runner.clone()).unwrap_or_default(),
+        runner_trusted: from.is_some_and(|g| g.trusted),
+    }
+}
+
+/// The state as the record shows it, from every confirmation whoever ran it.
+pub(crate) fn derive(records: &[CheckRecord]) -> Result<Derived> {
+    let groups = groups_of(records)?;
+    Ok(derive_from(&groups.iter().collect::<Vec<_>>()))
+}
+
+/// The state a claim may rest on: from the confirmations of trusted runners only, so that nothing an untrusted runner
+/// stored can lift, or complete, what a trusted one found. A failure that only untrusted runners checked is read from
+/// theirs, and the claim gate then refuses it for that reason.
+pub(crate) fn derive_for_claim(records: &[CheckRecord]) -> Result<Derived> {
+    let groups = groups_of(records)?;
+    let trusted: Vec<&Group> = groups.iter().filter(|g| g.trusted).collect();
+    Ok(if trusted.is_empty() {
+        derive_from(&groups.iter().collect::<Vec<_>>())
+    } else {
+        derive_from(&trusted)
+    })
 }
 
 fn view(record: &CheckRecord) -> Result<CheckView> {
@@ -124,26 +190,21 @@ fn view(record: &CheckRecord) -> Result<CheckView> {
 }
 
 pub(crate) fn failure_checks(failure_id: &str, records: &[CheckRecord]) -> Result<FailureChecks> {
-    let results = results_of(records)?;
+    let derived = derive(records)?;
     Ok(FailureChecks {
         failure_id: failure_id.to_owned(),
-        finding: finding_status(&results).as_str().to_owned(),
-        environment_pinned: environment_pinned(&results),
+        finding: derived.status.as_str().to_owned(),
+        confirmation_id: derived.confirmation_id,
+        environment_pinned: derived.pinned,
         checks: records.iter().map(view).collect::<Result<_>>()?,
     })
 }
 
 pub(crate) fn summary(records: &[CheckRecord]) -> Result<FindingSummary> {
-    let results = results_of(records)?;
+    let derived = derive(records)?;
     Ok(FindingSummary {
-        status: finding_status(&results).as_str().to_owned(),
+        status: derived.status.as_str().to_owned(),
         checks: records.len() as u32,
-        environment_pinned: environment_pinned(&results),
+        environment_pinned: derived.pinned,
     })
-}
-
-/// The state and environment pin the claim wording sees for a failure's stored checks.
-pub(crate) fn standing(records: &[CheckRecord]) -> Result<(FindingStatus, bool)> {
-    let results = results_of(records)?;
-    Ok((finding_status(&results), environment_pinned(&results)))
 }

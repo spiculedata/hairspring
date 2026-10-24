@@ -23,9 +23,9 @@ fn a_failure_with_no_checks_is_a_candidate() {
 }
 
 #[test]
-fn matching_reruns_alone_make_a_failure_reproduced_not_confirmed() {
+fn matching_reruns_alone_make_a_failure_rerun_repeated_not_confirmed() {
     let checks = [check(CheckKind::SameSeedRerun, CheckStatus::Pass)];
-    assert_eq!(status_of(&checks), FindingStatus::Reproduced);
+    assert_eq!(status_of(&checks), FindingStatus::RerunRepeated);
 }
 
 #[test]
@@ -84,7 +84,7 @@ fn a_replay_inconclusive_because_the_environment_differs_is_not_a_miss() {
         check(CheckKind::SameSeedRerun, CheckStatus::Pass),
         replay(CheckStatus::Inconclusive, true),
     ];
-    assert_eq!(status_of(&checks), FindingStatus::Reproduced);
+    assert_eq!(status_of(&checks), FindingStatus::RerunRepeated);
 }
 
 #[test]
@@ -121,7 +121,7 @@ fn the_latest_check_of_a_kind_wins() {
         check(CheckKind::SameSeedRerun, CheckStatus::Fail),
         check(CheckKind::SameSeedRerun, CheckStatus::Pass),
     ];
-    assert_eq!(status_of(&checks), FindingStatus::Reproduced);
+    assert_eq!(status_of(&checks), FindingStatus::RerunRepeated);
 }
 
 #[test]
@@ -131,7 +131,7 @@ fn only_confirmed_and_verified_findings_reach_the_claim_ladder() {
     assert_eq!(claimable(FindingStatus::Verified), FindingState::Verified);
     for s in [
         FindingStatus::Candidate,
-        FindingStatus::Reproduced,
+        FindingStatus::RerunRepeated,
         FindingStatus::NotReproducible,
         FindingStatus::ControlFailed,
     ] {
@@ -282,4 +282,114 @@ fn logging_options_are_refused_in_arguments_and_environment() {
     assert!(forbidden_logging(&[], &env).is_some());
     let other = BTreeMap::from([("HERMIT_LOGGING".to_string(), "x".to_string())]);
     assert!(forbidden_logging(&[], &other).is_none());
+}
+
+fn identity(c: CheckResult) -> CheckResult {
+    c.with_environment("host.container", "none")
+}
+
+fn complete() -> Vec<CheckResult> {
+    vec![
+        identity(check(CheckKind::SameSeedRerun, CheckStatus::Pass)),
+        identity(replay(CheckStatus::Pass, false)),
+    ]
+}
+
+fn skipped(kind: CheckKind) -> CheckResult {
+    check(kind, CheckStatus::Skipped).with_detail("skipped", "cancelled")
+}
+
+#[test]
+fn a_replay_in_another_environment_than_the_reruns_does_not_pin_it() {
+    let rerun = check(CheckKind::SameSeedRerun, CheckStatus::Pass)
+        .with_environment("host.container", "docker");
+    let checks = [rerun, identity(replay(CheckStatus::Pass, false))];
+    assert!(!environment_pinned(&checks));
+}
+
+#[test]
+fn reruns_that_say_the_environment_changed_do_not_pin_it() {
+    let rerun = identity(check(CheckKind::SameSeedRerun, CheckStatus::Pass))
+        .with_detail("environment_changed", "true");
+    let checks = [rerun, identity(replay(CheckStatus::Pass, false))];
+    assert!(!environment_pinned(&checks));
+}
+
+#[test]
+fn a_replay_with_no_passing_reruns_beside_it_does_not_pin_it() {
+    assert!(!environment_pinned(&[identity(replay(
+        CheckStatus::Pass,
+        false
+    ))]));
+}
+
+#[test]
+fn the_state_comes_from_one_confirmation_never_a_mix_of_two() {
+    let old_with_verify = vec![
+        identity(check(CheckKind::SameSeedRerun, CheckStatus::Pass)),
+        identity(replay(CheckStatus::Pass, false)),
+        check(CheckKind::StrictVerify, CheckStatus::Pass),
+    ];
+    let newer = complete();
+    let s = standing(&[old_with_verify, newer]);
+    assert_eq!(s.status, FindingStatus::Confirmed);
+    assert_eq!(s.confirmation, Some(1));
+    assert!(s.pinned);
+}
+
+#[test]
+fn a_newer_confirmation_that_did_not_finish_does_not_revert_an_older_complete_one() {
+    let cancelled = vec![
+        skipped(CheckKind::SameSeedRerun),
+        skipped(CheckKind::BundleReplay),
+    ];
+    let s = standing(&[complete(), cancelled]);
+    assert_eq!(s.status, FindingStatus::Confirmed);
+    assert_eq!(s.confirmation, Some(0));
+}
+
+#[test]
+fn when_no_confirmation_finished_the_newest_is_read_with_its_skipped_checks_ignored() {
+    let cancelled = vec![
+        check(CheckKind::SameSeedRerun, CheckStatus::Pass),
+        skipped(CheckKind::BundleReplay),
+    ];
+    let s = standing(&[cancelled]);
+    assert_eq!(s.status, FindingStatus::RerunRepeated);
+    assert_eq!(s.confirmation, Some(0));
+    assert!(!s.pinned);
+}
+
+#[test]
+fn a_newer_complete_confirmation_that_misses_replaces_an_older_one_that_confirmed() {
+    let miss = vec![check(CheckKind::SameSeedRerun, CheckStatus::Fail)];
+    let s = standing(&[complete(), miss]);
+    assert_eq!(s.status, FindingStatus::NotReproducible);
+    assert_eq!(s.confirmation, Some(1));
+}
+
+#[test]
+fn no_confirmations_leave_a_candidate() {
+    let s = standing(&[]);
+    assert_eq!(s.status, FindingStatus::Candidate);
+    assert_eq!(s.confirmation, None);
+    assert!(!s.pinned);
+}
+
+#[test]
+fn what_is_stored_fits_the_column_even_for_wide_and_escaped_text() {
+    let wide = "\u{1D11E}".repeat(MAX_DETAIL_VALUE_CHARS);
+    let quotes = "\"".repeat(MAX_COMMAND_CHARS);
+    let mut r = check(CheckKind::SameSeedRerun, CheckStatus::Pass).with_command(quotes);
+    for i in 0..40 {
+        r = r
+            .with_detail(format!("{i:0>2}{}", "\u{1D11E}".repeat(30)), wide.clone())
+            .with_environment(format!("{i:0>2}{}", "\u{1D11E}".repeat(30)), wide.clone());
+    }
+    let r = r.bounded();
+    let json = |m: &BTreeMap<String, String>| serde_json::to_string(m).unwrap().len();
+    assert!(json(&r.detail) <= MAX_COLUMN_BYTES, "{}", json(&r.detail));
+    assert!(json(&r.environment) <= MAX_COLUMN_BYTES);
+    assert!(r.command.len() <= MAX_COLUMN_BYTES);
+    assert!(!r.detail.is_empty(), "some of it is kept");
 }

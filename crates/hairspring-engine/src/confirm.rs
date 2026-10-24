@@ -15,7 +15,9 @@ pub use request::{
 };
 pub use result::{
     CheckCounts, CheckKind, CheckResult, CheckStatus, MAX_ARTEFACTS, MAX_ARTEFACT_CHARS,
-    MAX_COMMAND_CHARS, MAX_DETAIL_ENTRIES, MAX_DETAIL_KEY_CHARS, MAX_DETAIL_VALUE_CHARS,
-    MAX_ENVIRONMENT_ENTRIES, MAX_ENVIRONMENT_VALUE_CHARS,
+    MAX_COLUMN_BYTES, MAX_COMMAND_CHARS, MAX_DETAIL_ENTRIES, MAX_DETAIL_KEY_CHARS,
+    MAX_DETAIL_VALUE_CHARS, MAX_ENVIRONMENT_ENTRIES, MAX_ENVIRONMENT_VALUE_CHARS,
 };
-pub use state::{environment_pinned, finding_status, FindingStatus, ENVIRONMENT_CHANGED_KEY};
+pub use state::{
+    environment_pinned, finding_status, standing, FindingStatus, Standing, ENVIRONMENT_CHANGED_KEY,
+};

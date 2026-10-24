@@ -30,7 +30,7 @@ fn explanation(finding: &str) -> &'static str {
     match finding {
         "verified" => "the failure repeats on reruns and on a replay, and the strict verify agrees",
         "confirmed" => "the failure repeats on reruns and on a replay of its bundle",
-        "reproduced" => "reruns repeat the failure, but no replay of the bundle has yet",
+        "rerun_repeated" => "reruns repeat the failure, but no replay of the bundle has yet",
         "not_reproducible" => {
             "a rerun or the replay did not repeat the failure on the environment it was recorded in"
         }

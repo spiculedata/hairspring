@@ -1,8 +1,8 @@
 //! What a run's stored confirmation checks say about its failing seeds, for the claim gate and the claim wording.
 //!
-//! A failure belongs to a seed through its bundle (the scheduling seed it recorded). Its checks give a state, and the
+//! A failure belongs to a seed through its bundle (the scheduling seed it recorded). Its checks give a state (from the trusted runners' confirmations, one confirmation at a time), and the
 //! claim ladder sees only that state: nothing is "reproduced" unless the checks derive confirmed or verified.
-use crate::confirm_view::standing;
+use crate::confirm_view::derive_for_claim;
 use crate::{Result, Service};
 use hairspring_core::bundle::Bundle;
 use hairspring_engine::confirm::FindingStatus;
@@ -13,7 +13,7 @@ pub(crate) struct CheckedFailure {
     pub status: FindingStatus,
     /// The checks ran in the environment the bundle recorded, and it still matched.
     pub pinned: bool,
-    /// Who ran the newest check, and whether that runner was trusted when it reported.
+    /// Who ran the confirmation the state comes from, and whether that runner was trusted when it reported.
     pub runner: String,
     pub runner_trusted: bool,
 }
@@ -34,23 +34,23 @@ impl Service {
         let mut out = BTreeMap::new();
         for failure in self.store.list_failures(run_id)? {
             let records = self.store.list_failure_checks(&failure.id)?;
-            let Some(newest) = records.last() else {
+            if records.is_empty() {
                 continue;
-            };
+            }
             let Some(text) = self.get_bundle(&failure.bundle_hash)? else {
                 continue;
             };
             let Ok(bundle) = Bundle::decode(&text) else {
                 continue;
             };
-            let (status, pinned) = standing(&records)?;
+            let derived = derive_for_claim(&records)?;
             out.insert(
                 seed_of(&bundle),
                 CheckedFailure {
-                    status,
-                    pinned,
-                    runner: newest.runner.clone(),
-                    runner_trusted: newest.runner_trusted,
+                    status: derived.status,
+                    pinned: derived.pinned,
+                    runner: derived.runner,
+                    runner_trusted: derived.runner_trusted,
                 },
             );
         }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { failureChecksUrl, getTokenVersion, isPropertyPage, onTokenChange, parseRetryAfter, propertiesUrl, setToken } from './api';
 import { page } from './explorer/fixtures';
+import type { FailureChecks, FindingStatus } from './types';
 
 describe('token version', () => {
   it('advances each time a token is entered, so a hook that stopped on a 401 can load again', () => {
@@ -61,6 +62,25 @@ describe('failureChecksUrl', () => {
   });
   it('encodes an id that is not shaped like one, so it cannot change the path', () => {
     expect(failureChecksUrl('../runs?x=1')).toBe('/api/failures/..%2Fruns%3Fx%3D1/checks');
+  });
+});
+
+describe('finding status', () => {
+  it('calls the rung where only reruns repeated the failure rerun_repeated, never reproduced', () => {
+    const rung: FindingStatus = 'rerun_repeated';
+    // @ts-expect-error `reproduced` is not a state: that word is kept for confirmed and verified findings.
+    const stale: FindingStatus = 'reproduced';
+    expect([rung, stale]).toContain('rerun_repeated');
+  });
+  it('carries the confirmation the finding comes from', () => {
+    const checks: FailureChecks = {
+      failure_id: 'fail_0123456789abcdef',
+      finding: 'confirmed',
+      confirmation_id: 'conf_0123456789abcdef0123456789abcdef',
+      environment_pinned: true,
+      checks: [],
+    };
+    expect(checks.confirmation_id).toMatch(/^conf_/);
   });
 });
 

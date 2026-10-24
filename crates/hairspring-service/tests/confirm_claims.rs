@@ -72,6 +72,21 @@ fn pass(kind: CheckKind) -> CheckResult {
         .with_times(1, 2)
 }
 
+fn rerun(pinned: bool) -> CheckResult {
+    let r = pass(CheckKind::SameSeedRerun);
+    if pinned {
+        r.with_environment("host.container", "none")
+    } else {
+        r
+    }
+}
+
+fn skipped(kind: CheckKind) -> CheckResult {
+    CheckResult::new(kind, CheckStatus::Skipped)
+        .with_detail("skipped", "cancelled")
+        .with_times(7, 7)
+}
+
 fn replay(pinned: bool) -> CheckResult {
     let r = pass(CheckKind::BundleReplay).with_detail("environment_changed", "false");
     if pinned {
@@ -106,7 +121,7 @@ fn a_failure_with_no_checks_makes_no_claim() {
 #[test]
 fn confirming_checks_open_the_claim_with_the_environment_pinned_wording() {
     let rig = rig();
-    record(&rig, true, &[pass(CheckKind::SameSeedRerun), replay(true)]);
+    record(&rig, true, &[rerun(true), replay(true)]);
     let p = page(&rig);
     assert!(p.claim.allowed, "{:?}", p.claim.withheld);
     let text = p.claim.text.as_deref().expect("a sentence");
@@ -122,7 +137,7 @@ fn confirming_checks_open_the_claim_with_the_environment_pinned_wording() {
 #[test]
 fn checks_without_a_recorded_environment_say_the_environment_is_not_pinned() {
     let rig = rig();
-    record(&rig, true, &[pass(CheckKind::SameSeedRerun), replay(false)]);
+    record(&rig, true, &[rerun(false), replay(false)]);
     let p = page(&rig);
     let text = p.claim.text.as_deref().expect("a sentence");
     assert!(text.contains("environment not pinned"), "{text}");
@@ -135,11 +150,7 @@ fn a_verified_failure_says_verified() {
     record(
         &rig,
         true,
-        &[
-            pass(CheckKind::SameSeedRerun),
-            replay(true),
-            pass(CheckKind::StrictVerify),
-        ],
+        &[rerun(true), replay(true), pass(CheckKind::StrictVerify)],
     );
     let text = page(&rig).claim.text.expect("a sentence");
     assert!(text.starts_with("Reproduced (verified):"), "{text}");
@@ -157,7 +168,7 @@ fn reruns_alone_do_not_reach_the_claim() {
 #[test]
 fn checks_that_say_not_reproducible_withdraw_the_claim() {
     let rig = rig();
-    record(&rig, true, &[pass(CheckKind::SameSeedRerun), replay(true)]);
+    record(&rig, true, &[rerun(true), replay(true)]);
     assert!(page(&rig).claim.text.is_some());
     let miss = CheckResult::new(CheckKind::SameSeedRerun, CheckStatus::Fail)
         .with_counts(0, 3, 0)
@@ -174,7 +185,7 @@ fn checks_that_say_not_reproducible_withdraw_the_claim() {
 #[test]
 fn a_control_that_still_fails_withdraws_the_claim() {
     let rig = rig();
-    record(&rig, true, &[pass(CheckKind::SameSeedRerun), replay(true)]);
+    record(&rig, true, &[rerun(true), replay(true)]);
     let control = CheckResult::new(CheckKind::FixedControl, CheckStatus::Fail)
         .with_counts(0, 1, 0)
         .with_times(5, 6);
@@ -186,7 +197,7 @@ fn a_control_that_still_fails_withdraws_the_claim() {
 #[test]
 fn checks_from_an_untrusted_runner_never_open_the_claim() {
     let rig = rig();
-    record(&rig, false, &[pass(CheckKind::SameSeedRerun), replay(true)]);
+    record(&rig, false, &[rerun(true), replay(true)]);
     let p = page(&rig);
     assert!(!p.claim.allowed);
     assert_eq!(p.claim.text, None);
@@ -206,15 +217,89 @@ fn no_generated_sentence_uses_the_forbidden_words() {
     record(
         &rig,
         true,
-        &[
-            pass(CheckKind::SameSeedRerun),
-            replay(true),
-            pass(CheckKind::StrictVerify),
-        ],
+        &[rerun(true), replay(true), pass(CheckKind::StrictVerify)],
     );
     let text = page(&rig).claim.text.unwrap().to_lowercase();
     for word in ["found", "discovered", "unassisted"] {
         assert!(!text.contains(word), "{word}: {text}");
     }
     let _ = &rig.store;
+}
+
+#[test]
+fn an_untrusted_runners_checks_and_a_trusted_runners_control_do_not_open_the_claim() {
+    let rig = rig();
+    record(
+        &rig,
+        false,
+        &[rerun(true), replay(true), pass(CheckKind::StrictVerify)],
+    );
+    record(&rig, true, &[pass(CheckKind::FixedControl)]);
+    let p = page(&rig);
+    assert!(!p.claim.allowed, "{:?}", p.claim.withheld);
+    assert_eq!(p.claim.text, None);
+}
+
+#[test]
+fn a_trusted_confirmation_still_opens_the_claim_beside_an_untrusted_one() {
+    let rig = rig();
+    record(&rig, false, &[rerun(true), replay(true)]);
+    record(&rig, true, &[rerun(true), replay(true)]);
+    assert!(page(&rig).claim.allowed);
+}
+
+#[test]
+fn a_cancelled_confirmation_after_a_confirmed_one_leaves_it_confirmed() {
+    let rig = rig();
+    record(&rig, true, &[rerun(true), replay(true)]);
+    record(
+        &rig,
+        true,
+        &[
+            skipped(CheckKind::SameSeedRerun),
+            skipped(CheckKind::BundleReplay),
+        ],
+    );
+    let checks = rig.svc.failure_checks(&rig.failure_id).unwrap().unwrap();
+    assert_eq!(checks.finding, "confirmed");
+    assert!(checks.environment_pinned);
+    let text = page(&rig).claim.text.expect("a sentence");
+    assert!(text.starts_with("Reproduced (confirmed):"), "{text}");
+}
+
+#[test]
+fn an_old_strict_verify_does_not_lift_a_newer_confirmation_to_verified() {
+    let rig = rig();
+    record(
+        &rig,
+        true,
+        &[rerun(true), replay(true), pass(CheckKind::StrictVerify)],
+    );
+    record(&rig, true, &[rerun(true), replay(true)]);
+    let checks = rig.svc.failure_checks(&rig.failure_id).unwrap().unwrap();
+    assert_eq!(checks.finding, "confirmed");
+    let text = page(&rig).claim.text.expect("a sentence");
+    assert!(text.starts_with("Reproduced (confirmed):"), "{text}");
+}
+
+#[test]
+fn reruns_and_a_replay_from_different_confirmations_do_not_pin_the_environment() {
+    let rig = rig();
+    record(&rig, true, &[replay(true)]);
+    record(&rig, true, &[rerun(true)]);
+    let checks = rig.svc.failure_checks(&rig.failure_id).unwrap().unwrap();
+    assert_eq!(checks.finding, "rerun_repeated");
+    assert!(!checks.environment_pinned);
+    assert_eq!(page(&rig).claim.text, None);
+}
+
+#[test]
+fn the_finding_names_the_confirmation_it_comes_from() {
+    let rig = rig();
+    record(&rig, true, &[rerun(true), replay(true)]);
+    record(&rig, true, &[skipped(CheckKind::SameSeedRerun)]);
+    let checks = rig.svc.failure_checks(&rig.failure_id).unwrap().unwrap();
+    let from = checks.confirmation_id.clone().expect("a confirmation");
+    let first = checks.checks.iter().find(|c| c.kind == "bundle_replay");
+    assert_eq!(first.map(|c| c.confirmation_id.clone()), Some(from));
 }

@@ -28,7 +28,7 @@ export interface Run {
 }
 
 /** Where a failure stands, derived by the server from its stored confirmation checks. */
-export type FindingStatus = 'candidate' | 'reproduced' | 'confirmed' | 'verified' | 'not_reproducible' | 'control_failed';
+export type FindingStatus = 'candidate' | 'rerun_repeated' | 'confirmed' | 'verified' | 'not_reproducible' | 'control_failed';
 
 /** A failure's standing in one line. Present on the failures of `GET /api/runs/{id}`, absent from other lists. */
 export interface FindingSummary {
@@ -73,6 +73,8 @@ export interface CheckView {
 export interface FailureChecks {
   failure_id: string;
   finding: FindingStatus;
+  /** The confirmation `finding` is derived from: the newest that finished, or the newest when none did. */
+  confirmation_id: string | null;
   environment_pinned: boolean;
   checks: CheckView[];
 }

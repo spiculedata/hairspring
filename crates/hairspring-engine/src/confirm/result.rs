@@ -1,9 +1,12 @@
-//! One recorded check: what ran, how it ended, and the facts needed to run it again by hand.
+//! One recorded check: what ran, how it ended, and a record of the command it ran.
 use hairspring_core::environment::is_unsafe_display_char;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Longest text one stored column of a check may hold, in bytes. It is the store's limit, written out in JSON where the
+/// column is JSON, so a character that takes four bytes, or that JSON escapes, counts for what it costs.
+pub const MAX_COLUMN_BYTES: usize = 16 * 1024;
 /// Longest command line kept for a check, in characters.
 pub const MAX_COMMAND_CHARS: usize = 2000;
 pub const MAX_DETAIL_ENTRIES: usize = 16;
@@ -65,7 +68,10 @@ pub struct CheckResult {
     pub status: CheckStatus,
     #[serde(default)]
     pub counts: CheckCounts,
-    /// The exact Hermit command, enough to run the check by hand. Empty for a check that ran no command.
+    /// A record of the Hermit invocation (the program by file name, the target's own command and arguments in full). It
+    /// is not a paste-and-run line: the guest environment is cleared and rebuilt, and the seed, `extra_env` and the
+    /// events directory are set outside the command line. Anyone who may read the check can read it, so a credential in
+    /// the target's arguments is exposed. Empty for a check that ran no command.
     #[serde(default)]
     pub command: String,
     /// Short labelled facts (why it ended as it did, caveats). Bounded.
@@ -96,6 +102,51 @@ fn clean(text: &str, max: usize) -> String {
         .map(|c| if is_unsafe_display_char(c) { ' ' } else { c })
         .take(max)
         .collect()
+}
+
+/// What `c` costs inside a JSON string: its UTF-8 length, or the length of its escape.
+fn json_len(c: char) -> usize {
+    match c {
+        '"' | '\\' => 2,
+        c if (c as u32) < 0x20 => 6,
+        c => c.len_utf8(),
+    }
+}
+
+/// `text` cut on a character boundary so that it costs at most `budget` bytes, counted per `cost`.
+fn cut(text: &str, budget: usize, cost: fn(char) -> usize) -> String {
+    let mut used = 0;
+    text.chars()
+        .take_while(|c| {
+            used += cost(*c);
+            used <= budget
+        })
+        .collect()
+}
+
+fn text_len(text: &str) -> usize {
+    text.chars().map(json_len).sum()
+}
+
+/// `map` cut so that its JSON object is at most `budget` bytes: whole entries from the start while they fit (a map is
+/// in key order, so what is kept does not depend on insertion), the last one's value shortened to fill what is left.
+fn fit(map: BTreeMap<String, String>, budget: usize) -> BTreeMap<String, String> {
+    // `{}` and, per entry, `"":""` and a `,` between entries.
+    const FRAME: usize = 2;
+    const ENTRY: usize = 5;
+    let mut used = FRAME;
+    let mut kept = BTreeMap::new();
+    for (key, value) in map {
+        let sep = usize::from(!kept.is_empty());
+        let fixed = used + sep + ENTRY + text_len(&key);
+        if fixed > budget {
+            break;
+        }
+        let value = cut(&value, budget - fixed, json_len);
+        used = fixed + text_len(&value);
+        kept.insert(key, value);
+    }
+    kept
 }
 
 impl CheckResult {
@@ -201,7 +252,8 @@ impl CheckResult {
     }
 
     /// The same result cut to the limits: text on one line without control characters, at most the allowed number of
-    /// entries, each no longer than allowed. Nothing is rejected: whatever a check holds, what is stored fits.
+    /// entries, each no longer than allowed, and every stored column within [`MAX_COLUMN_BYTES`] as bytes (after JSON
+    /// escaping, where the column is JSON). Nothing is rejected: whatever a check holds, what is stored fits.
     #[must_use]
     pub fn bounded(self) -> CheckResult {
         let detail = self
@@ -227,15 +279,19 @@ impl CheckResult {
             })
             .collect();
         CheckResult {
-            command: clean(&self.command, MAX_COMMAND_CHARS),
-            detail,
+            command: cut(
+                &clean(&self.command, MAX_COMMAND_CHARS),
+                MAX_COLUMN_BYTES,
+                char::len_utf8,
+            ),
+            detail: fit(detail, MAX_COLUMN_BYTES),
             artefacts: self
                 .artefacts
                 .iter()
                 .take(MAX_ARTEFACTS)
                 .map(|a| clean(a, MAX_ARTEFACT_CHARS))
                 .collect(),
-            environment,
+            environment: fit(environment, MAX_COLUMN_BYTES),
             ..self
         }
     }
