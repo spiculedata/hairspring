@@ -96,7 +96,9 @@ java/                  the Java probe (no SDK): src/langat, test/, profiles.tsv,
 dotnet/                the BCL-only .NET probe: src, selftest, test_probe.sh, profiles.manifest, Makefile
 tests/seccomp_window.c test-only: the window makes no system call (used by the build record, Linux only)
 scripts/check-native.sh  the native self-check of one artifact; run-checks.sh adds the negative control;
-                       check-sources.sh, check-disasm.sh; test-scripts.sh tests all of them with a fake program
+                       check-sources.sh, check-disasm.sh; check-java-compiled.sh (PrintCompilation) and
+                       run-java-profile-checks.sh (the Java self-check under each profile's flags);
+                       test-scripts.sh tests all of them with a fake program
 scripts/build-record.sh  generates the build record of one artifact (build-record-docker.sh runs it in a container)
 Makefile               make test: all three
 ```
@@ -304,9 +306,11 @@ SDK's work counter and the busy loop's result (a volatile field, so the loop can
 store. The main thread then evaluates `java.counter_exact` (with the witness values `[final, 4000, 4, 1000]`) and
 `java.all_started`, writes the one `LANGAT v1 lang=java ...` line with one call on `FileOutputStream(FileDescriptor.out)`,
 and exits 0; exit 3 means an internal failure (a thread did not start, the barrier broke, the line could not be written) and
-64 a usage error. `rand` is the first value of a new `java.util.Random`. The window survives because the worker loops are
-too short for HotSpot to compile and the interpreter and the C1 compiler do not move a plain load past a loop; a C2-compiled
-loop might, which is why the profiles and the native runs are the evidence (see [docs/java-sdk.md](../../docs/java-sdk.md)).
+64 a usage error. `rand` is the first value of a new `java.util.Random`. The window survives the JIT because
+HotSpot only moves a plain load past a loop in code it compiles, and it compiles a method (or a loop in it) when the method's
+invocation and back-edge counters, summed over all threads, pass a threshold: each worker method is called 4 times and its
+loop passes 4 x 1,000 = 4,000 times in all, below the thresholds. The record checks it at run time, with
+`-XX:+PrintCompilation` (see [docs/java-sdk.md](../../docs/java-sdk.md)).
 
 ```sh
 make -C java at-test        # self-test, source check, native self-checks with a negative control, both flag profiles
@@ -317,11 +321,15 @@ make test-java              # the probe and the fixture
 
 `scripts/build-record-java.sh` writes the build record: B1 builds the jar twice (two directories, two time zones) and
 requires equal sha256, and checks the layout; B2 reads the window off the bytecode (`scripts/check-window-java.sh`: a load of
-the counter, one call of `spin`, a store, nothing else that calls, locks or allocates between them) and says that what the JIT
-makes of it is not recorded; B3 is a code-review statement (the JVM makes system calls on other threads, so there is no seccomp
-test); the source check allows no clock, environment, `/proc`, CPU count or process-table read in the fixture; the flag
+the counter, one call of `spin`, a store, nothing else that calls, locks or allocates between them); B3 is a code-review
+statement (the JVM makes system calls on other threads, so there is no seccomp test; the statement says plainly that `spin`
+is called inside the window, that a compile wait under arm b and a safepoint stop under both arms can happen there, and that
+this only makes the race easier to reach, and leaves the signature to the reviewer); F3 runs every mode under
+`-XX:+PrintCompilation` with the default flags and each profile (`scripts/check-java-compiled.sh`) and requires that neither
+worker loop is ever compiled; F4 requires the probe's classes in `lang-at.jar` to be byte-identical (sha256, one by one) to
+those of the probe-only jar; the source check allows no clock, environment, `/proc`, CPU count or process-table read in the fixture; the flag
 profiles are run (`scripts/check-java-arms.sh`); B4 is 50 native runs of `buggy` and `fixed`, `wide` as a contract check
-and a negative control; B5 runs `strace -ff` on one run without flags and one per profile and requires every protocol line
+and a negative control, with the default flags and again under each profile's flags (`scripts/run-java-profile-checks.sh`); B5 runs `strace -ff` on one run without flags and one per profile and requires every protocol line
 and the result line to be one `write(2)`; B6 runs the SDK's tests and conformance; B7 prints the modes. The alignment
 checklist is ticked from the evidence. The `java` variant of the manual `fixture-build-records` job runs it (Temurin 21 from
 `actions/setup-java`; the record fails if the JDK is not the pinned build); `scripts/build-record-docker.sh java` runs it in a

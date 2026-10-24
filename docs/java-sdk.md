@@ -197,12 +197,18 @@ call on `FileOutputStream(FileDescriptor.out)`, and exit 0 whatever the property
 usage error). `rand` is the first value of a new `java.util.Random`.
 
 **The window and the JIT.** Nothing in the language stops a compiler from moving a plain load past a loop or keeping a plain
-field in a register, either of which would remove the window. The interpreter and the C1 compiler do neither; C2 might, in a
-loop it compiles, and the worker loops are too short (1,000 iterations) for HotSpot to compile them by default. The two flag
-profiles in `examples/language-fixtures/java/profiles.tsv` are `-Xint ...` (interpreter only) and
+field in a register, either of which would remove the window; HotSpot can only do that to code it compiles. It compiles a
+method (or a loop in it, by on-stack replacement) when the method's invocation and loop back-edge counters pass a threshold,
+and those counters are per method, summed over all threads: `racyIterations` is called 4 times and its loop passes
+4 x 1,000 = 4,000 times in all, below the thresholds (about 60,000 back-edges for C1 at tier 3, about 10,700 with
+`-XX:-TieredCompilation`). That is a margin, so `scripts/check-java-compiled.sh` runs every mode under
+`-XX:+PrintCompilation`, with the default flags and under each profile, and requires that neither worker loop is ever
+compiled. The two flag profiles in `examples/language-fixtures/java/profiles.tsv` are `-Xint ...` (interpreter only) and
 `-XX:TieredStopAtLevel=1 ...` (C1 only). `scripts/check-window-java.sh` reads the bytecode of the two worker loops and
 requires a load of the counter, one call of `spin` and a store of the counter with nothing else that calls, locks or
-allocates between them; it cannot say what a JIT makes of that. The native self-check is what shows the race fires.
+allocates between them. `spin` itself is a call inside the window: under arm b a worker can wait for a compile of it, and under
+both arms a worker can stop at a safepoint in its loop; both only make the race easier to reach. The native self-check, run
+with the default flags and under each profile's flags, is what shows the race fires.
 
 Natively (macOS arm64, Temurin 21.0.5, default flags) `buggy` lost an update in 50 of 50 runs, `fixed` in 0 of 50 and `wide`
 in 10 of 10; under both flag profiles `buggy` lost an update in 5 of 5 runs and `fixed` in none. These say the race exists
