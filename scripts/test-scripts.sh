@@ -151,7 +151,7 @@ new_sandbox() {
 esac'
   mk_fake git 'if [ "$1" = "-C" ]; then shift 2; fi
 case "$1" in
-  clone) for a in "$@"; do last="$a"; done; mkdir -p "$last"; printf "[toolchain]\nchannel = \"nightly-2026-07-12\"\n" >"$last/rust-toolchain.toml" ;;
+  clone) for a in "$@"; do last="$a"; done; mkdir -p "$last"; [ -z "${FAKE_TAMPER_PATCH:-}" ] || echo tamper >>"$HAIRSPRING_HERMIT_PATCH"; printf "[toolchain]\nchannel = \"nightly-2026-07-12\"\n" >"$last/rust-toolchain.toml" ;;
   rev-parse) echo "${FAKE_GIT_HEAD:-25781c5c48d47c316324fd912b7dcafa394c339a}" ;;
   apply) if [ "$2" = "--check" ]; then exit "${FAKE_APPLY_CHECK_RC:-0}"; fi ;;
 esac'
@@ -505,6 +505,39 @@ t_skip_run_verify_installs_but_says_unverified() {
   grep -qF "version=unverified" "$SB/prefix/hermit.provenance" || fail_now "provenance should say unverified"
 }
 
+t_skip_run_verify_repeats_unverified_in_the_closing_summary() {
+  new_sandbox "$1"
+  hermit_run -- install --prefix "$SB/prefix" --skip-run-verify
+  assert_rc 0
+  grep -E '^installed: .*UNVERIFIED' "$SB/out" >/dev/null || fail_now "the installed: line lacks UNVERIFIED" "$(cat "$SB/out")"
+}
+
+t_a_verified_install_does_not_claim_unverified_in_its_summary() {
+  new_sandbox "$1"
+  hermit_run -- install --prefix "$SB/prefix"
+  assert_rc 0
+  grep -E '^installed: ' "$SB/out" | grep -qv UNVERIFIED || fail_now "a verified install said UNVERIFIED" "$(cat "$SB/out")"
+}
+
+t_patch_changed_after_the_first_check_is_refused_before_it_is_applied() {
+  new_sandbox "$1"
+  cp "$REAL_PATCH" "$SB/swap.diff"
+  PATCH_UNDER_TEST="$SB/swap.diff" hermit_run FAKE_TAMPER_PATCH=1 -- install --prefix "$SB/prefix"
+  assert_rc 1
+  assert_err_has "changed after it was verified"
+  assert_log_lacks " apply "
+  assert_absent "$SB/prefix/bin/hermit"
+}
+
+t_check_rejects_install_only_options() {
+  new_sandbox "$1"
+  hermit_run -- check --prefix "$SB/prefix"
+  assert_rc 2
+  assert_err_has "install option"
+  hermit_run -- check --skip-run-verify
+  assert_rc 2
+}
+
 t_install_refuses_a_foreign_non_empty_prefix() {
   new_sandbox "$1"
   mkdir -p "$SB/prefix"
@@ -626,6 +659,16 @@ t_cli_download_verifies_installs_and_runs_doctor() {
   assert_out_has "hairspring doctor --process-backend"
   assert_out_has "cannot run the process backend"
   assert_no_tripwire
+}
+
+t_cli_download_only_follows_https_redirects_with_tls_1_2() {
+  new_sandbox "$1"
+  make_release "$SB/rel" hairspring-linux-x86_64
+  mk_fake curl "exec \"$TMP/real/curl\" \"\$@\""
+  installer_run "HAIRSPRING_RELEASE_BASE_URL=file://$SB/rel" -- --version v0.1.0 --prefix "$SB/prefix"
+  assert_rc 0
+  assert_log_has "--proto-redir =https"
+  assert_log_has "--tlsv1.2"
 }
 
 t_cli_download_picks_the_macos_asset_on_apple_silicon() {
@@ -844,7 +887,7 @@ mutate() {
   dir="$TMP/mut/$name"
   mkdir -p "$dir/scripts" "$dir/crates/hairspring-cli"
   : >"$dir/Cargo.toml"
-  cp "$HERE/install-hermit.sh" "$HERE/install.sh" "$dir/scripts/"
+  cp "$HERE"/install-hermit.sh "$HERE"/install.sh "$HERE"/test-install-*.sh "$dir/scripts/"
   content="$(cat "$HERE/$file")"
   mutated="${content/"$old"/"$new"}"
   if [ "$mutated" = "$content" ]; then
@@ -861,7 +904,23 @@ mutate() {
   fi
 }
 
+# Control: an unmutated copy built the same way as a mutant must pass the whole suite. If it does not, every mutant
+# would count as killed for the wrong reason, so the run stops here.
+run_control() {
+  local dir="$TMP/mut/control"
+  mkdir -p "$dir/scripts" "$dir/crates/hairspring-cli"
+  : >"$dir/Cargo.toml"
+  cp "$HERE"/install-hermit.sh "$HERE"/install.sh "$HERE"/test-install-*.sh "$dir/scripts/"
+  if ! HS_SCRIPTS_DIR="$dir/scripts" bash "$HERE/test-scripts.sh" >"$dir/log" 2>&1; then
+    printf 'CONTROL FAILED: an unmutated copy does not pass the suite, so no mutant result can be trusted.\n' >&2
+    tail -n 30 "$dir/log" >&2
+    return 1
+  fi
+  printf 'control  an unmutated copy passes the whole suite\n'
+}
+
 run_mutations() {
+  run_control || return 1
   mutate hermit-patch-pin-ignored install-hermit.sh 'if [ "$actual" != "$HERMIT_PATCH_SHA256" ]; then' 'if false; then'
   mutate hermit-commit-pin-ignored install-hermit.sh 'if [ "$head" != "$HERMIT_BASE_COMMIT" ]; then' 'if false; then'
   mutate hermit-log-flag-unchecked install-hermit.sh '*--log*) ;;' '*) ;;'
@@ -885,6 +944,13 @@ run_mutations() {
     add_missing'
   mutate hermit-temp-dir-never-removed install-hermit.sh '      rm -rf "$TEMP_WORK"' '      true'
   mutate hermit-require-host-ignored install-hermit.sh '[ "$REQUIRE_HOST" != "yes" ] || exit 1' 'true'
+  mutate hermit-patch-not-rechecked-before-apply install-hermit.sh 'if [ "$actual" != "$HERMIT_PATCH_SHA256" ]; then
+    die "the replay patch changed after' 'if false; then
+    die "the replay patch changed after'
+  mutate hermit-summary-hides-unverified install-hermit.sh '    say "installed: $PREFIX/bin/hermit (UNVERIFIED' '    say "installed: $PREFIX/bin/hermit (checked'
+  mutate hermit-check-accepts-install-options install-hermit.sh '  if [ "$COMMAND" = "check" ]; then' '  if false; then'
+  mutate cli-redirects-not-restricted install.sh ' --proto-redir =https' ''
+  mutate cli-tls-version-unpinned install.sh ' --tlsv1.2' ''
   mutate cli-sha256-compare-ignored install.sh 'if [ "$actual" != "$expected" ]; then' 'if false; then'
   mutate cli-pinned-sha256-ignored install.sh 'if [ -n "$PINNED_SHA256" ] && [ "$actual" != "$PINNED_SHA256" ]; then' 'if false; then'
   mutate cli-sums-count-unchecked install.sh '[ "$count" -eq 1 ] ||' 'true ||'

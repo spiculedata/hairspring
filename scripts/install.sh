@@ -113,7 +113,7 @@ fetch() {
   # $1 url, $2 destination
   local protocols="=https"
   [ -z "${HAIRSPRING_RELEASE_BASE_URL:-}" ] || protocols="=https,file"
-  curl --fail --silent --show-error --location --proto "$protocols" --output "$2" "$1" ||
+  curl --fail --silent --show-error --location --proto "$protocols" --proto-redir =https --tlsv1.2 --output "$2" "$1" ||
     die "download failed: $1"
 }
 

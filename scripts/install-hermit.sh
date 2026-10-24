@@ -388,8 +388,15 @@ fetch_pinned_source() {
 
 apply_patch() {
   local src="$1"
-  git -C "$src" apply --check "$HERMIT_PATCH" || die "the replay patch does not apply to $HERMIT_BASE_COMMIT"
-  git -C "$src" apply "$HERMIT_PATCH"
+  # Hash and apply one private copy, so the file cannot change between the check and the use.
+  local copy="$WORK_DIR/replay.patch" actual
+  cp "$HERMIT_PATCH" "$copy"
+  actual="$(sha256_of "$copy")"
+  if [ "$actual" != "$HERMIT_PATCH_SHA256" ]; then
+    die "the replay patch changed after it was verified: sha256 is $actual, expected $HERMIT_PATCH_SHA256. Refusing to apply it."
+  fi
+  git -C "$src" apply --check "$copy" || die "the replay patch does not apply to $HERMIT_BASE_COMMIT"
+  git -C "$src" apply "$copy"
   say "replay patch applied"
 }
 
@@ -460,7 +467,11 @@ run_install() {
   verify_hermit_binary "$PREFIX/bin/hermit"
   trap - EXIT
   cleanup_temp_work success
-  say "installed: $PREFIX/bin/hermit"
+  if [ "$SKIP_RUN_VERIFY" = "yes" ]; then
+    say "installed: $PREFIX/bin/hermit (UNVERIFIED: --skip-run-verify was given, so it was never run)"
+  else
+    say "installed: $PREFIX/bin/hermit"
+  fi
   say "sha256:    $(sha256_of "$PREFIX/bin/hermit")"
   say "A rebuild is not expected to give the same sha256; the provenance is recorded in $PREFIX/$PROVENANCE_FILE."
   say "Use it with: export HAIRSPRING_HERMIT=$PREFIX/bin/hermit"
@@ -480,6 +491,9 @@ case "${1:-}" in
 esac
 
 while [ "$#" -gt 0 ]; do
+  if [ "$COMMAND" = "check" ]; then
+    case "$1" in -h | --help) ;; *) usage_error "$1 is an install option; 'check' takes no options" ;; esac
+  fi
   case "$1" in
     -h | --help)
       usage
