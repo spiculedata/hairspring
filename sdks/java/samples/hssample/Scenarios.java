@@ -9,7 +9,7 @@ import java.util.List;
 final class Scenarios {
     static final List<String> NAMES = List.of(
             "basic", "merge", "threads", "exit_status", "plain_exit", "raises", "halt", "big", "spawn", "conflict",
-            "empty", "limits", "explicit", "daemon");
+            "empty", "limits", "explicit", "daemon", "close_err", "daemon_report");
 
     private static final String LONG_MSG = "a deliberately long message so that each catalog line is large and two processes "
             + "writing at once have a real chance of interleaving if a line were ever split across write calls; padding "
@@ -42,6 +42,8 @@ final class Scenarios {
             case "limits" -> limits();
             case "explicit" -> explicit();
             case "daemon" -> daemon();
+            case "close_err" -> closeErr();
+            case "daemon_report" -> daemonReport();
             default -> throw new IllegalArgumentException(name);
         };
     }
@@ -168,6 +170,23 @@ final class Scenarios {
         spinner.setDaemon(true);
         spinner.start();
         Thread.sleep(DAEMON_RUN_MILLIS);
+        return 0;
+    }
+
+    /** The program closes System.err (the JDK points descriptor 2 at /dev/null); the report must still arrive. */
+    private static int closeErr() {
+        Hairspring.reachable("close_err.site", "evaluated before and after the close");
+        System.err.close();
+        Hairspring.reachable("close_err.after", "evaluated after the close");
+        return 0;
+    }
+
+    /** A daemon thread reports explicitly while main returns and the JVM exits; the report must still be whole. */
+    private static int daemonReport() {
+        Hairspring.reachable("daemon_report.site", "reached before the report");
+        Thread reporter = new Thread(Hairspring::report);
+        reporter.setDaemon(true);
+        reporter.start();
         return 0;
     }
 }

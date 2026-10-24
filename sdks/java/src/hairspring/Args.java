@@ -5,6 +5,8 @@ import java.util.Objects;
 /** Validation of what a call site passes. Called before any state changes, so a bad argument counts nothing. */
 final class Args {
     static final int MAX_VALS = 4;
+    /** A UTF-16 unit is at most three bytes of UTF-8 (a surrogate pair is four bytes for two units). */
+    private static final int MAX_UTF8_BYTES_PER_UNIT = 3;
 
     private Args() {}
 
@@ -22,6 +24,9 @@ final class Args {
 
     static void checkMsg(String raw) {
         Objects.requireNonNull(raw, "an assertion message must not be null");
+        if ((long) raw.length() * MAX_UTF8_BYTES_PER_UNIT <= Fmt.MSG_MAX) {
+            return; // short enough that it cannot be over the limit: no encoding, so a known site's call allocates nothing
+        }
         int size = Fmt.utf8(raw).length;
         if (size > Fmt.MSG_MAX) {
             throw new IllegalArgumentException("an assertion message is at most " + Fmt.MSG_MAX + " bytes, not " + size);

@@ -65,6 +65,28 @@ final class RecorderTests {
         }
     }
 
+
+    /** A sink whose first line blocks until released, so a report can be caught half written. */
+    private static final class BlockingSink implements Sink {
+        final ListSink inner = new ListSink();
+        final CountDownLatch entered = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+
+        @Override
+        public boolean writeLine(byte[] line) {
+            entered.countDown();
+            try {
+                release.await();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+            return inner.writeLine(line);
+        }
+
+        @Override
+        public void close() {}
+    }
+
     static void register(Suite s) {
         s.add("recorder: the report has hello, the catalog, the asserts, work, thread lines and end, in that order", () -> {
             ListSink sink = new ListSink();
@@ -143,6 +165,39 @@ final class RecorderTests {
             r.report(EndReason.EXIT, null);
             Check.equal(0, sink.ofKind("catalog").size());
             Check.yes(sink.ofKind("end").get(0).contains("\"evals\":" + w(0)), "nothing counted");
+        });
+        s.add("recorder: a bad message is refused on every call, also for a site that is already known", () -> {
+            ListSink sink = new ListSink();
+            Recorder r = recorder(sink);
+            r.record(Kind.ALWAYS, true, "x", "fine", new long[0]);
+            Check.raises(IllegalArgumentException.class, () -> r.record(Kind.ALWAYS, true, "x", "m".repeat(513), new long[0]));
+            Check.raises(IllegalArgumentException.class, () -> r.declare(Kind.ALWAYS, "x", "m".repeat(513)));
+            Check.raises(NullPointerException.class, () -> r.record(Kind.ALWAYS, true, "x", null, new long[0]));
+            r.record(Kind.ALWAYS, true, "x", "\u20ac".repeat(170), new long[0]); // 510 bytes: fits
+            Check.raises(IllegalArgumentException.class, () -> r.record(Kind.ALWAYS, true, "x", "\u20ac".repeat(171), new long[0]));
+            r.report(EndReason.EXIT, null);
+            Check.yes(sink.ofKind("end").get(0).contains("\"evals\":" + w(2)), "only the two good calls counted");
+        });
+        s.add("recorder: the exit hook waits for a report another thread is still writing", () -> {
+            BlockingSink sink = new BlockingSink();
+            Recorder r = recorder(sink);
+            r.record(Kind.REACHABLE, true, "x", "m", new long[0]);
+            Thread explicit = new Thread(() -> r.report(EndReason.EXPLICIT, null));
+            explicit.start();
+            Check.yes(sink.entered.await(10, java.util.concurrent.TimeUnit.SECONDS), "the writer started");
+            AtomicBoolean hookReturned = new AtomicBoolean();
+            Thread hook = new Thread(() -> {
+                r.report(EndReason.EXIT, null);
+                hookReturned.set(true);
+            });
+            hook.start();
+            Thread.sleep(300);
+            Check.no(hookReturned.get(), "the hook returned while the report was half written");
+            sink.release.countDown();
+            hook.join(10_000);
+            explicit.join(10_000);
+            Check.yes(hookReturned.get(), "the hook returned once the report was done");
+            Check.equal(1, sink.inner.ofKind("end").size());
         });
         s.add("recorder: ids and messages at their limits are accepted", () -> {
             ListSink sink = new ListSink();

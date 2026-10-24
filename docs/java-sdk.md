@@ -79,10 +79,18 @@ Each also has a form without `msg` and `vals`.
 | `HAIRSPRING_PROC_PID` | set for children by `prepare`; do not set it |
 | `HAIRSPRING_SIGNAL_REPORT` | **not supported**: ignored, and `hello.signal_handlers` is always false |
 
-The report goes to descriptor 2 through `FileOutputStream(FileDescriptor.err)`, which bypasses `System.err`, so a program
-that replaces `System.err` or `System.out` cannot redirect it. Unlike the C, Rust and Python SDKs, the JVM has no way to
-duplicate a descriptor, so the SDK does not keep a private copy at a high number: a program that closes or reuses
-descriptor 2 by other means (native code) can take the report's channel away.
+The report goes to standard error through the SDK's own channel, not through `System.err`, so a program that replaces
+`System.err` or `System.out` cannot redirect it. At start the SDK opens descriptor 2 again, through
+`/proc/self/fd/2` (`/dev/fd/2` where there is no `/proc`), in append mode: a second descriptor that is the SDK's own.
+This matters because `System.err.close()` makes the JDK point descriptor 2 at `/dev/null`; a report written to descriptor 2
+at exit would then disappear without a trace. With the second descriptor the report still arrives. The second descriptor
+is a new open file description: on a pipe or a terminal it is the same stream; on a regular file (`2>file`) the SDK appends
+at the end of the file instead of sharing the program's write offset, so a program that also writes to that file through
+another descriptor after the report can overwrite it. If neither path can be opened (standard error is a socket, the
+descriptor directory is missing) the SDK falls back to `FileOutputStream(FileDescriptor.err)`, and then a program that
+closes `System.err` loses the report. Unlike the C, Rust and Python SDKs the JVM has no way to duplicate a descriptor,
+so a program that closes or reuses descriptor 2 by other means (native code) after the SDK started cannot take the
+report's channel away, but one that does so before the SDK first runs can.
 
 ## What is written, and when
 
@@ -109,6 +117,9 @@ The report is written by a shutdown hook thread (`hairspring-report`), which run
 when `System.exit` is called, or when the JVM receives `SIGTERM` or `SIGINT`. It does not run for `Runtime.halt` or
 `SIGKILL`.
 
+* **An explicit `report()` from a daemon thread is not cut off.** The JVM does not wait for daemon threads at exit, but the
+  shutdown hook waits (up to 5 seconds) for a report another thread is still writing, so the lines are whole. A report
+  that takes longer than that (a reader that has stopped reading a full pipe) can still be cut off.
 * **Other threads keep running while the hook runs.** A non-daemon thread still evaluating, or a daemon thread, is not
   stopped. The hook takes one snapshot under the SDK's lock, so the report is consistent, and an evaluation that
   lands after the snapshot is not in it. A program that wants every evaluation counted joins its threads before it
@@ -241,7 +252,7 @@ its invariants and its workers; the source check; 50 native runs per mode with a
   lines, no fork handler, no `hs_choice` or tape, no call-site audit (there is no linker section to fall out of: every
   evaluation registers its own site). The C SDK's catalog is built from linker sections in the executable, which a JVM cannot
   load, so the SDK is not a binding to it.
-* No private copy of descriptor 2 and no `SIGPIPE` mask: the JVM ignores `SIGPIPE`, and a write to a reader that has gone
+* No `dup` of descriptor 2 (the SDK reopens it through `/proc/self/fd/2` or `/dev/fd/2` instead, see above) and no `SIGPIPE` mask: the JVM ignores `SIGPIPE`, and a write to a reader that has gone
   shows as an `IOException`, which costs the line (counted in `end.dropped`), not the process.
 * The events file is opened for appending without following a link and must be a regular file, but Java has no
   `O_NONBLOCK` for files: a FIFO is refused by looking at it before opening it, and a FIFO swapped in between the two steps

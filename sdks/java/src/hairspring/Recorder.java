@@ -5,6 +5,7 @@ import java.io.FileOutputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * The process-wide state: sites, thread slots, the lock that guards them, and the report.
@@ -16,6 +17,9 @@ import java.util.Map;
  * on it except what the caller passes (the values array).
  */
 final class Recorder {
+    /** How long the exit hook waits for a report another thread is writing. */
+    private static final long WRITER_WAIT_NANOS = TimeUnit.SECONDS.toNanos(5);
+
     private final Identity identity;
     private final Sink sink;
     private final long ownerPid;
@@ -26,6 +30,7 @@ final class Recorder {
     private long dropped;
     private volatile long status;
     private boolean reported;
+    private boolean writing;
 
     Recorder(Identity identity, Sink sink, long dropped, long ownerPid) {
         this.identity = identity;
@@ -45,7 +50,8 @@ final class Recorder {
     /** The recorder for this process: tag and output from the environment, the report registered as a shutdown hook. */
     static Recorder start() {
         Map<String, String> env = System.getenv();
-        Output.Opened opened = Output.open(env, Secure.isPrivileged(), new FileOutputStream(FileDescriptor.err));
+        Output.Opened opened = Output.open(
+                env, Secure.isPrivileged(), StderrSink.open(StderrSink.OWN_PATHS, new FileOutputStream(FileDescriptor.err)));
         Recorder recorder = fromEnvironment(env, opened.sink(), opened.dropped(), ProcessHandle.current().pid());
         recorder.installShutdownHook();
         return recorder;
@@ -103,6 +109,7 @@ final class Recorder {
     private Site site(Kind kind, String id, String msg) {
         Site site = sites.find(kind, id);
         if (site != null) {
+            Args.checkMsg(msg); // the message is not part of the lookup key, so a known site must still check it
             return site == Site.UNTRACKED ? null : site;
         }
         Where.Location where = Where.caller();
@@ -202,20 +209,49 @@ final class Recorder {
 
     /**
      * Write the report: at most once per process, and only from the process that started the SDK. Returns whether this
-     * call wrote it. {@code statusOverride} replaces the status the program recorded.
+     * call wrote it. {@code statusOverride} replaces the status the program recorded. The exit hook (reason
+     * {@code EXIT}) that finds another thread still writing waits for it, so the JVM does not exit in the middle of an
+     * explicit report written by a thread the exit does not wait for (a daemon thread); the wait is bounded.
      */
     boolean report(EndReason reason, Long statusOverride) {
         synchronized (lock) {
             if (reported) {
+                if (reason == EndReason.EXIT) {
+                    awaitWriter();
+                }
                 return false;
             }
             reported = true;
+            writing = true;
         }
-        if (ProcessHandle.current().pid() != ownerPid || sink == null) {
-            return false;
+        try {
+            if (ProcessHandle.current().pid() != ownerPid || sink == null) {
+                return false;
+            }
+            Report.write(snapshot(), identity, sink, reason, statusOverride == null ? status : statusOverride, this::noteDrop);
+            return true;
+        } finally {
+            synchronized (lock) {
+                writing = false;
+                lock.notifyAll();
+            }
         }
-        Report.write(snapshot(), identity, sink, reason, statusOverride == null ? status : statusOverride, this::noteDrop);
-        return true;
+    }
+
+    /** Waits (with {@code lock} held) until the report being written is done, or the bound passes. */
+    private void awaitWriter() {
+        long deadline = System.nanoTime() + WRITER_WAIT_NANOS;
+        try {
+            while (writing) {
+                long left = deadline - System.nanoTime();
+                if (left <= 0) {
+                    return;
+                }
+                TimeUnit.NANOSECONDS.timedWait(lock, left);
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /** The environment a child process needs to take its tag from this one (Java cannot change its own environment). */

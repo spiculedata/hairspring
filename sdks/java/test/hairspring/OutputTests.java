@@ -143,6 +143,31 @@ final class OutputTests {
             }
             Check.raises(IOException.class, () -> openWithin(devnull));
         });
+        s.add("output: standard error is reopened as the SDK's own channel and appended to", () -> {
+            Path dir = scratch();
+            try {
+                Path file = dir.resolve("err");
+                Files.writeString(file, "before\n");
+                ByteArrayOutputStream fallback = new ByteArrayOutputStream();
+                Sink sink = StderrSink.open(java.util.List.of(dir.resolve("missing"), file), fallback);
+                Check.yes(sink.writeLine(bytes("a\n")), "a");
+                Check.yes(sink.writeLine(bytes("b\n")), "b");
+                sink.close();
+                Check.equal("before\na\nb\n", Files.readString(file));
+                Check.equal("", fallback.toString(StandardCharsets.US_ASCII));
+            } finally {
+                remove(dir);
+            }
+        });
+        s.add("output: without a usable path to descriptor 2 the stream on it is used", () -> {
+            ByteArrayOutputStream fallback = new ByteArrayOutputStream();
+            Sink sink = StderrSink.open(java.util.List.of(Path.of("/nonexistent-dir-for-hairspring/fd2")), fallback);
+            Check.yes(sink.writeLine(bytes("x\n")), "written");
+            Check.equal("x\n", fallback.toString(StandardCharsets.US_ASCII));
+        });
+        s.add("output: the paths tried for descriptor 2 are the process's own", () -> {
+            Check.equal(java.util.List.of(Path.of("/proc/self/fd/2"), Path.of("/dev/fd/2")), StderrSink.OWN_PATHS);
+        });
         s.add("output: a missing directory is an error the caller counts", () ->
                 Check.raises(IOException.class, () -> openWithin(Path.of("/nonexistent-dir-for-hairspring/events"))));
         s.add("output: events off writes nothing and costs nothing", () -> {

@@ -21,6 +21,10 @@ final class Output {
     record Opened(Sink sink, long dropped) {}
 
     static Opened open(Map<String, String> environ, boolean privileged, OutputStream stderr) {
+        return open(environ, privileged, new StreamSink(stderr));
+    }
+
+    static Opened open(Map<String, String> environ, boolean privileged, Sink stderr) {
         if (OFF.equals(environ.get(ENV_EVENTS))) {
             return new Opened(null, 0);
         }
@@ -33,6 +37,6 @@ final class Output {
                 dropped = 1; // the file could not be used: events fall back to standard error, and this is counted
             }
         }
-        return new Opened(new StreamSink(stderr), dropped);
+        return new Opened(stderr, dropped);
     }
 }

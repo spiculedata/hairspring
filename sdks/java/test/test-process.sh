@@ -97,6 +97,16 @@ rc=$(sample daemon)
 expect "daemon: exit 0 and a complete report" is "$rc$(lines_of hello)$(lines_of end)" 011
 expect "daemon: every protocol line is whole" is "$(grep -c '^HAIRSPRING_EVENT {.*}$' "$tmp/err")" "$(grep -c '^HAIRSPRING_EVENT' "$tmp/err")"
 
+# a program that closes System.err does not lose the report: the SDK keeps its own channel to descriptor 2 (Linux and macOS)
+rc=$(sample close_err)
+expect "close_err: exit 0 and a complete report" is "$rc$(lines_of hello)$(lines_of end)" 011
+expect "close_err: both sites are in the report" is "$(lines_of catalog)" 2
+
+# an explicit report from a daemon thread is finished before the JVM exits
+rc=$(sample daemon_report)
+expect "daemon_report: exit 0 and a complete report" is "$rc$(lines_of hello)$(lines_of end)" 011
+expect "daemon_report: every protocol line is whole" is "$(grep -c '^HAIRSPRING_EVENT {.*}$' "$tmp/err")" "$(grep -c '^HAIRSPRING_EVENT' "$tmp/err")"
+
 # ids, messages and sites at their limits
 rc=$(sample limits)
 expect "limits: exit 0" is "$rc" 0
