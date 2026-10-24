@@ -205,7 +205,8 @@ jobs:
   # x86-64 Linux host, which an emulated container is not, so the records are produced here. Manual only.
   # Each job uploads the record and, next to it, the artifact it describes (the binary, or the staged Python package,
   # with a SHA256SUMS file): the record states the sha256 of exactly those bytes. The Rust variant covers at-rust;
-  # the rust-probe variant covers probe-rust, the std-only probe program.
+  # the rust-probe variant covers probe-rust, the std-only probe program; the java-probe variant covers lang-at.jar, the
+  # JDK-only probe program.
   fixture-build-records:
     name: Fixture build record (${{ matrix.variant }})
     if: github.event_name == 'workflow_dispatch'
@@ -214,7 +215,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [c, cxx-clang, cxx-gxx, go, python, rust, rust-probe]
+        variant: [c, cxx-clang, cxx-gxx, go, python, rust, rust-probe, java-probe]
     env:
       GOTOOLCHAIN: local
       GOPROXY: "off"
@@ -237,12 +238,18 @@ jobs:
         if: matrix.variant == 'rust' || matrix.variant == 'rust-probe'
         with:
           targets: x86_64-unknown-linux-musl
+      # The pinned Temurin 21 JDK of the Java probe (the record fails if the JDK is not the pinned build).
+      - uses: actions/setup-java@v4
+        if: matrix.variant == 'java-probe'
+        with:
+          distribution: temurin
+          java-version: "21.0.12+101.0.LTS"
       - name: Install the toolchains
-        if: matrix.variant != 'go' && matrix.variant != 'python' && matrix.variant != 'rust' && matrix.variant != 'rust-probe'
+        if: matrix.variant != 'go' && matrix.variant != 'python' && matrix.variant != 'rust' && matrix.variant != 'rust-probe' && matrix.variant != 'java-probe'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-13 g++-13 clang-18 strace binutils
       - name: Install strace
-        if: matrix.variant == 'go' || matrix.variant == 'python' || matrix.variant == 'rust' || matrix.variant == 'rust-probe'
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq strace binutils file
+        if: matrix.variant == 'go' || matrix.variant == 'python' || matrix.variant == 'rust' || matrix.variant == 'rust-probe' || matrix.variant == 'java-probe'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq strace binutils file unzip
       # Python has no compiler: the record stages the package (fixture, probe and SDK) twice and compares file hashes.
       - name: Build record (Python)
         if: matrix.variant == 'python'
@@ -257,6 +264,13 @@ jobs:
           PRODUCER: GitHub Actions ubuntu-24.04 (native x86-64)
           ARTIFACT_DIR: ${{ runner.temp }}/artifact
         run: IMAGE_DIGEST="runner image $ImageOS $ImageVersion (no digest available)" sh examples/language-fixtures/scripts/build-record-probe-rust.sh "$RUNNER_TEMP/record-rust-probe.md"
+      # lang-at.jar, the JDK-only probe program, built twice with the pinned JDK.
+      - name: Build record (Java probe)
+        if: matrix.variant == 'java-probe'
+        env:
+          PRODUCER: GitHub Actions ubuntu-24.04 (native x86-64)
+          ARTIFACT_DIR: ${{ runner.temp }}/artifact
+        run: IMAGE_DIGEST="runner image $ImageOS $ImageVersion (no digest available)" sh examples/language-fixtures/scripts/build-record-probe-java.sh "$RUNNER_TEMP/record-java-probe.md"
       # at-rust, built twice for the static musl target.
       - name: Build record (Rust)
         if: matrix.variant == 'rust'
@@ -265,7 +279,7 @@ jobs:
           ARTIFACT_DIR: ${{ runner.temp }}/artifact
         run: IMAGE_DIGEST="runner image $ImageOS $ImageVersion (no digest available)" sh examples/language-fixtures/scripts/build-record-rust.sh "$RUNNER_TEMP/record-rust.md"
       - name: Build record
-        if: matrix.variant != 'python' && matrix.variant != 'rust' && matrix.variant != 'rust-probe'
+        if: matrix.variant != 'python' && matrix.variant != 'rust' && matrix.variant != 'rust-probe' && matrix.variant != 'java-probe'
         env:
           PRODUCER: GitHub Actions ubuntu-24.04 (native x86-64)
           ARTIFACT_DIR: ${{ runner.temp }}/artifact
