@@ -234,7 +234,12 @@ fn judge_perf(f: &ProcessBackendFacts) -> Judged {
             format!("opening a hardware counter failed (errno {errno})"),
             format!("opening a hardware performance counter failed with errno {errno}"),
         ),
-        PerfFact::NotProbed => note("perf counters", "not checked on this platform"),
+        PerfFact::NotProbed => fail(
+            "perf counters",
+            "not checked: no hardware counter was opened",
+            "no hardware performance counter was opened on this machine (the probe did not run, which happens off \
+             Linux x86-64), so the process backend cannot be said to be runnable.",
+        ),
     }
 }
 
@@ -312,7 +317,8 @@ pub fn write_report(out: &mut dyn Write, report: &Report) -> std::io::Result<()>
     if report.can_run() {
         return writeln!(
             out,
-            "result: ok: this machine meets the process backend's prerequisites (it has not run a program under Hermit)"
+            "result: ok: a generic hardware branch counter was opened and Hermit answered --version; no program has been \
+             run under Hermit, so this does not show that Hermit works here"
         );
     }
     writeln!(
@@ -412,16 +418,45 @@ mod tests {
     }
 
     #[test]
+    fn a_counter_that_was_never_probed_blocks_even_when_the_platform_is_fine() {
+        let facts = ProcessBackendFacts {
+            perf: PerfFact::NotProbed,
+            ..good()
+        };
+        let reason = only_blocker(&facts);
+        assert!(reason.contains("performance counter"), "{reason}");
+        let text = text(&facts);
+        assert!(text.contains("result: CANNOT RUN"), "{text}");
+        assert!(!text.contains("result: ok"), "{text}");
+    }
+
+    #[test]
+    fn the_ok_line_says_what_was_and_was_not_checked() {
+        let text = text(&good());
+        assert!(
+            text.contains("generic hardware branch counter was opened"),
+            "{text}"
+        );
+        assert!(text.contains("--version"), "{text}");
+        assert!(
+            text.contains("no program has been run under Hermit"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn linux_on_another_architecture_cannot_run_it() {
         let facts = ProcessBackendFacts {
             arch: "aarch64".into(),
             perf: PerfFact::NotProbed,
             ..good()
         };
-        let reason = only_blocker(&facts);
+        let reasons = blockers(&facts);
         assert!(
-            reason.contains("x86-64") && reason.contains("aarch64"),
-            "{reason}"
+            reasons
+                .iter()
+                .any(|r| r.contains("x86-64") && r.contains("aarch64")),
+            "{reasons:?}"
         );
     }
 
