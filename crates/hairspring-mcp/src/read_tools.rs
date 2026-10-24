@@ -79,6 +79,13 @@ pub(crate) fn trial_schema() -> Value {
     )
 }
 
+pub(crate) fn failure_checks_schema() -> Value {
+    obj(
+        json!({ "failure_id": { "type": "string", "description": "A failure id from get_run or list_failures" } }),
+        &["failure_id"],
+    )
+}
+
 /// What `v` costs in a reply: once as JSON and once as an escaped string.
 fn reply_cost(v: &Value) -> usize {
     let text = v.to_string();
@@ -221,6 +228,18 @@ fn trial(server: &McpServer, args: &Value) -> Result<Value, Failed> {
     Ok(v)
 }
 
+/// The stored confirmation checks of one failure and where they leave it. A failure holds at most
+/// [`hairspring_store::MAX_CHECKS_PER_FAILURE`] checks, each bounded, so the answer is bounded without paging.
+fn failure_checks(server: &McpServer, args: &Value) -> Result<Value, Failed> {
+    let id = req_str(args, "failure_id")?;
+    if !failure_id(id) {
+        return Err(Failed::Params(
+            "`failure_id` has an invalid format".to_string(),
+        ));
+    }
+    to_value(server.service().failure_checks(id)?, "failure")
+}
+
 /// Runs one of the read tools. `None` when `name` is not one of them.
 pub(crate) fn call(server: &McpServer, name: &str, args: &Value) -> Option<Result<Value, Failed>> {
     Some(match name {
@@ -228,6 +247,7 @@ pub(crate) fn call(server: &McpServer, name: &str, args: &Value) -> Option<Resul
         "get_property" => property(server, args),
         "list_trials" => trials(server, args),
         "get_trial" => trial(server, args),
+        "get_failure_checks" => failure_checks(server, args),
         _ => return None,
     })
 }

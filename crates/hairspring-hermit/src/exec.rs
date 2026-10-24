@@ -128,13 +128,15 @@ pub fn scheduler_flags(s: &SchedulerSpec) -> Vec<String> {
     flags
 }
 
-/// Arguments for `hermit`: `run <flags> -- <command...>`.
+/// Arguments for `hermit`: `run <flags> -- <command...>`. `extra` are flags a caller adds for one kind of run (the
+/// strict verify's), placed before the target's own `hermit_args`.
 pub fn hermit_args(
     settings: &HermitSettings,
     spec: &ProcessSpec,
     seed: u64,
     summary: Option<&std::path::Path>,
     events: Option<&ScratchDir>,
+    extra: &[String],
 ) -> Vec<String> {
     let mut args = vec!["run".to_string(), format!("--epoch={}", settings.epoch)];
     args.extend(scheduler_flags(spec.scheduler));
@@ -145,6 +147,7 @@ pub fn hermit_args(
     if let Some(dir) = events {
         args.push(events::tmp_arg(dir));
     }
+    args.extend(extra.iter().cloned());
     args.extend(spec.hermit_args.iter().cloned());
     args.push("--".to_string());
     args.extend(spec.command.iter().cloned());
@@ -233,6 +236,18 @@ pub fn run_trial(
     timeout: Duration,
     dirs: Dirs,
 ) -> Result<Trial, SpawnError> {
+    run_trial_with(settings, spec, seed, timeout, dirs, &[])
+}
+
+/// [`run_trial`] with `extra` Hermit flags added to the command line.
+pub fn run_trial_with(
+    settings: &HermitSettings,
+    spec: &ProcessSpec,
+    seed: u64,
+    timeout: Duration,
+    dirs: Dirs,
+    extra: &[String],
+) -> Result<Trial, SpawnError> {
     let summary_path = dirs.summaries.map(|dir| dir.file_for(seed));
     let (events_dir, scratch_fault) = events_scratch(settings, spec, dirs.events);
     let trial = run_trial_with_summary(
@@ -242,6 +257,7 @@ pub fn run_trial(
         timeout,
         summary_path.as_deref(),
         events_dir.as_ref(),
+        extra,
     );
     // Always remove the file, including when the trial failed to start or timed out.
     let schedule = summary_path.as_deref().and_then(|p| {
@@ -291,23 +307,26 @@ fn run_trial_with_summary(
     timeout: Duration,
     summary: Option<&std::path::Path>,
     events_dir: Option<&ScratchDir>,
+    extra: &[String],
 ) -> Result<Trial, SpawnError> {
     let mut cmd = Command::new(resolve_bin(&settings.bin));
-    cmd.args(hermit_args(settings, spec, seed, summary, events_dir))
-        .env_clear()
-        .envs(guest_env(spec.command, spec.env))
-        // The trial seed is an input like any other; tools such as hairspring-dapr-sim derive their faults from it.
-        .env("HAIRSPRING_SEED", seed.to_string())
-        .envs(settings.extra_env.iter().map(|(k, v)| (k, v)))
-        .envs(events_dir.map(|_| (events::EVENTS_FILE_ENV, events::GUEST_EVENTS_FILE)))
-        // Last, so nothing configured or passed through can change it: the root process tag is the same bytes for
-        // every seed and trial, and a stray pid variable (which would make the root `p1.s<pid>`) never reaches the guest.
-        .env(ROOT_PROC_ENV, ROOT_PROC_TAG)
-        .env_remove(PROC_PID_ENV)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
+    cmd.args(hermit_args(
+        settings, spec, seed, summary, events_dir, extra,
+    ))
+    .env_clear()
+    .envs(guest_env(spec.command, spec.env))
+    // The trial seed is an input like any other; tools such as hairspring-dapr-sim derive their faults from it.
+    .env("HAIRSPRING_SEED", seed.to_string())
+    .envs(settings.extra_env.iter().map(|(k, v)| (k, v)))
+    .envs(events_dir.map(|_| (events::EVENTS_FILE_ENV, events::GUEST_EVENTS_FILE)))
+    // Last, so nothing configured or passed through can change it: the root process tag is the same bytes for
+    // every seed and trial, and a stray pid variable (which would make the root `p1.s<pid>`) never reaches the guest.
+    .env(ROOT_PROC_ENV, ROOT_PROC_TAG)
+    .env_remove(PROC_PID_ENV)
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .process_group(0);
     if let Some(dir) = spec.cwd {
         cmd.current_dir(dir);
     }

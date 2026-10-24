@@ -1,3 +1,5 @@
+pub mod confirm;
+mod confirm_text;
 pub mod doctor;
 pub mod init;
 pub mod inspect;
@@ -40,6 +42,7 @@ pub fn dispatch(
         Command::Targets => inspect::targets(&ctx, out),
         Command::Test(a) => test::run(&ctx, &a, out, err),
         Command::Replay(a) => replay::run(&ctx, &a, out),
+        Command::Confirm(a) => confirm::run(&ctx, &a, out),
         Command::Doctor(a) => doctor::run(&ctx, &a, out),
         Command::Results(a) => inspect::results(&ctx, &a, out),
         Command::Show(a) => inspect::show(&ctx, &a, out),

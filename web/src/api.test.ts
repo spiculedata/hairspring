@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { getTokenVersion, isPropertyPage, onTokenChange, parseRetryAfter, propertiesUrl, setToken } from './api';
+import { failureChecksUrl, getTokenVersion, isPropertyPage, onTokenChange, parseRetryAfter, propertiesUrl, setToken } from './api';
 import { page } from './explorer/fixtures';
 
 describe('token version', () => {
@@ -52,6 +52,15 @@ describe('isPropertyPage', () => {
   });
   it('rejects a row without a guest object', () => {
     expect(isPropertyPage({ ...page(), properties: [{ idx: 1 }] })).toBe(false);
+  });
+});
+
+describe('failureChecksUrl', () => {
+  it('names the failure and the checks', () => {
+    expect(failureChecksUrl('fail_0123456789abcdef')).toBe('/api/failures/fail_0123456789abcdef/checks');
+  });
+  it('encodes an id that is not shaped like one, so it cannot change the path', () => {
+    expect(failureChecksUrl('../runs?x=1')).toBe('/api/failures/..%2Fruns%3Fx%3D1/checks');
   });
 });
 

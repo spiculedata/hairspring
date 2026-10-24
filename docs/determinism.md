@@ -121,9 +121,9 @@ inconclusive: it does not show the bug is fixed. The API returns the same fact a
 result.
 
 Not recorded yet: the Hermit commit, Hermit's global seed, hashes of declared input files, the full Hermit command
-line beyond `hermit_args`, the `--tmp` pre-seed, and the Hairspring commit. The environment is also not compared on
-confirmation reruns or on bundle import. Each new field needs its name added to the fixed list in
-`hairspring-core`.
+line beyond `hermit_args`, the `--tmp` pre-seed, and the Hairspring commit. The environment is compared by
+`hairspring confirm` (see [Confirming a failure](#confirming-a-failure)), but not by the search's own three reruns or on
+bundle import. Each new field needs its name added to the fixed list in `hairspring-core`.
 
 Upgrade order: a server that predates v3 rejects a v3 bundle (it does not recognise the header). Upgrade the server
 before the workers that send it bundles.
@@ -134,6 +134,59 @@ rejects the header. Older readers ignore the extra `param.` lines, so the only c
 
 The 409 body from `POST /api/replay` is `{"error": "<short text>", "code": "environment_mismatch"}`; the MCP tool
 error has the same `code` in `structuredContent`.
+
+### Confirming a failure
+
+The search confirms a failing seed by running it again three times and comparing a behaviour hash. That is weaker than
+what it takes to trust a finding, so `hairspring confirm <run-id | failure-id | bundle>` runs explicit, recorded checks.
+For a run or failure id every check is stored; for a bundle file, `-` or a bundle hash it is only printed.
+
+| Check | What it does | Passes when |
+|---|---|---|
+| `same_seed_rerun` | the seed run again `--reruns` times (default 3, at most 10), each with a fresh private directory, the pinned environment and stdin from `/dev/null` | every rerun fails the same way: the same kind of failure, the same property, the same behaviour hash and the same schedule fingerprint as the recording |
+| `bundle_replay` | the bundle replayed, with the environment check | the failure repeats; a miss is a failure of the check only on an environment that matches the recording |
+| `fixed_control` (`--control <target>`) | the same seed, scheduler flags, Hermit flags and guest environment on a second target that runs the fixed build | the fixed build is clean at the seed. A control whose flags differ is not a control and nothing is run. It says "the fixed build does not fail at this seed", never "the same interleaving": a different build is a different schedule |
+| `strict_verify` (`--strict-verify`) | `hermit run --verify --verify-allow=failure --verify-strict --verify-json=F` (two runs) | the result file says `verified`, `bitwise_parity` and a `matched` verdict |
+
+Each check ends as `pass`, `fail`, `inconclusive` or `skipped`, with counts of the runs that passed, failed or could
+not be judged. A rerun that cannot be judged (a timeout, a Hermit fault, an events fault) is counted apart and is never a
+pass or a miss. A check that did not run because the caller cancelled, or the wall budget (`--wall-secs`, at most 600)
+was used up, is stored as `skipped` and says why.
+
+**The environment.** The host is compared with the bundle's recorded environment once, before anything runs. If a
+loader field differs and `--allow-environment-change` is not given, nothing runs: the rerun and replay checks are stored as
+`inconclusive: environment differs`. If another field differs, the checks run, and a miss is `inconclusive: environment
+differs`, never a failure and never "nondeterministic". `hairspring confirm` exits 3 for it.
+
+**Skid overshoot.** With `skid_margin` set, Hermit panics when a preemption lands late. That run is infrastructure, not a
+verdict. A confirmation retries it once at the same flags, then once at double the margin (up to Hermit's limit). A run at
+a higher margin is a different schedule: it cannot count toward the reruns (the check is then `inconclusive`, with a
+`caveat` and `skid_margin_doubled: true`), but it can count for the control, with the same caveat recorded.
+
+**No logging.** A target whose `hermit_args` carry `--log`, `--log=...`, `-v...` or `--verbose`, or whose Hermit
+environment carries `HERMIT_LOG`, cannot be confirmed (a clear error, nothing run): enabling logging changed a guest's
+path.
+
+**The finding.** Its state is derived from the stored checks alone, the newest check of each kind counting:
+
+| State | When |
+|---|---|
+| `candidate` | no check has repeated the failure (also while the only results are inconclusive or skipped) |
+| `reproduced` | the reruns repeat it |
+| `confirmed` | and the replay does too |
+| `verified` | and the strict verify agrees |
+| `not_reproducible` | a rerun check or the replay failed on an unchanged environment |
+| `control_failed` | reruns repeat it but the fixed build still fails at the seed |
+
+Only `confirmed` and `verified` reach the claim wording: a generated sentence says "Reproduced (confirmed|verified)" for
+them, names the environment ("under the recorded environment", or "environment not pinned by a recorded identity" when
+the bundle recorded none or the host differs), and uses no other state. A stored check from a runner that is not trusted
+never opens a claim. The word "found" is never generated.
+
+Stored checks are served by `GET /api/failures/{id}/checks` and the `get_failure_checks` tool; the command and notes
+a runner reported are under `guest`, and the runner's own id is stored but never served. `hairspring show` summarises the
+findings of a run. Each check's `command` is the exact Hermit command (program by file name, per-run plumbing left out),
+so it can be run by hand.
 
 ### Not measured / not possible
 

@@ -3,7 +3,7 @@ use crate::cli::{BundleCommand, ResultsArgs, ShowArgs};
 use crate::ctx::{CmdResult, Ctx};
 use crate::timefmt::format_utc;
 use hairspring_engine::format::to_text;
-use hairspring_service::RunDetail;
+use hairspring_service::{RunDetail, Service};
 use std::io::Write;
 
 pub fn targets(ctx: &Ctx, out: &mut dyn Write) -> CmdResult<i32> {
@@ -47,6 +47,7 @@ pub fn show(ctx: &Ctx, args: &ShowArgs, out: &mut dyn Write) -> CmdResult<i32> {
         .ok_or_else(|| format!("no stored run `{}`", args.id))?;
     write!(out, "{}", to_text(&detail.run.target, &outcome))?;
     write_property_labels(&detail, out)?;
+    write_findings(&svc, &detail, out)?;
     writeln!(
         out,
         "run {} seed {} created {}",
@@ -71,6 +72,42 @@ fn write_property_labels(detail: &RunDetail, out: &mut dyn Write) -> CmdResult<(
     }
     if p.stopped_at_first_failure {
         writeln!(out, "  the run stopped at its first failure, so its trial count is not a fixed budget and these are not failure rates")?;
+    }
+    Ok(())
+}
+
+/// Where each failure of the run stands, from its stored confirmation checks. A failure never confirmed says nothing.
+fn write_findings(svc: &Service, detail: &RunDetail, out: &mut dyn Write) -> CmdResult<()> {
+    for failure in &detail.failures {
+        let Some(checks) = svc
+            .failure_checks(&failure.id)?
+            .filter(|c| !c.checks.is_empty())
+        else {
+            continue;
+        };
+        let pin = if checks.environment_pinned {
+            ", environment pinned"
+        } else {
+            ""
+        };
+        writeln!(
+            out,
+            "  finding {}: {} ({} checks{pin})",
+            failure.id,
+            checks.finding,
+            checks.checks.len()
+        )?;
+        for check in &checks.checks {
+            writeln!(
+                out,
+                "    {} {} {}/{}/{}",
+                check.kind,
+                check.status,
+                check.counts.passed,
+                check.counts.failed,
+                check.counts.inconclusive
+            )?;
+        }
     }
     Ok(())
 }

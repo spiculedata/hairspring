@@ -56,6 +56,16 @@ pub fn behaviour_hash(t: &Trial) -> String {
     format!("{h:016x}")
 }
 
+fn is_skid_overshoot(stderr: &Findings) -> bool {
+    stderr.skid_overshoot || (stderr.panicked && stderr.overshoot)
+}
+
+/// Whether Hermit panicked on a PMU skid overshoot in this trial. Such a trial is `Infra`, and the one failure of
+/// Hermit's own that a confirmation retries.
+pub(crate) fn skid_overshoot(t: &Trial) -> bool {
+    is_skid_overshoot(&t.stderr_findings())
+}
+
 /// Failures of Hermit itself that are not about the guest: a command-line usage error, or the PMU skid overshoot
 /// panic. Either would otherwise look like the guest exiting non-zero and be reported as a finding.
 fn hermit_own_failure(stderr: &Findings) -> Option<String> {
@@ -68,7 +78,7 @@ fn hermit_own_failure(stderr: &Findings) -> Option<String> {
             "hermit rejected its command line (usage error): {detail}"
         ));
     }
-    if stderr.skid_overshoot || (stderr.panicked && stderr.overshoot) {
+    if is_skid_overshoot(stderr) {
         return Some(
             "hermit panicked on a PMU skid overshoot: the preemption landed late, so this schedule is not reproducible; raise `skid_margin`"
                 .to_string(),

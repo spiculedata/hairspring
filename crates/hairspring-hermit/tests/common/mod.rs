@@ -1,5 +1,6 @@
 //! Shared helpers for tests that drive the Hermit backend through a fake `hermit` script.
 #![allow(dead_code)]
+pub mod confirm;
 pub mod events;
 pub mod multi;
 pub mod props;

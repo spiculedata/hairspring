@@ -3,7 +3,8 @@
 //! A sentence is generated only when every condition holds: the label is declared, every trial came from a trusted
 //! worker, every failure it rests on was reproduced on a trusted worker, and the run finished in a state that can back
 //! it. Whatever fails is listed in `withheld`; the figures themselves are still shown, labelled.
-use crate::claims::{claim_gate, FailureEvidence};
+use crate::claims::{claim_gate, Confirmation, FailureEvidence};
+use crate::confirm_claims::CheckedFailure;
 use crate::{Result, RunCompletion, Service};
 use hairspring_props::claim_text::{generate, FindingState, Label, Subject};
 use hairspring_props::{PropertyStat, PropertyStatus};
@@ -42,12 +43,13 @@ impl Service {
         Ok(self.store.reporters_of(run_id, &wanted)?)
     }
 
-    /// What reproduces each violated property. No confirmation replays are stored yet, so every failure is
-    /// unconfirmed and the gate refuses any run that has one.
+    /// What reproduces each violated property: the stored checks of the failure at its seed, if any. A failure with
+    /// none is unconfirmed, and the gate refuses any run that has one.
     fn failure_evidence(
         &self,
         run_id: &str,
         stats: &[PropertyStat],
+        checked: &BTreeMap<u64, CheckedFailure>,
     ) -> Result<Vec<FailureEvidence>> {
         let seeds: BTreeSet<u64> = stats
             .iter()
@@ -62,7 +64,17 @@ impl Service {
             .iter()
             .map(|seed| FailureEvidence {
                 reporter: reporters.get(seed).cloned().unwrap_or_default(),
-                confirmations: Vec::new(),
+                confirmations: checked
+                    .get(seed)
+                    .map(|c| {
+                        vec![Confirmation {
+                            replayer: c.runner.clone(),
+                            replayer_trusted: c.runner_trusted,
+                            // Only a failure the checks derive confirmed or verified counts as reproduced.
+                            reproduced: c.status.claim_state() != FindingState::SingleRun,
+                        }]
+                    })
+                    .unwrap_or_default(),
             })
             .collect())
     }
@@ -80,7 +92,8 @@ impl Service {
             workers: Vec::new(),
             all_trusted: false,
         });
-        let evidence = self.failure_evidence(&run.id, stats)?;
+        let checked = self.checked_failures(&run.id)?;
+        let evidence = self.failure_evidence(&run.id, stats, &checked)?;
         let trusted_workers = self.list_workers()?.iter().filter(|w| w.trusted).count();
         let gate = claim_gate(&trust.workers, &evidence, trusted_workers);
 
@@ -99,13 +112,21 @@ impl Service {
             .filter_map(|s| s.first_failure.as_ref().map(|f| f.seed))
             .min();
         let subject = match (first_failure, rated_trials) {
-            (Some(seed), _) => Some(Subject::Failure {
-                seed,
-                // The gate only opens when every failure was reproduced on a trusted worker.
-                state: if gate.allowed {
-                    FindingState::Confirmed
-                } else {
-                    FindingState::SingleRun
+            (Some(seed), _) => Some(match checked.get(&seed) {
+                // The state is what the stored checks derive, and only where the gate opens: every failure was
+                // reproduced on a trusted worker.
+                Some(c) => Subject::CheckedFailure {
+                    seed,
+                    state: if gate.allowed {
+                        c.status.claim_state()
+                    } else {
+                        FindingState::SingleRun
+                    },
+                    pinned: c.pinned,
+                },
+                None => Subject::Failure {
+                    seed,
+                    state: FindingState::SingleRun,
                 },
             }),
             (None, Some(rated)) => Some(Subject::NoFailure {

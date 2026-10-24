@@ -27,6 +27,16 @@ export interface Run {
   error: string | null;
 }
 
+/** Where a failure stands, derived by the server from its stored confirmation checks. */
+export type FindingStatus = 'candidate' | 'reproduced' | 'confirmed' | 'verified' | 'not_reproducible' | 'control_failed';
+
+/** A failure's standing in one line. Present on the failures of `GET /api/runs/{id}`, absent from other lists. */
+export interface FindingSummary {
+  status: FindingStatus;
+  checks: number;
+  environment_pinned: boolean;
+}
+
 export interface FailureSummary {
   id: string;
   run_id: string;
@@ -36,6 +46,35 @@ export interface FailureSummary {
   shrunk_len: number;
   bundle_hash: string;
   created_at: number;
+  finding?: FindingSummary;
+}
+
+export type CheckKind = 'same_seed_rerun' | 'bundle_replay' | 'fixed_control' | 'strict_verify';
+export type CheckStatus = 'pass' | 'fail' | 'inconclusive' | 'skipped';
+
+/** One stored check. The free text a runner reported is under `guest` and is untrusted. */
+export interface CheckView {
+  id: string;
+  confirmation_id: string;
+  ordinal: number;
+  kind: CheckKind;
+  status: CheckStatus;
+  counts: { passed: number; failed: number; inconclusive: number };
+  artefacts: string[];
+  environment: Record<string, string>;
+  started_at: number;
+  finished_at: number;
+  runner_trusted: boolean;
+  created_at: number;
+  guest: { command: string; detail: Record<string, string> };
+}
+
+/** `GET /api/failures/{id}/checks`. */
+export interface FailureChecks {
+  failure_id: string;
+  finding: FindingStatus;
+  environment_pinned: boolean;
+  checks: CheckView[];
 }
 
 export interface Step {

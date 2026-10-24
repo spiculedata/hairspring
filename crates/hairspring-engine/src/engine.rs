@@ -1,5 +1,6 @@
 use crate::backend::{Backend, Progress, ReplayOptions};
 use crate::config::Config;
+use crate::confirm::{CheckResult, ConfirmRequest};
 use crate::erased::Registry;
 use crate::report::{DoctorReport, ReplayOutcome, RunOutcome};
 use crate::sim_backend::SimBackend;
@@ -89,6 +90,42 @@ impl Engine {
             )));
         }
         backend.replay_with(spec, bundle, options)
+    }
+
+    /// Runs the confirmation pipeline on the failure `bundle` records. The request is checked and every target it
+    /// names is resolved before anything runs. See [`Backend::confirm`] for `progress`.
+    pub fn confirm(
+        &self,
+        bundle: &Bundle,
+        req: &ConfirmRequest,
+        progress: &mut dyn FnMut(Progress) -> bool,
+    ) -> Result<Vec<CheckResult>, EngineError> {
+        let req = req.clone().validated()?;
+        let spec = self
+            .config
+            .targets
+            .get(&bundle.target)
+            .ok_or_else(|| EngineError::UnknownTarget(bundle.target.clone()))?;
+        let backend = self.backend_for(&spec.kind)?;
+        if backend.name() != bundle.backend {
+            return Err(EngineError::InvalidBundle(format!(
+                "bundle was produced by backend `{}` but target `{}` runs on `{}`",
+                bundle.backend,
+                bundle.target,
+                backend.name()
+            )));
+        }
+        let control = req
+            .control
+            .as_ref()
+            .map(|name| {
+                self.config
+                    .targets
+                    .get(name)
+                    .ok_or_else(|| EngineError::UnknownTarget(name.clone()))
+            })
+            .transpose()?;
+        backend.confirm(spec, control, bundle, &req, progress)
     }
 
     /// Runs the determinism self-check for a target over `seeds` seeds.

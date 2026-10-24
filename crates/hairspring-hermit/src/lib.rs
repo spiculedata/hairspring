@@ -14,6 +14,7 @@
 //! protocol) are captured separately from the capped output and folded into the trial's `events`. Linux x86-64 only; experimental.
 mod backend;
 mod capture;
+mod confirm;
 mod env;
 mod environment_probe;
 mod events;

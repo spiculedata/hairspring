@@ -1,5 +1,7 @@
+use crate::checks::{CheckRecord, ConfirmationOutcome, NewConfirmation};
 use crate::digest_allowance::DigestUse;
 use crate::lineage::*;
+use crate::sqlite_checks as checks;
 use crate::sqlite_explorer as explorer;
 use crate::sqlite_lineage as lineage;
 use crate::sqlite_run_end as run_end;
@@ -626,6 +628,14 @@ impl Store for SqliteStore {
             last_seen: now,
             trusted: false,
         })
+    }
+
+    fn add_confirmation(&self, new: &NewConfirmation, now: i64) -> Result<ConfirmationOutcome> {
+        checks::add(&mut self.conn(), new, now)
+    }
+
+    fn list_failure_checks(&self, failure_id: &str) -> Result<Vec<CheckRecord>> {
+        checks::list(&self.conn(), failure_id)
     }
 
     fn put_run_identity(&self, identity: &RunIdentity) -> Result<IdentityOutcome> {

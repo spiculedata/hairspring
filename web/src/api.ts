@@ -1,5 +1,5 @@
 import { parseSse, type SseEvent } from './sse';
-import type { FailureDetail, FailureSummary, PropertyPage, PropertyQuery, ReplayResult, Run, RunDetail, Target, Worker } from './types';
+import type { FailureChecks, FailureDetail, FailureSummary, PropertyPage, PropertyQuery, ReplayResult, Run, RunDetail, Target, Worker } from './types';
 
 const TOKEN_KEY = 'hairspring.token';
 
@@ -125,7 +125,12 @@ export function propertiesUrl(runId: string, query: PropertyQuery): string {
   return `/api/runs/${encodeURIComponent(runId)}/properties${qs ? `?${qs}` : ''}`;
 }
 
+export function failureChecksUrl(failureId: string): string {
+  return `/api/failures/${encodeURIComponent(failureId)}/checks`;
+}
+
 export const api = {
+  failureChecks: (failureId: string) => request<FailureChecks>(failureChecksUrl(failureId)),
   properties: async (runId: string, query: PropertyQuery = {}, signal?: AbortSignal): Promise<PropertyPage> => {
     const body = await request<unknown>(propertiesUrl(runId, query), { signal });
     if (!isPropertyPage(body)) throw new ApiError(502, 'the server sent a properties response in an unexpected shape');
