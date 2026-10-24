@@ -91,6 +91,7 @@ common/lang_at.h       the parts C and C++ share: parameters, modes, busy loop, 
 c/                     src/lost_update.c, Makefile
 cpp/                   src/lost_update.cc, Makefile (clang++ by default; CXX=g++ works)
 go/                    main.go, internal/race (the program and its unit tests), Makefile
+java/                  the Java probe (no SDK): src/langat, test/, profiles.tsv, manifest.mf, Makefile
 tests/seccomp_window.c test-only: the window makes no system call (used by the build record, Linux only)
 scripts/check-native.sh  the native self-check of one artifact; run-checks.sh adds the negative control;
                        check-sources.sh, check-disasm.sh; test-scripts.sh tests all of them with a fake program
@@ -197,6 +198,41 @@ six-field line and the exit status; B5 runs `strace -ff` on one run and requires
 (`scripts/check-probe-writes.sh`); the probe's own tests run in release. B2, B3, B6 and B7 belong to the AT programs and
 are marked not applicable, and the record has no alignment checklist. The CI workflow's manual `fixture-build-records`
 job runs it as the `rust-probe` variant; `scripts/build-record-docker.sh rust-probe` runs it in a container.
+
+## Java probe
+
+[`java/`](java) holds a small JDK-only program, `lang-at.jar` (class `langat.Probe`), used to check how Java platform
+threads are scheduled. It uses no SDK and has no property or modes, and it takes no argument (any argument prints a usage
+line on stderr and exits 64). Four `java.lang.Thread` workers take a `synchronized` monitor, run a loop on a plain
+`long` field with no guard, and report their finish on a `LinkedBlockingQueue`; a `ConcurrentHashMap` gives a fourth
+structure. It prints exactly one line, with one write to the stdout descriptor, and exits 0:
+
+`PROBE v1 lang=java lock_order=<16 hex> arrival=<16 hex> rand=<16 hex> vtime_ns=<20 digits> extra=<16 hex>`
+
+`lock_order` and `arrival` are FNV-1a 64 hashes of the worker numbers written as bare digits, `extra` hashes the map's
+keys in iteration order, `rand` is the first value of a new `java.util.Random` (which JDK 21 seeds from a counter and
+`System.nanoTime()`), and `vtime_ns` is the monotonic clock difference between the start and the end of the run. Exit 3
+means an internal failure (a thread did not start or died, or the line could not be written).
+
+`java/profiles.tsv` lists the JVM flag profiles the program is run with (two profiles, arm `a` and arm `b`); the flags are
+not part of the jar. The jar is built with `javac --release 21 -Xlint:all -Werror` and written with a fixed entry timestamp
+and its entries in sorted order, so two builds with the same JDK give the same bytes.
+
+```sh
+make -C java test      # self-test of the classes, then native tests of the jar (line format, usage errors, exit 3)
+make -C java flags     # every profile of profiles.tsv: valid JVM options, one clean line, no JVM warning
+make test-java         # both
+```
+
+`scripts/build-record-probe-java.sh` writes the build record: B1 builds the jar twice (two directories, two time zones)
+and requires equal sha256, and checks the sorted entries and the single timestamp; a source check
+(`scripts/check-sources-java.sh`) allows two `System.nanoTime` reads and no other clock, environment, `/proc`, CPU count or
+process-table read; the flag profiles are checked; B4 is native runs that check only the format of the line and the exit
+status; B5 runs `strace -ff` on one run per profile and requires the line to be one `write(2)`
+(`scripts/check-probe-writes.sh`). The record has no alignment checklist. The CI workflow's manual
+`fixture-build-records` job runs it as the `java-probe` variant (Temurin 21 from `actions/setup-java`; the record fails if
+the JDK is not the pinned build); `scripts/build-record-docker.sh java-probe` runs it in a container with the pinned
+Temurin tarball. Under an emulated container `strace` sees nothing, so B5 needs a native host.
 
 ## Compilers
 
