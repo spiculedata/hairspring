@@ -41,6 +41,7 @@ pub use env::guest_env;
 pub use events::{EventsFault, GUEST_EVENTS_FILE};
 pub use exec::Trial;
 pub use head_tail::Omitted;
+pub use hermit_version::probe as probe_hermit_version;
 pub use tally::TrialObserver;
 
 use hairspring_props::limits::DEFAULT_MAX_EVENT_BYTES_PER_TRIAL;

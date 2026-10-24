@@ -1,5 +1,6 @@
 use crate::cli::DoctorArgs;
 use crate::ctx::{CmdResult, Ctx};
+use crate::host::process_backend::{self, ProcessBackendFacts};
 use crate::host::{self, HostFacts};
 use hairspring_engine::config::TargetKind;
 use std::io::Write;
@@ -15,6 +16,10 @@ fn run_with_host(
     out: &mut dyn Write,
     facts: &HostFacts,
 ) -> CmdResult<i32> {
+    // The flag answers for the machine only; no target is looked at.
+    if args.process_backend {
+        return run_process_backend(out, &host::process_probe::probe());
+    }
     // First, so a per-target error below cannot hide it.
     if host::involves_process_target(ctx.engine.config(), &args.targets) {
         host::write_report(out, facts)?;
@@ -48,9 +53,20 @@ fn run_with_host(
     Ok(code)
 }
 
+/// Prints the process backend's prerequisites for `facts`; exits `EXIT_UNSUPPORTED_HOST` when any is unmet.
+fn run_process_backend(out: &mut dyn Write, facts: &ProcessBackendFacts) -> CmdResult<i32> {
+    let report = process_backend::assess(facts);
+    process_backend::write_report(out, &report)?;
+    Ok(match report.can_run() {
+        true => crate::EXIT_OK,
+        false => crate::EXIT_UNSUPPORTED_HOST,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::process_backend::{HermitFact, PerfFact, ProcessBackendFacts};
     use crate::host::{AutoUpdates, LoaderHashes};
     use hairspring_engine::erased::Registry;
 
@@ -120,7 +136,68 @@ mod tests {
             targets: vec![],
             seeds: 1,
             steps: 1,
+            process_backend: false,
         }
+    }
+
+    fn backend_facts(os: &str) -> ProcessBackendFacts {
+        ProcessBackendFacts {
+            os: os.into(),
+            arch: "x86_64".into(),
+            kernel_release: Some("6.17.0-42-generic".into()),
+            hermit: HermitFact::Found {
+                path: "/h/hermit".into(),
+                version: "hermit 0.4.1".into(),
+                sha256: Some("ab".into()),
+            },
+            perf: PerfFact::Usable,
+            perf_event_paranoid: Some(2),
+            ptrace_scope: Some(1),
+            is_root: false,
+            container: None,
+            libc: None,
+            loader: Default::default(),
+        }
+    }
+
+    #[test]
+    fn the_process_backend_flag_prints_the_report_and_exits_zero_when_it_can_run() {
+        let mut out = Vec::new();
+        let code = run_process_backend(&mut out, &backend_facts("linux")).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(code, crate::EXIT_OK, "{text}");
+        assert!(text.contains("result: ok:"), "{text}");
+    }
+
+    #[test]
+    fn a_machine_that_cannot_run_the_process_backend_gets_its_own_exit_code() {
+        let mut out = Vec::new();
+        let code = run_process_backend(&mut out, &backend_facts("macos")).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(code, crate::EXIT_UNSUPPORTED_HOST, "{text}");
+        assert_ne!(
+            code,
+            crate::EXIT_VIOLATION,
+            "must not look like a found bug"
+        );
+        assert!(text.contains("result: CANNOT RUN"), "{text}");
+    }
+
+    #[test]
+    fn the_process_backend_flag_skips_the_target_checks() {
+        let mut flagged = args();
+        flagged.process_backend = true;
+        flagged.targets = vec!["no-such-target".to_string()];
+        let mut out = Vec::new();
+        let result = run_with_host(
+            &ctx_with(PROCESS),
+            &flagged,
+            &mut out,
+            &HostFacts::default(),
+        );
+        // The flag answers for the machine only: a target name that would be an error is not looked at.
+        assert!(result.is_ok());
+        assert!(!String::from_utf8(out).unwrap().contains("no-such-target"));
     }
 
     const PROCESS: &str = "[target.svc]\nkind = \"process\"\ncommand = [\"/bin/true\"]\n";

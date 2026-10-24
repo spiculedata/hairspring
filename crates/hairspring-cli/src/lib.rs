@@ -24,6 +24,8 @@ pub const EXIT_VIOLATION: i32 = 1;
 pub const EXIT_ERROR: i32 = 2;
 /// A replay did not reproduce the failure, but the host differs from the recording, so it does not show the bug is fixed.
 pub const EXIT_INCONCLUSIVE: i32 = 3;
+/// `doctor --process-backend`: this machine cannot run the process backend. Not a found bug and not a usage error.
+pub const EXIT_UNSUPPORTED_HOST: i32 = 4;
 
 pub fn main_with(registry: Registry) -> ExitCode {
     let code = run(

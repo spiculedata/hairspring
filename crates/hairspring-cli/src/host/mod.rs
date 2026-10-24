@@ -4,6 +4,8 @@ mod apt_conf;
 mod autoupdate;
 mod kernel;
 mod loader;
+pub mod process_backend;
+pub mod process_probe;
 
 pub use autoupdate::AutoUpdates;
 pub use loader::LoaderHashes;

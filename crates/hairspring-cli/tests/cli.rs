@@ -165,6 +165,24 @@ fn doctor_passes_for_demo_targets() {
 }
 
 #[test]
+fn doctor_process_backend_reports_a_missing_hermit_and_exits_4() {
+    // A Hermit that is not there blocks the backend on every platform, so the verdict does not depend on the host.
+    let d = scratch("doctor-backend");
+    let missing = d.join("no-such-dir").join("hermit");
+    let o = Command::new(env!("CARGO_BIN_EXE_hairspring"))
+        .args(["doctor", "--process-backend"])
+        .current_dir(&d)
+        .env("HAIRSPRING_HERMIT", &missing)
+        .output()
+        .expect("binary runs");
+    let s = out(&o);
+    assert_eq!(o.status.code(), Some(4), "{s}{}", err(&o));
+    assert!(s.contains("result: CANNOT RUN"), "{s}");
+    assert!(s.contains(&missing.display().to_string()), "{s}");
+    assert!(s.contains("platform"), "{s}");
+}
+
+#[test]
 fn init_writes_a_config_once() {
     let d = scratch("init");
     assert_eq!(hairspring(&d, &["init"]).status.code(), Some(0));
