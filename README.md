@@ -57,6 +57,9 @@ Measured on real hardware: a WASM trace hash recorded on macOS arm64 is identica
 Hermit backend found a real check-then-act threading bug in a C program, reproduced it 3/3 times, and
 found a duplicate-delivery bug in an unmodified Python Dapr consumer through a simulated sidecar.
 
+To install Hermit and try the `process` backend on a suitable Linux machine, see
+[docs/quickstart.md](docs/quickstart.md); `hairspring doctor --process-backend` reports whether a machine can run it.
+
 What we do **not** claim: bit-exact replay of arbitrary programs on macOS (there is no supported way to do
 this), a general-purpose deterministic hypervisor, or that Hermit (a young open-source
 project) is production-hardened. See [Limitations](#limitations).
@@ -76,6 +79,8 @@ hairspring serve                 # REST API, live UI and MCP at http://127.0.0.1
 ```
 
 Without `make ui` the server still works (API and MCP); it shows a placeholder page instead of the UI.
+`scripts/install.sh` builds the CLI and installs it to `~/.local/bin` (or, with `--version <tag>`, downloads a release
+binary and verifies its sha256 first), then runs `hairspring doctor`.
 
 ### Test your own system
 
