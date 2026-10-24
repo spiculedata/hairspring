@@ -47,8 +47,6 @@ else
   java=java
   javac=javac
 fi
-# The six-field line and nothing else.
-line_rx='^PROBE v1 lang=java lock_order=[0-9a-f]{16} arrival=[0-9a-f]{16} rand=[0-9a-f]{16} vtime_ns=[0-9]{20} extra=[0-9a-f]{16}$'
 
 versions() {
   uname -srm
@@ -56,10 +54,12 @@ versions() {
   echo "$got"
   "$javac" -version 2>&1
   [ -r "${JAVA_HOME:-/nonexistent}/release" ] && grep -E '^(IMPLEMENTOR|JAVA_RUNTIME_VERSION|JAVA_VERSION|OS_ARCH)=' "$JAVA_HOME/release"
-  case "$got" in
-    *"$jdk_pinned"*) echo "ok   the JDK is the pinned $jdk_pinned" ;;
-    *) echo "FAIL the JDK is not the pinned $jdk_pinned"; return 1 ;;
-  esac
+  if printf '%s\n' "$got" | sh "$here/check-jdk-version.sh" "$jdk_pinned"; then
+    echo "ok   the JDK is the pinned $jdk_pinned"
+  else
+    echo "FAIL the JDK is not the pinned $jdk_pinned"
+    return 1
+  fi
   command -v strace >/dev/null 2>&1 && strace -V 2>&1 | head -1
   echo "image digest: ${IMAGE_DIGEST:-<TO BE FILLED: not given>}"
   echo "build command: make -C examples/language-fixtures/java jar BUILD=<dir> (javac --release 21 -Xlint:all -Werror -encoding UTF-8 -proc:none; jar --create --date=2026-01-01T00:00:00Z --manifest manifest.mf, the class files listed one by one in sorted order)"
@@ -111,7 +111,7 @@ forbidden_reads() {
 
 # Every flag profile of the experiment is a valid set of JVM options, and a run under it prints one clean line.
 profiles() {
-  JAVA=$java sh "$here/check-java-profiles.sh" "$javadir/profiles.tsv" "$jar"
+  JAVA=$java sh "$here/check-java-profiles.sh" --exact "$javadir/profiles.tsv" "$jar"
 }
 
 # B4, format only: every run exits 0 with an empty stderr and one stdout line of the six-field form. The distinct counts are
@@ -125,8 +125,7 @@ native() {
     rc=$?
     [ "$rc" -eq 0 ] || { echo "FAIL run $i: exit status $rc, want 0"; return 1; }
     [ ! -s "$work/err.txt" ] || { echo "FAIL run $i: something on stderr:"; cat "$work/err.txt"; return 1; }
-    [ "$(wc -l <"$work/out.txt" | tr -d ' ')" -eq 1 ] || { echo "FAIL run $i: stdout is not exactly one line:"; cat "$work/out.txt"; return 1; }
-    grep -Eq "$line_rx" "$work/out.txt" || { echo "FAIL run $i: the line is not in the six-field form:"; cat "$work/out.txt"; return 1; }
+    sh "$here/check-probe-line.sh" "$work/out.txt" || { echo "FAIL run $i: stdout is not exactly the six-field line:"; cat "$work/out.txt"; return 1; }
     cat "$work/out.txt" >>"$work/lines.txt"
     i=$((i + 1))
   done
@@ -152,7 +151,7 @@ events() {
     echo "--- arm $arm: $flags"
     rm -f "$work"/strace.*
     # shellcheck disable=SC2086  # flags is a list of words on purpose
-    strace -ff -s 4096 -e trace=write,writev -o "$work/strace" "$java" $flags -cp "$jar" langat.Probe >"$work/stdout.txt" 2>"$work/stderr.txt" || return 1
+    strace -ff -s 4096 -e trace=write,writev -o "$work/strace" "$java" $flags -cp "$jar" langat.Probe >"$work/stdout.txt" 2>"$work/stderr.txt" </dev/null || return 1
     sh "$here/check-probe-writes.sh" "$work"/strace.* || return 1
   done <"$javadir/profiles.tsv"
 }

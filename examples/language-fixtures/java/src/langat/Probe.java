@@ -27,18 +27,27 @@ public final class Probe {
 
     private Probe() {}
 
+    /** The workload, as a seam so a test can make it fail. */
+    interface Runner {
+        Outcome run() throws InvariantException;
+    }
+
     public static void main(String[] args) {
         System.exit(run(args, new FileOutputStream(FileDescriptor.out), System.err));
     }
 
     /** Runs the probe against the given streams and returns the exit status. */
     static int run(String[] args, OutputStream out, PrintStream err) {
+        return run(args, out, err, Workload::run);
+    }
+
+    static int run(String[] args, OutputStream out, PrintStream err, Runner runner) {
         if (args.length > 0) {
             err.println(USAGE);
             return EXIT_USAGE;
         }
         try {
-            byte[] line = ProbeLine.format(fieldsOf(Workload.run())).getBytes(StandardCharsets.US_ASCII);
+            byte[] line = ProbeLine.format(fieldsOf(runner.run())).getBytes(StandardCharsets.US_ASCII);
             // One call, then a flush: the whole line is one write(2) on the real stdout.
             out.write(line, 0, line.length);
             out.flush();
@@ -47,7 +56,7 @@ public final class Probe {
             err.println("probe: internal invariant failed: " + failed.getMessage());
         } catch (IOException failed) {
             err.println("probe: the stdout line could not be written: " + failed.getMessage());
-        } catch (RuntimeException failed) {
+        } catch (RuntimeException | Error failed) {
             err.println("probe: internal failure: " + failed);
         }
         return EXIT_INVARIANT;

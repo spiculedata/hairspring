@@ -915,7 +915,10 @@ esac
 [ "${FAKE:-}" = noisy ] && echo "noise" >&2
 [ "${FAKE:-}" = fail ] && exit 1
 [ "${FAKE:-}" = twolines ] && echo "second line"
-printf 'PROBE v1 lang=java lock_order=0123456789abcdef arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef\n'
+fakeline='PROBE v1 lang=java lock_order=0123456789abcdef arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef'
+printf '%s\n' "$fakeline"
+[ "${FAKE:-}" = twice ] && printf '%s\n' "$fakeline"
+[ "${FAKE:-}" = junk ] && printf 'junk'
 exit 0
 EOF
 chmod +x "$fakejava"
@@ -942,6 +945,62 @@ expect "check-java-profiles prints each arm and its flags" 0 sh -c "FAKE= JAVA='
 expect "the real profiles.tsv names arm a with the base flags" 0 grep -Fxq "$(printf 'a\t-Xint -XX:+UseSerialGC -XX:ActiveProcessorCount=1 -XX:-UsePerfData -Xshare:off')" "$here/../java/profiles.tsv"
 expect "the real profiles.tsv names arm b with the JIT-limited flags" 0 grep -Fxq "$(printf 'b\t-XX:TieredStopAtLevel=1 -XX:-BackgroundCompilation -XX:CICompilerCount=1 -XX:+UseSerialGC -XX:ActiveProcessorCount=1 -XX:-UsePerfData -Xshare:off')" "$here/../java/profiles.tsv"
 expect "the real profiles.tsv has two profiles and nothing else but comments" 0 sh -c "test \$(grep -vc '^#' '$here/../java/profiles.tsv') -eq 2"
+
+# check-java-profiles.sh --exact: the profiles file must be exactly arms a and b with the experiment's flags.
+cjx() { # cjx <name> <wanted exit> <profiles file>
+  expect "check-java-profiles --exact $1" "$2" env FAKE= JAVA="$fakejava" sh "$here/check-java-profiles.sh" --exact "$3" "$jarfile"
+}
+cjx "accepts the real profiles" 0 "$here/../java/profiles.tsv"
+cjx "rejects profiles with other flags" 1 "$profiles"
+{ cat "$here/../java/profiles.tsv"; printf 'c\t-Xint\n'; } >"$tmp/three.tsv"
+cjx "rejects a third arm" 1 "$tmp/three.tsv"
+sed 's/-Xshare:off/-Xshare:auto/' "$here/../java/profiles.tsv" >"$tmp/changed.tsv"
+cjx "rejects a changed flag" 1 "$tmp/changed.tsv"
+grep -v '^b' "$here/../java/profiles.tsv" >"$tmp/onlya.tsv"
+cjx "rejects a missing arm" 1 "$tmp/onlya.tsv"
+# Trailing junk after the line: the line must be the whole of stdout.
+cjp "rejects junk after the line (no newline at its end)" 1 junk
+cjp "rejects a stdout that is the line twice" 1 twice
+
+# check-probe-line.sh: one line in the six-field form and nothing else, byte for byte.
+goodline='PROBE v1 lang=java lock_order=0123456789abcdef arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef'
+printf '%s\n' "$goodline" >"$tmp/pl_good.txt"
+printf '%s\njunk' "$goodline" >"$tmp/pl_junk.txt"
+printf '%s\n\n' "$goodline" >"$tmp/pl_blank.txt"
+printf '%s' "$goodline" >"$tmp/pl_nonl.txt"
+printf '%s\n%s\n' "$goodline" "$goodline" >"$tmp/pl_two.txt"
+printf '%s \n' "$goodline" >"$tmp/pl_trail.txt"
+: >"$tmp/pl_empty.txt"
+expect "check-probe-line accepts the line and its newline" 0 sh "$here/check-probe-line.sh" "$tmp/pl_good.txt"
+expect "check-probe-line rejects LINE then junk without a newline" 1 sh "$here/check-probe-line.sh" "$tmp/pl_junk.txt"
+expect "check-probe-line rejects a blank line after the line" 1 sh "$here/check-probe-line.sh" "$tmp/pl_blank.txt"
+expect "check-probe-line rejects a line with no newline" 1 sh "$here/check-probe-line.sh" "$tmp/pl_nonl.txt"
+expect "check-probe-line rejects two lines" 1 sh "$here/check-probe-line.sh" "$tmp/pl_two.txt"
+expect "check-probe-line rejects trailing space" 1 sh "$here/check-probe-line.sh" "$tmp/pl_trail.txt"
+expect "check-probe-line rejects an empty file" 1 sh "$here/check-probe-line.sh" "$tmp/pl_empty.txt"
+expect "check-probe-line rejects a missing file" 1 sh "$here/check-probe-line.sh" "$tmp/pl_missing.txt"
+expect "check-probe-line without a file is a usage error" 64 sh "$here/check-probe-line.sh"
+
+# check-jdk-version.sh: the JDK must report exactly the pinned build, not a later one that starts with it.
+jv() { # jv <name> <wanted exit> <text>
+  expect "check-jdk-version $1" "$2" sh -c "printf '%s\n' '$3' | sh '$here/check-jdk-version.sh' Temurin-21.0.12.1+1"
+}
+jv "accepts the pinned build" 0 'OpenJDK Runtime Environment Temurin-21.0.12.1+1 (build 21.0.12.1+1-LTS)'
+jv "accepts the pinned build at the end of a line" 0 'Runtime Temurin-21.0.12.1+1'
+jv "rejects +10" 1 'OpenJDK Runtime Environment Temurin-21.0.12.1+10 (build 21.0.12.1+10-LTS)'
+jv "rejects +19" 1 'OpenJDK Runtime Environment Temurin-21.0.12.1+19 (build 21.0.12.1+19-LTS)'
+jv "rejects another patch release" 1 'OpenJDK Runtime Environment Temurin-21.0.13+9 (build 21.0.13+9-LTS)'
+jv "rejects a dot standing for another character" 1 'OpenJDK Runtime Environment Temurin-21x0.12.1+1 (build 21)'
+expect "check-jdk-version without a pin is a usage error" 64 sh "$here/check-jdk-version.sh"
+
+# check-sources-java.sh: more clocks and random sources, system properties, /sys and reflection.
+for token in 'Calendar.getInstance()' 'OffsetDateTime.now()' 'InstantSource.system()' 'Year.now()' 'YearMonth.now()' 'MonthDay.now()' \
+  'System.getProperty("os.name")' 'System.getProperties()' '"/sys/devices/system/cpu"' 'Class.forName("x")' 'x.getDeclaredMethod("m")' \
+  'f.setAccessible(true)' 'ThreadLocalRandom.current()' 'Math.random()' 'new SecureRandom()' 'UUID.randomUUID()'; do
+  jbad="$tmp/Bad2.java"
+  printf 'class Bad2 { Object f() { return %s; } }\n' "$token" >"$jbad"
+  expect "check-sources-java rejects $token" 1 sh "$here/check-sources-java.sh" "$jbad"
+done
 
 libcase "a record without an alignment checklist does not claim a count of ticked lines" 0 'record_title=t; record_generated_by=g; artifact_name=p; artifact_sha=aa; record_no_checklist=1; finish_record >/dev/null; ! grep -q "Checklist lines ticked" "$out"'
 libcase "a record with an alignment checklist states how many lines are ticked" 0 'record_title=t; record_generated_by=g; artifact_name=p; artifact_sha=aa; finish_record >/dev/null; grep -q "^Checklist lines ticked: 0 of 11." "$out"'

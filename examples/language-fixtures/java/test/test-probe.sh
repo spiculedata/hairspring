@@ -23,7 +23,7 @@ flags=${JAVA_FLAGS:-}
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/probe-java-test.XXXXXX") || exit 1
 trap 'rm -rf "$tmp"' EXIT
 failures=0
-line_rx='^PROBE v1 lang=java lock_order=[0-9a-f]{16} arrival=[0-9a-f]{16} rand=[0-9a-f]{16} vtime_ns=[0-9]{20} extra=[0-9a-f]{16}$'
+checks=$(cd "$(dirname "$0")/../../scripts" && pwd) || exit 1
 
 ok() { echo "ok   $1"; }
 bad() {
@@ -54,12 +54,8 @@ while [ "$i" -lt "$runs" ]; do
     echo "run $i: something on stderr:"
     cat "$tmp/err.txt"
     format_ok=0
-  elif [ "$(wc -l <"$tmp/out.txt" | tr -d ' ')" -ne 1 ]; then
-    echo "run $i: stdout is not exactly one line:"
-    cat "$tmp/out.txt"
-    format_ok=0
-  elif ! grep -Eq "$line_rx" "$tmp/out.txt"; then
-    echo "run $i: not the six-field line:"
+  elif ! sh "$checks/check-probe-line.sh" "$tmp/out.txt"; then
+    echo "run $i: stdout is not exactly the six-field line:"
     cat "$tmp/out.txt"
     format_ok=0
   else

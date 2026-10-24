@@ -219,6 +219,29 @@ public final class SelfTest {
             same(3, probe(new String[0], new Broken(), err));
             require(err.size() > 0, "no message");
         });
+        test("an Error or a runtime exception from the workload is an internal failure: exit 3 and a message", () -> {
+            Probe.Runner[] failing = {
+                () -> {
+                    throw new OutOfMemoryError("unable to create native thread");
+                },
+                () -> {
+                    throw new StackOverflowError();
+                },
+                () -> {
+                    throw new IllegalStateException("boom");
+                },
+                () -> {
+                    throw new InvariantException("a worker died");
+                }
+            };
+            for (Probe.Runner runner : failing) {
+                Recording out = new Recording();
+                ByteArrayOutputStream err = new ByteArrayOutputStream();
+                same(3, Probe.run(new String[0], out, new PrintStream(err, true, StandardCharsets.US_ASCII), runner));
+                same(0, out.writes.size());
+                require(err.size() > 0, "no message");
+            }
+        });
         test("two runs agree on the fields that do not depend on the schedule", () -> {
             String first = lineOf();
             String second = lineOf();
