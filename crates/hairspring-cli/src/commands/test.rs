@@ -69,13 +69,27 @@ pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write)
             max_trials: requested_trials.unwrap_or(spec.budget.max_trials),
             wall_secs: args.budget_secs.unwrap_or(spec.budget.wall_secs),
         };
+        // Trial n runs at seed + n. Past the largest seed that would wrap round to 0, which a range written as
+        // FIRST..END cannot say, so such a sweep is refused rather than printed as a range it did not run.
+        if mode.is_sweep()
+            && seed
+                .checked_add(budget.max_trials.saturating_sub(1))
+                .is_none()
+        {
+            return Err(format!(
+                "a sweep of {} trials from seed {seed} would pass the largest seed ({}); start lower",
+                budget.max_trials,
+                u64::MAX
+            )
+            .into());
+        }
         if text_mode {
             match mode {
                 RunMode::Search => writeln!(out, "hairspring: exploring {name} (seed {seed})")?,
                 RunMode::Sweep => writeln!(
                     out,
                     "hairspring: sweeping {name} (seeds {seed}..{})",
-                    seed.saturating_add(budget.max_trials)
+                    u128::from(seed) + u128::from(budget.max_trials)
                 )?,
             }
         }
@@ -113,6 +127,12 @@ pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write)
                 out,
                 "  note: ended after {} of {} trials, before its trial budget (a step, wall-clock or memory limit; raise --budget-steps or --budget-secs to run more)",
                 outcome.trials, budget.max_trials
+            )?;
+        }
+        if mode.is_sweep() && detail.run.ingest_incomplete && text_mode {
+            writeln!(
+                out,
+                "  note: this sweep was stopped before its budget without reaching a limit; its figures are partial and no sweep summary is stated"
             )?;
         }
         code = code.max(match outcome.status {

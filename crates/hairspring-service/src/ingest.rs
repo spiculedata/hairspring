@@ -5,6 +5,7 @@
 //! is decoded and checked against the catalog the server holds, and a batch is stored all or nothing.
 use crate::digest_cap::{is_capped_reason, stand_in};
 use crate::query::is_schedule_fingerprint;
+use crate::sweep::RowRules;
 use crate::types::IngestReceipt;
 use crate::{Result, Service, ServiceError};
 use hairspring_engine::config::MAX_TRIALS_CAP;
@@ -155,13 +156,21 @@ struct Checked {
     rows: Vec<CatalogRowRecord>,
 }
 
-/// `limit` is the number of trials the run was started with: a record numbered at or past it is not one of its trials.
-fn check_report(r: &TrialReport, catalog: RunCatalog, limit: u64) -> Result<(Checked, RunCatalog)> {
+/// `rules` come from the job: a record numbered at or past the number of trials the run was started with is not one of
+/// its trials, and in a sweep a record's seed is fixed by its number.
+fn check_report(
+    r: &TrialReport,
+    catalog: RunCatalog,
+    rules: RowRules,
+) -> Result<(Checked, RunCatalog)> {
     let label = |what: &str| invalid(format!("trial {}: {what}", r.seq));
-    if r.seq >= limit.min(MAX_TRIALS_CAP) {
+    if r.seq >= rules.limit.min(MAX_TRIALS_CAP) {
         return Err(label(
             "sequence number is past the trials this run was started with",
         ));
+    }
+    if rules.seed_of(r.seq).is_some_and(|seed| seed != r.seed) {
+        return Err(label("seed is not the one this run gives that trial"));
     }
     if r.reason.chars().count() > MAX_TRIAL_REASON_CHARS || !is_plain_text(&r.reason, usize::MAX) {
         return Err(label(
@@ -349,10 +358,10 @@ impl Service {
             return Err(invalid("the run is already finished"));
         }
         let mut catalog = self.catalog_for(&run, &job)?;
-        let limit = crate::sweep::trial_limit(&job.payload_json);
+        let rules = crate::sweep::row_rules(&job.payload_json);
         let (mut trials, mut rows) = (Vec::with_capacity(reports.len()), Vec::new());
         for r in reports {
-            let (checked, next) = check_report(r, catalog, limit)?;
+            let (checked, next) = check_report(r, catalog, rules)?;
             catalog = next;
             rows.extend(checked.rows);
             trials.push(checked.trial);

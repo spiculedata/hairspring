@@ -176,6 +176,119 @@ fn a_failed_sweep_that_ran_fewer_trials_than_its_budget_without_a_limit_is_incom
 }
 
 #[test]
+fn an_incomplete_sweep_is_reported_without_a_rate_and_has_no_summary() {
+    let (svc, _store, engine) = setup();
+    let job = lease_sweep(&svc, &engine, WORKER, 10);
+    let verdicts = [Pass, Pass, Violation];
+    svc.ingest_trials(&job.job_id, WORKER, &rows(&verdicts))
+        .unwrap();
+    let outcome = RunOutcome {
+        trials_reported: Some(3),
+        ..RunOutcome::failed(3, 3, 5, failure())
+    };
+    finish(&svc, &job, WORKER, outcome);
+    let detail = svc.get_run(&job.run_id).unwrap().unwrap();
+    assert!(
+        detail.sweep.is_none(),
+        "a first-hit count is not offered as a summary"
+    );
+    let stored = svc.outcome(&job.run_id).unwrap().unwrap();
+    assert!(stored.sweep.is_none());
+    let text = to_text("lock-lease", &stored);
+    assert!(!text.contains("Wilson"), "{text}");
+    assert!(!text.contains('%'), "no rate of any kind: {text}");
+    assert!(!text.contains("sweep:"), "{text}");
+}
+
+#[test]
+fn a_failed_sweep_cannot_skip_the_incomplete_mark_on_its_workers_word_about_steps() {
+    let (svc, store, engine) = setup();
+    let job = lease_sweep(&svc, &engine, WORKER, 10);
+    let verdicts = [Pass, Violation];
+    svc.ingest_trials(&job.job_id, WORKER, &rows(&verdicts))
+        .unwrap();
+    // The budget's step limit is 1000; the worker says it spent them all.
+    let outcome = RunOutcome {
+        trials_reported: Some(2),
+        ..RunOutcome::failed(1000, 2, 5, failure())
+    };
+    finish(&svc, &job, WORKER, outcome);
+    assert!(
+        store
+            .get_run(&job.run_id)
+            .unwrap()
+            .unwrap()
+            .ingest_incomplete
+    );
+}
+
+#[test]
+fn a_finished_sweep_serves_its_summary_with_the_run_and_a_search_does_not() {
+    let (svc, _store, engine) = setup();
+    let sweep = svc
+        .run_sync_with_mode(&engine, &lock_lease(5), RunMode::Sweep)
+        .unwrap();
+    let summary = sweep
+        .sweep
+        .as_ref()
+        .expect("a sweep's detail carries its summary");
+    assert_eq!(summary.trials, 5);
+    let json = serde_json::to_value(&sweep).unwrap();
+    assert_eq!(json["sweep"]["trials"], 5);
+    assert_eq!(json["sweep"]["first_failing_seeds"][0], "7");
+    let search = svc.run_sync(&engine, &lock_lease(5)).unwrap();
+    assert!(search.sweep.is_none());
+    assert!(serde_json::to_value(&search)
+        .unwrap()
+        .get("sweep")
+        .is_none());
+}
+
+#[test]
+fn a_sweep_that_is_still_running_serves_no_summary() {
+    let (svc, _store, engine) = setup();
+    let job = lease_sweep(&svc, &engine, WORKER, 3);
+    svc.ingest_trials(&job.job_id, WORKER, &rows(&[Pass, Pass]))
+        .unwrap();
+    assert!(svc.get_run(&job.run_id).unwrap().unwrap().sweep.is_none());
+}
+
+#[test]
+fn a_sweep_row_must_carry_the_seed_its_position_names() {
+    let (svc, store, engine) = setup();
+    let job = lease_sweep(&svc, &engine, WORKER, 3);
+    // The run starts at seed 1, so trial 1 is seed 2: a worker cannot name another failing seed.
+    for forged in [1u64, 99, u64::MAX] {
+        let mut log = rows(&[Pass, Violation]);
+        log[1].seed = forged;
+        let err = svc.ingest_trials(&job.job_id, WORKER, &log).unwrap_err();
+        assert!(
+            matches!(err, ServiceError::InvalidRequest(_)),
+            "{forged}: {err:?}"
+        );
+    }
+    assert_eq!(store.count_trials(&job.run_id).unwrap(), 0);
+    svc.ingest_trials(&job.job_id, WORKER, &rows(&[Pass, Violation]))
+        .unwrap();
+}
+
+#[test]
+fn a_sweep_seed_rule_wraps_at_the_top_of_the_seed_space() {
+    let (svc, _store, engine) = setup();
+    let req = StartRun {
+        seed: Some(u64::MAX),
+        ..lock_lease(3)
+    };
+    svc.start_run_with_mode(&engine, &req, RunMode::Sweep)
+        .unwrap();
+    let job = svc.lease(WORKER).unwrap().unwrap();
+    let mut log = rows(&[Pass, Pass]);
+    log[0].seed = u64::MAX;
+    log[1].seed = 0;
+    svc.ingest_trials(&job.job_id, WORKER, &log).unwrap();
+}
+
+#[test]
 fn a_sweep_that_ran_every_trial_of_its_budget_is_complete() {
     let (svc, store, engine) = setup();
     let job = lease_sweep(&svc, &engine, WORKER, 4);

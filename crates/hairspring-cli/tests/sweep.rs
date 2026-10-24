@@ -165,6 +165,34 @@ fn trials_and_seeds_are_refused_without_sweep() {
 }
 
 #[test]
+fn a_sweep_whose_seeds_would_run_past_the_largest_seed_is_refused() {
+    let d = scratch("wrap");
+    let o = hairspring(
+        &d,
+        &with(
+            FAILING,
+            &["--trials", "3", "--seed", "18446744073709551615"],
+        ),
+    );
+    assert_eq!(o.status.code(), Some(2), "{}{}", out(&o), err(&o));
+    assert!(err(&o).contains("largest seed"), "{}", err(&o));
+    assert!(out(&o).is_empty(), "nothing ran");
+    let ok = hairspring(
+        &d,
+        &with(
+            FAILING,
+            &["--trials", "3", "--seed", "18446744073709551613"],
+        ),
+    );
+    assert_eq!(ok.status.code(), Some(1), "{}{}", out(&ok), err(&ok));
+    assert!(
+        out(&ok).contains("seeds 18446744073709551613..18446744073709551616"),
+        "{}",
+        out(&ok)
+    );
+}
+
+#[test]
 fn a_bad_seed_range_or_trial_count_is_refused_before_anything_runs() {
     let d = scratch("bad-range");
     let bad: [&[&str]; 8] = [

@@ -96,6 +96,11 @@ fn a_sweep_started_over_http_runs_its_whole_budget_and_every_trial_is_readable()
     let run = c.finished(&id);
     assert_eq!(run["run"]["trials"], 5, "{run}");
     assert_eq!(run["run"]["stopped_at_first_failure"], false);
+    assert_eq!(
+        run["sweep"]["trials"], 5,
+        "the summary is served with the run: {run}"
+    );
+    assert_eq!(run["sweep"]["first_failing_seeds"][0], "7");
     let (_, trials) = c.get(&format!("/api/runs/{id}/trials"));
     let seeds: Vec<&str> = trials["trials"]
         .as_array()
@@ -113,6 +118,10 @@ fn a_run_without_a_mode_is_a_search_and_stops_at_its_first_failure() {
     let id = start_run(&c, json!({"target": "lock-lease", "seed": 7}));
     let run = c.finished(&id);
     assert_eq!(run["run"]["stopped_at_first_failure"], true, "{run}");
+    assert!(
+        run.get("sweep").is_none(),
+        "a search has no sweep summary: {run}"
+    );
     let (_, trials) = c.get(&format!("/api/runs/{id}/trials"));
     assert!(trials["trials"].as_array().unwrap().is_empty());
 }

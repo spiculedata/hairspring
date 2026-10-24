@@ -2,6 +2,7 @@ use crate::RunCompletion;
 use hairspring_engine::config::Budget;
 use hairspring_engine::mode::RunMode;
 use hairspring_engine::report::Step;
+use hairspring_engine::sweep::SweepSummary;
 use hairspring_store::{Contributor, RunRecord};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -54,6 +55,11 @@ pub struct RunDetail {
     /// Property figures, for runs whose trials were stored.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub properties: Option<PropertySummary>,
+    /// How every trial of a finished sweep ended, counted by the server from the rows it holds. Absent for a search,
+    /// for a run still going, and for a sweep that ended short of its budget without reaching a limit: its counts are
+    /// those of whatever ran before it was stopped, so they are not offered as the figures of a sweep.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sweep: Option<SweepSummary>,
 }
 
 /// Text that comes from the program under test. Anything that renders it, or hands it to a model, must treat it as

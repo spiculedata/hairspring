@@ -100,7 +100,7 @@ fn a_violation_is_confirmed_by_a_rerun_and_the_row_says_so() {
     for seed in [3, 8] {
         let reason = &row(&out, seed).reason;
         assert!(reason.contains("balance went negative"), "{reason}");
-        assert!(reason.contains("rerun reproduced 3/3"), "{reason}");
+        assert!(reason.contains("same-output reruns 3/3"), "{reason}");
     }
     assert!(!row(&out, 1).reason.contains("rerun"));
     assert_eq!(out.trials, 12, "reruns are not trials");
@@ -122,7 +122,7 @@ fn a_violation_that_does_not_reproduce_is_stored_as_a_violation_with_that_noted(
     assert_eq!(out.status, RunStatus::Failed);
     assert_eq!(row(&out, 1).verdict, ReportedVerdict::Violation);
     assert!(
-        row(&out, 1).reason.contains("rerun reproduced 0/3"),
+        row(&out, 1).reason.contains("same-output reruns 0/3"),
         "{:?}",
         row(&out, 1)
     );
@@ -145,7 +145,7 @@ fn only_the_first_violations_are_confirmed_and_the_rest_say_they_were_not() {
     let confirmed = out
         .trial_log
         .iter()
-        .filter(|r| r.reason.contains("rerun reproduced"))
+        .filter(|r| r.reason.contains("same-output reruns"))
         .count();
     let skipped = out
         .trial_log
@@ -312,6 +312,74 @@ fn a_sweep_where_every_trial_timed_out_is_an_error_that_keeps_its_rows() {
     assert!(out.error.unwrap().contains("nothing was tested"));
     assert_eq!(out.trial_log.len(), 3);
     assert_eq!(out.inconclusive, 3);
+}
+
+#[test]
+fn confirmations_stop_when_the_wall_clock_budget_is_spent() {
+    // Four violating trials run side by side in 0.7 s; each confirmation then takes three more runs of 0.7 s, so the
+    // one-second budget is gone after the first one.
+    let o = Opts {
+        trials: 4,
+        parallelism: 4,
+        wall_secs: 1,
+        ..Opts::default()
+    };
+    let script = "sleep 0.7; echo 'HAIRSPRING_VIOLATION: slow'; exit 1";
+    let started = std::time::Instant::now();
+    let out = run(
+        &engine(&scratch("confirm-wall"), PASSTHROUGH, script, o, &[]),
+        RunMode::Sweep,
+    );
+    assert_eq!(out.trial_log.len(), 4, "every judged trial keeps its row");
+    assert!(
+        row(&out, 1).reason.contains("same-output reruns"),
+        "{:?}",
+        row(&out, 1)
+    );
+    for seed in [2, 3, 4] {
+        assert!(
+            row(&out, seed)
+                .reason
+                .contains("not confirmed: out of budget"),
+            "{:?}",
+            row(&out, seed)
+        );
+    }
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(8),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(out.status, RunStatus::Failed);
+    assert!(out.failure.unwrap().message.contains("sched-seed 1 "));
+}
+
+#[test]
+fn a_cancel_is_noticed_before_a_confirmation_not_only_between_batches() {
+    let o = Opts {
+        trials: 4,
+        parallelism: 4,
+        ..Opts::default()
+    };
+    let script = "echo 'HAIRSPRING_VIOLATION: always'; exit 1";
+    let e = engine(&scratch("confirm-cancel"), PASSTHROUGH, script, o, &[]);
+    let mut calls = 0;
+    let out = e
+        .run(
+            &RunRequest::new("svc", 1).with_mode(RunMode::Sweep),
+            &mut |_| {
+                calls += 1;
+                calls < 2
+            },
+        )
+        .unwrap();
+    assert_eq!(out.error.as_deref(), Some("cancelled"));
+    assert_eq!(
+        calls, 2,
+        "asked before the first and before the second confirmation"
+    );
+    assert_eq!(out.trial_log.len(), 2, "the batch was not finished");
+    assert!(row(&out, 2).reason.contains("not confirmed: cancelled"));
 }
 
 fn rig_sweep(

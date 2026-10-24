@@ -37,7 +37,7 @@ const TOOLS: &[Tool] = &[
                     "seed": { "type": "integer", "minimum": 0, "description": "Exploration seed; omit for a random one (recorded in the run)" },
                     "max_steps": { "type": "integer", "minimum": 1, "description": "Step budget override" },
                     "wall_secs": { "type": "integer", "minimum": 1, "description": "Wall-clock budget override" },
-                    "mode": { "type": "string", "enum": ["search", "sweep"], "description": "search (default) stops at the first confirmed failure; sweep runs the whole trial budget past every failure and stores every trial, so a rate with an interval can be stated" },
+                    "mode": { "type": "string", "enum": ["search", "sweep"], "description": "search (default) stops at the first confirmed failure; sweep runs the whole trial budget past every failure and stores every trial, so a rate with an interval can be stated. The summary comes back as `sweep` once the run is over. A simulation target's trial is one exploration round and rounds share max_steps, so with default budgets a simulation sweep runs few trials: raise max_steps" },
                     "max_trials": { "type": "integer", "minimum": 1, "maximum": 10000, "description": "Trial budget override (a sweep runs this many trials unless its step or wall-clock budget ends first)" },
                     "wait": { "type": "boolean", "description": "Wait for completion (default false; always true in local stdio mode)" },
                     "wait_secs": { "type": "integer", "minimum": 1, "maximum": 300, "description": "Maximum time to wait (default 60)" }

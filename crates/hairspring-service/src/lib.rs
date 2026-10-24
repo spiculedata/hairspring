@@ -245,10 +245,17 @@ impl Service {
             })
             .collect::<Result<Vec<_>>>()?;
         let properties = self.property_summary(&run)?;
+        // Counted when the run is over: a run still going has a changing count, and a read must not scan its rows each
+        // time the page polls.
+        let sweep = match run.state.is_terminal() {
+            true => self.sweep_summary(&run)?,
+            false => None,
+        };
         Ok(Some(RunDetail {
             run,
             failures,
             properties,
+            sweep,
         }))
     }
 
@@ -293,6 +300,7 @@ impl Service {
         let Some(detail) = self.get_run(run_id)? else {
             return Ok(None);
         };
+        let sweep = detail.sweep.clone();
         let run = detail.run;
         let status = match run.state {
             RunState::Passed => RunStatus::Passed,
@@ -324,7 +332,6 @@ impl Service {
             .property_summary_json
             .as_deref()
             .and_then(|j| serde_json::from_str(j).ok());
-        let sweep = self.sweep_summary(&run)?;
         Ok(Some(RunOutcome {
             status,
             steps_executed: run.steps,

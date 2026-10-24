@@ -186,10 +186,11 @@ from counts and recorded labels by two pure modules in `hairspring-props`, `run_
 front end can print the same lines.
 
 * A rate is always `k/n rated trials` with its Wilson 95% interval. A bare percentage is never printed.
-* The denominator is the rated trials. Inconclusive trials (timeouts and unusable events) and crashed trials are
-  listed on a `not rated trials:` line, are never in the denominator and are never described as passes. The CLI reads
-  only the inconclusive count from a stored outcome; the crashed count is zero there, because a host or Hermit failure
-  ends the run as an error. Starved and infrastructure trials do not have columns of their own yet.
+* The denominator is the rated trials. Inconclusive trials (timeouts and unusable events) and trials that failed in
+  the host are listed on a `not rated trials:` line, are never in the denominator and are never described as passes.
+  For a search run the CLI reads only the inconclusive count from a stored outcome; the host-failure count is zero
+  there, because a host or Hermit failure ends a search as an error. A sweep stores host failures as `infra` rows and
+  counts them in that slot. Starved trials do not have a column of their own yet.
 * If every non-rated trial had been a hit, the rate would be `(k + x)/(n + x)`. The report prints that as a
   `sensitivity:` line with its own interval. It is left out when nothing was rated, because it would only say that
   all of them hit.

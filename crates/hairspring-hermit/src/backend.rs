@@ -262,7 +262,7 @@ impl HermitBackend {
     /// includes the guest's reported events) and the same failing properties, by id, kind and reason. A rerun that
     /// fails a different property is a different bug, not a reproduction. A rerun that could not be judged is counted
     /// apart, because it says nothing about whether the program is deterministic.
-    fn confirm(
+    fn confirm_violation(
         &self,
         p: &ProcessSpec,
         seed: u64,
@@ -367,7 +367,7 @@ impl HermitBackend {
 
     /// Confirms a failing trial by rerunning its seed and builds the outcome that ends the run.
     fn finding(&self, j: &Judged, tally: &Tally, kind: FailureKind, reason: &str) -> RunOutcome {
-        let confirmed = self.confirm(j.p, j.seed, j.trial, kind, j.timeout);
+        let confirmed = self.confirm_violation(j.p, j.seed, j.trial, kind, j.timeout);
         let failure = self.failure(&Found {
             spec: j.spec,
             p: j.p,

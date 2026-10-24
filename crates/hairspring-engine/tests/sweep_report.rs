@@ -1,7 +1,7 @@
 //! The text report of a sweep: a rate with its interval, the trials left out of it, and the failing seeds.
 use hairspring_engine::format::to_text;
 use hairspring_engine::report::{FailureReport, RunOutcome};
-use hairspring_engine::sweep::{assemble, SweepEnd, MAX_FIRST_FAILING_SEEDS};
+use hairspring_engine::sweep::{assemble, assemble_error, SweepEnd, MAX_FIRST_FAILING_SEEDS};
 use hairspring_engine::trial_log::{ReportedVerdict, TrialReport};
 use ReportedVerdict::{Inconclusive, Infra, Pass, Unusable, Violation};
 
@@ -71,7 +71,7 @@ fn timeouts_unusable_and_infra_trials_are_out_of_the_denominator_and_listed_apar
     );
     assert!(text.contains("  hits: 1/3 rated trials ("), "{text}");
     assert!(
-        text.contains("  not rated trials: 2 inconclusive, 1 crashed;"),
+        text.contains("  not rated trials: 2 inconclusive, 1 failed in the host;"),
         "{text}"
     );
     assert!(text.contains("never counted as passes"), "{text}");
@@ -111,6 +111,32 @@ fn a_long_list_of_failing_seeds_is_cut_and_says_how_many_there_were() {
         )),
         "{text}"
     );
+}
+
+#[test]
+fn a_sweep_that_ended_in_an_error_labels_its_rate_as_partial() {
+    let rows: Vec<TrialReport> = [Pass, Violation, Pass]
+        .iter()
+        .enumerate()
+        .map(|(i, v)| TrialReport::without_events(i as u64, 1 + i as u64, *v, "", 1))
+        .collect();
+    let out = assemble_error(
+        "cancelled",
+        SweepEnd {
+            steps_executed: 3,
+            rows,
+            failure: None,
+            elapsed_ms: 1,
+        },
+    );
+    let text = to_text("svc", &out);
+    assert!(
+        text.contains("  partial: the sweep ended early; optional stopping can bias this figure\n"),
+        "{text}"
+    );
+    assert!(text.contains("hits: 1/3 rated trials"), "{text}");
+    let whole = to_text("svc", &sweep(&[Pass, Violation, Pass]));
+    assert!(!whole.contains("partial"), "{whole}");
 }
 
 #[test]

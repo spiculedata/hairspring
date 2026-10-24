@@ -273,7 +273,13 @@ impl Service {
         let limited = match budget {
             Some(b) if short => {
                 let started = self.store.get_run(run_id)?.and_then(|r| r.started_at);
-                hit_time_or_step_limit(&b, started, now_ms(), clean.steps_executed, attempt)
+                // A failed sweep's step count is the worker's own word, and a worker that stopped at the failure (one
+                // that predates sweeps) could claim it spent every step. Only the server's clock is believed there.
+                let steps = match clean.status {
+                    RunStatus::Passed => clean.steps_executed,
+                    _ => 0,
+                };
+                hit_time_or_step_limit(&b, started, now_ms(), steps, attempt)
             }
             _ => false,
         };

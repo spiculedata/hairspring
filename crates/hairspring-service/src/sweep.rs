@@ -14,13 +14,33 @@ pub(crate) fn mode_of(payload_json: &str) -> RunMode {
     serde_json::from_str::<JobPayload>(payload_json).map_or(RunMode::Search, |p| p.mode)
 }
 
-/// How many trial rows a job may hold: its budget's trial count (at least one trial always runs), and never more than
-/// the most any run may be asked for. A payload without a budget is held to the cap alone.
-pub(crate) fn trial_limit(payload_json: &str) -> u64 {
-    let budget = serde_json::from_str::<JobPayload>(payload_json)
-        .ok()
-        .and_then(|p| p.budget);
-    budget.map_or(MAX_TRIALS_CAP, |b| b.max_trials.clamp(1, MAX_TRIALS_CAP))
+/// What the rows of a job must look like, from the job itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RowRules {
+    /// How many trial rows the job may hold: its budget's trial count (at least one trial always runs), and never more
+    /// than the most any run may be asked for. A payload without a budget is held to the cap alone.
+    pub limit: u64,
+    /// For a sweep, the seed of trial 0. Every backend runs trial `n` at this seed plus `n` (wrapping), so a row that
+    /// says otherwise did not come from this run, and a worker could use it to name an arbitrary failing seed. A search
+    /// is not held to it (the rows of a search are optional extras, and older tests and tools send any seed).
+    pub seed_base: Option<u64>,
+}
+
+impl RowRules {
+    /// The seed trial `seq` must carry, when the job fixes it.
+    pub(crate) fn seed_of(&self, seq: u64) -> Option<u64> {
+        self.seed_base.map(|base| base.wrapping_add(seq))
+    }
+}
+
+pub(crate) fn row_rules(payload_json: &str) -> RowRules {
+    let payload = serde_json::from_str::<JobPayload>(payload_json).ok();
+    let limit = payload
+        .as_ref()
+        .and_then(|p| p.budget)
+        .map_or(MAX_TRIALS_CAP, |b| b.max_trials.clamp(1, MAX_TRIALS_CAP));
+    let seed_base = payload.filter(|p| p.mode.is_sweep()).map(|p| p.seed);
+    RowRules { limit, seed_base }
 }
 
 fn reported(v: TrialVerdict) -> ReportedVerdict {
@@ -35,9 +55,11 @@ fn reported(v: TrialVerdict) -> ReportedVerdict {
 
 impl Service {
     /// The aggregate of a stored sweep, counted from its trial rows (their verdicts and seeds only: no digest or text is
-    /// read). `None` for a run that was not a sweep, or whose job stored no rows.
+    /// read). `None` for a run that was not a sweep, whose job stored no rows, or that is marked incomplete: it ended
+    /// short of its budget without reaching a limit (a worker that predates sweeps stops at the first failure), so what
+    /// its rows hold depends on how it stopped and is not the figure of a sweep.
     pub(crate) fn sweep_summary(&self, run: &RunRecord) -> Result<Option<SweepSummary>> {
-        if !mode_of(&run.config_json).is_sweep() {
+        if !mode_of(&run.config_json).is_sweep() || run.ingest_incomplete {
             return Ok(None);
         }
         let mut summary = SweepSummary::default();
@@ -69,13 +91,25 @@ mod tests {
                 r#"{{"target":"t","seed":1,"budget":{{"max_steps":1,"max_trials":{trials},"wall_secs":1}}}}"#
             )
         };
-        assert_eq!(trial_limit(&with(7)), 7);
-        assert_eq!(trial_limit(&with(0)), 1);
-        assert_eq!(trial_limit(&with(u64::MAX)), MAX_TRIALS_CAP);
+        assert_eq!(row_rules(&with(7)).limit, 7);
+        assert_eq!(row_rules(&with(0)).limit, 1);
+        assert_eq!(row_rules(&with(u64::MAX)).limit, MAX_TRIALS_CAP);
         assert_eq!(
-            trial_limit(r#"{"target":"t","seed":1,"budget":null}"#),
+            row_rules(r#"{"target":"t","seed":1,"budget":null}"#).limit,
             MAX_TRIALS_CAP
         );
-        assert_eq!(trial_limit("not json"), MAX_TRIALS_CAP);
+        assert_eq!(row_rules("not json").limit, MAX_TRIALS_CAP);
+    }
+
+    #[test]
+    fn only_a_sweep_fixes_the_seed_of_each_row_and_it_wraps() {
+        let search = row_rules(r#"{"target":"t","seed":5,"budget":null}"#);
+        assert_eq!(search.seed_of(3), None);
+        let sweep = row_rules(&format!(
+            r#"{{"target":"t","seed":{},"budget":null,"mode":"sweep"}}"#,
+            u64::MAX
+        ));
+        assert_eq!(sweep.seed_of(0), Some(u64::MAX));
+        assert_eq!(sweep.seed_of(2), Some(1));
     }
 }

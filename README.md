@@ -143,11 +143,15 @@ hairspring test checkout --sweep --seeds 5000..5500       # seeds 5000 to 5499 (
 The report gives the violations out of the rated trials with a Wilson 95% interval (with no violation, an exact upper
 bound instead), names the lowest failing seeds, and lists timeouts, trials with unusable output and trials that failed
 in the host apart: they are never in the denominator and never counted as passes. The first ten violations are each
-confirmed by re-running their seed, and the trial's row says whether the rerun reproduced it. The exit code is 1 when
+confirmed by re-running their seed, and the trial's row says how many reruns gave the same output (`same-output reruns k/n`). The exit code is 1 when
 any trial was a violation. `--trials` is at most 10,000, and a sweep also ends at `--budget-secs`; for a simulation
 target a trial is one exploration round and the rounds share `--budget-steps`, so raise it to run more of them (the
 report says when a sweep ended before its trial budget). Over HTTP, send `"mode": "sweep"` to
-`POST /api/runs`; over MCP, pass `mode` and `max_trials` to `start_run`. Without a mode a run is a search, as before.
+`POST /api/runs`; over MCP, pass `mode` and `max_trials` to `start_run`. The finished run's `sweep` field (in `GET
+/api/runs/{id}` and the MCP `get_run`) holds the counts and the first failing seeds, counted by the server from the
+stored trials; it is left out for a search and for a sweep that was stopped before its budget without reaching a limit.
+A simulation sweep at the default budgets runs only a few rounds, so raise the step budget there. Without a mode a run
+is a search, as before.
 
 ## For AI agents (MCP)
 

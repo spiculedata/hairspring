@@ -53,7 +53,13 @@ fn a_sweep_started_through_mcp_runs_its_whole_budget_and_its_trials_are_listed()
     assert_eq!(run["run"]["state"], "failed");
     assert_eq!(run["run"]["trials"], 4, "{run}");
     assert_eq!(run["run"]["stopped_at_first_failure"], false);
+    assert_eq!(
+        run["sweep"]["trials"], 4,
+        "the summary comes back with the run: {run}"
+    );
     let id = run["run"]["id"].as_str().unwrap();
+    let again = tool(&s, "get_run", json!({"run_id": id}));
+    assert_eq!(structured(&again)["sweep"]["trials"], 4);
     let listed = tool(&s, "list_trials", json!({"run_id": id}));
     let trials = structured(&listed)["trials"].as_array().unwrap().len();
     assert_eq!(trials, 4);

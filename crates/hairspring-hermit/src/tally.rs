@@ -100,18 +100,12 @@ impl Tally {
         report
     }
 
-    /// Adds `note` to the reason of the trial numbered `seq`, which was judged before.
+    /// Adds `note` to the reason of the trial numbered `seq`, which must be the one judged last (a note is written right
+    /// after its trial is judged, so nothing earlier in the log is ever searched or rebuilt).
     pub fn note_confirmation(&mut self, seq: u64, note: &str) {
-        self.log = std::mem::take(&mut self.log)
-            .into_iter()
-            .map(|r| match r.seq == seq {
-                true => TrialReport {
-                    reason: trial_log::with_note(&r.reason, note),
-                    ..r
-                },
-                false => r,
-            })
-            .collect();
+        if let Some(last) = self.log.last_mut().filter(|r| r.seq == seq) {
+            last.reason = trial_log::with_note(&last.reason, note);
+        }
     }
 
     /// Records a finished trial: tells the observer, folds its properties into the run and logs a record of it for the
@@ -177,10 +171,13 @@ impl Tally {
     /// The outcome of a sweep that ran to the end of its budget (or of its wall-clock time): `Failed` with the report
     /// of its lowest failing seed when any trial violated, `Passed` otherwise, and an error when it rated nothing.
     /// Every judged trial is in the outcome's log, and the properties are those of the trials that ran.
-    pub fn finish_sweep(&self, started: Instant, failure: Option<FailureReport>) -> RunOutcome {
+    ///
+    /// The tally is consumed and its log moves into the outcome, so the log is never copied (a sweep's log is the
+    /// largest thing it holds).
+    pub fn finish_sweep(mut self, started: Instant, failure: Option<FailureReport>) -> RunOutcome {
         let (distinct, work) = self.schedule_stats();
-        let outcome =
-            assemble(self.sweep_end(started, failure)).with_schedule_stats(distinct, work);
+        let end = self.sweep_end(started, failure);
+        let outcome = assemble(end).with_schedule_stats(distinct, work);
         match outcome.status {
             hairspring_engine::report::RunStatus::Passed => self.with_properties(outcome),
             _ => self.with_partial_properties(outcome),
@@ -188,16 +185,17 @@ impl Tally {
     }
 
     /// The outcome of a sweep that had to stop with an error: the trials judged so far are kept.
-    pub fn sweep_error(&self, started: Instant, message: impl Into<String>) -> RunOutcome {
+    pub fn sweep_error(mut self, started: Instant, message: impl Into<String>) -> RunOutcome {
         let (distinct, work) = self.schedule_stats();
-        let outcome = assemble_error(message, self.sweep_end(started, None))
-            .with_schedule_stats(distinct, work);
+        let end = self.sweep_end(started, None);
+        let outcome = assemble_error(message, end).with_schedule_stats(distinct, work);
         self.with_partial_properties(outcome)
     }
 
-    fn sweep_end(&self, started: Instant, failure: Option<FailureReport>) -> SweepEnd {
+    /// Takes the log out of the tally.
+    fn sweep_end(&mut self, started: Instant, failure: Option<FailureReport>) -> SweepEnd {
         SweepEnd {
-            rows: self.log.clone(),
+            rows: std::mem::take(&mut self.log),
             failure,
             steps_executed: self.trials,
             elapsed_ms: started.elapsed().as_millis() as u64,
@@ -566,6 +564,25 @@ mod tests {
         let log = tally.trial_log();
         assert_eq!(log[0].reason, "boom");
         assert_eq!(log[1].reason, "boom | rerun reproduced 3/3");
+    }
+
+    #[test]
+    fn a_note_touches_only_the_trial_judged_last() {
+        let mut tally = Tally::for_sweep(None, u64::MAX, u64::MAX);
+        tally.on_trial(0, 5, &failing(1), &violation());
+        tally.on_trial(1, 6, &failing(1), &violation());
+        tally.note_confirmation(0, "stale");
+        assert_eq!(tally.trial_log()[0].reason, "boom");
+        assert_eq!(tally.trial_log()[1].reason, "boom");
+    }
+
+    #[test]
+    fn finishing_a_sweep_hands_over_its_log_without_copying_it_twice() {
+        let mut tally = Tally::for_sweep(None, u64::MAX, u64::MAX);
+        tally.on_trial(0, 5, &failing(1), &violation());
+        tally.violation();
+        let out = tally.finish_sweep(Instant::now(), None);
+        assert_eq!(out.trial_log.len(), 1);
     }
 
     #[test]

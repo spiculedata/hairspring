@@ -20,7 +20,6 @@ use hairspring_engine::EngineError;
 use std::time::{Duration, Instant};
 
 /// What a sweep has seen so far, besides its tally.
-#[derive(Default)]
 struct Findings {
     /// The report of the lowest failing seed.
     failure: Option<FailureReport>,
@@ -28,15 +27,41 @@ struct Findings {
     confirmed: usize,
     /// Trials in a row that failed in the host.
     infra_run: u32,
+    /// The sweep's wall-clock budget, which confirmations are held to as well.
+    wall: Duration,
 }
 
-/// What a row says about the reruns of its seed.
+impl Findings {
+    fn new(wall: Duration) -> Findings {
+        Findings {
+            failure: None,
+            confirmed: 0,
+            infra_run: 0,
+            wall,
+        }
+    }
+}
+
+const OUT_OF_BUDGET_NOTE: &str = "not confirmed: out of budget";
+const CANCELLED_NOTE: &str = "not confirmed: cancelled";
+
+/// What stands in for the reruns of a violation that was not confirmed, so its report does not call it
+/// non-deterministic: none ran, and `why` is said where a host problem would be.
+fn skipped(total: u32, why: &str) -> Confirmation {
+    Confirmation {
+        reproduced: 0,
+        inconclusive: total,
+        first_error: Some(format!("not rerun: {why}")),
+    }
+}
+
+/// What a row says about the reruns of its seed: how many gave the same output and failed the same properties.
 fn confirmation_note(c: &Confirmation, total: u32) -> String {
     let inconclusive = match c.inconclusive {
         0 => String::new(),
         n => format!(", {n} inconclusive"),
     };
-    format!("rerun reproduced {}/{total}{inconclusive}", c.reproduced)
+    format!("same-output reruns {}/{total}{inconclusive}", c.reproduced)
 }
 
 fn not_confirmed_note() -> String {
@@ -63,7 +88,7 @@ impl HermitBackend {
             self.settings.sweep_kept_bytes,
             self.settings.sweep_digest_bytes,
         );
-        let mut found = Findings::default();
+        let mut found = Findings::new(wall);
         let mut next = 0u64;
         while next < trials {
             let remaining = wall.saturating_sub(started.elapsed());
@@ -94,7 +119,7 @@ impl HermitBackend {
                     started,
                     environment: &environment,
                 };
-                if let Some(why) = self.judge_sweep(&judged, &mut tally, &mut found) {
+                if let Some(why) = self.judge_sweep(&judged, &mut tally, &mut found, progress) {
                     return Ok(tally.sweep_error(started, why));
                 }
             }
@@ -116,7 +141,13 @@ impl HermitBackend {
     }
 
     /// Judges one finished trial of a sweep. `Some(why)` says the sweep cannot go on.
-    fn judge_sweep(&self, j: &Judged, tally: &mut Tally, found: &mut Findings) -> Option<String> {
+    fn judge_sweep(
+        &self,
+        j: &Judged,
+        tally: &mut Tally,
+        found: &mut Findings,
+        progress: &mut dyn FnMut(Progress) -> bool,
+    ) -> Option<String> {
         let cut_by_budget = j.trial.timed_out && j.clipped;
         let verdict = match self.verdict(j.p, j.trial, j.timeout) {
             // Out of budget, not out of patience: inconclusive, never a finding.
@@ -148,12 +179,10 @@ impl HermitBackend {
                 None
             }
             Verdict::Violation(reason) => {
-                self.sweep_violation(j, tally, found, FailureKind::Violation, &reason);
-                None
+                self.sweep_violation(j, tally, found, FailureKind::Violation, &reason, progress)
             }
             Verdict::Deadlock(reason) => {
-                self.sweep_violation(j, tally, found, FailureKind::Deadlock, &reason);
-                None
+                self.sweep_violation(j, tally, found, FailureKind::Deadlock, &reason, progress)
             }
             Verdict::Pass => {
                 tally.pass();
@@ -163,6 +192,11 @@ impl HermitBackend {
     }
 
     /// Counts a violation, confirms it by rerun when the sweep still confirms, and keeps the report of the first one.
+    ///
+    /// A confirmation is a few more trials, so before each one the sweep checks that it still has wall-clock time and
+    /// has not been cancelled (it asks the progress callback, which is how a cancel is delivered). Without that, ten
+    /// violations in one batch could run `repro_runs` timeouts each past the budget. `Some(why)` says the sweep was
+    /// cancelled.
     fn sweep_violation(
         &self,
         j: &Judged,
@@ -170,16 +204,31 @@ impl HermitBackend {
         found: &mut Findings,
         kind: FailureKind,
         reason: &str,
-    ) {
+        progress: &mut dyn FnMut(Progress) -> bool,
+    ) -> Option<String> {
         tally.violation();
-        if found.confirmed >= MAX_CONFIRMED_VIOLATIONS {
+        let total = self.settings.repro_runs;
+        let mut stop = None;
+        let confirmed = if found.confirmed >= MAX_CONFIRMED_VIOLATIONS {
             tally.note_confirmation(j.index, &not_confirmed_note());
-            return;
-        }
-        found.confirmed += 1;
-        let confirmed = self.confirm(j.p, j.seed, j.trial, kind, j.timeout);
-        let note = confirmation_note(&confirmed, self.settings.repro_runs);
-        tally.note_confirmation(j.index, &note);
+            return None;
+        } else if j.started.elapsed() >= found.wall {
+            tally.note_confirmation(j.index, OUT_OF_BUDGET_NOTE);
+            skipped(total, "out of budget")
+        } else if !progress(Progress {
+            steps: j.index + 1,
+            trials: j.index + 1,
+            message: format!("confirming the violation at seed {}", j.seed),
+        }) {
+            tally.note_confirmation(j.index, CANCELLED_NOTE);
+            stop = Some(CANCELLED.to_string());
+            skipped(total, "cancelled")
+        } else {
+            found.confirmed += 1;
+            let c = self.confirm_violation(j.p, j.seed, j.trial, kind, j.timeout);
+            tally.note_confirmation(j.index, &confirmation_note(&c, total));
+            c
+        };
         if found.failure.is_none() {
             found.failure = Some(self.failure(&Found {
                 spec: j.spec,
@@ -193,5 +242,6 @@ impl HermitBackend {
                 environment: j.environment,
             }));
         }
+        stop
     }
 }

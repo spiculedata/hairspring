@@ -38,7 +38,9 @@ pub struct SweepSummary {
     pub unusable: u64,
     /// The host or Hermit failed.
     pub infra: u64,
-    /// The lowest failing seeds, in seed order of judging, at most [`MAX_FIRST_FAILING_SEEDS`].
+    /// The first failing seeds in judging order, at most [`MAX_FIRST_FAILING_SEEDS`]. Trial n runs at the first seed plus
+    /// n (wrapping), so this is also ascending seed order unless the seeds pass the largest one and wrap to 0; "lowest
+    /// failing seed" means the first one judged. The CLI refuses a sweep that would wrap.
     #[serde(with = "decimal_list")]
     pub first_failing_seeds: Vec<u64>,
 }
