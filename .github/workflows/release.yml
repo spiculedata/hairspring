@@ -26,6 +26,8 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -56,11 +58,17 @@ jobs:
           apt-get update -qq
           apt-get install -y -qq --no-install-recommends build-essential ca-certificates curl git pkg-config
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+        with:
+          persist-credentials: false
+      # The same Rust version ci.yml pins for the SDK artifacts. A `uses:` ref cannot read a variable, so it is
+      # written in each place: change release.yml and ci.yml together.
+      - uses: dtolnay/rust-toolchain@1.99.1
       - uses: actions/download-artifact@v4
         with:
           name: web-dist
           path: web/dist
+      - name: Test
+        run: cargo test --locked -p hairspring-cli
       - name: Build
         run: cargo build --release --locked -p hairspring-cli
       - name: Smoke test
@@ -98,11 +106,17 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+        with:
+          persist-credentials: false
+      # The same Rust version ci.yml pins for the SDK artifacts. A `uses:` ref cannot read a variable, so it is
+      # written in each place: change release.yml and ci.yml together.
+      - uses: dtolnay/rust-toolchain@1.99.1
       - uses: actions/download-artifact@v4
         with:
           name: web-dist
           path: web/dist
+      - name: Test
+        run: cargo test --locked -p hairspring-cli
       - name: Build
         run: cargo build --release --locked -p hairspring-cli
       - name: Smoke test
@@ -160,7 +174,9 @@ jobs:
             echo
             echo "- \`hairspring-linux-x86_64\`: Linux x86-64, built on Ubuntu 22.04."
             echo "- \`hairspring-macos-arm64\`: macOS on Apple silicon."
-            echo "- \`SHA256SUMS\`: check a download with \`sha256sum -c SHA256SUMS\`."
+            echo "- \`SHA256SUMS\`: check a download with \`sha256sum -c SHA256SUMS\`. The checksums come from the same"
+            echo "  place as the binaries, so they catch a corrupted download but do not prove who built it. To pin a"
+            echo "  hash you obtained some other way, pass it to the installer with \`--sha256\`."
             echo
             echo "\`scripts/install.sh --version ${TAG}\` downloads the right asset, verifies it and installs it."
             echo "The \`process\` backend needs Linux x86-64 and a separately built Hermit; see docs/quickstart.md."
