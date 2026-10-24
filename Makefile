@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt ui release audit docker clean
+.PHONY: build test lint fmt ui release audit docker clean test-scripts
 
 build:
 	cargo build --workspace
@@ -8,6 +8,11 @@ test:
 
 lint:
 	cargo clippy --workspace --all-targets -- -D warnings
+
+# The install scripts: lint and test them with fake commands (add --mutations to prove the tests can fail).
+test-scripts:
+	shellcheck -S warning scripts/*.sh
+	bash scripts/test-scripts.sh
 
 fmt:
 	cargo fmt --all
