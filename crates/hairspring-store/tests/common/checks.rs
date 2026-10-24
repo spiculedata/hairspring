@@ -7,7 +7,10 @@ pub fn run_all_checks(make: &dyn Fn() -> Arc<dyn Store>) {
     an_unknown_failure_is_not_found_and_nothing_is_written(&*make());
     storing_a_confirmation_again_changes_nothing(&*make());
     a_confirmation_that_does_not_fit_is_stored_not_at_all(&*make());
-    the_number_of_checks_is_capped(&*make());
+    the_number_of_checks_in_one_confirmation_is_capped(&*make());
+    a_full_failure_drops_its_oldest_confirmations_for_a_new_one(&*make());
+    confirmations_written_in_the_same_millisecond_list_in_the_order_written(&*make());
+    a_confirmations_id_follows_its_content(&*make());
     later_confirmations_list_after_earlier_ones(&*make());
     hostile_text_is_stored_verbatim(&*make());
     concurrent_identical_confirmations_store_once(make());
@@ -164,26 +167,91 @@ pub fn a_confirmation_that_does_not_fit_is_stored_not_at_all(s: &dyn Store) {
     assert!(s.list_failure_checks(&f.id).unwrap().is_empty());
 }
 
-pub fn the_number_of_checks_is_capped(s: &dyn Store) {
+pub fn the_number_of_checks_in_one_confirmation_is_capped(s: &dyn Store) {
     let f = failure(s);
     let too_many = vec![check("same_seed_rerun", "pass"); MAX_CHECKS_PER_CONFIRMATION + 1];
     let err = s
         .add_confirmation(&confirmation("conf_many", &f.id, too_many), 5)
         .unwrap_err();
     assert!(matches!(err, StoreError::LimitExceeded { .. }), "{err}");
+}
+
+/// A failure that has reached the cap does not refuse every later confirmation: the oldest whole confirmations are
+/// dropped to make room, so the newest checks are always the ones kept.
+pub fn a_full_failure_drops_its_oldest_confirmations_for_a_new_one(s: &dyn Store) {
+    let f = failure(s);
     let per_confirmation = vec![check("same_seed_rerun", "pass"); MAX_CHECKS_PER_CONFIRMATION];
     let rounds = MAX_CHECKS_PER_FAILURE as usize / MAX_CHECKS_PER_CONFIRMATION;
     for i in 0..rounds {
         let c = confirmation(&format!("conf_{i}"), &f.id, per_confirmation.clone());
         s.add_confirmation(&c, 10 + i as i64).unwrap();
     }
-    let held = s.list_failure_checks(&f.id).unwrap().len() as u64;
-    assert_eq!(held, MAX_CHECKS_PER_FAILURE);
-    let err = s
+    assert_eq!(
+        s.list_failure_checks(&f.id).unwrap().len() as u64,
+        MAX_CHECKS_PER_FAILURE
+    );
+    let outcome = s
         .add_confirmation(&confirmation("conf_over", &f.id, pair()), 999)
-        .unwrap_err();
-    assert!(matches!(err, StoreError::LimitExceeded { .. }), "{err}");
-    assert_eq!(s.list_failure_checks(&f.id).unwrap().len() as u64, held);
+        .unwrap();
+    assert_eq!(outcome, ConfirmationOutcome::Stored);
+    let rows = s.list_failure_checks(&f.id).unwrap();
+    assert!(rows.len() as u64 <= MAX_CHECKS_PER_FAILURE);
+    assert!(rows.iter().all(|r| r.confirmation_id != "conf_0"), "oldest");
+    assert!(rows.iter().any(|r| r.confirmation_id == "conf_1"));
+    assert_eq!(rows.last().unwrap().confirmation_id, "conf_over");
+    assert_eq!(
+        rows.iter()
+            .filter(|r| r.confirmation_id == "conf_over")
+            .count(),
+        2
+    );
+}
+
+/// Two confirmations that carry the same time list in the order they were written, whatever their ids.
+pub fn confirmations_written_in_the_same_millisecond_list_in_the_order_written(s: &dyn Store) {
+    let f = failure(s);
+    s.add_confirmation(&confirmation("conf_z", &f.id, pair()), 500)
+        .unwrap();
+    s.add_confirmation(&confirmation("conf_a", &f.id, pair()), 500)
+        .unwrap();
+    s.add_confirmation(&confirmation("conf_m", &f.id, pair()), 500)
+        .unwrap();
+    let mut order: Vec<String> = Vec::new();
+    for r in s.list_failure_checks(&f.id).unwrap() {
+        if order.last() != Some(&r.confirmation_id) {
+            order.push(r.confirmation_id);
+        }
+    }
+    assert_eq!(order, ["conf_z", "conf_a", "conf_m"]);
+}
+
+/// The id a confirmation is stored under comes from what it is, so a retry of the same report is the same confirmation.
+pub fn a_confirmations_id_follows_its_content(s: &dyn Store) {
+    let f = failure(s);
+    let id = |runner: &str, trusted: bool, checks: &[NewCheck]| {
+        NewConfirmation::content_id(&f.id, runner, trusted, checks)
+    };
+    let base = id("local-1", true, &pair());
+    assert_eq!(base, id("local-1", true, &pair()));
+    assert!(base.starts_with("conf_") && base.len() <= MAX_CHECK_TAG_BYTES);
+    assert_ne!(base, id("local-2", true, &pair()));
+    assert_ne!(base, id("local-1", false, &pair()));
+    assert_ne!(
+        base,
+        NewConfirmation::content_id("fail_other", "local-1", true, &pair())
+    );
+    let mut changed = pair();
+    changed[1].passed += 1;
+    assert_ne!(base, id("local-1", true, &changed));
+    let c = confirmation(&base, &f.id, pair());
+    assert_eq!(
+        s.add_confirmation(&c, 1).unwrap(),
+        ConfirmationOutcome::Stored
+    );
+    assert_eq!(
+        s.add_confirmation(&c, 2).unwrap(),
+        ConfirmationOutcome::Duplicate
+    );
 }
 
 pub fn later_confirmations_list_after_earlier_ones(s: &dyn Store) {

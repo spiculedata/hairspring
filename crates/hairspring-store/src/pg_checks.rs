@@ -34,7 +34,8 @@ fn from_row(r: &Row) -> CheckRecord {
 pub(crate) fn list(c: &mut Client, failure_id: &str) -> Result<Vec<CheckRecord>> {
     let rows = c.query(
         &format!(
-            "SELECT {COLUMNS} FROM failure_checks WHERE failure_id=$1 ORDER BY created_at, confirmation_id, ordinal"
+            "SELECT {COLUMNS} FROM failure_checks c WHERE failure_id=$1 ORDER BY created_at, \
+             (SELECT MIN(seq) FROM failure_checks m WHERE m.confirmation_id=c.confirmation_id), ordinal"
         ),
         &[&failure_id],
     )?;
@@ -82,17 +83,20 @@ pub(crate) fn add(c: &mut Client, new: &NewConfirmation, now: i64) -> Result<Con
             )))
         };
     }
-    let held: i64 = tx
-        .query_one(
-            "SELECT COUNT(*) FROM failure_checks WHERE failure_id=$1",
+    let held: Vec<(String, u64)> = tx
+        .query(
+            "SELECT confirmation_id, COUNT(*) FROM failure_checks WHERE failure_id=$1 \
+             GROUP BY confirmation_id ORDER BY MIN(created_at), MIN(seq)",
             &[&new.failure_id],
         )?
-        .get(0);
-    if over_cap(held as u64, new.checks.len()) {
-        return Err(StoreError::LimitExceeded {
-            what: "checks held for one failure",
-            limit: MAX_CHECKS_PER_FAILURE,
-        });
+        .iter()
+        .map(|r| (r.get::<_, String>(0), r.get::<_, i64>(1) as u64))
+        .collect();
+    for id in to_drop(&held, new.checks.len()) {
+        tx.execute(
+            "DELETE FROM failure_checks WHERE confirmation_id=$1",
+            &[&id],
+        )?;
     }
     for (ordinal, ch) in new.checks.iter().enumerate() {
         tx.execute(

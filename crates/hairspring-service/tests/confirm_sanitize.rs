@@ -267,23 +267,103 @@ fn an_unknown_failure_is_not_found_and_a_malformed_id_is_invalid() {
     assert!(matches!(err, ServiceError::InvalidRequest(_)), "{err:?}");
 }
 
-#[test]
-fn a_failure_cannot_hold_more_checks_than_the_cap() {
-    let rig = rig();
-    let checks: Vec<_> = [
+/// The four checks of a confirmation that began at `at` (so that two of them are not the same report).
+fn four_at(at: i64) -> Vec<CheckResult> {
+    [
         CheckKind::SameSeedRerun,
         CheckKind::BundleReplay,
         CheckKind::FixedControl,
         CheckKind::StrictVerify,
     ]
     .into_iter()
-    .map(good)
-    .collect();
-    let rounds = hairspring_store::MAX_CHECKS_PER_FAILURE as usize / checks.len();
-    for _ in 0..rounds {
-        record(&rig, &checks).unwrap();
+    .map(|k| good(k).with_times(at, at + 1))
+    .collect()
+}
+
+#[test]
+fn a_full_failure_keeps_its_newest_checks_and_accepts_another_confirmation() {
+    let rig = rig();
+    let rounds = hairspring_store::MAX_CHECKS_PER_FAILURE as usize / four_at(0).len();
+    for i in 0..rounds {
+        record(&rig, &four_at(i as i64)).unwrap();
     }
-    let err = record(&rig, &checks).unwrap_err();
-    assert!(matches!(err, ServiceError::InvalidRequest(_)), "{err:?}");
-    assert_eq!(stored(&rig), rounds * checks.len());
+    assert_eq!(stored(&rig), rounds * 4);
+    record(&rig, &four_at(10_000)).unwrap();
+    let rows = rig.store.list_failure_checks(&rig.failure).unwrap();
+    assert!(rows.len() as u64 <= hairspring_store::MAX_CHECKS_PER_FAILURE);
+    assert_eq!(rows.last().unwrap().started_at, 10_000);
+    assert!(
+        rows.iter().all(|r| r.started_at != 0),
+        "the oldest confirmation made room"
+    );
+}
+
+#[test]
+fn the_same_report_sent_again_is_stored_once() {
+    let rig = rig();
+    let checks = [
+        good(CheckKind::SameSeedRerun),
+        good(CheckKind::BundleReplay),
+    ];
+    let first = rig
+        .svc
+        .record_confirmation(&rig.failure, "runner-1", true, &checks)
+        .unwrap();
+    let again = rig
+        .svc
+        .record_confirmation(&rig.failure, "runner-1", true, &checks)
+        .unwrap();
+    assert_eq!(first.confirmation_id, again.confirmation_id);
+    assert_eq!(first.outcome, hairspring_store::ConfirmationOutcome::Stored);
+    assert_eq!(
+        again.outcome,
+        hairspring_store::ConfirmationOutcome::Duplicate
+    );
+    assert_eq!(stored(&rig), 2);
+}
+
+#[test]
+fn a_report_that_differs_is_a_new_confirmation() {
+    let rig = rig();
+    record(&rig, &[good(CheckKind::SameSeedRerun)]).unwrap();
+    record(&rig, &[good(CheckKind::SameSeedRerun).with_times(300, 400)]).unwrap();
+    assert_eq!(stored(&rig), 2);
+}
+
+#[test]
+fn text_of_wide_characters_is_cut_to_fit_and_stored_not_refused() {
+    let rig = rig();
+    let wide = "\u{1D11E}".repeat(MAX_DETAIL_VALUE_CHARS);
+    let mut check = good(CheckKind::SameSeedRerun).with_command("\"".repeat(MAX_COMMAND_CHARS));
+    for i in 0..MAX_DETAIL_ENTRIES {
+        check = check.with_detail(format!("{i:0>2}{}", "\u{1D11E}".repeat(30)), wide.clone());
+    }
+    record(&rig, &[check]).unwrap();
+    let row = &rig.store.list_failure_checks(&rig.failure).unwrap()[0];
+    assert!(row.detail_json.len() <= hairspring_store::MAX_CHECK_TEXT_BYTES);
+}
+
+#[test]
+fn a_runner_label_is_cut_by_bytes_on_a_character_boundary() {
+    let rig = rig();
+    let runner = "\u{1D11E}".repeat(hairspring_store::MAX_CHECK_TAG_BYTES);
+    rig.svc
+        .record_confirmation(
+            &rig.failure,
+            &runner,
+            false,
+            &[good(CheckKind::SameSeedRerun)],
+        )
+        .unwrap();
+    let stored_runner = rig.store.list_failure_checks(&rig.failure).unwrap()[0]
+        .runner
+        .clone();
+    assert!(stored_runner.len() <= hairspring_store::MAX_CHECK_TAG_BYTES);
+    assert!(!stored_runner.is_empty());
+    assert!(runner.starts_with(&stored_runner));
+}
+
+#[test]
+fn the_engine_and_the_store_agree_on_how_long_a_column_may_be() {
+    assert_eq!(MAX_COLUMN_BYTES, hairspring_store::MAX_CHECK_TEXT_BYTES);
 }

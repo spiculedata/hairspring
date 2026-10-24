@@ -1,15 +1,17 @@
 //! The stored results of confirming a failure (schema version 5).
 //!
 //! A confirmation is one run of the confirmation pipeline on a failure: several checks, stored together or not at all.
-//! Each check keeps its kind, outcome, counts, the exact command, bounded JSON for its detail, the hashes it saw, the
+//! Each check keeps its kind, outcome, counts, a record of the command, bounded JSON for its detail, the hashes it saw, the
 //! environment it ran in and when. The store does not interpret any of it; the service validates what a runner reports
 //! before it gets here, and the store only enforces the sizes so a caller cannot make one failure grow without limit.
 use crate::types::{Result, StoreError};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// Most checks one confirmation may hold (the pipeline has four kinds).
 pub const MAX_CHECKS_PER_CONFIRMATION: usize = 8;
-/// Most checks one failure may hold across all its confirmations.
+/// Most checks one failure may hold across all its confirmations. A confirmation that would pass it drops the oldest
+/// confirmations to make room.
 pub const MAX_CHECKS_PER_FAILURE: u64 = 200;
 /// Longest text kept in any one column of a check, in bytes.
 pub const MAX_CHECK_TEXT_BYTES: usize = 16 * 1024;
@@ -42,6 +44,48 @@ pub struct NewConfirmation {
     pub runner_trusted: bool,
     pub checks: Vec<NewCheck>,
 }
+
+impl NewConfirmation {
+    /// The id a confirmation is stored under, derived from what it is: the failure, the runner, whether it was trusted
+    /// and every check's content. The same report sent again (a retry) gets the same id and is stored once; a new
+    /// confirmation differs in at least the times of its checks.
+    pub fn content_id(
+        failure_id: &str,
+        runner: &str,
+        runner_trusted: bool,
+        checks: &[NewCheck],
+    ) -> String {
+        let mut h = Sha256::new();
+        let mut put = |text: &str| {
+            h.update((text.len() as u64).to_le_bytes());
+            h.update(text.as_bytes());
+        };
+        put(failure_id);
+        put(runner);
+        put(if runner_trusted { "1" } else { "0" });
+        for c in checks {
+            for field in [&c.kind, &c.status, &c.command, &c.detail_json] {
+                put(field);
+            }
+            for field in [&c.artefacts_json, &c.environment_json] {
+                put(field);
+            }
+            for number in [
+                i64::from(c.passed),
+                i64::from(c.failed),
+                i64::from(c.inconclusive),
+                c.started_at,
+                c.finished_at,
+            ] {
+                put(&number.to_string());
+            }
+        }
+        format!("conf_{}", &crate::hex(&h.finalize())[..CONTENT_ID_HEX])
+    }
+}
+
+/// Hex digits of a content id: 128 bits, and with the prefix well inside [`MAX_CHECK_TAG_BYTES`].
+const CONTENT_ID_HEX: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckRecord {
@@ -137,7 +181,18 @@ pub(crate) fn validate(new: &NewConfirmation) -> Result<()> {
     Ok(())
 }
 
-/// Whether adding `adding` checks to a failure that holds `held` would pass the per-failure cap.
-pub(crate) fn over_cap(held: u64, adding: usize) -> bool {
-    held.saturating_add(adding as u64) > MAX_CHECKS_PER_FAILURE
+/// The confirmations to drop so that `adding` more checks fit under the per-failure cap. `held` lists the failure's
+/// confirmations oldest first, each with its number of checks. Whole confirmations go, oldest first: a half-kept
+/// confirmation would be read as a different one, and the newest checks are the ones worth keeping.
+pub(crate) fn to_drop(held: &[(String, u64)], adding: usize) -> Vec<String> {
+    let mut total: u64 = held.iter().map(|(_, n)| n).sum::<u64>() + adding as u64;
+    let mut dropped = Vec::new();
+    for (id, n) in held {
+        if total <= MAX_CHECKS_PER_FAILURE {
+            break;
+        }
+        total -= n;
+        dropped.push(id.clone());
+    }
+    dropped
 }

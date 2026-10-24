@@ -12,7 +12,8 @@ use hairspring_engine::backend::Progress;
 use hairspring_engine::confirm::{CheckResult, ConfirmRequest};
 use hairspring_engine::engine::Engine;
 use hairspring_store::{
-    new_id, now_ms, CheckRecord, ConfirmationOutcome, NewCheck, NewConfirmation, StoreError,
+    now_ms, CheckRecord, ConfirmationOutcome, NewCheck, NewConfirmation, StoreError,
+    MAX_CHECK_TAG_BYTES,
 };
 
 const FAILURE_ID_PREFIX: &str = "fail_";
@@ -61,11 +62,22 @@ fn new_check(check: &CheckResult) -> Result<NewCheck> {
     })
 }
 
+/// `text` cut to at most `max` bytes, on a character boundary.
+fn cut_bytes(text: &str, max: usize) -> String {
+    let mut used = 0;
+    text.chars()
+        .take_while(|c| {
+            used += c.len_utf8();
+            used <= max
+        })
+        .collect()
+}
+
 fn store_error(e: StoreError, failure_id: &str) -> ServiceError {
     match e {
         StoreError::NotFound(_) => ServiceError::NotFound(format!("failure {failure_id}")),
-        StoreError::LimitExceeded { what, .. } => {
-            ServiceError::InvalidRequest(format!("too many checks: {what}"))
+        StoreError::LimitExceeded { what, limit } => {
+            ServiceError::InvalidRequest(format!("{what} is over the limit of {limit}"))
         }
         other => ServiceError::Store(other),
     }
@@ -118,6 +130,8 @@ impl Service {
 
     /// Validates the checks a runner reports and stores them as one confirmation of `failure_id`. `runner` is an
     /// opaque label, stored and never served; `runner_trusted` is a snapshot of whether it was trusted when it reported.
+    /// The confirmation's id comes from its content, so the same report sent again (a retry) is a `Duplicate` and
+    /// stores nothing twice.
     pub fn record_confirmation(
         &self,
         failure_id: &str,
@@ -127,16 +141,16 @@ impl Service {
     ) -> Result<ConfirmationReceipt> {
         checked_failure_id(failure_id)?;
         let clean = confirm_sanitize::checks(reported)?;
-        let confirmation_id = new_id("conf");
+        let checks = clean.iter().map(new_check).collect::<Result<Vec<_>>>()?;
+        let runner = cut_bytes(runner, MAX_CHECK_TAG_BYTES);
+        let confirmation_id =
+            NewConfirmation::content_id(failure_id, &runner, runner_trusted, &checks);
         let new = NewConfirmation {
             id: confirmation_id.clone(),
             failure_id: failure_id.to_owned(),
-            runner: runner
-                .chars()
-                .take(hairspring_store::MAX_CHECK_TAG_BYTES)
-                .collect(),
+            runner,
             runner_trusted,
-            checks: clean.iter().map(new_check).collect::<Result<_>>()?,
+            checks,
         };
         let outcome = self
             .store

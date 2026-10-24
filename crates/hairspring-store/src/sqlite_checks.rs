@@ -1,5 +1,6 @@
 //! Stored confirmation checks on SQLite. A confirmation is written in one transaction, and the connection's mutex plus
-//! the write transaction serialise writers, so two identical confirmations store once.
+//! the write transaction serialise writers, so two identical confirmations store once. Rows list by creation time and
+//! then by the order they were written (`rowid`), never by id.
 use crate::checks::*;
 use crate::new_id;
 use crate::types::{Result, StoreError};
@@ -33,7 +34,8 @@ fn from_row(r: &Row<'_>) -> rusqlite::Result<CheckRecord> {
 
 pub(crate) fn list(conn: &Connection, failure_id: &str) -> Result<Vec<CheckRecord>> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT {COLUMNS} FROM failure_checks WHERE failure_id=? ORDER BY created_at, confirmation_id, ordinal"
+        "SELECT {COLUMNS} FROM failure_checks c WHERE failure_id=? ORDER BY created_at, \
+         (SELECT MIN(rowid) FROM failure_checks m WHERE m.confirmation_id=c.confirmation_id), ordinal"
     ))?;
     let rows = stmt
         .query_map([failure_id], from_row)?
@@ -91,16 +93,20 @@ pub(crate) fn add(
     if !exists {
         return Err(StoreError::NotFound(format!("failure {}", new.failure_id)));
     }
-    let held: i64 = tx.query_row(
-        "SELECT COUNT(*) FROM failure_checks WHERE failure_id=?",
-        [&new.failure_id],
-        |r| r.get(0),
-    )?;
-    if over_cap(held as u64, new.checks.len()) {
-        return Err(StoreError::LimitExceeded {
-            what: "checks held for one failure",
-            limit: MAX_CHECKS_PER_FAILURE,
-        });
+    let held = {
+        let mut stmt = tx.prepare(
+            "SELECT confirmation_id, COUNT(*) FROM failure_checks WHERE failure_id=? \
+             GROUP BY confirmation_id ORDER BY MIN(created_at), MIN(rowid)",
+        )?;
+        let rows = stmt
+            .query_map([&new.failure_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+    for id in to_drop(&held, new.checks.len()) {
+        tx.execute("DELETE FROM failure_checks WHERE confirmation_id=?", [id])?;
     }
     for (ordinal, c) in new.checks.iter().enumerate() {
         tx.execute(

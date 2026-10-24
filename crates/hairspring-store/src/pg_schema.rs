@@ -136,6 +136,7 @@ CREATE TABLE IF NOT EXISTS failure_checks (
   failed BIGINT NOT NULL, inconclusive BIGINT NOT NULL, command TEXT NOT NULL, detail_json TEXT NOT NULL,
   artefacts_json TEXT NOT NULL, environment_json TEXT NOT NULL, started_at BIGINT NOT NULL,
   finished_at BIGINT NOT NULL, runner TEXT NOT NULL, runner_trusted BOOLEAN NOT NULL, created_at BIGINT NOT NULL,
+  seq BIGSERIAL NOT NULL,
   UNIQUE (confirmation_id, ordinal));
 CREATE INDEX IF NOT EXISTS failure_checks_failure ON failure_checks(failure_id, created_at, confirmation_id, ordinal);
 ";
