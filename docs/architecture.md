@@ -184,22 +184,28 @@ Version 5 adds one table, `failure_checks`, and changes nothing else (`runs`, `f
 and rows, so migrating rewrites no existing row). A failure with no row has never been confirmed.
 
 - A confirmation is one run of the pipeline (see [Confirming a failure](determinism.md#confirming-a-failure)) on a
-  failure: up to eight checks, written in one transaction under a confirmation id, so a retry stores nothing twice and the
-  same id with different content is refused. A failure holds at most 200 checks, and each text column at most 16 KiB.
+  failure: up to eight checks, written in one transaction under an id derived from its content, so a retry stores
+  nothing twice and the same id with different content is refused. A failure holds at most 200 checks (a confirmation
+  that would pass that drops the oldest whole confirmations), and each text column at most 16 KiB. Rows list by creation
+  time and then by write order (`rowid` on SQLite, a `seq` column on PostgreSQL), never by id.
 - A check keeps its kind (`same_seed_rerun`, `bundle_replay`, `fixed_control`, `strict_verify`), status (`pass`, `fail`,
-  `inconclusive`, `skipped`), counts of passed, failed and inconclusive runs, the exact Hermit command, bounded JSON for
+  `inconclusive`, `skipped`), counts of passed, failed and inconclusive runs, a record of the Hermit command (not a paste-and-run line), bounded JSON for
   its detail, the hashes it saw, the environment identity it ran in, when it started and finished, and the runner and
   whether it was trusted when it reported. The runner label is never served.
 - The service validates every reported check before it reaches the store (`Service::record_confirmation`): enumerated
   kind and status, counts that fit the status and the rerun limit, sane times, hashes that are hex, environment fields
   that belong to the identity, and text cut to size with control characters removed. An impossible result is refused whole.
-- A failure's state is derived from its checks at read time (`candidate`, `reproduced`, `confirmed`, `verified`,
-  `not_reproducible`, `control_failed`); nothing stores it, so it cannot drift from the checks. The run's claim uses it:
-  a failure counts as reproduced for the claim gate only when the newest checks derive confirmed or verified.
+- A failure's state is derived from its checks at read time (`candidate`, `rerun_repeated`, `confirmed`, `verified`,
+  `not_reproducible`, `control_failed`); nothing stores it, so it cannot drift from the checks. It is derived from one
+  confirmation (the newest that finished), never from checks of different confirmations. The run's claim uses it, from
+  the confirmations of trusted runners only: a failure counts as reproduced for the claim gate only when that state is
+  confirmed or verified.
 
 The pipeline runs where the engine is: the CLI's own process, or the server's embedded engine. It is bounded (at most ten
 reruns, each limited by the target's trial timeout, and a wall budget of at most ten minutes) and cancellable: the engine
-stops between runs and records what did not run as skipped. A remote worker does not run confirmations yet.
+stops between runs (the replay and each skid retry included) and records what did not run as skipped, for a caller that
+uses the progress callback; Ctrl-C on the CLI stops hairspring and may leave Hermit children running, as for
+`hairspring test`. A remote worker does not run confirmations yet.
 
 Opening a version 4 database adds the table and its index in the same transaction as the version bump. A version 4
 database that lost one of its own tables or indexes is refused rather than repaired, on both backends, and a current
