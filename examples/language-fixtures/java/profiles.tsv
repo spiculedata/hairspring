@@ -1,0 +1,5 @@
+# The JVM flag profiles of the probe: one profile per line, the arm name, a tab, the flags (a list of words).
+# Arm a is the base profile and arm b the one extra profile; no other flag is part of either. The probe runs as
+#   <jdk>/bin/java <flags> -cp <dir>/lang-at.jar langat.Probe
+a	-Xint -XX:+UseSerialGC -XX:ActiveProcessorCount=1 -XX:-UsePerfData -Xshare:off
+b	-XX:TieredStopAtLevel=1 -XX:-BackgroundCompilation -XX:CICompilerCount=1 -XX:+UseSerialGC -XX:ActiveProcessorCount=1 -XX:-UsePerfData -Xshare:off
