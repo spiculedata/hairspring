@@ -1,0 +1,15 @@
+# Environment profiles of the .NET probe, one variable per line: `<arm> <NAME=value>`.
+#
+# Arm a is the base profile. Arm b is arm a plus the variables listed under `b`. `@DOTNET_ROOT@` stands for the directory
+# that holds the dotnet executable. The probe is run as `$DOTNET_ROOT/dotnet LangAtProbe.dll`, with exactly these
+# variables added to an otherwise minimal environment. profile-env.sh prints the words of an arm; test_probe.sh pins the
+# lists below, so a change here fails the test until the test is changed too.
+#
+# Nothing else is set: no other DOTNET_* variable, and no runtime option is added to LangAtProbe.runtimeconfig.json. That file
+# carries only the two configProperties the SDK writes by default (System.Reflection.Metadata.MetadataUpdater.IsSupported=false
+# and System.Runtime.Serialization.EnableUnsafeBinaryFormatterSerialization=false).
+a DOTNET_ROOT=@DOTNET_ROOT@
+b DOTNET_TieredCompilation=0
+b DOTNET_EnableWriteXorExecute=0
+b DOTNET_gcServer=0
+b DOTNET_PROCESSOR_COUNT=1
