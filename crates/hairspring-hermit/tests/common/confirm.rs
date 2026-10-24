@@ -5,7 +5,8 @@
 //! every call its own schedule summary), `skid_left` (how many base-margin calls report a skid overshoot),
 //! `skid_double_fails` (the doubled margin overshoots too), `skid_base` (the margin that counts as the base one),
 //! `skid_for` (only guests whose command contains this text overshoot), `verify` (`good`, `diverged` or `missing`),
-//! `sleep` (seconds each call takes).
+//! `sleep` (seconds each call takes), `sleep_from` (the number of the first call that sleeps, counting every call the
+//! fake has seen; `count` holds that number and a test may reset it).
 use super::scratch;
 use hairspring_core::bundle::Bundle;
 use hairspring_engine::config::{Budget, Config, TargetKind, TargetSpec};
@@ -42,7 +43,8 @@ while [ "$1" != "--" ]; do
 done
 shift
 nap=$(cat "$dir/sleep" 2>/dev/null || echo 0)
-[ "$nap" -gt 0 ] && sleep "$nap"
+from=$(cat "$dir/sleep_from" 2>/dev/null || echo 0)
+[ "$nap" -gt 0 ] && [ "$n" -ge "$from" ] && sleep "$nap"
 case "$*" in
   *INFRA_MARKER*) echo "HERMIT_INTERNAL_FAILURE class=fake" >&2; echo "Error: fake failure" >&2; exit 1;;
 esac
@@ -90,6 +92,11 @@ pub struct RigOptions {
     pub control_script: String,
     pub with_summaries: bool,
     pub extra_env: Vec<(String, String)>,
+    /// The guest environment both targets carry (the target's own `env`).
+    pub guest_env: Vec<(String, String)>,
+    /// The failing target hangs on the first run after a test creates `hang_once` in the rig's directory, and times
+    /// out after two seconds.
+    pub hangs_once: bool,
 }
 
 impl Default for RigOptions {
@@ -101,6 +108,8 @@ impl Default for RigOptions {
             control_script: "echo fine".to_string(),
             with_summaries: true,
             extra_env: vec![],
+            guest_env: vec![],
+            hangs_once: false,
         }
     }
 }
@@ -115,16 +124,18 @@ fn process(
     script: &str,
     hermit_args: Vec<String>,
     scheduler: SchedulerSpec,
+    env: BTreeMap<String, String>,
+    trial_timeout_secs: Option<u64>,
 ) -> TargetSpec {
     TargetSpec {
         name: name.into(),
         description: String::new(),
         kind: TargetKind::Process {
             command: vec!["/bin/sh".into(), "-c".into(), script.into()],
-            env: BTreeMap::new(),
+            env,
             cwd: None,
             hermit_args,
-            trial_timeout_secs: None,
+            trial_timeout_secs,
             scheduler,
             hang_is_violation: false,
             parallelism: 1,
@@ -145,17 +156,26 @@ pub fn rig(name: &str, o: RigOptions) -> Rig {
     let bin = dir.join("fake-hermit");
     std::fs::write(&bin, FAKE).unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let guest_env: BTreeMap<String, String> = o.guest_env.iter().cloned().collect();
+    let hang = format!(
+        "[ -f {d}/hang_once ] && {{ rm {d}/hang_once; sleep 30; }}; {SEEDED_BUG}",
+        d = dir.display()
+    );
     let svc = process(
         "svc",
-        SEEDED_BUG,
+        if o.hangs_once { &hang } else { SEEDED_BUG },
         o.hermit_args.clone(),
         o.scheduler.clone(),
+        guest_env.clone(),
+        o.hangs_once.then_some(2),
     );
     let fixed = process(
         "fixed",
         &o.control_script,
         o.control_hermit_args,
         o.scheduler,
+        guest_env,
+        None,
     );
     let settings = HermitSettings {
         bin,

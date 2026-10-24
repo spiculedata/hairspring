@@ -134,3 +134,22 @@ fn a_higher_skid_run_counts_for_the_control_with_the_caveat_recorded() {
     assert!(detail(control, "caveat").contains("different schedule"));
     assert_eq!(margins(&rig).last().map(String::as_str), Some("50"));
 }
+
+#[test]
+fn a_skid_overshoot_is_not_retried_once_the_caller_has_cancelled() {
+    let rig = skid_rig("skid-cancel");
+    let bundle = rig.bundle();
+    rig.set("skid_left", "5");
+    let checks = rig
+        .engine
+        .confirm(&bundle, &one_rerun(), &mut |_| false)
+        .unwrap();
+    assert_eq!(
+        rig.calls().len(),
+        1,
+        "no retry after the cancel: {:?}",
+        rig.calls()
+    );
+    assert_eq!(checks[0].status, CheckStatus::Inconclusive);
+    assert_eq!(checks[1].status, CheckStatus::Skipped);
+}

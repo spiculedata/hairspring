@@ -1,4 +1,8 @@
-//! The Hermit command a check ran, written so it can be pasted into a shell.
+//! The Hermit command a check ran, written as a record of the invocation (shell-quoted so it reads unambiguously).
+//!
+//! It is not a paste-and-run line: a run clears the guest's environment and sets `HAIRSPRING_SEED`, the backend's
+//! `extra_env` and the events variables outside the command line, and runs in a private directory. The target's full
+//! argv and `hermit_args` are included, so a credential passed in them is exposed to whoever may read the check.
 //!
 //! The program is named by its file name only (a stored command is read by other people, and the path to Hermit on one
 //! host is not part of what ran). The per-run plumbing Hermit is given (the summary file, the events directory) is left

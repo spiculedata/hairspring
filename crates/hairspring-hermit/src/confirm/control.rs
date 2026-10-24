@@ -5,6 +5,9 @@
 //! It passes if the fixed build is clean at the seed. That is all it says: "the fixed build does not fail at this
 //! seed", not "the same interleaving", because a different build is a different schedule. A control that still fails is
 //! flagged. One that could not be judged (a timeout, a Hermit fault) is inconclusive and never read as clean.
+//!
+//! What is not compared: the working directory, the `--tmp` pre-seed and the events transport. The control target
+//! is trusted to be the same program in the same setting, with the fix as the only change.
 use super::attempt;
 use super::context::{now_ms, Ctx};
 use super::{command, pace::Pace};
@@ -54,8 +57,13 @@ pub(super) fn check(
         );
     }
     let environment = ctx.backend.environment(control);
-    let timeout = pace.run_timeout(ctx.backend.trial_timeout(control));
-    let a = attempt::run(ctx.backend, control, ctx.seed, timeout);
+    let a = attempt::run(
+        ctx.backend,
+        control,
+        ctx.seed,
+        ctx.backend.trial_timeout(control),
+        pace,
+    );
     pace.ran("control".to_string());
     let result = ctx
         .result(kind, CheckStatus::Inconclusive, started)
@@ -81,7 +89,7 @@ pub(super) fn check(
     } else {
         result
     };
-    judge(ctx.backend, control, timeout, a.trial, result)
+    judge(ctx.backend, control, a.timeout, a.trial, result)
 }
 
 fn judge(

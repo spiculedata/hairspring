@@ -581,6 +581,72 @@ pub(crate) fn check_same_scheduler(p: &ProcessSpec, bundle: &Bundle) -> Result<(
 }
 
 impl HermitBackend {
+    /// [`Backend::replay_with`] with the run's time cut to `cap` when that is less than the target's own limit. A run the
+    /// cap, not the target, cut short says nothing about the bundle, so it is an error ([`REPLAY_CLIPPED`]) and never a
+    /// miss.
+    pub(crate) fn replay_capped(
+        &self,
+        spec: &TargetSpec,
+        bundle: &Bundle,
+        options: ReplayOptions,
+        cap: Option<Duration>,
+    ) -> Result<ReplayOutcome, EngineError> {
+        let p = self.process(spec)?;
+        check_same_scheduler(&p, bundle)?;
+        self.check_events_setup(&p)?;
+        self.check_same_events_transport(bundle)?;
+        let environment = replay_environment::check(
+            bundle,
+            &self.environment(&p),
+            options.allow_environment_change,
+        )?;
+        let seed = bundle
+            .params
+            .get("sched_seed")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(bundle.seed);
+        let mut settings = self.settings.clone();
+        if let Some(epoch) = bundle.params.get("epoch") {
+            settings.epoch = epoch.clone();
+        }
+        let own = self.trial_timeout(&p);
+        let timeout = cap.map_or(own, |c| c.min(own));
+        let trial = run_trial(&settings, &p, seed, timeout, self.dirs())
+            .map_err(|e| EngineError::Backend(e.to_string()))?;
+        let verdict = self.verdict(&p, &trial, timeout);
+        if timeout < own && matches!(classify(&trial, timeout.as_secs()), Verdict::Hang(_)) {
+            return Err(EngineError::Backend(REPLAY_CLIPPED.to_string()));
+        }
+        if let Verdict::Infra(m) = &verdict {
+            return Err(EngineError::Backend(m.clone()));
+        }
+        let hang_relaxed = matches!(verdict, Verdict::Hang(_))
+            && bundle.params.get("hang_is_violation").map(String::as_str) == Some("true");
+        let matches = output_matches(bundle, &trial);
+        let reproduced = FailureKind::of(&verdict).is_some()
+            && failure_kind_matches(bundle, &verdict) != Some(false)
+            && matches != Some(false)
+            && property_matches(bundle, &trial) != Some(false);
+        let mut notes = replay_notes(bundle, &trial, &verdict, hang_relaxed);
+        if !reproduced && environment.differs {
+            notes = Some(match notes {
+                Some(existing) => format!("{existing}; {MISS_ON_CHANGED_HOST}"),
+                None => MISS_ON_CHANGED_HOST.to_string(),
+            });
+        }
+        let steps = steps(
+            p.command,
+            seed,
+            &settings.epoch,
+            p.scheduler.effective_heuristic().name(),
+            &trial,
+            notes,
+        );
+        Ok(ReplayOutcome::new(reproduced, steps)
+            .with_warnings(environment.warnings)
+            .with_environment_changed(environment.differs))
+    }
+
     /// Replaying through the other transport would change what the guest sees (its `/tmp`, its environment), so the
     /// schedule would not reproduce. Bundles from before the setting existed used the stream transport.
     pub(crate) fn check_same_events_transport(&self, bundle: &Bundle) -> Result<(), EngineError> {
@@ -597,6 +663,10 @@ impl HermitBackend {
         )))
     }
 }
+
+/// The error of a replay whose time was cut short by a cap that is less than the target's own limit.
+pub(crate) const REPLAY_CLIPPED: &str =
+    "the replay was cut short by the confirmation's wall budget";
 
 fn infra(msg: impl Into<String>) -> RunOutcome {
     RunOutcome::error(msg)
@@ -686,56 +756,7 @@ impl Backend for HermitBackend {
         bundle: &Bundle,
         options: ReplayOptions,
     ) -> Result<ReplayOutcome, EngineError> {
-        let p = self.process(spec)?;
-        check_same_scheduler(&p, bundle)?;
-        self.check_events_setup(&p)?;
-        self.check_same_events_transport(bundle)?;
-        let environment = replay_environment::check(
-            bundle,
-            &self.environment(&p),
-            options.allow_environment_change,
-        )?;
-        let seed = bundle
-            .params
-            .get("sched_seed")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(bundle.seed);
-        let mut settings = self.settings.clone();
-        if let Some(epoch) = bundle.params.get("epoch") {
-            settings.epoch = epoch.clone();
-        }
-        let timeout = self.trial_timeout(&p);
-        let trial = run_trial(&settings, &p, seed, timeout, self.dirs())
-            .map_err(|e| EngineError::Backend(e.to_string()))?;
-        let verdict = self.verdict(&p, &trial, timeout);
-        if let Verdict::Infra(m) = &verdict {
-            return Err(EngineError::Backend(m.clone()));
-        }
-        let hang_relaxed = matches!(verdict, Verdict::Hang(_))
-            && bundle.params.get("hang_is_violation").map(String::as_str) == Some("true");
-        let matches = output_matches(bundle, &trial);
-        let reproduced = FailureKind::of(&verdict).is_some()
-            && failure_kind_matches(bundle, &verdict) != Some(false)
-            && matches != Some(false)
-            && property_matches(bundle, &trial) != Some(false);
-        let mut notes = replay_notes(bundle, &trial, &verdict, hang_relaxed);
-        if !reproduced && environment.differs {
-            notes = Some(match notes {
-                Some(existing) => format!("{existing}; {MISS_ON_CHANGED_HOST}"),
-                None => MISS_ON_CHANGED_HOST.to_string(),
-            });
-        }
-        let steps = steps(
-            p.command,
-            seed,
-            &settings.epoch,
-            p.scheduler.effective_heuristic().name(),
-            &trial,
-            notes,
-        );
-        Ok(ReplayOutcome::new(reproduced, steps)
-            .with_warnings(environment.warnings)
-            .with_environment_changed(environment.differs))
+        self.replay_capped(spec, bundle, options, None)
     }
 
     fn confirm(

@@ -34,6 +34,30 @@ fn skid_text(a: &Attempt) -> Option<&'static str> {
     )
 }
 
+/// Whether the rerun finished and was judged (it failed, or it passed): a hung or infrastructure-failed run has nothing
+/// to be compared with, so it is never the first rerun the others are measured against.
+fn judged_failure_or_pass(ctx: &Ctx, trial: &Trial) -> bool {
+    matches!(
+        ctx.backend
+            .verdict(ctx.p, trial, ctx.backend.trial_timeout(ctx.p)),
+        Verdict::Pass | Verdict::Violation(_) | Verdict::Deadlock(_)
+    )
+}
+
+/// What the reruns were compared with where the recording has nothing to compare, or `None` when it had it all.
+fn baseline_note(ctx: &Ctx) -> Option<&'static str> {
+    let params = &ctx.bundle.params;
+    let no_output = !params.contains_key("output_hash");
+    let no_schedule =
+        !params.contains_key("schedule_fingerprint") && ctx.backend.dirs().summaries.is_some();
+    match (no_output, no_schedule) {
+        (false, false) => None,
+        (true, false) => Some("the recording has no output hash, so each rerun's output was compared with the first rerun's"),
+        (false, true) => Some("the recording has no schedule fingerprint, so each rerun's schedule was compared with the first rerun's"),
+        (true, true) => Some("the recording has no output hash or schedule fingerprint, so each rerun was compared with the first rerun"),
+    }
+}
+
 /// Compares a finished rerun with the recording (or with the first rerun where the recording has nothing to compare).
 fn judge(ctx: &Ctx, trial: &Trial, first: &Option<First>) -> Rerun {
     let verdict = ctx
@@ -134,8 +158,13 @@ pub(super) fn check(ctx: &Ctx, pace: &mut Pace) -> CheckResult {
         if stopped.is_some() {
             break;
         }
-        let timeout = pace.run_timeout(ctx.backend.trial_timeout(ctx.p));
-        let a = attempt::run(ctx.backend, ctx.p, ctx.seed, timeout);
+        let a = attempt::run(
+            ctx.backend,
+            ctx.p,
+            ctx.seed,
+            ctx.backend.trial_timeout(ctx.p),
+            pace,
+        );
         let outcome = match (&a.trial, skid_text(&a)) {
             (Err(_), _) => Rerun::Inconclusive("Hermit could not be started (host fault)"),
             (Ok(_), Some(why)) => Rerun::Inconclusive(why),
@@ -146,7 +175,7 @@ pub(super) fn check(ctx: &Ctx, pace: &mut Pace) -> CheckResult {
             if let Some(s) = &t.schedule {
                 tally.add_artefact(s.fingerprint.clone());
             }
-            if first.is_none() && !a.doubled {
+            if first.is_none() && !a.doubled && judged_failure_or_pass(ctx, t) {
                 first = Some(First {
                     hash: behaviour_hash(t),
                     fingerprint: t.schedule.as_ref().map(|s| s.fingerprint.clone()),
@@ -193,6 +222,9 @@ fn finish(
     }
     for artefact in &tally.artefacts {
         result = result.with_artefact(artefact.clone());
+    }
+    if let Some(note) = baseline_note(ctx) {
+        result = result.with_detail("compared_with", note);
     }
     if let Some(why) = tally.first_mismatch {
         result = result.with_detail("mismatch", why);

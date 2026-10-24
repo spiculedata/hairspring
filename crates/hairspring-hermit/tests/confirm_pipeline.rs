@@ -190,6 +190,39 @@ fn hermit_logging_in_the_hermit_environment_cannot_be_confirmed() {
 }
 
 #[test]
+fn hermit_logging_in_the_targets_own_environment_cannot_be_confirmed() {
+    let o = RigOptions {
+        guest_env: vec![("HERMIT_LOG".to_string(), "debug".to_string())],
+        ..RigOptions::default()
+    };
+    let rig = rig("pipe-guestlog", o);
+    let bundle = rig.bundle();
+    let err = rig
+        .engine
+        .confirm(&bundle, &ConfirmRequest::default(), &mut |_| true)
+        .unwrap_err();
+    assert!(
+        matches!(&err, EngineError::InvalidRequest(m) if m.contains("HERMIT_LOG")),
+        "{err}"
+    );
+    assert!(rig.calls().is_empty(), "nothing ran: {:?}", rig.calls());
+}
+
+#[test]
+fn a_target_environment_that_only_looks_like_logging_is_allowed() {
+    let o = RigOptions {
+        guest_env: vec![("HERMIT_LOGGING".to_string(), "x".to_string())],
+        ..RigOptions::default()
+    };
+    let rig = rig("pipe-guestlogok", o);
+    let bundle = rig.bundle();
+    assert!(rig
+        .engine
+        .confirm(&bundle, &ConfirmRequest::default(), &mut |_| true)
+        .is_ok());
+}
+
+#[test]
 fn a_confirmation_never_passes_logging_flags_to_hermit() {
     let rig = rig("pipe-nolog", RigOptions::default());
     let bundle = rig.bundle();

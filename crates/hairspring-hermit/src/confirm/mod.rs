@@ -26,10 +26,17 @@ use pace::Pace;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-/// Refuses a target whose Hermit arguments or environment turn on logging.
+/// Refuses a target whose Hermit arguments or environment turn on logging. Every environment Hermit's process is given
+/// counts: the backend's own `extra_env` and the target's `env`, which a run passes on to the guest through Hermit.
 fn refuse_logging(backend: &HermitBackend, p: &ProcessSpec) -> Result<(), EngineError> {
-    let hermit_env: BTreeMap<String, String> = backend.settings.extra_env.iter().cloned().collect();
-    match forbidden_logging(p.hermit_args, &hermit_env) {
+    let environment: BTreeMap<String, String> = backend
+        .settings
+        .extra_env
+        .iter()
+        .cloned()
+        .chain(p.env.iter().map(|(k, v)| (k.clone(), v.clone())))
+        .collect();
+    match forbidden_logging(p.hermit_args, &environment) {
         Some(why) => Err(EngineError::InvalidRequest(why)),
         None => Ok(()),
     }
@@ -93,8 +100,8 @@ pub(crate) fn run(
     checks.push(step(&ctx, &mut pace, CheckKind::SameSeedRerun, |pace| {
         rerun::check(&ctx, pace)
     }));
-    checks.push(step(&ctx, &mut pace, CheckKind::BundleReplay, |_| {
-        replay::check(&ctx)
+    checks.push(step(&ctx, &mut pace, CheckKind::BundleReplay, |pace| {
+        replay::check(&ctx, pace)
     }));
     if let (Some(spec), Some(cp)) = (control, &control_process) {
         checks.push(step(&ctx, &mut pace, CheckKind::FixedControl, |pace| {
