@@ -866,11 +866,16 @@ expect "check-probe-writes counts stdout writes across the per-thread files" 1 s
 expect "check-probe-writes rejects a stdout line written with writev" 1 sh "$here/check-probe-writes.sh" "$pw_writev"
 expect "check-probe-writes rejects a writev to stdout beside a write" 1 sh "$here/check-probe-writes.sh" "$pw_writev_extra"
 
-# check-probe-writes.sh --any-fd: the .NET runtime duplicates descriptor 1 for its console stream, so the line is written to
-# another descriptor (real trace: write(24, "PROBE v1 ...")). With the flag the line is found on any descriptor; writes of
-# other things (thread names, wake-up bytes) are ignored, and the rest of the rules are unchanged.
+# check-probe-writes.sh --dup-of-stdout: the .NET runtime duplicates descriptor 1 for its console stream, so the line is
+# written to another descriptor (real trace: fcntl(1, F_DUPFD_CLOEXEC, 0) = 24, then write(24, "PROBE v1 ...")). With the
+# flag the line must be written once, whole, to a descriptor that a traced dup of descriptor 1 created; any write to
+# descriptor 1 or 2 fails (the runtime writes nothing there); writes of other things (thread names, wake-up bytes) are
+# ignored. A line on a duplicate of descriptor 2, or on a descriptor with no traced dup, is not accepted.
 pw_dup_ok="$tmp/pw_dup_ok.txt"
 cat >"$pw_dup_ok" <<'EOF'
+fcntl(0, F_DUPFD_CLOEXEC, 0)            = 5
+fcntl(1, F_DUPFD_CLOEXEC, 0)            = 24
+fcntl(2, F_DUPFD_CLOEXEC, 0)            = 27
 write(13, "*", 1)                       = 1
 write(14, ".NET Finalizer", 14)         = 14
 write(24, "PROBE v1 lang=dotnet lock_order=0123456789abcdef arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef\n", 149) = 149
@@ -878,57 +883,86 @@ write(4, "\1", 1)                       = 1
 EOF
 pw_dup_two="$tmp/pw_dup_two.txt"
 cat >"$pw_dup_two" <<'EOF'
+fcntl(1, F_DUPFD_CLOEXEC, 0)            = 24
 write(24, "PROBE v1 lang=dotnet lock_order=0123456789abcdef ", 49) = 49
 write(24, "arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef\n", 100) = 100
 EOF
 pw_dup_short="$tmp/pw_dup_short.txt"
 cat >"$pw_dup_short" <<'EOF'
+fcntl(1, F_DUPFD_CLOEXEC, 0)            = 24
 write(24, "PROBE v1 lang=dotnet lock_order=0123456789abcdef arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef\n", 149) = 20
 EOF
 pw_dup_none="$tmp/pw_dup_none.txt"
 printf 'write(14, ".NET Finalizer", 14)         = 14\n' >"$pw_dup_none"
 pw_dup_writev="$tmp/pw_dup_writev.txt"
 cat >"$pw_dup_writev" <<'EOF'
+fcntl(1, F_DUPFD_CLOEXEC, 0)            = 24
 writev(24, [{iov_base="PROBE v1 lang=dotnet lock_order=0123456789abcdef arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef\n", iov_len=149}], 1) = 149
 EOF
 pw_dup_event="$tmp/pw_dup_event.txt"
 { printf 'write(200, "HAIRSPRING_EVENT {\\"v\\":1}\\n", 24) = 24\n'; cat "$pw_dup_ok"; } >"$pw_dup_event"
-expect "check-probe-writes --any-fd accepts the line on a duplicated descriptor among internal writes" 0 sh "$here/check-probe-writes.sh" --any-fd "$pw_dup_ok"
-expect "check-probe-writes without --any-fd rejects a line that is not on descriptor 1" 1 sh "$here/check-probe-writes.sh" "$pw_dup_ok"
-expect "check-probe-writes --any-fd rejects a line written in two pieces" 1 sh "$here/check-probe-writes.sh" --any-fd "$pw_dup_two"
-expect "check-probe-writes --any-fd rejects a short write" 1 sh "$here/check-probe-writes.sh" --any-fd "$pw_dup_short"
-expect "check-probe-writes --any-fd rejects a run with no line" 1 sh "$here/check-probe-writes.sh" --any-fd "$pw_dup_none"
-expect "check-probe-writes --any-fd rejects a writev of the line" 1 sh "$here/check-probe-writes.sh" --any-fd "$pw_dup_writev"
-expect "check-probe-writes --any-fd rejects a protocol line" 1 sh "$here/check-probe-writes.sh" --any-fd "$pw_dup_event"
-expect "check-probe-writes --any-fd still accepts the plain descriptor-1 line" 0 sh "$here/check-probe-writes.sh" --any-fd "$pw_ok"
-expect "check-probe-writes --any-fd without a file is a usage error" 64 sh "$here/check-probe-writes.sh" --any-fd
+# Writes that must not pass: something else on descriptor 1 beside the line on the duplicate, the line on descriptor 2, the
+# line on a duplicate of descriptor 2, the line on a descriptor nobody duplicated from descriptor 1.
+pw_dup_hello="$tmp/pw_dup_hello.txt"
+{ printf 'write(1, "hello\\n", 6)                  = 6\n'; cat "$pw_dup_ok"; } >"$pw_dup_hello"
+pw_dup_fd2="$tmp/pw_dup_fd2.txt"
+printf 'write(2, "PROBE v1 lang=dotnet lock_order=0123456789abcdef arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef\\n", 149) = 149\n' >"$pw_dup_fd2"
+pw_dup_of2="$tmp/pw_dup_of2.txt"
+cat >"$pw_dup_of2" <<'EOF'
+fcntl(1, F_DUPFD_CLOEXEC, 0)            = 24
+fcntl(2, F_DUPFD_CLOEXEC, 0)            = 27
+write(27, "PROBE v1 lang=dotnet lock_order=0123456789abcdef arrival=0123456789abcdef rand=0123456789abcdef vtime_ns=00000000000005000000 extra=0123456789abcdef\n", 149) = 149
+EOF
+pw_dup_nodup="$tmp/pw_dup_nodup.txt"
+grep -v fcntl "$pw_dup_ok" >"$pw_dup_nodup"
+pw_dup_later="$tmp/pw_dup_later.99"
+printf 'fcntl(1, F_DUPFD_CLOEXEC, 0)            = 24\n' >"$pw_dup_later"
+pw_dup_main="$tmp/pw_dup_main.98"
+grep -v fcntl "$pw_dup_ok" >"$pw_dup_main"
+expect "check-probe-writes --dup-of-stdout accepts the line on a duplicate of descriptor 1 among internal writes" 0 sh "$here/check-probe-writes.sh" --dup-of-stdout "$pw_dup_ok"
+expect "check-probe-writes without --dup-of-stdout rejects a line that is not on descriptor 1" 1 sh "$here/check-probe-writes.sh" "$pw_dup_ok"
+expect "check-probe-writes --dup-of-stdout finds the dup in another thread's file, whichever file comes first" 0 sh "$here/check-probe-writes.sh" --dup-of-stdout "$pw_dup_main" "$pw_dup_later"
+expect "check-probe-writes --dup-of-stdout rejects other output on descriptor 1 beside the line" 1 sh "$here/check-probe-writes.sh" --dup-of-stdout "$pw_dup_hello"
+expect "check-probe-writes --dup-of-stdout rejects the line on descriptor 2" 1 sh "$here/check-probe-writes.sh" --dup-of-stdout "$pw_dup_fd2"
+expect "check-probe-writes --dup-of-stdout rejects the line on a duplicate of descriptor 2" 1 sh "$here/check-probe-writes.sh" --dup-of-stdout "$pw_dup_of2"
+expect "check-probe-writes --dup-of-stdout rejects a descriptor with no traced dup of descriptor 1" 1 sh "$here/check-probe-writes.sh" --dup-of-stdout "$pw_dup_nodup"
+expect "check-probe-writes --dup-of-stdout rejects a line written in two pieces" 1 sh "$here/check-probe-writes.sh" --dup-of-stdout "$pw_dup_two"
+expect "check-probe-writes --dup-of-stdout rejects a short write" 1 sh "$here/check-probe-writes.sh" --dup-of-stdout "$pw_dup_short"
+expect "check-probe-writes --dup-of-stdout rejects a run with no line" 1 sh "$here/check-probe-writes.sh" --dup-of-stdout "$pw_dup_none"
+expect "check-probe-writes --dup-of-stdout rejects a writev of the line" 1 sh "$here/check-probe-writes.sh" --dup-of-stdout "$pw_dup_writev"
+expect "check-probe-writes --dup-of-stdout rejects a protocol line" 1 sh "$here/check-probe-writes.sh" --dup-of-stdout "$pw_dup_event"
+expect "check-probe-writes --dup-of-stdout without a file is a usage error" 64 sh "$here/check-probe-writes.sh" --dup-of-stdout
 
 # check-sources-dotnet.sh: the .NET probe must not read the seed, /proc, the CPU count, the environment or the clock (it alone
-# may read the stopwatch counter, once, when --allow-stopwatch is given).
+# may read the stopwatch counter, once, and only in the file named by --allow-stopwatch-in).
 dn_clean="$tmp/dn_clean.cs"
 printf 'using System.Threading;\nclass C { void F() { new Thread(() => { }).Start(); } }\n' >"$dn_clean"
 expect "check-sources-dotnet accepts a clean source" 0 sh "$here/check-sources-dotnet.sh" "$dn_clean"
 for token in HAIRSPRING_SEED '/proc/self/stat' 'Environment.GetEnvironmentVariable("X")' 'Environment.GetEnvironmentVariables()' \
   'Environment.ExpandEnvironmentVariables("x")' 'Environment.ProcessorCount' 'Thread.GetCurrentProcessorId()' 'DateTime.Now' 'DateTime.UtcNow' \
   'DateTime.Today' 'DateTimeOffset.Now' 'DateTimeOffset.UtcNow' 'Environment.TickCount' 'Environment.TickCount64' \
-  'TimeProvider.System.GetUtcNow()' 'Process.GetCurrentProcess()' 'Stopwatch.StartNew()' 'Stopwatch.GetTimestamp()'; do
+  'TimeProvider.System.GetUtcNow()' 'Process.GetCurrentProcess()' 'Stopwatch.StartNew()' 'Stopwatch.GetTimestamp()' \
+  'using static System.DateTime' 'using static System.DateTimeOffset' 'using static System.Environment' 'using static System.Diagnostics.Stopwatch' \
+  'Now' 'UtcNow' 'Today' '"/sys/devices/system/cpu/online"' '"/sys/fs/cgroup/cpu.max"'; do
   dn_bad="$tmp/dn_bad.cs"
   printf 'class C { void F() { var x = %s; } }\n' "$token" >"$dn_bad"
   expect "check-sources-dotnet rejects $token" 1 sh "$here/check-sources-dotnet.sh" "$dn_bad"
 done
 dn_clock="$tmp/dn_clock.cs"
 printf 'class C { long F() => System.Diagnostics.Stopwatch.GetTimestamp(); long G() => System.Diagnostics.Stopwatch.Frequency; }\n' >"$dn_clock"
-expect "check-sources-dotnet accepts Stopwatch.GetTimestamp and Frequency when they are allowed" 0 sh "$here/check-sources-dotnet.sh" --allow-stopwatch "$dn_clock"
+expect "check-sources-dotnet accepts Stopwatch.GetTimestamp and Frequency when they are allowed" 0 sh "$here/check-sources-dotnet.sh" --allow-stopwatch-in dn_clock.cs "$dn_clock"
 for token in 'Stopwatch.StartNew()' 'new Stopwatch()' 'Stopwatch.GetElapsedTime(1, 2)' 'Stopwatch.IsHighResolution'; do
   printf 'class C { void F() { var x = System.Diagnostics.%s; } }\n' "$token" >"$dn_bad"
-  expect "check-sources-dotnet --allow-stopwatch still rejects $token" 1 sh "$here/check-sources-dotnet.sh" --allow-stopwatch "$dn_bad"
+  expect "check-sources-dotnet --allow-stopwatch-in still rejects $token" 1 sh "$here/check-sources-dotnet.sh" --allow-stopwatch-in dn_bad.cs "$dn_bad"
 done
 for token in HAIRSPRING_SEED '/proc/self' 'Environment.ProcessorCount' 'DateTime.UtcNow' 'Environment.GetEnvironmentVariable("X")'; do
   printf 'class C { void F() { var x = %s; var t = System.Diagnostics.Stopwatch.GetTimestamp(); } }\n' "$token" >"$dn_bad"
-  expect "check-sources-dotnet --allow-stopwatch still rejects $token" 1 sh "$here/check-sources-dotnet.sh" --allow-stopwatch "$dn_bad"
+  expect "check-sources-dotnet --allow-stopwatch-in still rejects $token" 1 sh "$here/check-sources-dotnet.sh" --allow-stopwatch-in dn_bad.cs "$dn_bad"
 done
 expect "check-sources-dotnet without a file is a usage error" 64 sh "$here/check-sources-dotnet.sh"
-expect "check-sources-dotnet --allow-stopwatch without a file is a usage error" 64 sh "$here/check-sources-dotnet.sh" --allow-stopwatch
+expect "check-sources-dotnet --allow-stopwatch-in without a file is a usage error" 64 sh "$here/check-sources-dotnet.sh" --allow-stopwatch-in dn_clock.cs
+expect "check-sources-dotnet --allow-stopwatch-in without a name is a usage error" 64 sh "$here/check-sources-dotnet.sh" --allow-stopwatch-in
+expect "the allowance is for the named file only" 1 sh "$here/check-sources-dotnet.sh" --allow-stopwatch-in Other.cs "$dn_clock"
 expect "check-sources-dotnet fails on a missing file" 1 sh "$here/check-sources-dotnet.sh" "$tmp/no-such-file.cs"
 dn_dir="$tmp/dn_dir"
 mkdir -p "$dn_dir/obj"
@@ -938,7 +972,13 @@ expect "check-sources-dotnet searches a directory but not its build output" 0 sh
 printf 'class D { long F() => System.Environment.TickCount64; }\n' >"$dn_dir/Dirty.cs"
 expect "check-sources-dotnet finds a forbidden read in a file of a directory" 1 sh "$here/check-sources-dotnet.sh" "$dn_dir"
 dnroot="$here/../dotnet"
-expect "the real .NET probe is clean apart from the stopwatch" 0 sh "$here/check-sources-dotnet.sh" --allow-stopwatch "$dnroot/src"
+dn_two="$tmp/dn_two"
+mkdir -p "$dn_two"
+cp "$dnroot/src/Clock.cs" "$dn_two/Clock.cs"
+expect "a directory with the one clock file passes when the allowance names it" 0 sh "$here/check-sources-dotnet.sh" --allow-stopwatch-in Clock.cs "$dn_two"
+printf 'class Second { long F() => System.Diagnostics.Stopwatch.GetTimestamp(); }\n' >"$dn_two/Second.cs"
+expect "a second clock read in another file is rejected" 1 sh "$here/check-sources-dotnet.sh" --allow-stopwatch-in Clock.cs "$dn_two"
+expect "the real .NET probe is clean apart from the stopwatch in Clock.cs" 0 sh "$here/check-sources-dotnet.sh" --allow-stopwatch-in Clock.cs "$dnroot/src"
 expect "the real .NET probe is rejected when the stopwatch is not allowed" 1 sh "$here/check-sources-dotnet.sh" "$dnroot/src"
 
 # check-stopwatch-use.sh: exactly one Stopwatch.GetTimestamp, no aliased import of Stopwatch
@@ -961,6 +1001,22 @@ expect "check-stopwatch-use without a file is a usage error" 64 sh "$here/check-
 expect "the real .NET probe has exactly one Stopwatch.GetTimestamp" 0 sh "$here/check-stopwatch-use.sh" "$dnroot/src/Clock.cs"
 # No other source file of the probe may read the clock at all.
 expect "no other source of the .NET probe mentions Stopwatch" 1 sh -c "grep -l Stopwatch '$dnroot'/src/*.cs | grep -v 'src/Clock.cs'"
+
+# extract-runtime.sh: the pinned runtime tarball is checked against its sha512 before it is extracted
+rt_src="$tmp/rt_src"
+mkdir -p "$rt_src/shared"
+printf '#!/bin/sh\n' >"$rt_src/dotnet"
+printf 'x\n' >"$rt_src/shared/file"
+tar -czf "$tmp/rt.tar.gz" -C "$rt_src" .
+if command -v sha512sum >/dev/null 2>&1; then rt_sha=$(sha512sum "$tmp/rt.tar.gz" | cut -d' ' -f1); else rt_sha=$(shasum -a 512 "$tmp/rt.tar.gz" | cut -d' ' -f1); fi
+expect "extract-runtime extracts a tarball whose sha512 matches" 0 sh "$here/extract-runtime.sh" "$tmp/rt.tar.gz" "$rt_sha" "$tmp/rt_out"
+expect "the extracted runtime holds the dotnet file" 0 test -e "$tmp/rt_out/dotnet"
+expect "extract-runtime rejects a wrong sha512" 1 sh "$here/extract-runtime.sh" "$tmp/rt.tar.gz" "$(printf '%0128d' 0)" "$tmp/rt_out2"
+expect "nothing is extracted when the sha512 is wrong" 1 test -e "$tmp/rt_out2"
+expect "extract-runtime rejects a sha512 of the wrong length" 1 sh "$here/extract-runtime.sh" "$tmp/rt.tar.gz" abc "$tmp/rt_out3"
+expect "extract-runtime fails on a missing tarball" 1 sh "$here/extract-runtime.sh" "$tmp/no-such.tar.gz" "$rt_sha" "$tmp/rt_out4"
+expect "extract-runtime refuses an existing destination" 1 sh "$here/extract-runtime.sh" "$tmp/rt.tar.gz" "$rt_sha" "$tmp/rt_out"
+expect "extract-runtime without arguments is a usage error" 64 sh "$here/extract-runtime.sh"
 
 # profile-env.sh: the probe's environment profiles, read from profiles.manifest
 pe_manifest="$tmp/pe.manifest"

@@ -98,7 +98,7 @@ internal static class SelfTest
         {
             var stdout = new CountingStream();
             var stderr = new StringWriter();
-            Equal(0, Cli.Run(Array.Empty<string>(), stdout, stderr));
+            Equal(0, Cli.Run(Array.Empty<string>(), stdout, () => stderr));
             Equal(1, stdout.Writes);
             Equal(string.Empty, stderr.ToString());
             var text = Encoding.ASCII.GetString(stdout.Written.ToArray());
@@ -106,13 +106,31 @@ internal static class SelfTest
             True(text.EndsWith('\n'), text);
             Equal(1, text.Count(c => c == '\n'));
         }),
+        ("a successful run never creates the stderr writer", () =>
+        {
+            var created = 0;
+            Equal(0, Cli.Run(Array.Empty<string>(), new CountingStream(), () =>
+            {
+                created++;
+                return new StringWriter();
+            }));
+            Equal(0, created);
+        }),
+        ("the random value is the runtime's NextInt64 as an unsigned number: 63 bits", () =>
+        {
+            for (var i = 0; i < 200; i++)
+            {
+                Equal(0UL, Workload.RandomValue() >> 63);
+            }
+            NotEqual(Workload.RandomValue(), Workload.RandomValue());
+        }),
         ("any argument is a usage error: exit 64, a usage line on stderr, nothing on stdout", () =>
         {
             foreach (var arg in new[] { "x", "--switch=1.0", "" })
             {
                 var stdout = new CountingStream();
                 var stderr = new StringWriter();
-                Equal(64, Cli.Run(new[] { arg }, stdout, stderr));
+                Equal(64, Cli.Run(new[] { arg }, stdout, () => stderr));
                 Equal(0, stdout.Writes);
                 True(stderr.ToString().StartsWith(UsageStart, StringComparison.Ordinal), stderr.ToString());
             }
@@ -120,7 +138,7 @@ internal static class SelfTest
         ("an unwritable stdout is an internal failure: exit 3 and a message on stderr", () =>
         {
             var stderr = new StringWriter();
-            Equal(3, Cli.Run(Array.Empty<string>(), new BrokenStream(), stderr));
+            Equal(3, Cli.Run(Array.Empty<string>(), new BrokenStream(), () => stderr));
             True(stderr.ToString().Contains("internal invariant failed", StringComparison.Ordinal), stderr.ToString());
         }),
         ("a worker that did not finish is an internal failure", () =>

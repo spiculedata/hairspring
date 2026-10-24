@@ -211,8 +211,8 @@ with one `write(2)` to stdout, and exits 0:
 PROBE v1 lang=dotnet lock_order=<16 hex> arrival=<16 hex> rand=<16 hex> vtime_ns=<20 digits> extra=<16 hex>
 ```
 
-`lock_order`, `arrival` and `extra` are FNV-1a 64 hashes of the worker numbers as bare digits; `rand` is 64 bits from
-`Random.Shared`; `vtime_ns` is the difference of two `Stopwatch.GetTimestamp()` readings, the program's only clock read.
+`lock_order`, `arrival` and `extra` are FNV-1a 64 hashes of the worker numbers as bare digits; `rand` is
+`Random.Shared.NextInt64()` as an unsigned number (a non-negative 63-bit value, so the top bit of the field is 0); `vtime_ns` is the difference of two `Stopwatch.GetTimestamp()` readings, the program's only clock read.
 Any argument is a usage error (exit 64); an internal failure, such as a worker that did not start or a stdout that cannot
 be written, exits 3.
 
@@ -223,6 +223,10 @@ The output is framework-dependent: `LangAtProbe.dll` with its `.runtimeconfig.js
 (arm a: `DOTNET_ROOT` only; arm b: plus `DOTNET_TieredCompilation=0`, `DOTNET_EnableWriteXorExecute=0`,
 `DOTNET_gcServer=0` and `DOTNET_PROCESSOR_COUNT=1`); `dotnet/profile-env.sh` prints one arm.
 
+The runtime needs ICU. Before running the probe on a machine, check (read-only) that libicu is installed, for example
+`ls /usr/lib/x86_64-linux-gnu/libicuuc.so.74*`: without ICU the runtime aborts at startup, which would look like a crash of
+the probe. `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT` is not set in either profile.
+
 ```sh
 make -C dotnet test      # the unit checks (selftest/), the build, then test_probe.sh against the built program
 make test-dotnet         # the same, from this directory (not part of `make test`: it needs the .NET 10 SDK)
@@ -230,12 +234,16 @@ make test-dotnet         # the same, from this directory (not part of `make test
 
 `scripts/build-record-probe-dotnet.sh` records `probe-dotnet`: B1 publishes it twice from two copies of the sources in
 different directories (with different file times) and requires equal sha256 for each of the three files and checks that
-the restore resolved no library; the SDK and runtime versions are checked against the pinned 10.0.402 and 10.0.13; a
-source check (`scripts/check-sources-dotnet.sh`) allows `Stopwatch.GetTimestamp` (exactly once,
-`scripts/check-stopwatch-use.sh`) and no other clock, seed, `/proc`, CPU count or environment read; B4 is native runs that
-check only the format of the line and the exit status, under the base environment and under each profile; B5 runs
-`strace -ff` on one run per profile and requires the line to be one `write(2)` (`scripts/check-probe-writes.sh --any-fd`:
-the runtime duplicates descriptor 1 for its console stream, so the line appears on another descriptor); the
+the restore resolved no library; the SDK version is checked against the pinned 10.0.402. The program is then run (B4, B5) on
+the pinned runtime 10.0.13: its tarball is checked against the published sha512 (`scripts/extract-runtime.sh`) and
+extracted, and that directory is `DOTNET_ROOT` for every run, so the record cannot silently use a newer 10.0.x patch
+(`RUNTIME_SOURCE=installed` uses the installed runtime on a machine that is not x86-64 Linux; it still has to be 10.0.13).
+A source check (`scripts/check-sources-dotnet.sh`) allows `Stopwatch.GetTimestamp` in `Clock.cs` only (exactly once,
+`scripts/check-stopwatch-use.sh`) and no other clock, seed, `/proc`, `/sys`, CPU count or environment read; B4 is native
+runs that check only the format of the line and the exit status, under the base environment and under each profile; B5 runs
+`strace -ff` on one run per profile and requires the line to be one whole `write(2)` to a duplicate of descriptor 1, no
+write at all to descriptors 1 or 2, stdout equal to exactly the line and stderr empty (`scripts/check-probe-writes.sh
+--dup-of-stdout`: the runtime duplicates descriptor 1 for its console stream, so the line appears on another descriptor); the
 unit checks run on a clean copy. B2, B3, B6 and B7 are marked not applicable, and the record has no alignment checklist.
 The artifact is identified by the tree hash of its three files. The CI workflow's manual `fixture-build-records` job runs
 it as the `dotnet-probe` variant (with the pinned SDK from `actions/setup-dotnet`);

@@ -12,9 +12,9 @@ internal static class Clock
     private const ulong NanosPerSecond = 1_000_000_000UL;
 
     /// <summary>The monotonic counter now, in stopwatch ticks.</summary>
-    public static long Now() => Stopwatch.GetTimestamp();
+    public static long Ticks() => Stopwatch.GetTimestamp();
 
-    /// <summary>Nanoseconds between two readings of <see cref="Now"/>, using the stopwatch's own tick frequency.</summary>
+    /// <summary>Nanoseconds between two readings of <see cref="Ticks"/>, using the stopwatch's own tick frequency.</summary>
     public static ulong NanosBetween(long start, long end) => NanosBetween(start, end, Stopwatch.Frequency);
 
     /// <summary>

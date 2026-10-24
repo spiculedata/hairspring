@@ -63,11 +63,11 @@ internal static class Workload
     /// <summary>Runs the workers and the tasks to completion and collects what the line reports.</summary>
     public static Outcome Run()
     {
-        var start = Clock.Now();
+        var start = Clock.Ticks();
         var shared = new SharedState();
         RunThreads(shared);
         var completion = RunTasks();
-        var end = Clock.Now();
+        var end = Clock.Ticks();
         var lockOrder = shared.LockOrderSnapshot();
         var arrival = shared.Arrival.ToArray();
         Check(lockOrder, arrival, completion);
@@ -84,13 +84,11 @@ internal static class Workload
         }
     }
 
-    /// <summary>64 bits from the runtime's default random source.</summary>
-    private static ulong RandomValue()
-    {
-        Span<byte> bytes = stackalloc byte[sizeof(ulong)];
-        Random.Shared.NextBytes(bytes);
-        return BitConverter.ToUInt64(bytes);
-    }
+    /// <summary>
+    /// One value from the runtime's default random source, <c>Random.Shared.NextInt64()</c>, as an unsigned number. That call
+    /// returns a non-negative 63-bit value, so the top bit of the 64-bit <c>rand</c> field is always 0.
+    /// </summary>
+    internal static ulong RandomValue() => (ulong)Random.Shared.NextInt64();
 
     private static void RunThreads(SharedState shared)
     {

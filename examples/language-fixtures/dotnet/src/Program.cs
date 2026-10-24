@@ -16,7 +16,7 @@ internal static class Program
         try
         {
             using var stdout = Console.OpenStandardOutput();
-            return Cli.Run(args, stdout, Console.Error);
+            return Cli.Run(args, stdout, () => Console.Error);
         }
         catch (Exception e)
         {

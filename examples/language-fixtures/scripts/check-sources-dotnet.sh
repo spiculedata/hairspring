@@ -1,15 +1,18 @@
 #!/bin/sh
 # Source check of the .NET probe: it must not read the scheduler seed, /proc, the CPU count, the environment or the clock.
 #
-#   check-sources-dotnet.sh [--allow-stopwatch] <source-file-or-directory>...
+#   check-sources-dotnet.sh [--allow-stopwatch-in <file-name>] <source-file-or-directory>...
 #
-# Forbidden: HAIRSPRING_SEED, /proc, Environment.GetEnvironmentVariable(s), ExpandEnvironmentVariables, the CPU count
-# (Environment.ProcessorCount, Thread.GetCurrentProcessorId), the wall clock and tick counters (DateTime.Now, UtcNow, Today,
-# DateTimeOffset.Now, UtcNow, Environment.TickCount and TickCount64, TimeProvider), Process.GetCurrentProcess and Stopwatch.
-# --allow-stopwatch is for the probe alone: its output line carries the monotonic counter difference between the start and
-# the end of the run, so `Stopwatch.GetTimestamp(` and `Stopwatch.Frequency` are allowed there and no other use of Stopwatch
-# is (not StartNew, not GetElapsedTime, not `new Stopwatch`). check-stopwatch-use.sh is the other half: the file that holds
-# the read has exactly one. This is a plain text search, so a forbidden word in a comment is reported too.
+# Forbidden: HAIRSPRING_SEED, /proc and /sys (CPU counts and cgroup limits are read there), Environment.GetEnvironmentVariable(s),
+# ExpandEnvironmentVariables, the CPU count (Environment.ProcessorCount, Thread.GetCurrentProcessorId), the wall clock and tick
+# counters (DateTime.Now, UtcNow, Today, DateTimeOffset.Now, UtcNow, a bare Now, UtcNow or Today, Environment.TickCount and
+# TickCount64, TimeProvider), `using static` of DateTime, DateTimeOffset or Environment, Process.GetCurrentProcess and Stopwatch.
+# --allow-stopwatch-in is for the probe alone: its output line carries the monotonic counter difference between the start and
+# the end of the run, so in the one source file with that name (matched on the file name) `Stopwatch.GetTimestamp(` and
+# `Stopwatch.Frequency` are allowed and no other use of Stopwatch is (not StartNew, not GetElapsedTime, not `new Stopwatch`);
+# every other file is searched without the allowance, so a second clock read elsewhere fails. check-stopwatch-use.sh is the
+# other half: the file that holds the read has exactly one. This is a plain text search, so a forbidden word in a comment is
+# reported too.
 #
 # A directory is searched whole (every .cs file below it except obj/ and bin/ build output), so a new source file is covered
 # without editing a list. A file that is missing or unreadable, a grep that fails, or nothing to search is a failure, never
@@ -18,17 +21,21 @@
 
 set -u
 
-allow_stopwatch=0
-if [ "${1:-}" = "--allow-stopwatch" ]; then
-  allow_stopwatch=1
-  shift
+allowed_name=""
+if [ "${1:-}" = "--allow-stopwatch-in" ]; then
+  if [ $# -lt 2 ]; then
+    echo "usage: $0 [--allow-stopwatch-in <file-name>] <source-file-or-directory>..." >&2
+    exit 64
+  fi
+  allowed_name=$2
+  shift 2
 fi
 if [ $# -lt 1 ]; then
-  echo "usage: $0 [--allow-stopwatch] <source-file-or-directory>..." >&2
+  echo "usage: $0 [--allow-stopwatch-in <file-name>] <source-file-or-directory>..." >&2
   exit 64
 fi
 
-forbidden='HAIRSPRING_SEED|/proc|GetEnvironmentVariable|ExpandEnvironmentVariables|ProcessorCount|ProcessorId|DateTime\.(Now|UtcNow|Today)|DateTimeOffset\.(Now|UtcNow)|TickCount|TimeProvider|GetCurrentProcess|Stopwatch'
+forbidden='HAIRSPRING_SEED|/proc|/sys/|GetEnvironmentVariable|ExpandEnvironmentVariables|ProcessorCount|ProcessorId|DateTime\.(Now|UtcNow|Today)|DateTimeOffset\.(Now|UtcNow)|(^|[^A-Za-z0-9_.])(Now|UtcNow|Today)([^A-Za-z0-9_]|$)|TickCount|TimeProvider|using[[:space:]]+static[[:space:]]+System\.(DateTime|DateTimeOffset|Environment)|GetCurrentProcess|Stopwatch'
 list=$(mktemp "${TMPDIR:-/tmp}/sources.XXXXXX") || exit 1
 trap 'rm -f "$list"' EXIT
 status=0
@@ -47,9 +54,10 @@ if [ ! -s "$list" ]; then
   status=1
 fi
 
-# without_allowed <file>: the file with the allowed stopwatch forms blanked out (line numbers are kept), or as it is.
+# without_allowed <file>: the named file with the allowed stopwatch forms blanked out (line numbers are kept); any other
+# file as it is.
 without_allowed() {
-  if [ "$allow_stopwatch" -eq 1 ]; then
+  if [ -n "$allowed_name" ] && [ "$(basename "$1")" = "$allowed_name" ]; then
     sed -E 's/Stopwatch\.GetTimestamp\(|Stopwatch\.Frequency//g' "$1"
   else
     cat "$1"
@@ -69,7 +77,7 @@ while read -r file; do
 done <"$list"
 if [ "$status" -eq 0 ]; then
   note=""
-  [ "$allow_stopwatch" -eq 1 ] && note=" (Stopwatch.GetTimestamp( and Stopwatch.Frequency blanked out first)"
+  [ -n "$allowed_name" ] && note=" (in $allowed_name only: Stopwatch.GetTimestamp( and Stopwatch.Frequency blanked out first)"
   echo "grep -En '$forbidden'$note"
   echo "no match in: $(tr '\n' ' ' <"$list")"
 fi

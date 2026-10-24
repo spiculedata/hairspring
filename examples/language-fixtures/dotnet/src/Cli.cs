@@ -24,12 +24,15 @@ internal static class Cli
         outcome.ElapsedNs,
         Line.HashDigits(outcome.CompletionOrder));
 
-    /// <summary>Runs the probe: nothing is written to <paramref name="stdout"/> unless the whole run succeeded.</summary>
-    public static int Run(string[] args, Stream stdout, TextWriter stderr)
+    /// <summary>
+    /// Runs the probe: nothing is written to <paramref name="stdout"/> unless the whole run succeeded. The stderr writer is
+    /// created only when something is reported, so a successful run does not touch descriptor 2 or the locale variables.
+    /// </summary>
+    public static int Run(string[] args, Stream stdout, Func<TextWriter> stderr)
     {
         if (args.Length > 0)
         {
-            stderr.WriteLine(Usage);
+            stderr().WriteLine(Usage);
             return ExitUsage;
         }
         try
@@ -40,12 +43,12 @@ internal static class Cli
         }
         catch (InvariantException e)
         {
-            stderr.WriteLine($"probe-dotnet: internal invariant failed: {e.Message}{CauseOf(e)}");
+            stderr().WriteLine($"probe-dotnet: internal invariant failed: {e.Message}{CauseOf(e)}");
             return ExitInvariant;
         }
         catch (IOException e)
         {
-            stderr.WriteLine($"probe-dotnet: internal invariant failed: the stdout line could not be written: {e.Message}");
+            stderr().WriteLine($"probe-dotnet: internal invariant failed: the stdout line could not be written: {e.Message}");
             return ExitInvariant;
         }
     }
