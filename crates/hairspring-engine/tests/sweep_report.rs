@@ -140,6 +140,35 @@ fn a_sweep_that_ended_in_an_error_labels_its_rate_as_partial() {
 }
 
 #[test]
+fn a_sweep_whose_rate_is_withheld_states_counts_only_whatever_its_status() {
+    // What the server builds for a sweep that was stopped short of its budget without reaching a limit.
+    let passed = RunOutcome::passed(3, 3, 5).with_rate_withheld();
+    let text = to_text("svc", &passed);
+    assert!(text.starts_with("PASSED  svc"), "{text}");
+    assert!(text.contains("  counts only, not a rate:"), "{text}");
+    assert!(text.contains("3 trials ran"), "{text}");
+    assert!(!text.contains("hits:") && !text.contains('%'), "{text}");
+
+    let failed = RunOutcome::failed(3, 3, 5, failure()).with_rate_withheld();
+    let text = to_text("svc", &failed);
+    assert!(text.contains("  counts only, not a rate:"), "{text}");
+    assert!(
+        !text.contains("first hit"),
+        "a sweep does not stop at a hit: {text}"
+    );
+    assert!(!text.contains("hits:") && !text.contains('%'), "{text}");
+}
+
+#[test]
+fn a_withheld_rate_still_lists_the_trials_that_were_inconclusive() {
+    let out = RunOutcome::passed(5, 5, 5)
+        .with_inconclusive(2)
+        .with_rate_withheld();
+    let text = to_text("svc", &out);
+    assert!(text.contains("5 trials ran (2 inconclusive)"), "{text}");
+}
+
+#[test]
 fn a_search_run_is_reported_exactly_as_before() {
     let text = to_text("svc", &RunOutcome::failed(7, 7, 5, failure()));
     assert!(!text.contains("sweep:"), "{text}");

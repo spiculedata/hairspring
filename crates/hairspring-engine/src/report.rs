@@ -80,9 +80,22 @@ pub struct RunOutcome {
     /// How every trial of a sweep ended. `None` for a run that stops at its first failure, which has no rate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sweep: Option<SweepSummary>,
+    /// True for a sweep that was stopped before its trial budget without reaching a limit the server can verify. Its
+    /// counts depend on how it stopped, so the report states them as counts and never as a rate, whatever the status.
+    /// Set by the server when it rebuilds a stored run; not stored.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rate_withheld: bool,
 }
 
 impl RunOutcome {
+    /// Marks the outcome as one whose rate must not be stated (see [`RunOutcome::rate_withheld`]).
+    pub fn with_rate_withheld(self) -> Self {
+        RunOutcome {
+            rate_withheld: true,
+            ..self
+        }
+    }
+
     /// Marks the outcome as a sweep's and attaches its summary. A sweep never stops at its first failure.
     pub fn with_sweep(self, summary: SweepSummary) -> Self {
         RunOutcome {
@@ -173,6 +186,7 @@ impl RunOutcome {
             trial_log: Vec::new(),
             trials_reported: None,
             sweep: None,
+            rate_withheld: false,
         }
     }
     pub fn failed(
@@ -197,6 +211,7 @@ impl RunOutcome {
             trial_log: Vec::new(),
             trials_reported: None,
             sweep: None,
+            rate_withheld: false,
         }
     }
     pub fn error(message: impl Into<String>) -> Self {
@@ -216,6 +231,7 @@ impl RunOutcome {
             trial_log: Vec::new(),
             trials_reported: None,
             sweep: None,
+            rate_withheld: false,
         }
     }
 }

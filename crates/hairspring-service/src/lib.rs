@@ -251,11 +251,14 @@ impl Service {
             true => self.sweep_summary(&run)?,
             false => None,
         };
+        let sweep_partial =
+            sweep.is_some() && !matches!(run.state, RunState::Passed | RunState::Failed);
         Ok(Some(RunDetail {
             run,
             failures,
             properties,
             sweep,
+            sweep_partial,
         }))
     }
 
@@ -302,6 +305,9 @@ impl Service {
         };
         let sweep = detail.sweep.clone();
         let run = detail.run;
+        // A sweep with no summary because it was stopped short without a limit states counts only, never a rate.
+        let rate_withheld =
+            sweep.is_none() && run.ingest_incomplete && sweep::mode_of(&run.config_json).is_sweep();
         let status = match run.state {
             RunState::Passed => RunStatus::Passed,
             RunState::Failed => RunStatus::Failed,
@@ -348,6 +354,7 @@ impl Service {
             trial_log: Vec::new(),
             trials_reported: None,
             sweep,
+            rate_withheld,
         }))
     }
 

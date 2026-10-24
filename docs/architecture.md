@@ -124,7 +124,9 @@ change: the trial rows added in version 2 already hold every verdict.
   reruns. A confirmation is held to the sweep's wall-clock budget and asks the progress callback first, so a cancel is
   noticed before it, not only between batches. The row's reason ends with `same-output reruns k/n` (reruns with the
   same behaviour hash and failing properties), or `not confirmed: ...` (limit reached, out of budget, cancelled). A
-  violation counts toward the rate whether or not its reruns matched; the note says what they showed. Only the lowest failing seed gets a
+  violation counts toward the rate whether or not its reruns matched. The check is before a confirmation, not between
+  its reruns, so a sweep overruns its wall-clock budget by at most one confirmation (`repro_runs` reruns of up to a
+  trial's timeout each; a test pins the bound); the note says what they showed. Only the lowest failing seed gets a
   report (trace and replayable bundle), which is also what the run's failure row holds.
 - **Not rated.** The rate is violations out of passes and violations. Timeouts, unusable trials and infrastructure
   failures (labelled "failed in the host") are listed apart, are never in a denominator and are never described as
@@ -140,8 +142,12 @@ change: the trial rows added in version 2 already hold every verdict.
   not from the outcome, so its properties have rates. A failed sweep that holds fewer rows than its budget without
   having reached its wall-clock or step limit (what a worker that predates sweeps produces: it ignores the mode and
   stops at the first failure) is marked `ingest_incomplete`, like a short pass; for a failed sweep only the server's clock
-  counts as a limit, never the worker's own step count. Such a run has no `sweep` summary (a first-hit count is not a
-  rate) and its report states no rate. A worker's record numbered at or past the run's trial budget is refused, and so
+  counts as a limit, never the worker's own step count. Such a run (`EndedEarly` in the completion label) has no
+  `sweep` summary, and its report states counts only, not a rate, whatever its status (`RunOutcome::rate_withheld`,
+  set when the server rebuilds the stored run; not stored). The split is `completion_for`'s: a run that is incomplete
+  only because the server replaced digests by stand-ins (`DigestAllowanceUsedUp`) keeps its summary and its rate, since
+  the summary reads verdicts and seeds. `sweep_partial` on the run marks a summary from a sweep that ended in an error or
+  was cancelled. A worker's record numbered at or past the run's trial budget is refused, and so
   is a sweep record whose seed is not the run's first seed plus its number (wrapping), so a worker cannot name an
   arbitrary failing seed. A sweep summary that contradicts itself or the trial count is refused, and the worker's
   summary is dropped. The server serves its own summary as the `sweep` field of `GET /api/runs/{id}` and the MCP

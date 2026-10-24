@@ -577,12 +577,25 @@ mod tests {
     }
 
     #[test]
-    fn finishing_a_sweep_hands_over_its_log_without_copying_it_twice() {
+    fn finishing_a_sweep_moves_its_log_into_the_outcome_instead_of_copying_it() {
         let mut tally = Tally::for_sweep(None, u64::MAX, u64::MAX);
         tally.on_trial(0, 5, &failing(1), &violation());
         tally.violation();
+        let before = tally.log.as_ptr();
         let out = tally.finish_sweep(Instant::now(), None);
         assert_eq!(out.trial_log.len(), 1);
+        // A copy would live in a new allocation; a move keeps the one the tally built.
+        assert_eq!(out.trial_log.as_ptr(), before);
+    }
+
+    #[test]
+    fn a_sweep_that_ends_in_an_error_moves_its_log_too() {
+        let mut tally = Tally::for_sweep(None, u64::MAX, u64::MAX);
+        tally.on_trial(0, 5, &failing(1), &violation());
+        tally.violation();
+        let before = tally.log.as_ptr();
+        let out = tally.sweep_error(Instant::now(), "cancelled");
+        assert_eq!(out.trial_log.as_ptr(), before);
     }
 
     #[test]

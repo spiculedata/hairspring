@@ -142,16 +142,23 @@ hairspring test checkout --sweep --seeds 5000..5500       # seeds 5000 to 5499 (
 
 The report gives the violations out of the rated trials with a Wilson 95% interval (with no violation, an exact upper
 bound instead), names the lowest failing seeds, and lists timeouts, trials with unusable output and trials that failed
-in the host apart: they are never in the denominator and never counted as passes. The first ten violations are each
-confirmed by re-running their seed, and the trial's row says how many reruns gave the same output (`same-output reruns k/n`). The exit code is 1 when
-any trial was a violation. `--trials` is at most 10,000, and a sweep also ends at `--budget-secs`; for a simulation
-target a trial is one exploration round and the rounds share `--budget-steps`, so raise it to run more of them (the
-report says when a sweep ended before its trial budget). Over HTTP, send `"mode": "sweep"` to
-`POST /api/runs`; over MCP, pass `mode` and `max_trials` to `start_run`. The finished run's `sweep` field (in `GET
-/api/runs/{id}` and the MCP `get_run`) holds the counts and the first failing seeds, counted by the server from the
-stored trials; it is left out for a search and for a sweep that was stopped before its budget without reaching a limit.
-A simulation sweep at the default budgets runs only a few rounds, so raise the step budget there. Without a mode a run
-is a search, as before.
+in the host apart: they are never in the denominator and never counted as passes.
+
+Up to the first ten violations are each confirmed by re-running their seed, and the trial's row says how many reruns
+gave the same output (`same-output reruns k/n`). A confirmation is skipped, and the row says so, when the limit of ten
+is reached, when the sweep is out of wall-clock budget, or when it was cancelled. The exit code is 1 when any trial was
+a violation. `--trials` is at most 10,000, and a sweep also ends at `--budget-secs`. For a simulation target a trial is
+one exploration round and the rounds share `--budget-steps`, so raise it to run more of them; a default simulation
+sweep runs only a few rounds. The report says when a sweep ended before its trial budget, and why as far as the server
+can tell.
+
+Over HTTP, send `"mode": "sweep"` to `POST /api/runs`; over MCP, pass `mode` and `max_trials` to `start_run`. The
+finished run's `sweep` field (in `GET /api/runs/{id}` and the MCP `get_run`) holds the counts and the first failing
+seeds, counted by the server from the stored trials. It is left out for a search, for a run still going, and for a
+sweep that was stopped before its budget without reaching a limit (counts only, never a rate). `sweep_partial` is true
+when the sweep ended in an error or was cancelled: its counts are those of whatever ran, so a client that states a rate
+must check it and the run's state. REST and MCP accept a first seed near the top of the 64-bit range and wrap round
+to 0, while the CLI refuses such a sweep. Without a mode a run is a search, as before.
 
 ## For AI agents (MCP)
 

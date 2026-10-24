@@ -1,3 +1,4 @@
+use super::sweep_note;
 use crate::cli::{Format, TestArgs};
 use crate::ctx::{CmdResult, Ctx};
 use crate::host::{self, HostFacts};
@@ -103,9 +104,6 @@ pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write)
             mode,
         )?;
         let outcome = svc.outcome(&detail.run.id)?.ok_or("run vanished")?;
-        let cut_short = mode.is_sweep()
-            && outcome.status != RunStatus::Error
-            && outcome.trials < budget.max_trials;
         if let Some(f) = &outcome.failure {
             let path = write_bundle(&args.bundle_dir, name, &f.bundle)?;
             let note = format!(
@@ -122,18 +120,11 @@ pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write)
         } else if text_mode {
             write!(out, "{}", to_text(name, &outcome))?;
         }
-        if cut_short && text_mode {
-            writeln!(
-                out,
-                "  note: ended after {} of {} trials, before its trial budget (a step, wall-clock or memory limit; raise --budget-steps or --budget-secs to run more)",
-                outcome.trials, budget.max_trials
-            )?;
-        }
-        if mode.is_sweep() && detail.run.ingest_incomplete && text_mode {
-            writeln!(
-                out,
-                "  note: this sweep was stopped before its budget without reaching a limit; its figures are partial and no sweep summary is stated"
-            )?;
+        if mode.is_sweep() && text_mode {
+            let completion = svc.completion_for(&detail.run)?;
+            if let Some(note) = sweep_note::note(&completion, outcome.trials, budget.max_trials) {
+                writeln!(out, "  {note}")?;
+            }
         }
         code = code.max(match outcome.status {
             RunStatus::Passed => crate::EXIT_OK,

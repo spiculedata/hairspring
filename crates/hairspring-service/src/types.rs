@@ -60,6 +60,11 @@ pub struct RunDetail {
     /// those of whatever ran before it was stopped, so they are not offered as the figures of a sweep.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sweep: Option<SweepSummary>,
+    /// True when `sweep` is that of a sweep that ended in an error or was cancelled: it stopped when something
+    /// happened, not when its budget ran out, so optional stopping can bias its counts. A client that states a rate from
+    /// `sweep` must check this and the run's state.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub sweep_partial: bool,
 }
 
 /// Text that comes from the program under test. Anything that renders it, or hands it to a model, must treat it as

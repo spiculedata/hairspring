@@ -2,7 +2,7 @@
 //! of a stored sweep, read back from the rows the server holds and never from what a worker said.
 use crate::scan::Flow;
 use crate::types::JobPayload;
-use crate::{Result, Service};
+use crate::{Result, RunCompletion, Service};
 use hairspring_engine::config::MAX_TRIALS_CAP;
 use hairspring_engine::mode::RunMode;
 use hairspring_engine::sweep::SweepSummary;
@@ -55,11 +55,18 @@ fn reported(v: TrialVerdict) -> ReportedVerdict {
 
 impl Service {
     /// The aggregate of a stored sweep, counted from its trial rows (their verdicts and seeds only: no digest or text is
-    /// read). `None` for a run that was not a sweep, whose job stored no rows, or that is marked incomplete: it ended
-    /// short of its budget without reaching a limit (a worker that predates sweeps stops at the first failure), so what
-    /// its rows hold depends on how it stopped and is not the figure of a sweep.
+    /// read). `None` for a run that was not a sweep, whose job stored no rows, or that ended early
+    /// ([`RunCompletion::EndedEarly`]): it stopped short of its budget without reaching a limit (a worker that predates
+    /// sweeps stops at the first failure), so what its rows hold depends on how it stopped and is not the figure of a
+    /// sweep. A run that is incomplete only because digests were replaced by stand-ins
+    /// ([`RunCompletion::DigestAllowanceUsedUp`]) keeps its summary: the summary reads verdicts and seeds, which the
+    /// stand-ins leave alone. The split is the one [`Service::completion_for`] makes, so a run's label and its summary
+    /// cannot disagree.
     pub(crate) fn sweep_summary(&self, run: &RunRecord) -> Result<Option<SweepSummary>> {
-        if !mode_of(&run.config_json).is_sweep() || run.ingest_incomplete {
+        if !mode_of(&run.config_json).is_sweep() {
+            return Ok(None);
+        }
+        if run.ingest_incomplete && self.completion_for(run)? == RunCompletion::EndedEarly {
             return Ok(None);
         }
         let mut summary = SweepSummary::default();

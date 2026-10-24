@@ -345,9 +345,13 @@ fn confirmations_stop_when_the_wall_clock_budget_is_spent() {
             row(&out, seed)
         );
     }
+    // The bound, pinned: the budget (1 s), plus the batch that was already running (0.7 s), plus the one confirmation
+    // that had started (repro_runs = 3 reruns of 0.7 s each). A confirmation is checked before it starts, not between
+    // its reruns, so this is the most a sweep overruns its wall-clock budget by (plus process start-up).
+    let bound = std::time::Duration::from_millis(1000 + 700 + 3 * 700 + 2500);
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(8),
-        "{:?}",
+        started.elapsed() < bound,
+        "{:?} is past the documented bound {bound:?}",
         started.elapsed()
     );
     assert_eq!(out.status, RunStatus::Failed);

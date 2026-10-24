@@ -201,6 +201,147 @@ fn an_incomplete_sweep_is_reported_without_a_rate_and_has_no_summary() {
 }
 
 #[test]
+fn an_incomplete_sweep_that_passed_states_counts_only_not_a_rate() {
+    let (svc, store, engine) = setup();
+    let job = lease_sweep(&svc, &engine, WORKER, 10);
+    svc.ingest_trials(&job.job_id, WORKER, &rows(&[Pass, Pass, Pass]))
+        .unwrap();
+    let outcome = RunOutcome {
+        trials_reported: Some(3),
+        ..RunOutcome::passed(3, 3, 5)
+    };
+    finish(&svc, &job, WORKER, outcome);
+    assert!(
+        store
+            .get_run(&job.run_id)
+            .unwrap()
+            .unwrap()
+            .ingest_incomplete
+    );
+    let stored = svc.outcome(&job.run_id).unwrap().unwrap();
+    assert!(stored.rate_withheld && stored.sweep.is_none());
+    let text = to_text("lock-lease", &stored);
+    assert!(text.contains("counts only, not a rate"), "{text}");
+    assert!(!text.contains("hits:") && !text.contains('%'), "{text}");
+    assert!(!text.contains("upper bound"), "{text}");
+}
+
+#[test]
+fn an_incomplete_sweep_that_failed_does_not_say_it_stopped_at_its_first_hit() {
+    let (svc, _store, engine) = setup();
+    let job = lease_sweep(&svc, &engine, WORKER, 10);
+    svc.ingest_trials(&job.job_id, WORKER, &rows(&[Pass, Violation]))
+        .unwrap();
+    let outcome = RunOutcome {
+        trials_reported: Some(2),
+        ..RunOutcome::failed(2, 2, 5, failure())
+    };
+    finish(&svc, &job, WORKER, outcome);
+    let text = to_text("lock-lease", &svc.outcome(&job.run_id).unwrap().unwrap());
+    assert!(text.contains("counts only, not a rate"), "{text}");
+    assert!(!text.contains("first hit"), "{text}");
+}
+
+/// A service whose digest allowance is one byte, so every trial's digest is replaced by a stand-in.
+fn tiny_allowance() -> (
+    hairspring_service::Service,
+    std::sync::Arc<dyn hairspring_store::Store>,
+    hairspring_engine::engine::Engine,
+) {
+    let (svc, store, engine) = setup();
+    let svc = svc.with_config(hairspring_service::ServiceConfig {
+        digest_bytes_per_run: 1,
+        ..hairspring_service::ServiceConfig::default()
+    });
+    (svc, store, engine)
+}
+
+#[test]
+fn a_sweep_that_ran_its_whole_budget_keeps_its_summary_when_only_its_digests_were_capped() {
+    let (svc, store, engine) = tiny_allowance();
+    let job = lease_sweep(&svc, &engine, WORKER, 4);
+    let verdicts = [Pass, Violation, Pass, Pass];
+    svc.ingest_trials(&job.job_id, WORKER, &rows(&verdicts))
+        .unwrap();
+    let mut outcome = sweep_outcome(&verdicts);
+    outcome.trials_reported = Some(4);
+    finish(&svc, &job, WORKER, outcome);
+    let run = store.get_run(&job.run_id).unwrap().unwrap();
+    assert!(
+        run.ingest_incomplete,
+        "the capped digests make the run incomplete"
+    );
+    assert_eq!(
+        svc.completion_for(&run).unwrap(),
+        RunCompletion::DigestAllowanceUsedUp
+    );
+    let detail = svc.get_run(&job.run_id).unwrap().unwrap();
+    let summary = detail.sweep.expect("verdicts and seeds are all it reads");
+    assert_eq!((summary.trials, summary.violations), (4, 1));
+    let stored = svc.outcome(&job.run_id).unwrap().unwrap();
+    assert!(!stored.rate_withheld);
+    assert!(to_text("lock-lease", &stored).contains("Wilson 95% interval"));
+}
+
+#[test]
+fn a_short_sweep_that_also_had_capped_digests_is_still_labelled_by_the_digest_allowance() {
+    // completion_for makes this split; the summary follows it, so the two cannot disagree.
+    let (svc, store, engine) = tiny_allowance();
+    let job = lease_sweep(&svc, &engine, WORKER, 10);
+    svc.ingest_trials(&job.job_id, WORKER, &rows(&[Pass, Pass]))
+        .unwrap();
+    let outcome = RunOutcome {
+        trials_reported: Some(2),
+        ..RunOutcome::passed(2, 2, 5)
+    };
+    finish(&svc, &job, WORKER, outcome);
+    let run = store.get_run(&job.run_id).unwrap().unwrap();
+    let completion = svc.completion_for(&run).unwrap();
+    let detail = svc.get_run(&job.run_id).unwrap().unwrap();
+    assert_eq!(
+        detail.sweep.is_some(),
+        completion == RunCompletion::DigestAllowanceUsedUp
+    );
+}
+
+#[test]
+fn a_sweep_that_ended_in_an_error_is_served_with_a_partial_marker() {
+    let (svc, _store, engine) = setup();
+    let job = lease_sweep(&svc, &engine, WORKER, 10);
+    let log = rows(&[Pass, Violation]);
+    svc.ingest_trials(&job.job_id, WORKER, &log).unwrap();
+    let mut outcome = hairspring_engine::sweep::assemble_error(
+        "cancelled",
+        hairspring_engine::sweep::SweepEnd {
+            steps_executed: 2,
+            rows: log,
+            failure: None,
+            elapsed_ms: 1,
+        },
+    );
+    outcome.trials_reported = Some(2);
+    finish(&svc, &job, WORKER, outcome);
+    let detail = svc.get_run(&job.run_id).unwrap().unwrap();
+    assert!(detail.sweep.is_some());
+    assert!(detail.sweep_partial);
+    let json = serde_json::to_value(&detail).unwrap();
+    assert_eq!(json["sweep_partial"], true);
+}
+
+#[test]
+fn a_sweep_that_finished_is_not_marked_partial_and_a_search_has_no_marker() {
+    let (svc, _store, engine) = setup();
+    let sweep = svc
+        .run_sync_with_mode(&engine, &lock_lease(3), RunMode::Sweep)
+        .unwrap();
+    assert!(!sweep.sweep_partial);
+    assert!(serde_json::to_value(&sweep)
+        .unwrap()
+        .get("sweep_partial")
+        .is_none());
+}
+
+#[test]
 fn a_failed_sweep_cannot_skip_the_incomplete_mark_on_its_workers_word_about_steps() {
     let (svc, store, engine) = setup();
     let job = lease_sweep(&svc, &engine, WORKER, 10);
