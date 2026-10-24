@@ -129,7 +129,7 @@ constant_names() {
   case "$1" in
     c | cxx) echo "LANG_AT_THREADS LANG_AT_ITERS LANG_AT_SPIN LANG_AT_SPIN_WIDE" ;;
     go) echo "Workers Iterations Spin SpinWide" ;;
-    rust | py) echo "THREADS ITERATIONS WINDOW WINDOW_WIDE" ;;
+    rust | py | java) echo "THREADS ITERATIONS WINDOW WINDOW_WIDE" ;;
     *) echo "" ;;
   esac
 }
@@ -140,7 +140,7 @@ constant_value() {
   shift
   awk -v n="$name" '
     {
-      re = "^[ \t]*(#define[ \t]+|pub[ \t]+const[ \t]+|const[ \t]+)?" n "[ \t]*(:[^=]*)?(=|[ \t])[ \t]*[0-9][0-9_]*"
+      re = "^[ \t]*(#define[ \t]+|pub[ \t]+const[ \t]+|const[ \t]+|static[ \t]+final[ \t]+(int|long)[ \t]+)?" n "[ \t]*(:[^=]*)?(=|[ \t])[ \t]*[0-9][0-9_]*"
       if (match($0, re)) {
         s = substr($0, RSTART, RLENGTH)
         sub(/^.*[^0-9_]/, "", s)
@@ -182,8 +182,8 @@ cmd_constants() {
   return $status
 }
 
-BARRIER_INCREMENT='(started[^;]*(fetch_add|\.Add\(|\+= *1|\+\+)|(fetch_add|\.Add)\(&?[A-Za-z_.>-]*started)'
-BARRIER_WAIT='(started[^;]*(<|>=|!=|==) *(LANG_AT_THREADS|Workers|THREADS|4)|barrier\.wait\(\))'
+BARRIER_INCREMENT='(started[^;]*(fetch_add|\.Add\(|\+= *1|\+\+|incrementAndGet|getAndIncrement)|(fetch_add|\.Add)\(&?[A-Za-z_.>-]*started)'
+BARRIER_WAIT='(started[^;]*(<|>=|!=|==) *(LANG_AT_THREADS|Workers|THREADS|4)|barrier\.wait\(\)|barrier\.await\(\))'
 
 # barrier_in_file <file>: succeeds when a line that increments started is followed, within six lines, by a wait, or by a
 # call to a function whose body (ten lines) holds a wait. Comments and the lines of assertion calls (the
