@@ -12,7 +12,8 @@
 #
 # This script does not rely on that arithmetic. For the default flags and for each profile of profiles.tsv it runs buggy,
 # fixed and wide under -XX:+PrintCompilation and fails if the output names langat.Race::racyIterations or
-# langat.Race::lockedIterations (a normal compile or an OSR compile, which the log marks with %). Positive controls, so a
+# langat.Race::lockedIterations (a normal compile or an OSR compile, which the log marks with %), or any other method of
+# langat.Race except spin. Positive controls, so a
 # log the check could not read is not taken for a pass: under every run that is not interpreter-only the log must hold at
 # least one compile line, and the wide run must show langat.Race::spin compiled (its loop is the hot one).
 # JAVA is the java command (default java). Nothing here runs Hermit.
@@ -36,7 +37,8 @@ trap 'rm -rf "$tmp"' EXIT
 tab=$(printf '\t')
 status=0
 count=0
-LOOPS='langat\.Race::(racyIterations|lockedIterations)'
+# Any compiled method of Race but spin: the two worker loops, and the rest of the class (a lambda, execute, joinAll) too.
+OTHER_RACE='langat\.Race::([^s]|s[^p]|sp[^i]|spi[^n]|spin[^ ])'
 COMPILE_LINE='^ *[0-9]+ +[0-9]+ '
 
 # check_arm <arm> <flags>: the three modes under the flags, each with the log in $tmp/log.
@@ -52,8 +54,8 @@ check_arm() {
     rc=$?
     [ "$rc" -eq 0 ] || { echo "FAIL arm $arm, $mode: exit status $rc"; cat "$tmp/err"; return 1; }
     lines=$(grep -Ec "$COMPILE_LINE" "$tmp/log")
-    if grep -E "$LOOPS" "$tmp/log"; then
-      echo "FAIL arm $arm, $mode: a worker loop was compiled (the lines above)"
+    if grep -E "$OTHER_RACE" "$tmp/log"; then
+      echo "FAIL arm $arm, $mode: a method of Race other than spin was compiled (the lines above)"
       return 1
     fi
     if [ "$interpreted" -eq 0 ]; then
@@ -63,7 +65,7 @@ check_arm() {
         return 1
       fi
     fi
-    echo "ok   arm $arm, $mode: $lines compile lines, neither worker loop among them"
+    echo "ok   arm $arm, $mode: $lines compile lines, no Race method but spin among them"
   done
 }
 

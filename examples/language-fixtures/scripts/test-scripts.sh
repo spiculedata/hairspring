@@ -1250,17 +1250,23 @@ expect "java arms: without arguments is a usage error" 64 sh "$here/check-java-a
 compiled_java="$tmp/compiled-java"
 cat >"$compiled_java" <<'EOF2'
 #!/bin/sh
-# FAKE_JAVA: workerloop (a worker loop is compiled), nocompiles (PrintCompilation prints nothing), exit1 (the program fails).
+# FAKE_JAVA: workerloop (a worker loop is compiled), otherrace (another Race method is compiled), nospin (compile lines but
+# never spin), spinonlywide (spin is compiled in wide, and no other line in any mode), nocompiles (PrintCompilation prints
+# nothing), exit1 (the program fails).
 interp=0
 for a in "$@"; do
   [ "$a" = -Xint ] && interp=1
   mode=$a
 done
 [ "${FAKE_JAVA:-}" = exit1 ] && exit 1
-if [ "$interp" -eq 0 ] && [ "${FAKE_JAVA:-}" != nocompiles ]; then
-  echo '     42   17       3       java.lang.String::hashCode (55 bytes)'
+if [ "$interp" -eq 0 ] && [ "${FAKE_JAVA:-}" = spinonlywide ]; then
   [ "$mode" = wide ] && echo '    130   40 %     3       langat.Race::spin @ 8 (30 bytes)'
+elif [ "$interp" -eq 0 ] && [ "${FAKE_JAVA:-}" != nocompiles ]; then
+  echo '     42   17       3       java.lang.String::hashCode (55 bytes)'
+  [ "$mode" = wide ] && [ "${FAKE_JAVA:-}" != nospin ] && echo '    130   40 %     3       langat.Race::spin @ 8 (30 bytes)'
 fi
+[ "${FAKE_JAVA:-}" = otherrace ] && [ "$interp" -eq 0 ] && echo '    500   60       3       langat.Race::joinAll (40 bytes)'
+[ "${FAKE_JAVA:-}" = otherrace2 ] && [ "$interp" -eq 0 ] && echo '    500   61       3       langat.Race::lambda$execute$0 (10 bytes)'
 [ "${FAKE_JAVA:-}" = workerloop ] && [ "$mode" = fixed ] && [ "$interp" -eq 0 ] && echo '    900   99 %     3       langat.Race::lockedIterations @ 21 (66 bytes)'
 [ "${FAKE_JAVA:-}" = workerracy ] && [ "$mode" = buggy ] && [ "$interp" -eq 0 ] && echo '    900   98       3       langat.Race::racyIterations (66 bytes)'
 printf 'LANGAT v1 lang=java mode=%s final=%020d expect=%020d order=0123456789abcdef rand=0123456789abcdef\n' "$mode" 4000 4000
@@ -1273,6 +1279,10 @@ cjc() { # cjc <name> <wanted exit> <FAKE_JAVA value> [profiles file]
 cjc "accepts runs in which neither worker loop is compiled" 0 ""
 cjc "rejects a compiled locked worker loop (an OSR compile)" 1 workerloop
 cjc "rejects a compiled unlocked worker loop" 1 workerracy
+cjc "rejects any other compiled Race method" 1 otherrace
+cjc "rejects a compiled Race lambda" 1 otherrace2
+cjc "rejects a log with compile lines but no spin in wide (the spin control)" 1 nospin
+cjc "rejects a log with no compile line in buggy although wide shows spin (the compile-line control)" 1 spinonlywide
 cjc "rejects a PrintCompilation that prints nothing (the check could not see a compile)" 1 nocompiles
 cjc "rejects a program that fails" 1 exit1
 cjc "rejects a missing profiles file" 1 "" "$tmp/none.tsv"
