@@ -13,3 +13,4 @@ How you verified it (commands run, platforms).
 - [ ] `make test` passes (and `npm test` in `web/` if the UI changed)
 - [ ] Docs updated where behaviour changed
 - [ ] No secrets in code, logs or test fixtures
+- [ ] Every commit is signed off (`git commit -s`, see `CONTRIBUTING.md`)

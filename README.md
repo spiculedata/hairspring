@@ -234,4 +234,5 @@ Inspired by FoundationDB's simulation testing, TigerBeetle's VOPR, Antithesis, a
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Contributions are accepted under the same licence with a
+Developer Certificate of Origin sign-off; see [CONTRIBUTING.md](CONTRIBUTING.md).
