@@ -227,7 +227,7 @@ Native self-tests (`sdks/rust/tests/fixture_race.rs`, and the same through the r
 `always` false with the witness `[final, 4000, 4, 1000]`, within 200 native runs) and never fires in `fixed` (20 runs,
 every one exactly 4000), and check the stdout line, the exit statuses and that each property is evaluated once. The
 binary has unit tests for the mode parser, the line format, the order hash and the workers. They prove only that the
-race exists and the report sees it; nothing here ran under Hermit.
+race exists and the report sees it. The Hermit results are in the [support matrix](support-matrix.md).
 
 ## The std-only probe
 
@@ -262,7 +262,7 @@ Natively the thread order and the random value differ from run to run, so the na
 exactly six fields of the right width and alphabet, the two thread orders are hashes of a permutation of the four
 workers, the elapsed time is positive, the random value varies, and the map order with a fixed hasher is repeatable.
 `scripts/build-record-probe-rust.sh` builds it twice for the static musl target and requires equal sha256 (see
-`examples/language-fixtures/README.md`). Nothing here ran under Hermit.
+`examples/language-fixtures/README.md`). The Hermit results are in the [support matrix](support-matrix.md).
 
 ## Conformance
 
@@ -318,4 +318,4 @@ Linux only; CI's native x86-64 runner is its first x86-64 run.
 * More than 4,096 ids is untested for this SDK (the parser's handling is covered by the C SDK's `manyids` scenario).
 * `hairspring catalog <binary>` (the tool that reads the twin sections) does not exist yet.
 * The seccomp check has not run on native x86-64 Linux here.
-* No run under Hermit; the planted race has not been reached through the engine.
+* Hermit: Rust passed our acceptance test on one configuration and was not tested elsewhere; see the [support matrix](support-matrix.md).

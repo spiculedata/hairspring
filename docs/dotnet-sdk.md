@@ -5,9 +5,9 @@ Hairspring tracks across trials. It speaks [guest protocol v1](guest-protocol.md
 [C SDK](c-sdk.md) (checked byte for byte, see "Conformance"), is managed C# for `net10.0` using only the base class library
 (no NuGet package, no agent, no native code of its own), supports Linux and macOS, and is not published to a registry.
 
-> **Status.** The SDK, its tests and a lost-update fixture exist in this repository. A .NET program has **not yet been run
-> under Hermit**, and **.NET is not supported on this build**. Everything below was checked natively (Linux and macOS, no
-> Hermit); nothing here says how a .NET program behaves under the `process` backend.
+> **Status.** The SDK, its tests and a lost-update fixture exist in this repository. **.NET is not supported on this
+> build**: the probe program did not complete under Hermit. Everything below was checked natively (Linux and macOS, no
+> Hermit). See the [support matrix](support-matrix.md).
 
 A call site only updates counters in memory; the program reports once, when the process exits.
 
@@ -341,5 +341,4 @@ environment and under each profile arm.
 * A profiler or startup hook that would catalog every call site before it runs, instead of `Declare`.
 * Signal-time reports, `HS_EVAL_*` equivalents, a fork handler, the tape API.
 * Windows.
-* Nothing here ran under Hermit: the planted race has not been reached through the engine, how the runtime's threads, clocks
-  and JIT behave under the process backend is not known, and **.NET is not supported on this build**.
+* Hermit: **.NET is not supported on this build**; the probe program did not complete under Hermit. See the [support matrix](support-matrix.md).

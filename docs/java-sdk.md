@@ -280,5 +280,4 @@ its invariants and its workers; the source check; 50 native runs per mode with a
 * A JVM agent (`-javaagent`) that would catalog every call site before it runs, instead of `declare`.
 * Signal-time reports, `HS_EVAL_*` equivalents, a fork handler, the tape API.
 * Windows.
-* Nothing here ran under Hermit; the planted race has not been reached through the engine, and how the JVM's threads,
-  clocks and compiler threads behave under the process backend is not known.
+* Hermit: not supported on this build; the probe program did not complete under Hermit. See the [support matrix](support-matrix.md).
