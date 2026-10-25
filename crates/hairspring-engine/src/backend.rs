@@ -1,4 +1,5 @@
 use crate::config::{Budget, TargetKind, TargetSpec};
+use crate::confirm::{CheckResult, ConfirmRequest};
 use crate::report::{DoctorReport, ReplayOutcome, RunOutcome};
 use crate::EngineError;
 use hairspring_core::bundle::Bundle;
@@ -64,6 +65,23 @@ pub trait Backend: Send + Sync {
         _options: ReplayOptions,
     ) -> Result<ReplayOutcome, EngineError> {
         self.replay(spec, bundle)
+    }
+    /// Runs the confirmation checks of `req` on the failure `bundle` records, returning each one that was run or skipped,
+    /// in order. `control` is the target that runs the fixed build, when the request names one. `progress` is called
+    /// between checks and reruns; returning `false` stops the confirmation, and the checks not yet run are returned as
+    /// skipped. Backends that have nothing to rerun say so.
+    fn confirm(
+        &self,
+        _spec: &TargetSpec,
+        _control: Option<&TargetSpec>,
+        _bundle: &Bundle,
+        _req: &ConfirmRequest,
+        _progress: &mut dyn FnMut(Progress) -> bool,
+    ) -> Result<Vec<CheckResult>, EngineError> {
+        Err(EngineError::BackendUnavailable(format!(
+            "`confirm` is not supported by the {} backend",
+            self.name()
+        )))
     }
     /// Determinism self-check. Backends that cannot do this in-process say so.
     fn doctor(

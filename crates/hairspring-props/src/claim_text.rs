@@ -198,6 +198,14 @@ pub enum Subject {
     Failure { seed: u64, state: FindingState },
     /// A hit seen in the one run that is being reported, with no replay: a candidate, never a claim.
     SingleRunHit,
+    /// A property failed in `seed` and its confirmation checks are recorded: `state` is what they derive, and `pinned`
+    /// says they ran in the environment the bundle recorded (a recorded identity that still matched). Only a confirmed
+    /// or verified state gets a sentence, and the sentence names the environment.
+    CheckedFailure {
+        seed: u64,
+        state: FindingState,
+        pinned: bool,
+    },
 }
 
 /// A claim sentence, if one may be made, and the reasons it was not.
@@ -212,6 +220,14 @@ const NOT_DECLARED: &str =
     "label not declared: the arm has no knowledge list, so it is incomplete and makes no claim";
 const NOTHING_RATED: &str = "no rated trials, so there is nothing to claim";
 const SINGLE_RUN: &str = "a failure with no confirming replay is a candidate, not a claim";
+
+/// The word in brackets after "Reproduced". Only a confirmed or verified state reaches it.
+fn state_word(state: FindingState) -> &'static str {
+    match state {
+        FindingState::Verified => "verified",
+        _ => "confirmed",
+    }
+}
 
 /// Trials left out of a count are said so beside it, so the sentence does not read as covering them.
 fn unrated_note(unrated: u64) -> String {
@@ -228,6 +244,10 @@ pub fn generate(label: &Label, subject: &Subject) -> ClaimOutput {
         subject,
         Subject::SingleRunHit
             | Subject::Failure {
+                state: FindingState::SingleRun,
+                ..
+            }
+            | Subject::CheckedFailure {
                 state: FindingState::SingleRun,
                 ..
             }
@@ -256,11 +276,26 @@ pub fn generate(label: &Label, subject: &Subject) -> ClaimOutput {
             zero_failure_bound_clause(rated)
         ),
         Subject::Failure { seed, state } => {
-            let status = match state {
-                FindingState::Verified => "verified",
-                _ => "confirmed",
+            format!(
+                "Reproduced ({}): a property failed in seed {seed}; {how}; {note}.",
+                state_word(state)
+            )
+        }
+        Subject::CheckedFailure {
+            seed,
+            state,
+            pinned,
+        } => {
+            let environment = if pinned {
+                " under the recorded environment"
+            } else {
+                out.caveats.push("environment_not_pinned");
+                " (environment not pinned by a recorded identity)"
             };
-            format!("Reproduced ({status}): a property failed in seed {seed}; {how}; {note}.")
+            format!(
+                "Reproduced ({}): a property failed in seed {seed}{environment}; {how}; {note}.",
+                state_word(state)
+            )
         }
     });
     out

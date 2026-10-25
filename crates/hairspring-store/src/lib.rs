@@ -5,6 +5,7 @@
 //! Unix epoch and are passed in explicitly so behaviour is testable.
 #[macro_use]
 mod types;
+mod checks;
 mod digest_allowance;
 mod downgrade;
 #[macro_use]
@@ -12,6 +13,8 @@ mod lineage;
 mod lineage_fields;
 #[cfg(feature = "postgres")]
 mod pg;
+#[cfg(feature = "postgres")]
+mod pg_checks;
 #[cfg(feature = "postgres")]
 mod pg_downgrade;
 #[cfg(feature = "postgres")]
@@ -28,6 +31,7 @@ mod pg_tree_query;
 mod pg_trials;
 mod reporters;
 mod sqlite;
+mod sqlite_checks;
 mod sqlite_downgrade;
 mod sqlite_explorer;
 mod sqlite_lineage;
@@ -37,6 +41,7 @@ mod sqlite_tree_query;
 mod sqlite_trials;
 mod trials;
 
+pub use checks::*;
 pub use digest_allowance::*;
 pub use downgrade::*;
 pub use lineage::*;
@@ -140,6 +145,16 @@ pub trait Store: Send + Sync {
     fn list_recent_failures(&self, limit: u32) -> Result<Vec<FailureRecord>>;
     fn put_blob(&self, data: &[u8]) -> Result<String>;
     fn get_blob(&self, hash: &str) -> Result<Option<Vec<u8>>>;
+
+    // the stored results of confirming a failure (schema version 5)
+    /// Stores one confirmation's checks all together or not at all. The same confirmation again (same id, same
+    /// content) is a `Duplicate` and changes nothing; one that differs under the same id is refused. An unknown failure
+    /// is `NotFound`; more checks than [`MAX_CHECKS_PER_CONFIRMATION`], or than [`MAX_CHECKS_PER_FAILURE`] held for the
+    /// failure, or a column over [`MAX_CHECK_TEXT_BYTES`], is `LimitExceeded`. The store keeps what it is given: the
+    /// service checks what a runner reports before calling this.
+    fn add_confirmation(&self, new: &NewConfirmation, now: i64) -> Result<ConfirmationOutcome>;
+    /// The checks held for a failure, oldest confirmation first and in each confirmation's order.
+    fn list_failure_checks(&self, failure_id: &str) -> Result<Vec<CheckRecord>>;
 
     // job queue
     fn enqueue_job(&self, run_id: &str, kind: &str, payload_json: &str, now: i64) -> Result<Job>;

@@ -4,6 +4,10 @@
 mod claim_view;
 pub mod claims;
 mod completion;
+mod confirm;
+mod confirm_claims;
+mod confirm_sanitize;
+mod confirm_view;
 mod coverage_cache;
 mod coverage_series;
 mod digest_cap;
@@ -25,6 +29,8 @@ pub mod view;
 
 pub use claim_view::ClaimView;
 pub use completion::{completion_of, RunCompletion};
+pub use confirm::ConfirmationReceipt;
+pub use confirm_view::{CheckGuest, CheckView, FailureChecks, FindingSummary};
 pub use digest_cap::DIGEST_CAPPED_REASON;
 pub use error::ServiceError;
 pub use query::{
@@ -128,6 +134,7 @@ fn summary(f: &FailureRecord) -> FailureSummary {
         shrunk_len: f.shrunk_len,
         bundle_hash: f.bundle_hash.clone(),
         created_at: f.created_at,
+        finding: None,
     }
 }
 
@@ -212,7 +219,17 @@ impl Service {
         let Some(run) = self.store.get_run(id)? else {
             return Ok(None);
         };
-        let failures = self.store.list_failures(id)?.iter().map(summary).collect();
+        let failures = self
+            .store
+            .list_failures(id)?
+            .iter()
+            .map(|f| {
+                Ok(FailureSummary {
+                    finding: Some(self.finding_summary(&f.id)?),
+                    ..summary(f)
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         let properties = self.property_summary(&run)?;
         Ok(Some(RunDetail {
             run,

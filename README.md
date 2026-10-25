@@ -118,6 +118,11 @@ trial_timeout_secs = 120
 max_trials = 100
 ```
 
+A failing seed can be confirmed in recorded steps with `hairspring confirm <run-or-failure-id>`: same-seed reruns
+compared on output, schedule and failing property, a bundle replay with its environment check, and optionally a
+fixed-version control (`--control <target>`) and Hermit's strict determinism verify (`--strict-verify`). See
+[docs/determinism.md](docs/determinism.md#confirming-a-failure).
+
 A trial that times out is reported as inconclusive, not as a pass or a failure, unless you set
 `hang_is_violation = true`. Programs can also report assertions through the guest event protocol; see
 [docs/guest-protocol.md](docs/guest-protocol.md), the C SDK in [`sdks/c`](sdks/c) ([docs/c-sdk.md](docs/c-sdk.md)) and
@@ -128,7 +133,8 @@ the Python SDK in [`sdks/python`](sdks/python) ([docs/python-sdk.md](docs/python
 ## For AI agents (MCP)
 
 `hairspring mcp` (stdio) or `POST /mcp` (HTTP) expose the loop an agent needs: `list_targets`, `start_run`,
-`get_failure` (minimal trace plus plain-language explanation), `replay_bundle`, `cancel_run`.
+`get_failure` (minimal trace plus plain-language explanation), `replay_bundle`, `get_failure_checks` (the stored
+confirmation checks of a failure), `cancel_run`.
 
 ```bash
 claude mcp add hairspring -- hairspring mcp

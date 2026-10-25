@@ -121,6 +121,17 @@ impl SchedulerSpec {
         Ok(())
     }
 
+    /// The same scheduler with twice the skid margin (capped at Hermit's limit), for retrying a run that overshot.
+    /// `None` when there is no margin to raise: none is set, or it is already at the limit.
+    pub fn with_doubled_skid(&self) -> Option<SchedulerSpec> {
+        let margin = self.skid_margin?;
+        let doubled = margin.saturating_mul(2).min(MAX_SKID_MARGIN);
+        (doubled > margin).then(|| SchedulerSpec {
+            skid_margin: Some(doubled),
+            ..self.clone()
+        })
+    }
+
     /// True when any option differs from the default (used to describe a target).
     pub fn is_default(&self) -> bool {
         *self == SchedulerSpec::default()

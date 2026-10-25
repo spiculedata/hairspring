@@ -2,8 +2,10 @@
 //!
 //! Connections are plain TCP (`NoTls`): run Postgres on a private network or behind a TLS proxy.
 //! Leasing uses `FOR UPDATE SKIP LOCKED`, so any number of workers can pull jobs concurrently.
+use crate::checks::{CheckRecord, ConfirmationOutcome, NewConfirmation};
 use crate::digest_allowance::DigestUse;
 use crate::lineage::*;
+use crate::pg_checks as checks;
 use crate::pg_explorer as explorer;
 use crate::pg_lineage as lineage;
 use crate::pg_run_end as run_end;
@@ -576,6 +578,14 @@ impl Store for PgStore {
 
     fn run_contributors(&self, run_id: &str) -> Result<Vec<Contributor>> {
         trials::run_contributors(&mut *self.client()?, run_id)
+    }
+
+    fn add_confirmation(&self, new: &NewConfirmation, now: i64) -> Result<ConfirmationOutcome> {
+        checks::add(&mut *self.client()?, new, now)
+    }
+
+    fn list_failure_checks(&self, failure_id: &str) -> Result<Vec<CheckRecord>> {
+        checks::list(&mut *self.client()?, failure_id)
     }
 
     fn reporters_of(&self, run_id: &str, seeds: &[u64]) -> Result<BTreeMap<u64, String>> {

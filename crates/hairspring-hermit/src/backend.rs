@@ -12,6 +12,7 @@ use hairspring_core::bundle::Bundle;
 use hairspring_core::environment::EnvironmentIdentity;
 use hairspring_engine::backend::{Backend, Progress, ReplayOptions, RunRequest};
 use hairspring_engine::config::{Budget, TargetKind, TargetSpec};
+use hairspring_engine::confirm::{CheckResult, ConfirmRequest};
 use hairspring_engine::report::{
     DoctorDivergence, DoctorReport, FailureReport, ReplayOutcome, RunOutcome,
 };
@@ -104,7 +105,7 @@ struct Judged<'a> {
 }
 
 pub struct HermitBackend {
-    settings: HermitSettings,
+    pub(crate) settings: HermitSettings,
     /// Where Hermit writes each trial's summary; `None` turns schedule fingerprints off (no directory configured, or
     /// one that could not be made private).
     summaries: Option<PrivateDir>,
@@ -145,7 +146,7 @@ impl HermitBackend {
     }
 
     /// The environment this run would record, or that a replay compares against.
-    fn environment(&self, p: &ProcessSpec) -> EnvironmentIdentity {
+    pub(crate) fn environment(&self, p: &ProcessSpec) -> EnvironmentIdentity {
         let extra: Vec<String> = self
             .settings
             .extra_env
@@ -164,7 +165,7 @@ impl HermitBackend {
         }
     }
 
-    fn dirs(&self) -> Dirs<'_> {
+    pub(crate) fn dirs(&self) -> Dirs<'_> {
         Dirs {
             summaries: self.summaries.as_ref(),
             events: self.events_scratch.as_ref().or(self.summaries.as_ref()),
@@ -181,7 +182,7 @@ impl HermitBackend {
     }
 
     /// Refuses to start a run or replay whose events file cannot work, before any trial is spent.
-    fn check_events_setup(&self, p: &ProcessSpec) -> Result<(), EngineError> {
+    pub(crate) fn check_events_setup(&self, p: &ProcessSpec) -> Result<(), EngineError> {
         match events::config_problem(
             self.settings.events_file,
             p.hermit_args,
@@ -197,7 +198,7 @@ impl HermitBackend {
         HermitBackend::new(HermitSettings::default())
     }
 
-    fn process<'a>(&self, spec: &'a TargetSpec) -> Result<ProcessSpec<'a>, EngineError> {
+    pub(crate) fn process<'a>(&self, spec: &'a TargetSpec) -> Result<ProcessSpec<'a>, EngineError> {
         match &spec.kind {
             TargetKind::Process {
                 command,
@@ -223,14 +224,14 @@ impl HermitBackend {
     }
 
     /// The target's own limit if it set one, otherwise the backend default.
-    fn trial_timeout(&self, p: &ProcessSpec) -> Duration {
+    pub(crate) fn trial_timeout(&self, p: &ProcessSpec) -> Duration {
         p.trial_timeout_secs
             .map(Duration::from_secs)
             .unwrap_or(self.settings.trial_timeout)
     }
 
     /// Classifies a trial. A timeout is only a violation when the target says a hang is the bug.
-    fn verdict(&self, p: &ProcessSpec, t: &Trial, timeout: Duration) -> Verdict {
+    pub(crate) fn verdict(&self, p: &ProcessSpec, t: &Trial, timeout: Duration) -> Verdict {
         match classify(t, timeout.as_secs()) {
             Verdict::Hang(reason) if p.hang_is_violation => Verdict::Violation(reason),
             other => other,
@@ -246,7 +247,12 @@ impl HermitBackend {
             .map_err(|e| EngineError::Backend(e.to_string()))
     }
 
-    fn trial(&self, p: &ProcessSpec, seed: u64, timeout: Duration) -> Result<Trial, SpawnError> {
+    pub(crate) fn trial(
+        &self,
+        p: &ProcessSpec,
+        seed: u64,
+        timeout: Duration,
+    ) -> Result<Trial, SpawnError> {
         run_trial(&self.settings, p, seed, timeout, self.dirs())
     }
 
@@ -456,7 +462,7 @@ impl HermitBackend {
 
 /// Whether the rerun's output hashes like the recording; `None` when the bundle has no hash, or when it was hashed by
 /// the earlier scheme (no `output_hash_scheme`) and this rerun's output was cut, which that scheme hashed differently.
-fn output_matches(bundle: &Bundle, trial: &Trial) -> Option<bool> {
+pub(crate) fn output_matches(bundle: &Bundle, trial: &Trial) -> Option<bool> {
     let recorded = bundle.params.get("output_hash")?;
     let older_scheme = !bundle.params.contains_key("output_hash_scheme");
     if older_scheme && trial.stdout_omitted.is_truncated() {
@@ -467,7 +473,7 @@ fn output_matches(bundle: &Bundle, trial: &Trial) -> Option<bool> {
 
 /// Whether the rerun failed the way the bundle recorded (a deadlock or an ordinary violation); `None` for bundles
 /// without a recorded kind, and for a rerun that did not fail at all.
-fn failure_kind_matches(bundle: &Bundle, verdict: &Verdict) -> Option<bool> {
+pub(crate) fn failure_kind_matches(bundle: &Bundle, verdict: &Verdict) -> Option<bool> {
     let recorded = bundle.params.get("failure_kind")?;
     let now = FailureKind::of(verdict)?;
     Some(recorded == now.bundle_name())
@@ -527,7 +533,7 @@ fn replay_notes(
 /// failures that were an exit status or a legacy violation line). A kind or reason this build cannot parse matches
 /// nothing: replay would rather say "not reproduced" than confirm a property it cannot identify. Bundles from before
 /// `property_reason` existed match on id and kind alone.
-fn property_matches(bundle: &Bundle, trial: &Trial) -> Option<bool> {
+pub(crate) fn property_matches(bundle: &Bundle, trial: &Trial) -> Option<bool> {
     let id = bundle.params.get("property")?;
     let kind = match bundle.params.get("property_kind") {
         Some(k) => match AssertKind::from_wire(k) {
@@ -547,7 +553,7 @@ fn property_matches(bundle: &Bundle, trial: &Trial) -> Option<bool> {
 
 /// Replay is only meaningful under the scheduling strategy the bundle was recorded with. Bundles from before scheduler
 /// options existed recorded no flags and always used the default random strategy.
-fn check_same_scheduler(p: &ProcessSpec, bundle: &Bundle) -> Result<(), EngineError> {
+pub(crate) fn check_same_scheduler(p: &ProcessSpec, bundle: &Bundle) -> Result<(), EngineError> {
     let current = scheduler_flags(p.scheduler).join(" ");
     let recorded = bundle
         .params
@@ -575,9 +581,75 @@ fn check_same_scheduler(p: &ProcessSpec, bundle: &Bundle) -> Result<(), EngineEr
 }
 
 impl HermitBackend {
+    /// [`Backend::replay_with`] with the run's time cut to `cap` when that is less than the target's own limit. A run the
+    /// cap, not the target, cut short says nothing about the bundle, so it is an error ([`REPLAY_CLIPPED`]) and never a
+    /// miss.
+    pub(crate) fn replay_capped(
+        &self,
+        spec: &TargetSpec,
+        bundle: &Bundle,
+        options: ReplayOptions,
+        cap: Option<Duration>,
+    ) -> Result<ReplayOutcome, EngineError> {
+        let p = self.process(spec)?;
+        check_same_scheduler(&p, bundle)?;
+        self.check_events_setup(&p)?;
+        self.check_same_events_transport(bundle)?;
+        let environment = replay_environment::check(
+            bundle,
+            &self.environment(&p),
+            options.allow_environment_change,
+        )?;
+        let seed = bundle
+            .params
+            .get("sched_seed")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(bundle.seed);
+        let mut settings = self.settings.clone();
+        if let Some(epoch) = bundle.params.get("epoch") {
+            settings.epoch = epoch.clone();
+        }
+        let own = self.trial_timeout(&p);
+        let timeout = cap.map_or(own, |c| c.min(own));
+        let trial = run_trial(&settings, &p, seed, timeout, self.dirs())
+            .map_err(|e| EngineError::Backend(e.to_string()))?;
+        let verdict = self.verdict(&p, &trial, timeout);
+        if timeout < own && matches!(classify(&trial, timeout.as_secs()), Verdict::Hang(_)) {
+            return Err(EngineError::Backend(REPLAY_CLIPPED.to_string()));
+        }
+        if let Verdict::Infra(m) = &verdict {
+            return Err(EngineError::Backend(m.clone()));
+        }
+        let hang_relaxed = matches!(verdict, Verdict::Hang(_))
+            && bundle.params.get("hang_is_violation").map(String::as_str) == Some("true");
+        let matches = output_matches(bundle, &trial);
+        let reproduced = FailureKind::of(&verdict).is_some()
+            && failure_kind_matches(bundle, &verdict) != Some(false)
+            && matches != Some(false)
+            && property_matches(bundle, &trial) != Some(false);
+        let mut notes = replay_notes(bundle, &trial, &verdict, hang_relaxed);
+        if !reproduced && environment.differs {
+            notes = Some(match notes {
+                Some(existing) => format!("{existing}; {MISS_ON_CHANGED_HOST}"),
+                None => MISS_ON_CHANGED_HOST.to_string(),
+            });
+        }
+        let steps = steps(
+            p.command,
+            seed,
+            &settings.epoch,
+            p.scheduler.effective_heuristic().name(),
+            &trial,
+            notes,
+        );
+        Ok(ReplayOutcome::new(reproduced, steps)
+            .with_warnings(environment.warnings)
+            .with_environment_changed(environment.differs))
+    }
+
     /// Replaying through the other transport would change what the guest sees (its `/tmp`, its environment), so the
     /// schedule would not reproduce. Bundles from before the setting existed used the stream transport.
-    fn check_same_events_transport(&self, bundle: &Bundle) -> Result<(), EngineError> {
+    pub(crate) fn check_same_events_transport(&self, bundle: &Bundle) -> Result<(), EngineError> {
         let recorded = bundle
             .params
             .get("events_transport")
@@ -591,6 +663,10 @@ impl HermitBackend {
         )))
     }
 }
+
+/// The error of a replay whose time was cut short by a cap that is less than the target's own limit.
+pub(crate) const REPLAY_CLIPPED: &str =
+    "the replay was cut short by the confirmation's wall budget";
 
 fn infra(msg: impl Into<String>) -> RunOutcome {
     RunOutcome::error(msg)
@@ -680,56 +756,18 @@ impl Backend for HermitBackend {
         bundle: &Bundle,
         options: ReplayOptions,
     ) -> Result<ReplayOutcome, EngineError> {
-        let p = self.process(spec)?;
-        check_same_scheduler(&p, bundle)?;
-        self.check_events_setup(&p)?;
-        self.check_same_events_transport(bundle)?;
-        let environment = replay_environment::check(
-            bundle,
-            &self.environment(&p),
-            options.allow_environment_change,
-        )?;
-        let seed = bundle
-            .params
-            .get("sched_seed")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(bundle.seed);
-        let mut settings = self.settings.clone();
-        if let Some(epoch) = bundle.params.get("epoch") {
-            settings.epoch = epoch.clone();
-        }
-        let timeout = self.trial_timeout(&p);
-        let trial = run_trial(&settings, &p, seed, timeout, self.dirs())
-            .map_err(|e| EngineError::Backend(e.to_string()))?;
-        let verdict = self.verdict(&p, &trial, timeout);
-        if let Verdict::Infra(m) = &verdict {
-            return Err(EngineError::Backend(m.clone()));
-        }
-        let hang_relaxed = matches!(verdict, Verdict::Hang(_))
-            && bundle.params.get("hang_is_violation").map(String::as_str) == Some("true");
-        let matches = output_matches(bundle, &trial);
-        let reproduced = FailureKind::of(&verdict).is_some()
-            && failure_kind_matches(bundle, &verdict) != Some(false)
-            && matches != Some(false)
-            && property_matches(bundle, &trial) != Some(false);
-        let mut notes = replay_notes(bundle, &trial, &verdict, hang_relaxed);
-        if !reproduced && environment.differs {
-            notes = Some(match notes {
-                Some(existing) => format!("{existing}; {MISS_ON_CHANGED_HOST}"),
-                None => MISS_ON_CHANGED_HOST.to_string(),
-            });
-        }
-        let steps = steps(
-            p.command,
-            seed,
-            &settings.epoch,
-            p.scheduler.effective_heuristic().name(),
-            &trial,
-            notes,
-        );
-        Ok(ReplayOutcome::new(reproduced, steps)
-            .with_warnings(environment.warnings)
-            .with_environment_changed(environment.differs))
+        self.replay_capped(spec, bundle, options, None)
+    }
+
+    fn confirm(
+        &self,
+        spec: &TargetSpec,
+        control: Option<&TargetSpec>,
+        bundle: &Bundle,
+        req: &ConfirmRequest,
+        progress: &mut dyn FnMut(Progress) -> bool,
+    ) -> Result<Vec<CheckResult>, EngineError> {
+        crate::confirm::run(self, spec, control, bundle, req, progress)
     }
 
     fn doctor(

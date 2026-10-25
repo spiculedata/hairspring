@@ -135,7 +135,7 @@ tree tables in the same transaction as the version bump.
 
 **Downgrade to version 2** (offline; back up first, nothing is downgraded automatically):
 `hairspring_store::downgrade_sqlite` and `downgrade_postgres` (also `cargo run -p hairspring-store --example
-store_downgrade`) drop the four tree tables (and the two version 4 tables, if present) and set the version to 2.
+store_downgrade`) drop the four tree tables (and the tables of versions 4 and 5, if present) and set the version to 2.
 Branch runs, which exist only because of version 3,
 are listed first and kept by default as ordinary runs; `--drop-branch-runs` deletes them, with their trials, jobs,
 events and failures, in the same transaction and removes the blobs nothing else refers to. `--dry-run` only reports.
@@ -177,6 +177,42 @@ that lost one of its own tables or indexes is refused rather than repaired, on b
 a version 4 database; the offline downgrade above removes the two tables. **Stop every older (version 3) server and
 worker before upgrading**: a version 3 process that is still running does not know the allowance and neither writes
 nor clears `run_digest_use`, so runs it ingests meanwhile are not counted.
+
+## Confirmation checks (schema version 5)
+
+Version 5 adds one table, `failure_checks`, and changes nothing else (`runs`, `failures` and `trials` keep their columns
+and rows, so migrating rewrites no existing row). A failure with no row has never been confirmed.
+
+- A confirmation is one run of the pipeline (see [Confirming a failure](determinism.md#confirming-a-failure)) on a
+  failure: up to eight checks, written in one transaction under an id derived from its content, so a retry stores
+  nothing twice and the same id with different content is refused. A failure holds at most 200 checks (a confirmation
+  that would pass that drops the oldest whole confirmations), and each text column at most 16 KiB. Rows list by creation
+  time and then by write order (`rowid` on SQLite, a `seq` column on PostgreSQL), never by id.
+- A check keeps its kind (`same_seed_rerun`, `bundle_replay`, `fixed_control`, `strict_verify`), status (`pass`, `fail`,
+  `inconclusive`, `skipped`), counts of passed, failed and inconclusive runs, a record of the Hermit command (not a paste-and-run line), bounded JSON for
+  its detail, the hashes it saw, the environment identity it ran in, when it started and finished, and the runner and
+  whether it was trusted when it reported. The runner label is never served.
+- The service validates every reported check before it reaches the store (`Service::record_confirmation`): enumerated
+  kind and status, counts that fit the status and the rerun limit, sane times, hashes that are hex, environment fields
+  that belong to the identity, and text cut to size with control characters removed. An impossible result is refused whole.
+- A failure's state is derived from its checks at read time (`candidate`, `rerun_repeated`, `confirmed`, `verified`,
+  `not_reproducible`, `control_failed`); nothing stores it, so it cannot drift from the checks. It is derived from one
+  confirmation (the newest that finished), never from checks of different confirmations. The run's claim uses it, from
+  the confirmations of trusted runners only: a failure counts as reproduced for the claim gate only when that state is
+  confirmed or verified.
+
+The pipeline runs where the engine is: the CLI's own process, or the server's embedded engine. It is bounded (at most ten
+reruns, each limited by the target's trial timeout, and a wall budget of at most ten minutes) and cancellable: the engine
+stops between runs (the replay and each skid retry included) and records what did not run as skipped, for a caller that
+uses the progress callback; Ctrl-C on the CLI stops hairspring and may leave Hermit children running, as for
+`hairspring test`. A remote worker does not run confirmations yet.
+
+Opening a version 4 database adds the table and its index in the same transaction as the version bump. A version 4
+database that lost one of its own tables or indexes is refused rather than repaired, on both backends, and a current
+database is only looked at (no DDL). An older release refuses a version 5 database. **Back up first; stop every older
+server and worker before upgrading.** The offline downgrade (`hairspring_store::downgrade_sqlite` and
+`downgrade_postgres`, also `cargo run -p hairspring-store --example store_downgrade`) now accepts versions 3, 4 and 5 and
+drops the version 5 table first, so stored checks are lost by a downgrade.
 
 ## Bundles
 

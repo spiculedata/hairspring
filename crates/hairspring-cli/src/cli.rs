@@ -28,6 +28,8 @@ pub enum Command {
     Test(TestArgs),
     /// Replay a bundle (file, `-` for stdin, or stored hash); exit 1 if it still fails.
     Replay(ReplayArgs),
+    /// Confirm a failing seed: same-seed reruns, a bundle replay and optional controls, each recorded.
+    Confirm(ConfirmArgs),
     /// Check that targets are deterministic (same seed, same trace).
     Doctor(DoctorArgs),
     /// List stored runs, newest first.
@@ -87,6 +89,35 @@ pub struct ReplayArgs {
     /// Replay even when the host's dynamic loader differs from the recording (the differences are still reported).
     #[arg(long)]
     pub allow_environment_change: bool,
+}
+
+#[derive(Args)]
+#[command(
+    after_help = "Checks, in order: same-seed reruns (default 3, each compared on behaviour hash, schedule fingerprint and failing property), a replay of the bundle with its environment check, then a fixed-version control (--control) and Hermit's strict determinism verify (--strict-verify) when asked for. Every check is recorded; for a run or failure id the results are stored and `hairspring show` summarises them.\n\nFinding: candidate -> rerun_repeated (reruns repeat it) -> confirmed (and the replay does) -> verified (and the strict verify agrees), or not_reproducible, or control_failed (the fixed build still fails at the seed).\n\nExit codes:\n  1 confirmed or verified: the failure repeats\n  0 not_reproducible: it did not repeat on the environment it was recorded in\n  2 error, including a request over the limits\n  3 inconclusive: rerun_repeated (reruns only), a check could not run or the environment differs from the recording, or the control failed; none of these shows the bug is fixed"
+)]
+pub struct ConfirmArgs {
+    /// A run id (run_...) or failure id (fail_...) whose results are stored, or a bundle file, `-` for stdin or a stored
+    /// bundle hash, which are confirmed without storing anything.
+    pub input: String,
+    /// Same-seed reruns, 1 to 10.
+    #[arg(long, default_value_t = hairspring_engine::confirm::DEFAULT_RERUNS)]
+    pub reruns: u32,
+    /// A target that runs the fixed build: the same seed and flags on it should not fail.
+    #[arg(long)]
+    pub control: Option<String>,
+    /// Also run Hermit's strict determinism verify (two more runs).
+    #[arg(long)]
+    pub strict_verify: bool,
+    /// Go on when the host's dynamic loader differs from the recording (the differences are still recorded).
+    #[arg(long)]
+    pub allow_environment_change: bool,
+    /// Wall-clock budget for the whole confirmation in seconds, 1 to 600; checks that do not fit are skipped.
+    #[arg(long, default_value_t = hairspring_engine::confirm::DEFAULT_WALL_SECS)]
+    pub wall_secs: u64,
+    /// Print the stored answer as one JSON document: an object for a failure id or a bundle, an array with an entry per
+    /// failure for a run id.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args)]

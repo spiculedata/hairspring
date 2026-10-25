@@ -4,12 +4,16 @@
 use crate::types::{Result, StoreError};
 use postgres::Transaction;
 
-pub(crate) const SCHEMA_VERSION: i32 = 4;
+pub(crate) const SCHEMA_VERSION: i32 = 5;
 
 /// The tables a version 3 schema must have.
 const V3_TABLES: [&str; 4] = ["run_identity", "trees", "trial_lineage", "tree_branches"];
 /// The tables version 4 added.
 const V4_TABLES: [&str; 2] = ["run_digest_use", "run_coverage"];
+/// The tables version 5 added.
+const V5_TABLES: [&str; 1] = ["failure_checks"];
+/// The index version 5 added.
+const V5_INDEXES: [&str; 1] = ["failure_checks_failure"];
 /// The indexes of `trial_lineage`.
 const V3_INDEXES: [&str; 4] = [
     "lineage_children",
@@ -123,6 +127,20 @@ CREATE TABLE IF NOT EXISTS run_coverage (
   run_id TEXT PRIMARY KEY REFERENCES runs(id), series_json TEXT NOT NULL);
 ";
 
+/// Version 5: see the SQLite migration of the same name; the two stores keep the same columns. A separate table on
+/// purpose: `runs`, `failures` and `trials` are not altered, so no existing row is rewritten.
+const MIGRATE_V4_TO_V5: &str = "
+CREATE TABLE IF NOT EXISTS failure_checks (
+  id TEXT PRIMARY KEY, failure_id TEXT NOT NULL REFERENCES failures(id), confirmation_id TEXT NOT NULL,
+  ordinal INTEGER NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, passed BIGINT NOT NULL,
+  failed BIGINT NOT NULL, inconclusive BIGINT NOT NULL, command TEXT NOT NULL, detail_json TEXT NOT NULL,
+  artefacts_json TEXT NOT NULL, environment_json TEXT NOT NULL, started_at BIGINT NOT NULL,
+  finished_at BIGINT NOT NULL, runner TEXT NOT NULL, runner_trusted BOOLEAN NOT NULL, created_at BIGINT NOT NULL,
+  seq BIGSERIAL NOT NULL,
+  UNIQUE (confirmation_id, ordinal));
+CREATE INDEX IF NOT EXISTS failure_checks_failure ON failure_checks(failure_id, created_at, confirmation_id, ordinal);
+";
+
 /// Brings the schema to [`SCHEMA_VERSION`] inside the caller's transaction. A schema from a newer release is refused.
 /// A current schema is only looked at: no DDL is issued, so opening it needs no rights beyond reading and writing rows.
 pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
@@ -147,6 +165,7 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             tx.batch_execute(MIGRATE_V1_TO_V2)?;
             tx.batch_execute(MIGRATE_V2_TO_V3)?;
             tx.batch_execute(MIGRATE_V3_TO_V4)?;
+            tx.batch_execute(MIGRATE_V4_TO_V5)?;
             tx.execute(
                 "INSERT INTO schema_version(version) VALUES ($1)",
                 &[&SCHEMA_VERSION],
@@ -156,6 +175,7 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             tx.batch_execute(MIGRATE_V1_TO_V2)?;
             tx.batch_execute(MIGRATE_V2_TO_V3)?;
             tx.batch_execute(MIGRATE_V3_TO_V4)?;
+            tx.batch_execute(MIGRATE_V4_TO_V5)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(2) => {
@@ -166,12 +186,20 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             }
             tx.batch_execute(MIGRATE_V2_TO_V3)?;
             tx.batch_execute(MIGRATE_V3_TO_V4)?;
+            tx.batch_execute(MIGRATE_V4_TO_V5)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(3) => {
             // A version 3 schema is looked at, as on SQLite, and not repaired by the upgrade.
-            verify_objects(tx, 3, &V3_TABLES)?;
+            verify_objects(tx, 3, &V3_TABLES, &V3_INDEXES)?;
             tx.batch_execute(MIGRATE_V3_TO_V4)?;
+            tx.batch_execute(MIGRATE_V4_TO_V5)?;
+            tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
+        }
+        Some(4) => {
+            let tables: Vec<&str> = V3_TABLES.into_iter().chain(V4_TABLES).collect();
+            verify_objects(tx, 4, &tables, &V3_INDEXES)?;
+            tx.batch_execute(MIGRATE_V4_TO_V5)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(v) if v == SCHEMA_VERSION => verify_current(tx)?,
@@ -186,11 +214,42 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
 
 /// Reports a current schema that lost one of its tables or a version 3 index instead of repairing it.
 fn verify_current(tx: &mut Transaction<'_>) -> Result<()> {
-    let tables: Vec<&str> = V3_TABLES.into_iter().chain(V4_TABLES).collect();
-    verify_objects(tx, SCHEMA_VERSION, &tables)
+    let tables: Vec<&str> = V3_TABLES
+        .into_iter()
+        .chain(V4_TABLES)
+        .chain(V5_TABLES)
+        .collect();
+    let indexes: Vec<&str> = V3_INDEXES.into_iter().chain(V5_INDEXES).collect();
+    verify_objects(tx, SCHEMA_VERSION, &tables, &indexes)?;
+    verify_checks_seq(tx)
 }
 
-fn verify_objects(tx: &mut Transaction<'_>, version: i32, tables: &[&str]) -> Result<()> {
+/// A development database created at an earlier draft of version 5 has `failure_checks` without `seq`. It opens, but
+/// every read of the checks would fail with an opaque database error, so it is refused here with the way out.
+fn verify_checks_seq(tx: &mut Transaction<'_>) -> Result<()> {
+    let row = tx.query_one(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns \
+         WHERE table_schema = current_schema() AND table_name = 'failure_checks' AND column_name = 'seq')",
+        &[],
+    )?;
+    if row.get::<_, bool>(0) {
+        return Ok(());
+    }
+    Err(StoreError::Backend(
+        "database schema version 5 is incomplete: failure_checks has no `seq` column (it was created by an earlier draft of version 5). \
+         It holds only stored confirmation checks. In this schema run \
+         `DROP TABLE failure_checks; UPDATE schema_version SET version = 4;` and open the database again: it migrates back to version 5. \
+         Or reset the development database"
+            .to_string(),
+    ))
+}
+
+fn verify_objects(
+    tx: &mut Transaction<'_>,
+    version: i32,
+    tables: &[&str],
+    indexes: &[&str],
+) -> Result<()> {
     for table in tables {
         let row = tx.query_one(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables \
@@ -203,7 +262,7 @@ fn verify_objects(tx: &mut Transaction<'_>, version: i32, tables: &[&str]) -> Re
             )));
         }
     }
-    for index in V3_INDEXES {
+    for index in indexes {
         let row = tx.query_one(
             "SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND indexname = $1)",
             &[&index],

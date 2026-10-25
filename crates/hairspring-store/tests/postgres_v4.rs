@@ -63,13 +63,27 @@ fn make_v3_schema(url: &str, schema: &str) -> String {
     run.id
 }
 
+/// The version this build creates: version 5 only adds a table to version 4.
+const CURRENT_VERSION: i32 = 5;
+
+/// A genuine version 4 schema: nothing of version 5.
+fn make_v4_schema(url: &str, schema: &str) {
+    drop(PgStore::connect_in_schema(url, schema, 1).unwrap());
+    admin(url)
+        .batch_execute(&format!(
+            "DROP TABLE \"{schema}\".failure_checks;
+             UPDATE \"{schema}\".schema_version SET version = 4"
+        ))
+        .unwrap();
+}
+
 #[test]
-fn a_fresh_schema_is_at_version_four_with_the_new_tables() {
+fn a_fresh_schema_has_the_version_four_tables() {
     let Some(url) = url() else { return };
     let schema = new_schema("v4f");
     drop(PgStore::connect_in_schema(&url, &schema, 1).unwrap());
     let mut c = admin(&url);
-    assert_eq!(recorded_version(&mut c, &schema), 4);
+    assert_eq!(recorded_version(&mut c, &schema), CURRENT_VERSION);
     for t in NEW_TABLES {
         assert!(table_exists(&mut c, &schema, t), "{t}");
     }
@@ -90,7 +104,7 @@ fn a_version_three_schema_migrates_in_place_and_keeps_its_rows() {
     assert_eq!(s.run_coverage_json(&run_id).unwrap(), None);
     drop(s);
 
-    assert_eq!(recorded_version(&mut c, &schema), 4);
+    assert_eq!(recorded_version(&mut c, &schema), CURRENT_VERSION);
     for t in NEW_TABLES {
         assert!(table_exists(&mut c, &schema, t), "{t}");
     }
@@ -167,7 +181,7 @@ fn a_version_three_schema_still_downgrades_to_two() {
 fn downgrading_a_version_four_schema_drops_the_new_tables() {
     let Some(url) = url() else { return };
     let schema = new_schema("v4d4");
-    drop(PgStore::connect_in_schema(&url, &schema, 1).unwrap());
+    make_v4_schema(&url, &schema);
     let report = downgrade_postgres(&url, &schema, &DowngradeOptions::default()).unwrap();
     assert_eq!((report.from_version, report.to_version), (4, 2));
     let mut c = admin(&url);

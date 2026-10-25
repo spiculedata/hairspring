@@ -189,6 +189,22 @@ pub async fn strip(
     json(blocking(move || s.svc.strip(&id, &q)).await?)
 }
 
+/// The stored confirmation checks of a failure, and where they leave it. A malformed id is a 404, like an unknown one.
+/// The runner's own id is stored but never in the answer, and the free text it reported is under `guest`.
+pub async fn failure_checks(
+    State(s): State<AppState>,
+    caller: Caller,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    caller.need(Role::Read)?;
+    if !validate::failure_id(&id) {
+        return Err(ApiError::not_found());
+    }
+    let checks = blocking(move || s.svc.failure_checks(&id)).await?;
+    listing(&headers, checks, "checks")
+}
+
 pub async fn coverage(
     State(s): State<AppState>,
     caller: Caller,

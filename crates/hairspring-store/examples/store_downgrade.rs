@@ -1,4 +1,4 @@
-//! Offline downgrade of a Hairspring database from schema version 3 or 4 to version 2. Back the database up first;
+//! Offline downgrade of a Hairspring database from schema version 3, 4 or 5 to version 2. Back the database up first;
 //! stop every server and worker that uses it.
 //!
 //!     cargo run -p hairspring-store --example store_downgrade -- --sqlite path/to/hairspring.db --dry-run

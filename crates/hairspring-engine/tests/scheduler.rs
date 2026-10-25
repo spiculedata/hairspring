@@ -137,3 +137,29 @@ fn the_none_heuristic_needs_chaos_because_seeds_would_change_nothing() {
     );
     assert!(parse("heuristic = \"none\"\nchaos = true").is_ok());
 }
+
+#[test]
+fn a_retry_after_a_skid_overshoot_doubles_the_margin_up_to_the_limit() {
+    let with = |margin| SchedulerSpec {
+        skid_margin: margin,
+        ..SchedulerSpec::default()
+    };
+    assert_eq!(with(Some(25)).with_doubled_skid(), Some(with(Some(50))));
+    assert_eq!(
+        with(Some(6_000)).with_doubled_skid(),
+        Some(with(Some(10_000)))
+    );
+    assert_eq!(
+        with(Some(10_000)).with_doubled_skid(),
+        None,
+        "already at the limit"
+    );
+    assert_eq!(with(None).with_doubled_skid(), None, "no margin to raise");
+    let chaos = SchedulerSpec {
+        chaos: true,
+        skid_margin: Some(10),
+        ..SchedulerSpec::default()
+    };
+    let doubled = chaos.with_doubled_skid().unwrap();
+    assert!(doubled.chaos, "every other option is kept");
+}

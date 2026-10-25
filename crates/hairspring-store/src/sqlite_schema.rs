@@ -6,7 +6,7 @@
 use crate::types::{Result, StoreError};
 use rusqlite::Connection;
 
-pub(crate) const SCHEMA_VERSION: i64 = 4;
+pub(crate) const SCHEMA_VERSION: i64 = 5;
 
 const SCHEMA_V1: &str = "
 CREATE TABLE runs (
@@ -125,10 +125,28 @@ CREATE TABLE IF NOT EXISTS run_coverage (
   run_id TEXT PRIMARY KEY REFERENCES runs(id), series_json TEXT NOT NULL);
 ";
 
+/// Version 5: the stored results of confirming a failure. Purely additive and a separate table on purpose: `runs`,
+/// `failures` and `trials` are not altered, so no existing row is rewritten. A failure with no row has never been
+/// confirmed. Rows are written a confirmation at a time (`confirmation_id`, `ordinal`), which makes a retry idempotent.
+const MIGRATE_V4_TO_V5: &str = "
+CREATE TABLE IF NOT EXISTS failure_checks (
+  id TEXT PRIMARY KEY, failure_id TEXT NOT NULL REFERENCES failures(id), confirmation_id TEXT NOT NULL,
+  ordinal INTEGER NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, passed INTEGER NOT NULL,
+  failed INTEGER NOT NULL, inconclusive INTEGER NOT NULL, command TEXT NOT NULL, detail_json TEXT NOT NULL,
+  artefacts_json TEXT NOT NULL, environment_json TEXT NOT NULL, started_at INTEGER NOT NULL,
+  finished_at INTEGER NOT NULL, runner TEXT NOT NULL, runner_trusted INTEGER NOT NULL, created_at INTEGER NOT NULL,
+  UNIQUE (confirmation_id, ordinal));
+CREATE INDEX IF NOT EXISTS failure_checks_failure ON failure_checks(failure_id, created_at, confirmation_id, ordinal);
+";
+
 /// The tables a version 3 database must have.
 const V3_TABLES: [&str; 4] = ["run_identity", "trees", "trial_lineage", "tree_branches"];
 /// The tables version 4 added.
 const V4_TABLES: [&str; 2] = ["run_digest_use", "run_coverage"];
+/// The tables version 5 added.
+const V5_TABLES: [&str; 1] = ["failure_checks"];
+/// The index version 5 added.
+const V5_INDEXES: [&str; 1] = ["failure_checks_failure"];
 /// The indexes of `trial_lineage`.
 const V3_INDEXES: [&str; 4] = [
     "lineage_children",
@@ -164,21 +182,37 @@ fn ensure_secret_column(conn: &Connection) -> Result<()> {
 /// write rows; a database that lost a table or an index is reported, not repaired (the children query names its
 /// index, so a missing one would otherwise fail later, at the first read).
 fn verify_current(conn: &Connection) -> Result<()> {
-    let tables: Vec<&str> = V3_TABLES.into_iter().chain(V4_TABLES).collect();
-    verify_objects(conn, SCHEMA_VERSION, &tables)
+    let tables: Vec<&str> = V3_TABLES
+        .into_iter()
+        .chain(V4_TABLES)
+        .chain(V5_TABLES)
+        .collect();
+    let indexes: Vec<&str> = V3_INDEXES.into_iter().chain(V5_INDEXES).collect();
+    verify_objects(conn, SCHEMA_VERSION, &tables, &indexes)
 }
 
 /// A version 3 database is looked at the same way before version 4 is added: the upgrade does not quietly recreate
 /// a version 3 table or index that went missing, on either backend.
 fn verify_v3(conn: &Connection) -> Result<()> {
-    verify_objects(conn, 3, &V3_TABLES)
+    verify_objects(conn, 3, &V3_TABLES, &V3_INDEXES)
 }
 
-fn verify_objects(conn: &Connection, version: i64, tables: &[&str]) -> Result<()> {
+/// And a version 4 database before version 5 is added.
+fn verify_v4(conn: &Connection) -> Result<()> {
+    let tables: Vec<&str> = V3_TABLES.into_iter().chain(V4_TABLES).collect();
+    verify_objects(conn, 4, &tables, &V3_INDEXES)
+}
+
+fn verify_objects(
+    conn: &Connection,
+    version: i64,
+    tables: &[&str],
+    indexes: &[&str],
+) -> Result<()> {
     let wanted = tables
         .iter()
         .map(|t| ("table", *t))
-        .chain(V3_INDEXES.iter().map(|i| ("index", *i)));
+        .chain(indexes.iter().map(|i| ("index", *i)));
     for (kind, name) in wanted {
         let present: i64 = conn.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type=? AND name=?",
@@ -204,12 +238,15 @@ fn upgrade(conn: &Connection, from: i64) -> Result<()> {
     if from == 2 {
         ensure_secret_column(conn)?;
     }
-    if from == 3 {
-        verify_v3(conn)?;
-    } else {
-        conn.execute_batch(MIGRATE_V2_TO_V3)?;
+    match from {
+        3 => verify_v3(conn)?,
+        4 => verify_v4(conn)?,
+        _ => conn.execute_batch(MIGRATE_V2_TO_V3)?,
     }
-    conn.execute_batch(MIGRATE_V3_TO_V4)?;
+    if from <= 3 {
+        conn.execute_batch(MIGRATE_V3_TO_V4)?;
+    }
+    conn.execute_batch(MIGRATE_V4_TO_V5)?;
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }

@@ -37,6 +37,10 @@ pub struct FailureSummary {
     pub shrunk_len: usize,
     pub bundle_hash: String,
     pub created_at: i64,
+    /// Where the failure's stored confirmation checks leave it. Present on a run's failures, left out of lists of
+    /// failures across runs, and absent from a summary stored before checks existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finding: Option<crate::FindingSummary>,
 }
 
 #[derive(Debug, Clone, Serialize)]

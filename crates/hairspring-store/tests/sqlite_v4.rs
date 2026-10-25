@@ -66,12 +66,23 @@ fn make_v3_database(path: &Path) -> String {
     run.id
 }
 
+/// The version this build creates: version 5 only adds a table to version 4.
+const CURRENT_VERSION: i64 = 5;
+
+/// A genuine version 4 database: nothing of version 5.
+fn make_v4_database(path: &Path) {
+    drop(SqliteStore::open(path).unwrap());
+    let conn = Connection::open(path).unwrap();
+    conn.execute_batch("DROP TABLE failure_checks; PRAGMA user_version = 4;")
+        .unwrap();
+}
+
 #[test]
-fn a_fresh_database_is_at_version_four_with_the_new_tables() {
+fn a_fresh_database_has_the_version_four_tables() {
     let path = temp_db("fresh");
     drop(SqliteStore::open(&path).unwrap());
     let conn = Connection::open(&path).unwrap();
-    assert_eq!(user_version(&conn), 4);
+    assert_eq!(user_version(&conn), CURRENT_VERSION);
     for t in NEW_TABLES {
         assert!(table_exists(&conn, t), "{t}");
     }
@@ -93,7 +104,7 @@ fn a_version_three_database_migrates_in_place_and_keeps_its_rows() {
     drop(s);
 
     let after = Connection::open(&path).unwrap();
-    assert_eq!(user_version(&after), 4);
+    assert_eq!(user_version(&after), CURRENT_VERSION);
     for t in NEW_TABLES {
         assert!(table_exists(&after, t), "{t}");
     }
@@ -127,14 +138,15 @@ fn a_migrated_database_takes_ingest_and_keeps_the_allowance() {
 }
 
 #[test]
-fn a_database_newer_than_four_is_refused_untouched() {
-    let path = temp_db("v5");
+fn a_database_newer_than_this_build_is_refused_untouched() {
+    let path = temp_db("v6");
     drop(SqliteStore::open(&path).unwrap());
     let conn = Connection::open(&path).unwrap();
-    conn.pragma_update(None, "user_version", 5).unwrap();
+    conn.pragma_update(None, "user_version", CURRENT_VERSION + 1)
+        .unwrap();
     let err = SqliteStore::open(&path).err().expect("must refuse");
-    assert!(err.to_string().contains('5'), "{err}");
-    assert_eq!(user_version(&conn), 5);
+    assert!(err.to_string().contains('6'), "{err}");
+    assert_eq!(user_version(&conn), CURRENT_VERSION + 1);
     for t in NEW_TABLES {
         assert!(table_exists(&conn, t), "{t} left alone");
     }
@@ -183,7 +195,7 @@ fn a_version_three_database_still_downgrades_to_two() {
 #[test]
 fn downgrading_a_version_four_database_drops_the_new_tables() {
     let path = temp_db("down-from-4");
-    drop(SqliteStore::open(&path).unwrap());
+    make_v4_database(&path);
     let report = downgrade_sqlite(&path, &DowngradeOptions::default()).unwrap();
     assert_eq!((report.from_version, report.to_version), (4, 2));
     let conn = Connection::open(&path).unwrap();
