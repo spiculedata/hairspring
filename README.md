@@ -129,7 +129,8 @@ A trial that times out is reported as inconclusive, not as a pass or a failure, 
 the Go SDK in [`sdks/go`](sdks/go), the Rust SDK in [`sdks/rust`](sdks/rust) ([docs/rust-sdk.md](docs/rust-sdk.md)) and
 the Python SDK in [`sdks/python`](sdks/python) ([docs/python-sdk.md](docs/python-sdk.md)), the Java SDK in
 [`sdks/java`](sdks/java) ([docs/java-sdk.md](docs/java-sdk.md)) and the .NET SDK in [`sdks/dotnet`](sdks/dotnet)
-([docs/dotnet-sdk.md](docs/dotnet-sdk.md); not yet run under Hermit, and .NET is not supported on this build).
+([docs/dotnet-sdk.md](docs/dotnet-sdk.md)). Which languages have passed our acceptance test under Hermit, and on what
+configuration, is in [docs/support-matrix.md](docs/support-matrix.md).
 
 ### Measure a failure rate (sweep)
 

@@ -44,4 +44,4 @@ samples/hssample/           sample programs, one per scenario
 * Hello and the catalog are written with the report, so a process killed before it reports leaves no lines.
 * A child process must be started through `Hairspring.prepare(builder)` to get its own tag.
 * Virtual threads each claim a thread slot; use platform threads for code that asserts.
-* No signal-time report, fork handler or JVM agent. Nothing here ran under Hermit.
+* No signal-time report, fork handler or JVM agent. For Hermit results see the [support matrix](../../docs/support-matrix.md).

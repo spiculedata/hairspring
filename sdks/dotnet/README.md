@@ -48,4 +48,4 @@ samples/Sample/            sample programs, one per scenario
   exception is reported (as `SIGABRT`); `SIGTERM`, `SIGINT`, `Environment.FailFast` and `SIGKILL` are not.
 * A child process must be started through `Hs.Prepare(startInfo)` to get its own tag.
 * Every thread that calls the SDK takes a slot, thread-pool threads included; use dedicated threads for code that asserts.
-* No signal-time report, fork handler or startup hook. Nothing here ran under Hermit.
+* No signal-time report, fork handler or startup hook. For Hermit results see the [support matrix](../../docs/support-matrix.md).

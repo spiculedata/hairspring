@@ -267,7 +267,7 @@ The original six fields are unchanged. Natively the counter loses updates in ess
 The fixture has its own tests (`examples/language-fixtures/python`, `make test` there): its command line, its stdout
 line, its report, and an `ast` check that the window is exactly a read, the busy loop and a write.
 
-Where it has been run (no Hermit anywhere): macOS arm64 with CPython 3.12.2 and 3.14 (the SDK tests, the fixture tests
+Where it has been run natively (for Hermit see the [support matrix](support-matrix.md)): macOS arm64 with CPython 3.12.2 and 3.14 (the SDK tests, the fixture tests
 and self-check, the conformance test); Linux aarch64 natively in an Ubuntu 24.04 container with CPython 3.12.3 (the SDK
 tests, including the Linux-only pipe and `AT_SECURE` paths, the fixture tests and the 50-run self-check); and Linux
 x86-64 in CI with CPython 3.12 (the SDK tests, the conformance test with `HS_REQUIRE_PYTHON`, the fixture tests and the
@@ -295,5 +295,4 @@ self-check).
   threads; every task of one event loop shares its thread's slot), free-threaded builds (the lock would make it correct;
   nothing has been run on one).
 * Windows.
-* Nothing here ran under Hermit; the planted race has not been reached through the engine, and how the interpreter's
-  time-driven lock switching behaves under the process backend is not known.
+* Hermit: not supported on this build; the probe program did not complete under Hermit. See the [support matrix](support-matrix.md).

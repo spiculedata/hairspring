@@ -136,18 +136,19 @@ See [Recorded environment](determinism.md#recorded-environment) for the fields a
 
 ## What is supported
 
-| Language | SDK | Fixture | SDK / fixture exists | Run under Hermit (evidence) |
-|---|---|---|---|---|
-| C | [`sdks/c`](../sdks/c), [c-sdk.md](c-sdk.md) | `examples/language-fixtures/c` | yes | yes, see the [glibc showcase](showcase-glibc-lost-wakeup.md) |
-| C++ | the C SDK (clang++ is the supported compiler; see c-sdk.md for g++) | `examples/language-fixtures/cpp` | yes | not yet confirmed |
-| Go | [`sdks/go`](../sdks/go) | `examples/language-fixtures/go`, `examples/go-sql-cancel` | yes | yes, see the [Go showcase](showcase-go-sql-cancel-race.md) |
-| Rust | [`sdks/rust`](../sdks/rust), [rust-sdk.md](rust-sdk.md) | `sdks/rust/fixtures` | yes | not yet run under Hermit |
-| Python | [`sdks/python`](../sdks/python), [python-sdk.md](python-sdk.md) | `examples/language-fixtures/python` | yes | single-threaded CPython only; **not supported yet** as a `process` target |
-| Java | [`sdks/java`](../sdks/java), [java-sdk.md](java-sdk.md) | `examples/language-fixtures/java` | yes | not yet run under Hermit; **Java is not supported on this build** |
-| .NET | [`sdks/dotnet`](../sdks/dotnet), [dotnet-sdk.md](dotnet-sdk.md) | `examples/language-fixtures/dotnet` | yes | not yet run under Hermit; **.NET is not supported on this build** |
+| Language | SDK | Fixture | Status under Hermit |
+|---|---|---|---|
+| C | [`sdks/c`](../sdks/c), [c-sdk.md](c-sdk.md) | `examples/language-fixtures/c` | Supported on one tested configuration; see the [support matrix](support-matrix.md) |
+| C++ (clang++ and g++) | the C SDK (see c-sdk.md) | `examples/language-fixtures/cpp` | Supported on one tested configuration; see the [support matrix](support-matrix.md) |
+| Go | [`sdks/go`](../sdks/go) | `examples/language-fixtures/go`, `examples/go-sql-cancel` | Supported on one tested configuration; see the [support matrix](support-matrix.md) |
+| Rust | [`sdks/rust`](../sdks/rust), [rust-sdk.md](rust-sdk.md) | `sdks/rust/fixtures` | Supported on one tested configuration; see the [support matrix](support-matrix.md) |
+| Python | [`sdks/python`](../sdks/python), [python-sdk.md](python-sdk.md) | `examples/language-fixtures/python` | Not supported on this build: the probe program did not complete under Hermit |
+| Java | [`sdks/java`](../sdks/java), [java-sdk.md](java-sdk.md) | `examples/language-fixtures/java` | SDK and fixture available. Not supported on this build: the probe program did not complete under Hermit |
+| .NET | [`sdks/dotnet`](../sdks/dotnet), [dotnet-sdk.md](dotnet-sdk.md) | `examples/language-fixtures/dotnet` | SDK and fixture available. Not supported on this build: the probe program did not complete under Hermit |
 
-"SDK / fixture exists" means the code and its tests are in this repository. Only the last column says whether a
-program in that language has been run under Hermit.
+"Supported" means the language passed our acceptance test on one configuration (Ubuntu 24.04, one Xeon host, pinned
+Hermit build) and was not tested elsewhere. The [support matrix](support-matrix.md) has the details and the exact
+configuration; the results apply only to that configuration.
 
 A program does not need an SDK to be run: the backend runs any Linux command and treats a non-zero exit as a failure.
 An SDK adds named properties (`always`, `sometimes`, `reachable`) that are tracked across trials.
