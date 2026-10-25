@@ -27,6 +27,9 @@
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <EnableSourceLink>false</EnableSourceLink>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- The SDK's call-site methods take [CallerFilePath], so the compiler writes the full path of each source file into LangAt.dll.
+         Mapping the repository root to /_/ keeps the build directory out of the output, with or without a git checkout. -->
+    <PathMap>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../../../'))=/_/</PathMap>
   </PropertyGroup>
 
   <ItemGroup>

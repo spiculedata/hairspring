@@ -1392,4 +1392,40 @@ expect "check-window rejects an empty file" 1 sh "$here/check-window-java.sh" "$
 expect "check-window rejects a missing file" 1 sh "$here/check-window-java.sh" "$tmp/none.txt"
 expect "check-window without a file is a usage error" 64 sh "$here/check-window-java.sh"
 
+# The .NET fixture: its constants and start barrier are read from its source, its sources read nothing forbidden, and
+# run-dotnet-profile-checks.sh runs the self-check once per environment profile arm (here with a stub checker).
+dotnet_fixture="$fixtures_dir/dotnet"
+expect "constants evidence passes for the .NET fixture" 0 sh "$evidence" constants dotnet "$dotnet_fixture/at/src/Contract.cs"
+sed 's/Window = 1000;/Window = 2000;/' "$dotnet_fixture/at/src/Contract.cs" >"$tmp/Contract_w2000.cs"
+expect "a .NET window of 2000 is rejected" 1 sh "$evidence" constants dotnet "$tmp/Contract_w2000.cs"
+sed 's/WindowWide = 10000;/WindowWide = 20000;/' "$dotnet_fixture/at/src/Contract.cs" >"$tmp/Contract_wide.cs"
+expect "a .NET wide window of 20000 is rejected" 1 sh "$evidence" constants dotnet "$tmp/Contract_wide.cs"
+sed 's/Iterations = 1000;/Iterations = 999;/' "$dotnet_fixture/at/src/Contract.cs" >"$tmp/Contract_k999.cs"
+expect "a .NET iteration count of 999 is rejected" 1 sh "$evidence" constants dotnet "$tmp/Contract_k999.cs"
+expect "the real .NET fixture has a start barrier" 0 sh "$evidence" barrier "$dotnet_fixture/at/src/Race.cs"
+expect "the .NET fixture without its barrier wait is rejected" 1 sh "$evidence" barrier "$(nowait dotnet "$dotnet_fixture/at/src/Race.cs" '_barrier.Await()')"
+expect "the real .NET fixture reads nothing forbidden" 0 sh "$here/check-sources-dotnet.sh" "$dotnet_fixture/at/src"
+bad_dotnet="$tmp/Bad.cs"
+printf 'class Bad { long t = System.Diagnostics.Stopwatch.GetTimestamp(); }\n' >"$bad_dotnet"
+expect "a .NET fixture that reads the clock is rejected" 1 sh "$here/check-sources-dotnet.sh" "$bad_dotnet"
+
+rcd_stub="$tmp/rcd-stub"
+cat >"$rcd_stub" <<'EOF2'
+#!/bin/sh
+# The wrapper the profile script writes is the artifact: print what it would run and the variables it adds.
+echo "$(sed -n 's/^exec env //p' "$2")|$*" >>"$RC_LOG"
+[ "${RC_FAIL:-}" = b ] && grep -q TieredCompilation "$2" && exit 1
+exit 0
+EOF2
+chmod +x "$rcd_stub"
+: >"$tmp/rcd.log"
+dotnet_manifest="$dotnet_fixture/profiles.manifest"
+expect "run-dotnet-profile-checks passes when both arms pass" 0 env RC_LOG="$tmp/rcd.log" RUN_CHECKS="$rcd_stub" sh "$here/run-dotnet-profile-checks.sh" "$dotnet_manifest" /x/LangAt.dll /bin/sh 7
+expect "run-dotnet-profile-checks runs arm a with DOTNET_ROOT only, the language and the run count" 0 grep -q "^'DOTNET_ROOT=[^']*' '/bin/sh' '/x/LangAt.dll' \"\$@\"|dotnet .*/at-dotnet-a 7\$" "$tmp/rcd.log"
+expect "run-dotnet-profile-checks runs arm b with the four extra variables" 0 grep -q "TieredCompilation=0.*EnableWriteXorExecute=0.*gcServer=0.*PROCESSOR_COUNT=1.*at-dotnet-b 7\$" "$tmp/rcd.log"
+expect "run-dotnet-profile-checks fails when arm b fails" 1 env RC_FAIL=b RC_LOG="$tmp/rcd.log" RUN_CHECKS="$rcd_stub" sh "$here/run-dotnet-profile-checks.sh" "$dotnet_manifest" /x/LangAt.dll /bin/sh
+expect "run-dotnet-profile-checks still runs arm b after arm a fails" 0 sh -c "env RC_FAIL=a RC_LOG='$tmp/rcd2.log' RUN_CHECKS='$rcd_stub' sh '$here/run-dotnet-profile-checks.sh' '$dotnet_manifest' /x/LangAt.dll /bin/sh; [ \$(wc -l <'$tmp/rcd2.log') -eq 2 ]"
+expect "run-dotnet-profile-checks with a bad manifest fails" 1 env RC_LOG="$tmp/rcd.log" RUN_CHECKS="$rcd_stub" sh "$here/run-dotnet-profile-checks.sh" "$tmp/no_manifest" /x/LangAt.dll /bin/sh
+expect "run-dotnet-profile-checks without arguments is a usage error" 64 sh "$here/run-dotnet-profile-checks.sh"
+
 exit $failures

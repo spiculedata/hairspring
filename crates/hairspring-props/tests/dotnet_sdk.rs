@@ -23,7 +23,7 @@ const LOCKED_RUNS: usize = 5;
 const MAX_LINE_BYTES: usize = 4096;
 /// SIGABRT, which the runtime raises when an exception nobody handled ends the process.
 const SIGABRT: i32 = 6;
-/// The two environment profiles of the acceptance experiment (`examples/language-fixtures/dotnet/profiles.manifest`).
+/// The extra variables of the second environment profile (arm b of `examples/language-fixtures/dotnet/profiles.manifest`).
 const ARM_B: [(&str, &str); 4] = [
     ("DOTNET_TieredCompilation", "0"),
     ("DOTNET_EnableWriteXorExecute", "0"),
