@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Sample instrumented programs, one per scenario: `dotnet Sample.dll <scenario> [args]`. The process tests
+       (test/test-process.sh) and the Rust conformance test (crates/hairspring-props/tests/dotnet_sdk.rs) run them. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>Sample</AssemblyName>
+    <RootNamespace>HsSample</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <UseAppHost>false</UseAppHost>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Hairspring.csproj" />
+  </ItemGroup>
+
+</Project>
