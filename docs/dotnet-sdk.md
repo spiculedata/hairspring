@@ -291,7 +291,7 @@ Natively (macOS arm64 and Linux arm64 with runtime 10.0.x) `buggy` lost an updat
 
 `make -C sdks/dotnet test` (.NET SDK only, no framework, no package):
 
-* `Hairspring.SelfTest` (161 cases): unit tests of the formatter (culture independence, control and bidirectional
+* `Hairspring.SelfTest` (178 cases): unit tests of the formatter (culture independence, control and bidirectional
   characters), every line kind, the catalog hash (including the value the C SDK prints), the thread slots, the site table and
   argument checks, the process identity rules, the `AT_SECURE` decision, the system calls (what a path or descriptor is,
   whole-line writes, a closed reader, close-on-exec, appending without following links), the events file (a link, a dangling
