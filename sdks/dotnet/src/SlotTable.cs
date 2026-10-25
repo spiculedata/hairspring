@@ -49,6 +49,26 @@ internal sealed class SlotTable
     /// </summary>
     public bool SetKey(Slot slot, string label, long index)
     {
+        var key = CheckKey(label, index);
+        if (slot.Index == OverflowSlot)
+        {
+            return false;
+        }
+        foreach (var other in _slots)
+        {
+            if (!ReferenceEquals(other, slot) && other.Key == key)
+            {
+                return false;
+            }
+        }
+        slot.Key = key;
+        slot.Stable = true;
+        return true;
+    }
+
+    /// <summary>The key <c>label-index</c> as it is sent, or an exception for a label or index that can never be a key.</summary>
+    public static string CheckKey(string label, long index)
+    {
         ArgumentNullException.ThrowIfNull(label);
         if (label.Length == 0)
         {
@@ -68,20 +88,7 @@ internal sealed class SlotTable
         {
             throw new ArgumentException($"the key {key} is longer than {Fmt.ThreadKeyMax} bytes", nameof(label));
         }
-        if (slot.Index == OverflowSlot)
-        {
-            return false;
-        }
-        foreach (var other in _slots)
-        {
-            if (!ReferenceEquals(other, slot) && other.Key == key)
-            {
-                return false;
-            }
-        }
-        slot.Key = key;
-        slot.Stable = true;
-        return true;
+        return key;
     }
 
     public IReadOnlyList<ThreadView> Views()

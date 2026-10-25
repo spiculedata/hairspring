@@ -1,3 +1,5 @@
+using System;
+
 namespace Hairspring;
 
 /// <summary>
@@ -27,10 +29,11 @@ internal sealed class StderrSink : ISink
     /// <summary>Whether the private duplicate exists and is close-on-exec (it is closed at once when it cannot be marked).</summary>
     public bool CopyIsCloseOnExec => _copy >= 0;
 
-    public static StderrSink Open(int fd = 2)
+    /// <summary>Only a descriptor that is not open (<c>EBADF</c>) is taken as closed; any other failure to look at it means its identity is unknown.</summary>
+    public static StderrSink Open(int fd = 2, Func<int, StatResult>? stat = null)
     {
-        var seen = Native.StatFd(fd);
-        if ((seen.Stat is null && seen.Errno != Native.Unavailable) || !Native.IsOpenForWriting(fd))
+        var seen = (stat ?? Native.StatFd)(fd);
+        if ((seen.Stat is null && seen.Errno == Native.BadDescriptor) || !Native.IsOpenForWriting(fd))
         {
             return new StderrSink(fd, false, null, -1);
         }

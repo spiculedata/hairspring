@@ -119,7 +119,13 @@ report is missing its `end`, and the program exits normally. If the file system 
 call is filtered), descriptor 2 is used as long as it stays open for writing.
 
 A write that fails (a reader that has gone, `EPIPE`; a full disk) costs that line, not the process: the runtime ignores
-`SIGPIPE`. The line is counted in `end.dropped`.
+`SIGPIPE`. The line is counted in `end.dropped`. A write that fails after the kernel took part of a line (a full disk, a
+non-blocking pipe) can leave a torn line, and the next line is then glued to it, so the parser drops both.
+
+Limits of the descriptor handling: if the program was started with standard error closed and the runtime's first open file
+became descriptor 2 and happens to be writable (a pipe or socket of the runtime's own), the report is written into it; the
+private duplicate is made with `dup` and then marked close-on-exec in a second call, so a child started in between could
+inherit it; and the duplicate takes the lowest free number, which a program that counts descriptors may notice.
 
 ## What is written, and when
 
@@ -274,7 +280,7 @@ Natively (macOS arm64 and Linux arm64 with runtime 10.0.x) `buggy` lost an updat
 
 `make -C sdks/dotnet test` (.NET SDK only, no framework, no package):
 
-* `Hairspring.SelfTest` (156 cases): unit tests of the formatter (culture independence, control and bidirectional
+* `Hairspring.SelfTest` (161 cases): unit tests of the formatter (culture independence, control and bidirectional
   characters), every line kind, the catalog hash (including the value the C SDK prints), the thread slots, the site table and
   argument checks, the process identity rules, the `AT_SECURE` decision, the system calls (what a path or descriptor is,
   whole-line writes, a closed reader, close-on-exec, appending without following links), the events file (a link, a dangling
@@ -304,8 +310,10 @@ environment and under each profile arm.
   evaluation registers its own site). The C SDK's catalog is built from linker sections in the executable, which a managed
   program has none of, so the SDK is not a binding to it.
 * The SDK calls the C library through P/Invoke for `write`, `dup`, `fcntl`, `ioctl`, `open`, `statx` or `fstat`, `getpid`
-  and `issetugid`, and only with fixed-argument calls (the variadic `fcntl` and `open` forms are avoided, because Apple arm64
-  passes variadic arguments differently). A system call that is not there (a filtered `statx`) fails like any other error
+  and `issetugid`, and `open`, `fcntl` and `ioctl`, which are variadic in C, are called only in forms that take no variadic argument (`open`
+  without `O_CREAT`, `fcntl(F_GETFL)`, `ioctl(FIOCLEX)`), because Apple arm64 passes variadic arguments differently. On
+  Linux the name `libc` is resolved to `libc.so.6`, so a system without the development package still works; on a system
+  where neither name loads (musl was not tried) the SDK starts as a recorder that writes nothing. A system call that is not there (a filtered `statx`) fails like any other error
   and the SDK carries on without that check, except for the events file, which is then refused.
 * The private duplicate of descriptor 2 uses the lowest free descriptor number, not a high one: `fcntl(F_DUPFD_CLOEXEC, 10)`
   is a variadic call. It is close-on-exec.

@@ -66,7 +66,7 @@ internal static class Lines
         {
             body.Append(",\"msg\":").Append(Fmt.JsonText(row.Msg, Fmt.MsgMax))
                 .Append(",\"loc\":{\"file\":").Append(Fmt.JsonText(FileTail(row.File), Fmt.FileMax))
-                .Append(",\"line\":").Append(row.Line).Append('}');
+                .Append(",\"line\":").Append(Fmt.Signed(Math.Max(0, row.Line))).Append('}');
         }
         return body;
     }
@@ -114,7 +114,7 @@ internal static class Lines
         var falses = point ? 0UL : row.Falses;
         var body = ProcField(Open("assert"), p)
             .Append(",\"id\":").Append(Fmt.Ident(row.Id, Fmt.IdMax))
-            .Append(",\"hits\":").Append(Fmt.NumW(unchecked(row.Trues + falses)))
+            .Append(",\"hits\":").Append(Fmt.NumW(Saturating.Add(row.Trues, falses)))
             .Append(",\"trues\":").Append(Fmt.NumW(row.Trues))
             .Append(",\"falses\":").Append(Fmt.NumW(falses));
         if (!point)
@@ -143,10 +143,10 @@ internal static class Lines
         var body = ProcField(Open("end"), p)
             .Append(",\"reason\":\"").Append(EndReasonInfo.Wire(reason))
             .Append("\",\"status\":").Append(Fmt.I64W(status))
-            .Append(",\"sites\":").Append(Math.Min(p.NIds, MaxIds))
+            .Append(",\"sites\":").Append(Fmt.Signed(Math.Min(p.NIds, MaxIds)))
             .Append(",\"evals\":").Append(Fmt.NumW(evals))
             .Append(",\"dropped\":").Append(Fmt.NumW(p.Dropped))
-            .Append(",\"threads\":").Append(threads);
+            .Append(",\"threads\":").Append(Fmt.Signed(threads));
         return Finish(body, Fmt.LineMax);
     }
 }

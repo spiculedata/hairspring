@@ -225,6 +225,7 @@ internal sealed class Recorder
     /// <summary>Give the calling thread the stable key <c>label-index</c>. See <see cref="SlotTable.SetKey"/>.</summary>
     public bool NameThread(string label, long index)
     {
+        SlotTable.CheckKey(label, index); // before the thread takes a slot: a refused call counts nothing
         var slot = CurrentSlot();
         lock (_lock)
         {
@@ -297,7 +298,7 @@ internal sealed class Recorder
         {
             if (_reported)
             {
-                if (reason == EndReason.Exit)
+                if (reason != EndReason.Explicit)
                 {
                     AwaitWriter();
                 }
@@ -328,10 +329,10 @@ internal sealed class Recorder
     /// <summary>Waits (with the lock held; <see cref="Monitor.Wait(object, TimeSpan)"/> releases it) until the report being written is done, or the bound passes.</summary>
     private void AwaitWriter()
     {
-        var deadline = DateTime.UtcNow + WriterWait;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
         while (_writing)
         {
-            var left = deadline - DateTime.UtcNow;
+            var left = WriterWait - clock.Elapsed;
             if (left <= TimeSpan.Zero)
             {
                 return;

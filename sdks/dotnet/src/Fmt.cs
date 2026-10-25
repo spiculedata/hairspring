@@ -62,7 +62,7 @@ internal static class Fmt
     /// </summary>
     public static string JsonText(ReadOnlySpan<byte> text, int maxBytes)
     {
-        var end = UntilNul(text, maxBytes);
+        var end = Math.Min(text.Length, maxBytes); // a NUL is a non-printable byte like any other
         var output = new StringBuilder(end + 2).Append('"');
         for (var i = 0; i < end; i++)
         {

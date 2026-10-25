@@ -116,6 +116,25 @@ internal static partial class Native
     [LibraryImport("libc", EntryPoint = "stat$INODE64", SetLastError = true)]
     private static partial int SysStatInode64(ref byte path, ref byte buffer);
 
+    static Native()
+    {
+        if (OnLinux)
+        {
+            try
+            {
+                NativeLibrary.SetDllImportResolver(typeof(Native).Assembly, ResolveLibc);
+            }
+            catch (InvalidOperationException)
+            {
+                // A resolver is already set for this assembly: the default probing stays.
+            }
+        }
+    }
+
+    /// <summary>"libc" is the C library on glibc systems even where only <c>libc.so.6</c> exists (no development package); anything else is left to the default probing.</summary>
+    private static IntPtr ResolveLibc(string name, System.Reflection.Assembly assembly, DllImportSearchPath? searchPath) =>
+        name == "libc" && NativeLibrary.TryLoad("libc.so.6", out var handle) ? handle : IntPtr.Zero;
+
     private static bool IsMissing(Exception e) => e is DllNotFoundException or EntryPointNotFoundException;
 
     private static byte[] CString(string path) => Encoding.UTF8.GetBytes(path + "\0");
@@ -246,7 +265,7 @@ internal static partial class Native
     {
         if (!OnLinux && !OnMac)
         {
-            return -Unavailable;
+            return Unavailable;
         }
         try
         {
