@@ -43,14 +43,16 @@ pub(crate) fn row_rules(payload_json: &str) -> RowRules {
     RowRules { limit, seed_base }
 }
 
-/// Whether the run holds fewer trials than its budget asked for. `completion_for` labels any run with a stand-in digest
+/// Whether `held` rows are fewer than the run's budget asked for. `completion_for` labels any run with a stand-in digest
 /// "digest allowance used up", even one that also stopped short, so an incomplete run is held back here as well when it
-/// is short: only a full-budget run whose sole problem is capped digests keeps its summary.
-fn short_of_budget(run: &RunRecord) -> bool {
+/// is short: only a full-budget run whose sole problem is capped digests keeps its summary. `held` is the number of
+/// rows the server holds, never the trial count the worker put in its outcome (`run.trials`), which a worker can set
+/// to the budget whatever it ran.
+fn short_of_budget(run: &RunRecord, held: u64) -> bool {
     serde_json::from_str::<JobPayload>(&run.config_json)
         .ok()
         .and_then(|p| p.budget)
-        .is_some_and(|b| run.trials < b.max_trials.max(1))
+        .is_some_and(|b| held < b.max_trials.max(1))
 }
 
 fn reported(v: TrialVerdict) -> ReportedVerdict {
@@ -72,12 +74,20 @@ impl Service {
     /// ([`RunCompletion::DigestAllowanceUsedUp`]) keeps its summary: the summary reads verdicts and seeds, which the
     /// stand-ins leave alone, but only when the run also ran its whole trial budget (see [`short_of_budget`]).
     pub(crate) fn sweep_summary(&self, run: &RunRecord) -> Result<Option<SweepSummary>> {
-        if !mode_of(&run.config_json).is_sweep() {
+        let Some(counted) = self.sweep_counts(run)? else {
             return Ok(None);
-        }
-        if run.ingest_incomplete
-            && (short_of_budget(run) || self.completion_for(run)? == RunCompletion::EndedEarly)
-        {
+        };
+        let withheld = run.ingest_incomplete
+            && (short_of_budget(run, counted.trials)
+                || self.completion_for(run)? == RunCompletion::EndedEarly);
+        Ok((!withheld).then_some(counted))
+    }
+
+    /// The verdict counts of a sweep's stored rows, whatever became of the run: the figures a report may state as
+    /// counts even when it may not state a rate. `None` for a run that was not a sweep or holds no rows. Nothing the
+    /// worker said about its trial counts is read.
+    pub(crate) fn sweep_counts(&self, run: &RunRecord) -> Result<Option<SweepSummary>> {
+        if !mode_of(&run.config_json).is_sweep() {
             return Ok(None);
         }
         let mut summary = SweepSummary::default();

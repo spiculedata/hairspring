@@ -328,6 +328,60 @@ fn a_short_sweep_with_capped_digests_withholds_its_summary_and_rate_on_every_sur
 }
 
 #[test]
+fn a_worker_cannot_get_a_rate_for_a_short_sweep_by_over_claiming_its_trial_count() {
+    // Three rows held, one digest capped, and a worker that says it ran all ten trials of its budget.
+    let (svc, store, engine) = tiny_allowance_of(5);
+    let job = lease_sweep(&svc, &engine, WORKER, 10);
+    svc.ingest_trials(&job.job_id, WORKER, &rows(&[Pass, Pass, Pass]))
+        .unwrap();
+    let outcome = RunOutcome {
+        trials_reported: Some(3),
+        ..RunOutcome::passed(10, 10, 5)
+    };
+    finish(&svc, &job, WORKER, outcome);
+    let run = store.get_run(&job.run_id).unwrap().unwrap();
+    assert_eq!(run.trials, 10, "the stored figure is the worker's own");
+    assert!(run.ingest_incomplete);
+    assert_eq!(
+        svc.completion_for(&run).unwrap(),
+        RunCompletion::DigestAllowanceUsedUp
+    );
+    let detail = svc.get_run(&job.run_id).unwrap().unwrap();
+    assert!(detail.sweep.is_none(), "{detail:?}");
+    assert!(serde_json::to_value(&detail)
+        .unwrap()
+        .get("sweep")
+        .is_none());
+    let stored = svc.outcome(&job.run_id).unwrap().unwrap();
+    assert!(stored.rate_withheld && stored.sweep.is_none());
+    assert_eq!(
+        stored.trials, 3,
+        "the report counts the rows the server holds"
+    );
+    let text = to_text("lock-lease", &stored);
+    assert!(text.contains("3 trials ran"), "{text}");
+    assert!(text.contains("counts only, not a rate"), "{text}");
+    assert!(!text.contains("hits:") && !text.contains('%'), "{text}");
+}
+
+#[test]
+fn a_sweeps_report_counts_come_from_its_rows_not_from_its_workers_figures() {
+    let (svc, _store, engine) = setup();
+    let job = lease_sweep(&svc, &engine, WORKER, 10);
+    svc.ingest_trials(&job.job_id, WORKER, &rows(&[Pass, Pass, Pass, Pass]))
+        .unwrap();
+    // A worker that claims ten trials, two of them inconclusive, though it holds four rows and none was.
+    let outcome = RunOutcome {
+        trials_reported: Some(4),
+        ..RunOutcome::passed(10, 10, 5).with_inconclusive(2)
+    };
+    finish(&svc, &job, WORKER, outcome);
+    let stored = svc.outcome(&job.run_id).unwrap().unwrap();
+    assert!(stored.rate_withheld);
+    assert_eq!((stored.trials, stored.inconclusive), (4, 0));
+}
+
+#[test]
 fn a_sweep_that_ended_in_an_error_is_served_with_a_partial_marker() {
     let (svc, _store, engine) = setup();
     let job = lease_sweep(&svc, &engine, WORKER, 10);

@@ -308,6 +308,14 @@ impl Service {
         // A sweep with no summary because it was stopped short without a limit states counts only, never a rate.
         let rate_withheld =
             sweep.is_none() && run.ingest_incomplete && sweep::mode_of(&run.config_json).is_sweep();
+        // A sweep's trial and inconclusive counts are those of the rows the server holds, not the worker's own figures.
+        let counted = match run.state.is_terminal() {
+            true => self.sweep_counts(&run)?,
+            false => None,
+        };
+        let (trials, inconclusive) = counted.map_or((run.trials, run.inconclusive), |c| {
+            (c.trials, c.not_rated())
+        });
         let status = match run.state {
             RunState::Passed => RunStatus::Passed,
             RunState::Failed => RunStatus::Failed,
@@ -341,8 +349,8 @@ impl Service {
         Ok(Some(RunOutcome {
             status,
             steps_executed: run.steps,
-            trials: run.trials,
-            inconclusive: run.inconclusive,
+            trials,
+            inconclusive,
             distinct_schedules: run.distinct_schedules,
             work: run.work,
             elapsed_ms,

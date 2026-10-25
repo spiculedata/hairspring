@@ -148,7 +148,12 @@ change: the trial rows added in version 2 already hold every verdict.
   (any stand-in gives that label) that also holds fewer rows than its budget: it stopped short with no limit the server
   can verify, so its summary is withheld too. Only a run that ran its whole budget and is incomplete solely because the
   server replaced digests by stand-ins keeps its summary and its rate, since the summary reads verdicts and seeds. A
-  time-limited sweep that also had stand-ins is withheld as well (the label cannot tell the two apart). `sweep_partial` on the run marks a summary from a sweep that ended in an error or
+  time-limited sweep that also had stand-ins is withheld as well (the label cannot tell the two apart). "Fewer rows
+  than its budget" is counted from the rows the server holds, and the report's trial and inconclusive counts are too:
+  the trial count a worker puts in its outcome (stored as `run.trials`, for display) decides nothing about a sweep. For
+  a withheld sweep the per-property cells in the report (for example `PASS always 'c.id'  0/1 ... exact one-sided 95%
+  upper bound 95.00%`) are property-level figures over the trials that reported that id, not the sweep's rate.
+  `sweep_partial` on the run marks a summary from a sweep that ended in an error or
   was cancelled. A worker's record numbered at or past the run's trial budget is refused, and so
   is a sweep record whose seed is not the run's first seed plus its number (wrapping), so a worker cannot name an
   arbitrary failing seed. A sweep summary that contradicts itself or the trial count is refused, and the worker's
