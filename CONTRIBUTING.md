@@ -51,6 +51,26 @@ Tests against the real Hermit need x86-64 Linux with performance counters:
 `HAIRSPRING_HERMIT=/path/to/hermit HAIRSPRING_HERMIT_REAL=1 cargo test -p hairspring-hermit --test real_hermit`.
 CI does not run these.
 
+## Licence of contributions and sign-off
+
+Hairspring is licensed under the Apache License, Version 2.0 (see `LICENSE`). By submitting a pull request you agree
+that your contribution is licensed under the same terms, as set out in section 5 of that licence.
+
+We use the [Developer Certificate of Origin](https://developercertificate.org/) (the text is in `DCO`) instead of a
+contributor licence agreement. It is your statement that you wrote the change or have the right to submit it. Say so by
+adding a `Signed-off-by` line, with your real name and an email address you can be reached at, to every commit:
+
+```bash
+git commit -s -m "fix: describe the change"
+```
+
+This adds `Signed-off-by: Your Name <you@example.com>` using your `user.name` and `user.email`. To add it to commits
+you have already made on a branch, run `git rebase --signoff main` (or `git commit --amend -s` for the last one) and
+push again. Commits made on your behalf by a tool are signed off by you, not by the tool. If you cannot sign off a
+change, say why in the pull request.
+
+Sign-off is checked by a maintainer at review time. There is no automated check yet.
+
 ## How we work
 
 - **Tests first.** Write the test, watch it fail for the right reason, then make it pass. Bug fixes start with a test that reproduces the bug.
