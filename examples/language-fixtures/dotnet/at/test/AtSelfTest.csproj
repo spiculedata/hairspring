@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The fixture's own tests: BCL only, no test framework, no packages. They compile the fixture's sources (except Program.cs,
+       which holds the entry point) next to their own and exit non-zero when a check fails. Run them with HAIRSPRING_EVENTS=off
+       so the SDK writes no report for the evaluations the tests make. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>LangAt.SelfTest</RootNamespace>
+    <UseAppHost>false</UseAppHost>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../src/*.cs" Exclude="../src/Program.cs" />
+    <ProjectReference Include="../../../../../sdks/dotnet/src/Hairspring.csproj" />
+  </ItemGroup>
+
+</Project>
