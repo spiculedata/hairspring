@@ -72,5 +72,19 @@ internal static partial class Posix
         return count <= 0 ? "" : System.Text.Encoding.ASCII.GetString(buffer, 0, (int)count);
     }
 
+    [LibraryImport("libc", EntryPoint = "link", SetLastError = true)]
+    private static partial int SysLink(ref byte from, ref byte to);
+
+    /// <summary>Makes <paramref name="to"/> a hard link to <paramref name="from"/>.</summary>
+    public static void HardLink(string from, string to)
+    {
+        var a = System.Text.Encoding.UTF8.GetBytes(from + "\0");
+        var b = System.Text.Encoding.UTF8.GetBytes(to + "\0");
+        if (SysLink(ref a[0], ref b[0]) != 0)
+        {
+            throw new IOException("link failed: " + Marshal.GetLastPInvokeError());
+        }
+    }
+
     public static bool IsOpen(int fd) => Fcntl(fd, FdGetFd) >= 0;
 }

@@ -17,6 +17,7 @@ internal static class Program
         SecureTests.Register(suite);
         NativeTests.Register(suite);
         OutputTests.Register(suite);
+        EventsFileTests.Register(suite);
         RecorderTests.Register(suite);
         RecorderRuntimeTests.Register(suite);
         return suite;

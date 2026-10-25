@@ -72,19 +72,20 @@ internal static class SitesTests
             Check.Yes(ReferenceEquals(table.Find(Kind.Reachable, "one-too-many"), Site.Untracked), "remembered as untracked");
             Check.Yes(table.Register(Kind.Sometimes, "id0", "", "A.cs", 1) is not null, "a known id can take another kind");
         });
-        s.Add("sites: the spellings the lookup remembers are bounded", () =>
+        s.Add("sites: the spellings the lookup remembers are bounded, however many spellings one id has", () =>
         {
             var table = new SiteTable();
-            for (var i = 0; i < SiteTable.MaxRemembered + 100; i++)
+            const string symbols = "!#$%&'()*+,;<=>?@[]^`{|}~";
+            for (var i = 0; i < SiteTable.MaxRemembered + 2000; i++)
             {
-                table.Register(Kind.Reachable, "same", "", "A.cs", 1);
-                table.Register(Kind.Reachable, "same" + (i % 3 == 0 ? " " : "_") + i, "", "A.cs", 1);
-                if (table.DistinctIds >= SiteTable.MaxDistinct)
-                {
-                    break;
-                }
+                // Every spelling is "k" and four characters outside the alphabet: one id, "k____", many spellings.
+                var n = i;
+                var spelling = "k" + symbols[n % symbols.Length] + symbols[n / symbols.Length % symbols.Length]
+                    + symbols[n / (symbols.Length * symbols.Length) % symbols.Length] + symbols[n / (symbols.Length * symbols.Length * symbols.Length) % symbols.Length];
+                table.Register(Kind.Reachable, spelling, "", "A.cs", 1);
             }
-            Check.Yes(table.RememberedCount <= SiteTable.MaxRemembered, "remembered " + table.RememberedCount);
+            Check.Equal(1, table.DistinctIds);
+            Check.Equal(SiteTable.MaxRemembered, table.RememberedCount);
         });
         s.Add("sites: registration validates the id and the message", () =>
         {

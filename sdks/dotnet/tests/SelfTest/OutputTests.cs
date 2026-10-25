@@ -328,11 +328,34 @@ internal static class OutputTests
             sink.Close();
             Posix.Close(write);
         });
+        s.Add("stderr: a file reopened read-only on descriptor 2 does not take the report, the private copy does", () =>
+        {
+            var dir = Scratch();
+            try
+            {
+                var file = Path.Combine(dir, "err");
+                File.WriteAllText(file, "");
+                var fd = Posix.Open(file, Posix.OpenWriteOnly);
+                var sink = StderrSink.Open(fd);
+                var readOnly = Posix.Open(file, Posix.OpenReadOnly);
+                Posix.Dup2(readOnly, fd); // the same file, but no longer open for writing
+                Posix.Close(readOnly);
+                Check.Yes(sink.WriteLine(Bytes("a\n")), "a");
+                sink.Close();
+                Posix.Close(fd);
+                Check.Equal("a\n", File.ReadAllText(file));
+            }
+            finally
+            {
+                Directory.Delete(dir, true);
+            }
+        });
         s.Add("stderr: the private copy does not outlive an exec", () =>
         {
             var (read, write) = Posix.Pipe();
             var sink = StderrSink.Open(write);
             Check.Yes(sink.CopyIsCloseOnExec, "close-on-exec");
+            Check.Equal(Posix.CloseOnExec, Posix.Fcntl(sink.CopyDescriptor, Posix.FdGetFd) & Posix.CloseOnExec);
             sink.Close();
             Posix.Close(read);
             Posix.Close(write);

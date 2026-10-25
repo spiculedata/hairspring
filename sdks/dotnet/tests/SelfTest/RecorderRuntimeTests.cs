@@ -260,6 +260,14 @@ internal static class RecorderRuntimeTests
             Record(r, Kind.Reachable, true, "x", "m");
             Check.Yes(r.Report(EndReason.Exit, null), "reported");
         });
+        s.Add("recorder: a failed report is announced through the sink, not around it", () =>
+        {
+            var sink = new ListSink();
+            var r = Make(sink);
+            r.WarnAboutFailure("the report could not be written", new InvalidOperationException("boom"));
+            Check.Equal(new[] { "hairspring: the report could not be written: InvalidOperationException: boom\n" }, sink.Lines());
+            Make(null).WarnAboutFailure("x", new InvalidOperationException("y")); // output off: nothing to write to, nothing thrown
+        });
         s.Add("recorder: the status the program recorded is in the end line", () =>
         {
             var sink = new ListSink();
