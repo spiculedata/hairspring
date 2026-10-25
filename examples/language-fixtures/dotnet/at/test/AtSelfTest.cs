@@ -130,15 +130,17 @@ internal static class AtSelfTest
         }),
         ("barrier: nobody passes until every party has arrived", () =>
         {
-            var barrier = new StartBarrier(4);
+            var started = 0;
+            var barrier = new StartBarrier(() => Volatile.Read(ref started), 4);
             var passedEarly = 0;
             var threads = new List<Thread>();
             for (var i = 0; i < 4; i++)
             {
                 var thread = new Thread(() =>
                 {
-                    var released = barrier.Arrive();
-                    if (!released || barrier.Started < 4)
+                    Interlocked.Increment(ref started);
+                    var released = barrier.Await();
+                    if (!released || Volatile.Read(ref started) < 4)
                     {
                         Interlocked.Increment(ref passedEarly);
                     }
@@ -156,15 +158,15 @@ internal static class AtSelfTest
         }),
         ("barrier: an abort wakes the waiters and tells them the start failed", () =>
         {
-            var barrier = new StartBarrier(4);
+            var barrier = new StartBarrier(() => 0, 4);
             var released = -1;
-            var waiter = new Thread(() => Volatile.Write(ref released, barrier.Arrive() ? 1 : 0));
+            var waiter = new Thread(() => Volatile.Write(ref released, barrier.Await() ? 1 : 0));
             waiter.Start();
             Thread.Sleep(20);
             barrier.Abort();
             waiter.Join();
             Equal(0, released);
-            Yes(!barrier.Arrive(), "a later arrival fails too");
+            Yes(!barrier.Await(), "a later wait fails too");
         }),
         ("race: spin is a pure function of its argument", () =>
         {

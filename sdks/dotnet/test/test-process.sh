@@ -134,7 +134,10 @@ expect "background_report: exit 0 and a complete report" is "$rc$(lines_of hello
 expect "background_report: every protocol line is whole" whole_lines
 
 # a forked copy of the process never reports; the parent reports once
-rc=$(sample fork)
+# (Forking a managed program is not something the runtime supports: with its write-xor-execute memory on, parent and child
+# share their executable memory and the parent can crash when the child compiles code. The test turns that off for this run.)
+runner_with DOTNET_EnableWriteXorExecute=0 "$dll" fork >"$tmp/out" 2>"$tmp/err"
+rc=$?
 expect "fork: exit 0, one hello and one end" is "$rc$(lines_of hello)$(lines_of end)" 011
 expect "fork: the report is the parent's" has '"kind":"hello".*"proc":"p1","catalog_hash"'
 
