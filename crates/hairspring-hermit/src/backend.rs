@@ -21,6 +21,8 @@ use hairspring_props::AssertKind;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+mod sweep;
+
 const BUILD: &str = env!("CARGO_PKG_VERSION");
 const CANCELLED: &str = "cancelled";
 
@@ -260,7 +262,7 @@ impl HermitBackend {
     /// includes the guest's reported events) and the same failing properties, by id, kind and reason. A rerun that
     /// fails a different property is a different bug, not a reproduction. A rerun that could not be judged is counted
     /// apart, because it says nothing about whether the program is deterministic.
-    fn confirm(
+    fn confirm_violation(
         &self,
         p: &ProcessSpec,
         seed: u64,
@@ -365,7 +367,7 @@ impl HermitBackend {
 
     /// Confirms a failing trial by rerunning its seed and builds the outcome that ends the run.
     fn finding(&self, j: &Judged, tally: &Tally, kind: FailureKind, reason: &str) -> RunOutcome {
-        let confirmed = self.confirm(j.p, j.seed, j.trial, kind, j.timeout);
+        let confirmed = self.confirm_violation(j.p, j.seed, j.trial, kind, j.timeout);
         let failure = self.failure(&Found {
             spec: j.spec,
             p: j.p,
@@ -688,6 +690,9 @@ impl Backend for HermitBackend {
         budget: Budget,
         progress: &mut dyn FnMut(Progress) -> bool,
     ) -> Result<RunOutcome, EngineError> {
+        if req.mode.is_sweep() {
+            return self.run_sweep(spec, req, budget, progress);
+        }
         let p = self.process(spec)?;
         self.check_events_setup(&p)?;
         let environment = self.environment(&p);
@@ -816,21 +821,4 @@ impl Backend for HermitBackend {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::inconclusive_text;
-
-    #[test]
-    fn the_inconclusive_note_keeps_the_spawn_error_text() {
-        let text = inconclusive_text(2, Some("cannot start hermit: no such file"));
-        assert!(text.contains("2 reruns inconclusive"), "{text}");
-        assert!(text.contains("cannot start hermit: no such file"), "{text}");
-    }
-
-    #[test]
-    fn the_inconclusive_note_without_a_spawn_error_is_unchanged() {
-        assert_eq!(
-            inconclusive_text(1, None),
-            "; 1 rerun inconclusive (host or infrastructure, not the program)"
-        );
-    }
-}
+mod tests;

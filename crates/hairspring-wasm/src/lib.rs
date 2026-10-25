@@ -9,6 +9,7 @@
 //! and export `run() -> i32` (0 = success) plus a `memory`. Everything else in WebAssembly is
 //! deterministic once NaN payloads are canonicalised (we do) and threads are absent (they are).
 mod backend;
+mod sweep;
 mod vm;
 
 pub use backend::{WasmBackend, WasmSettings};

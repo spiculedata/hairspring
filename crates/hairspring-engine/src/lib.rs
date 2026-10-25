@@ -10,9 +10,13 @@ pub mod erased;
 pub mod format;
 mod format_props;
 mod format_rate;
+mod format_sweep;
+pub mod mode;
 pub mod report;
 pub mod scheduler;
 pub mod sim_backend;
+mod sim_sweep;
+pub mod sweep;
 pub mod trial_log;
 
 use std::fmt;

@@ -1,5 +1,6 @@
 use crate::config::{Budget, TargetKind, TargetSpec};
 use crate::confirm::{CheckResult, ConfirmRequest};
+use crate::mode::RunMode;
 use crate::report::{DoctorReport, ReplayOutcome, RunOutcome};
 use crate::EngineError;
 use hairspring_core::bundle::Bundle;
@@ -16,6 +17,8 @@ pub struct RunRequest {
     pub target: String,
     pub seed: u64,
     pub budget: Option<Budget>,
+    /// Whether the run stops at its first confirmed violation (the default) or runs its whole trial budget.
+    pub mode: RunMode,
 }
 
 impl RunRequest {
@@ -24,6 +27,7 @@ impl RunRequest {
             target: target.into(),
             seed,
             budget: None,
+            mode: RunMode::Search,
         }
     }
     pub fn with_budget(self, budget: Budget) -> Self {
@@ -31,6 +35,9 @@ impl RunRequest {
             budget: Some(budget),
             ..self
         }
+    }
+    pub fn with_mode(self, mode: RunMode) -> Self {
+        RunRequest { mode, ..self }
     }
 }
 

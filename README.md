@@ -130,6 +130,39 @@ the Go SDK in [`sdks/go`](sdks/go), the Rust SDK in [`sdks/rust`](sdks/rust) ([d
 the Python SDK in [`sdks/python`](sdks/python) ([docs/python-sdk.md](docs/python-sdk.md)) and the Java SDK in
 [`sdks/java`](sdks/java) ([docs/java-sdk.md](docs/java-sdk.md)).
 
+### Measure a failure rate (sweep)
+
+A normal run stops at its first confirmed failure. That finds a bug, but it cannot say how often the bug happens. A
+sweep runs the whole trial budget past every failure and stores every trial:
+
+```bash
+hairspring test checkout --sweep --trials 1000 --seed 1   # trials at seeds 1 to 1000
+hairspring test checkout --sweep --seeds 5000..5500       # seeds 5000 to 5499 (END is not run)
+```
+
+The report gives the violations out of the rated trials with a Wilson 95% interval (with no violation, an exact upper
+bound instead), names the lowest failing seeds, and lists timeouts, trials with unusable output and trials that failed
+in the host apart: they are never in the denominator and never counted as passes.
+
+Up to the first ten violations are each confirmed by re-running their seed, and the trial's row says how many reruns
+gave the same output (`same-output reruns k/n`). A confirmation is skipped, and the row says so, when the limit of ten
+is reached, when the sweep is out of wall-clock budget, or when it was cancelled. The exit code is 1 when any trial was
+a violation. `--trials` is at most 10,000, and a sweep also ends at `--budget-secs`. For a simulation target a trial is
+one exploration round and the rounds share `--budget-steps`, so raise it to run more of them; a default simulation
+sweep runs only a few rounds. The report says when a sweep ended before its trial budget, and why as far as the server
+can tell.
+
+Over HTTP, send `"mode": "sweep"` to `POST /api/runs`; over MCP, pass `mode` and `max_trials` to `start_run`. The
+finished run's `sweep` field (in `GET /api/runs/{id}` and the MCP `get_run`) holds the counts and the first failing
+seeds, counted by the server from the stored trials. It is left out for a search, for a run still going, and for a
+sweep that is marked incomplete and holds fewer trials than its budget, whatever the reason (counts only, never a
+rate); the per-property cells of such a report are property-level figures, not the sweep's rate. The comparison with
+the budget uses the trials the server holds, not the count the worker reports. It is kept for a sweep that ran its whole budget even if the server had to replace some trial digests (its
+property statistics are then incomplete, its verdict counts are not). `sweep_partial` is true
+when the sweep ended in an error or was cancelled: its counts are those of whatever ran, so a client that states a rate
+must check it and the run's state. REST and MCP accept a first seed near the top of the 64-bit range and wrap round
+to 0, while the CLI refuses such a sweep. Without a mode a run is a search, as before.
+
 ## For AI agents (MCP)
 
 `hairspring mcp` (stdio) or `POST /mcp` (HTTP) expose the loop an agent needs: `list_targets`, `start_run`,

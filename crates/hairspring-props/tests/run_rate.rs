@@ -142,7 +142,7 @@ fn crashed_and_inconclusive_trials_are_both_listed() {
     let out = lines(2, 100, 4, 1, false);
     assert_eq!(
         out[1],
-        format!("not rated trials: 4 inconclusive, 1 crashed; {NOT_RATED_TAIL}")
+        format!("not rated trials: 4 inconclusive, 1 failed in the host; {NOT_RATED_TAIL}")
     );
     assert!(out[2].contains("7/105 (6.67%)"), "{out:?}");
 }

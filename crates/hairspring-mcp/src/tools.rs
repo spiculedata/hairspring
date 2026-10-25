@@ -1,6 +1,8 @@
 use crate::rpc::Reply;
 use crate::validate::*;
 use crate::McpServer;
+use hairspring_engine::config::{Budget, MAX_TRIALS_CAP};
+use hairspring_engine::mode::RunMode;
 use hairspring_service::{FailureDetail, Role, ServiceError, StartRun};
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
@@ -35,6 +37,8 @@ const TOOLS: &[Tool] = &[
                     "seed": { "type": "integer", "minimum": 0, "description": "Exploration seed; omit for a random one (recorded in the run)" },
                     "max_steps": { "type": "integer", "minimum": 1, "description": "Step budget override" },
                     "wall_secs": { "type": "integer", "minimum": 1, "description": "Wall-clock budget override" },
+                    "mode": { "type": "string", "enum": ["search", "sweep"], "description": "search (default) stops at the first confirmed failure; sweep runs the whole trial budget past every failure and stores every trial, so a rate with an interval can be stated. The summary comes back as `sweep` once the run is over. A simulation target's trial is one exploration round and rounds share max_steps, so with default budgets a simulation sweep runs few trials: raise max_steps" },
+                    "max_trials": { "type": "integer", "minimum": 1, "maximum": 10000, "description": "Trial budget override (a sweep runs this many trials unless its step or wall-clock budget ends first)" },
                     "wait": { "type": "boolean", "description": "Wait for completion (default false; always true in local stdio mode)" },
                     "wait_secs": { "type": "integer", "minimum": 1, "maximum": 300, "description": "Maximum time to wait (default 60)" }
                 }),
@@ -261,6 +265,14 @@ fn start_run(server: &McpServer, args: &Value) -> Result<Value, Failed> {
         opt_u64(args, "max_steps")?,
         opt_u64(args, "wall_secs")?,
     );
+    let max_trials = opt_u64(args, "max_trials")?;
+    let mode = opt_str(args, "mode")?
+        .map(|m| {
+            m.parse::<RunMode>()
+                .map_err(|e| Failed::Params(e.to_string()))
+        })
+        .transpose()?
+        .unwrap_or_default();
     let wait = opt_bool(args, "wait")?.unwrap_or(false);
     let wait_secs = opt_u64(args, "wait_secs")?
         .unwrap_or(DEFAULT_WAIT_SECS)
@@ -270,31 +282,32 @@ fn start_run(server: &McpServer, args: &Value) -> Result<Value, Failed> {
             "`max_steps` and `wall_secs` must be at least 1".to_string(),
         ));
     }
+    if max_trials.is_some_and(|n| !(1..=MAX_TRIALS_CAP).contains(&n)) {
+        return Err(Failed::Params(format!(
+            "`max_trials` must be 1-{MAX_TRIALS_CAP}"
+        )));
+    }
     let base = server
         .engine()
         .config()
         .targets
         .get(target)
         .map(|t| t.budget);
-    let budget = match (base, max_steps, wall_secs) {
-        (Some(b), None, None) => Some(b),
-        (Some(b), s, w) => Some(hairspring_engine::config::Budget {
-            max_steps: s.unwrap_or(b.max_steps),
-            wall_secs: w.unwrap_or(b.wall_secs),
-            ..b
-        }),
-        (None, _, _) => None,
-    };
+    let budget = base.map(|b| Budget {
+        max_steps: max_steps.unwrap_or(b.max_steps),
+        max_trials: max_trials.unwrap_or(b.max_trials),
+        wall_secs: wall_secs.unwrap_or(b.wall_secs),
+    });
     let req = StartRun {
         target: target.to_string(),
         seed,
         budget,
     };
     if server.inline() {
-        let detail = svc.run_sync(server.engine(), &req)?;
+        let detail = svc.run_sync_with_mode(server.engine(), &req, mode)?;
         return Ok(serde_json::to_value(detail).unwrap_or_default());
     }
-    let run = svc.start_run(server.engine(), &req)?;
+    let run = svc.start_run_with_mode(server.engine(), &req, mode)?;
     if wait {
         let Some(_slot) = server.try_acquire_wait() else {
             return Err(Failed::Tool("too many requests are already waiting for runs to finish; omit `wait` and poll get_run instead".to_string()));

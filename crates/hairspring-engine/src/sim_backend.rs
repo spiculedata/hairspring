@@ -8,14 +8,14 @@ use crate::report::{
 use crate::EngineError;
 use hairspring_core::bundle::Bundle;
 use hairspring_core::doctor::doctor;
-use hairspring_core::explore::{branching, Config as ExploreConfig};
+use hairspring_core::explore::{branching, Config as ExploreConfig, Failure};
 use hairspring_core::replay::find_action;
 use hairspring_core::shrink::shrink;
 use hairspring_core::{ActionId, Sim};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const ROUND_STEPS: u64 = 100_000;
+pub(crate) const ROUND_STEPS: u64 = 100_000;
 /// Error text of an outcome produced because the caller asked the run to stop.
 pub const CANCELLED: &str = "cancelled";
 const BUILD: &str = env!("CARGO_PKG_VERSION");
@@ -63,6 +63,33 @@ pub fn trace(root: &Erased, path: &[ActionId]) -> Result<Vec<Step>, EngineError>
     Ok(steps)
 }
 
+/// The report of a failing walk found at `seed`: shrunk, traced step by step and bundled for replay.
+pub(crate) fn failure_report(
+    root: &Erased,
+    req: &RunRequest,
+    seed: u64,
+    found: &Failure,
+) -> Result<FailureReport, EngineError> {
+    let shrunk = shrink(root, &found.path);
+    let steps = trace(root, &shrunk)?;
+    let bundle = Bundle::new(seed, BUILD, shrunk.clone())
+        .with_target(req.target.clone())
+        .with_backend("sim");
+    Ok(FailureReport {
+        target: req.target.clone(),
+        backend: "sim".to_string(),
+        message: format!(
+            "invariant violated; shrunk from {} to {} steps",
+            found.path.len(),
+            shrunk.len()
+        ),
+        original_len: found.path.len(),
+        shrunk_len: shrunk.len(),
+        steps,
+        bundle: bundle.encode(),
+    })
+}
+
 impl Backend for SimBackend {
     fn name(&self) -> &'static str {
         "sim"
@@ -80,6 +107,9 @@ impl Backend for SimBackend {
         progress: &mut dyn FnMut(Progress) -> bool,
     ) -> Result<RunOutcome, EngineError> {
         let root = self.root(spec)?;
+        if req.mode.is_sweep() {
+            return crate::sim_sweep::run(&root, req, budget, progress);
+        }
         let started = Instant::now();
         let wall = Duration::from_secs(budget.wall_secs);
         let mut steps_total = 0u64;
@@ -97,24 +127,7 @@ impl Backend for SimBackend {
             round += 1;
             if let Some(found) = branching(&root, &cfg) {
                 steps_total += found.steps_executed;
-                let shrunk = shrink(&root, &found.path);
-                let steps = trace(&root, &shrunk)?;
-                let bundle = Bundle::new(seed, BUILD, shrunk.clone())
-                    .with_target(req.target.clone())
-                    .with_backend("sim");
-                let failure = FailureReport {
-                    target: req.target.clone(),
-                    backend: "sim".to_string(),
-                    message: format!(
-                        "invariant violated; shrunk from {} to {} steps",
-                        found.path.len(),
-                        shrunk.len()
-                    ),
-                    original_len: found.path.len(),
-                    shrunk_len: shrunk.len(),
-                    steps,
-                    bundle: bundle.encode(),
-                };
+                let failure = failure_report(&root, req, seed, &found)?;
                 let _ = progress(Progress {
                     steps: steps_total,
                     trials: round,

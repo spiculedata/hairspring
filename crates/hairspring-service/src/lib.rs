@@ -22,6 +22,7 @@ mod query;
 pub mod sanitize;
 mod scan;
 mod strip_query;
+mod sweep;
 mod trial_class;
 mod trial_query;
 mod types;
@@ -46,6 +47,7 @@ use hairspring_core::bundle::Bundle;
 pub use hairspring_engine::backend::ReplayOptions;
 use hairspring_engine::config::TargetKind;
 use hairspring_engine::engine::Engine;
+use hairspring_engine::mode::RunMode;
 use hairspring_engine::report::{FailureReport, ReplayOutcome, RunOutcome, RunStatus, Step};
 use hairspring_store::{
     now_ms, random_seed, EventRecord, FailureRecord, NewEvent, NewRun, RunRecord, RunState, Store,
@@ -178,7 +180,18 @@ impl Service {
             .collect()
     }
 
+    /// Starts a run that stops at its first confirmed failure.
     pub fn start_run(&self, engine: &Engine, req: &StartRun) -> Result<RunRecord> {
+        self.start_run_with_mode(engine, req, RunMode::Search)
+    }
+
+    /// Starts a run in `mode`: a sweep runs its whole trial budget past every failure and stores every trial.
+    pub fn start_run_with_mode(
+        &self,
+        engine: &Engine,
+        req: &StartRun,
+        mode: RunMode,
+    ) -> Result<RunRecord> {
         if req.target.is_empty() || req.target.len() > MAX_TARGET_LEN {
             return Err(ServiceError::InvalidRequest(
                 "target must be 1-64 characters".to_string(),
@@ -198,6 +211,7 @@ impl Service {
             seed: req.seed.unwrap_or_else(random_seed),
             // The budget the run is held to is recorded in full, so it does not depend on the target's default later.
             budget: Some(req.budget.unwrap_or(spec.budget).clamp()),
+            mode,
         };
         let json = serde_json::to_string(&payload)
             .map_err(|e| ServiceError::InvalidRequest(e.to_string()))?;
@@ -231,10 +245,20 @@ impl Service {
             })
             .collect::<Result<Vec<_>>>()?;
         let properties = self.property_summary(&run)?;
+        // Counted when the run is over: a run still going has a changing count, and a read must not scan its rows each
+        // time the page polls.
+        let sweep = match run.state.is_terminal() {
+            true => self.sweep_summary(&run)?,
+            false => None,
+        };
+        let sweep_partial =
+            sweep.is_some() && !matches!(run.state, RunState::Passed | RunState::Failed);
         Ok(Some(RunDetail {
             run,
             failures,
             properties,
+            sweep,
+            sweep_partial,
         }))
     }
 
@@ -279,7 +303,19 @@ impl Service {
         let Some(detail) = self.get_run(run_id)? else {
             return Ok(None);
         };
+        let sweep = detail.sweep.clone();
         let run = detail.run;
+        // A sweep with no summary because it was stopped short without a limit states counts only, never a rate.
+        let rate_withheld =
+            sweep.is_none() && run.ingest_incomplete && sweep::mode_of(&run.config_json).is_sweep();
+        // A sweep's trial and inconclusive counts are those of the rows the server holds, not the worker's own figures.
+        let counted = match run.state.is_terminal() {
+            true => self.sweep_counts(&run)?,
+            false => None,
+        };
+        let (trials, inconclusive) = counted.map_or((run.trials, run.inconclusive), |c| {
+            (c.trials, c.not_rated())
+        });
         let status = match run.state {
             RunState::Passed => RunStatus::Passed,
             RunState::Failed => RunStatus::Failed,
@@ -313,8 +349,8 @@ impl Service {
         Ok(Some(RunOutcome {
             status,
             steps_executed: run.steps,
-            trials: run.trials,
-            inconclusive: run.inconclusive,
+            trials,
+            inconclusive,
             distinct_schedules: run.distinct_schedules,
             work: run.work,
             elapsed_ms,
@@ -325,6 +361,8 @@ impl Service {
             property_run,
             trial_log: Vec::new(),
             trials_reported: None,
+            sweep,
+            rate_withheld,
         }))
     }
 

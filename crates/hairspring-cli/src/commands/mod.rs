@@ -6,6 +6,7 @@ pub mod inspect;
 pub mod json_out;
 pub mod replay;
 pub mod serve;
+mod sweep_note;
 pub mod test;
 pub mod token;
 pub mod worker;

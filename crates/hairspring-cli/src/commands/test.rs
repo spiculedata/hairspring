@@ -1,8 +1,10 @@
+use super::sweep_note;
 use crate::cli::{Format, TestArgs};
 use crate::ctx::{CmdResult, Ctx};
 use crate::host::{self, HostFacts};
 use hairspring_engine::config::Budget;
 use hairspring_engine::format::{to_junit, to_sarif, to_text};
+use hairspring_engine::mode::RunMode;
 use hairspring_engine::report::{RunOutcome, RunStatus};
 use hairspring_service::StartRun;
 use hairspring_store::{random_seed, sha256_hex};
@@ -43,7 +45,15 @@ pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write)
         host::write_warnings(err, &HostFacts::probe())?;
     }
     let svc = ctx.service()?;
-    let seed = args.seed.unwrap_or_else(random_seed);
+    let (seed, requested_trials) = match args.seeds {
+        Some(range) => (range.start, Some(range.trials())),
+        None => (args.seed.unwrap_or_else(random_seed), args.trials),
+    };
+    let mode = if args.sweep {
+        RunMode::Sweep
+    } else {
+        RunMode::Search
+    };
     let text_mode = args.format == Format::Text;
     let mut results: Vec<(String, RunOutcome)> = Vec::new();
     let mut code = crate::EXIT_OK;
@@ -57,19 +67,41 @@ pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write)
             .ok_or_else(|| format!("unknown target `{name}`"))?;
         let budget = Budget {
             max_steps: args.budget_steps.unwrap_or(spec.budget.max_steps),
+            max_trials: requested_trials.unwrap_or(spec.budget.max_trials),
             wall_secs: args.budget_secs.unwrap_or(spec.budget.wall_secs),
-            ..spec.budget
         };
-        if text_mode {
-            writeln!(out, "hairspring: exploring {name} (seed {seed})")?;
+        // Trial n runs at seed + n. Past the largest seed that would wrap round to 0, which a range written as
+        // FIRST..END cannot say, so such a sweep is refused rather than printed as a range it did not run.
+        if mode.is_sweep()
+            && seed
+                .checked_add(budget.max_trials.saturating_sub(1))
+                .is_none()
+        {
+            return Err(format!(
+                "a sweep of {} trials from seed {seed} would pass the largest seed ({}); start lower",
+                budget.max_trials,
+                u64::MAX
+            )
+            .into());
         }
-        let detail = svc.run_sync(
+        if text_mode {
+            match mode {
+                RunMode::Search => writeln!(out, "hairspring: exploring {name} (seed {seed})")?,
+                RunMode::Sweep => writeln!(
+                    out,
+                    "hairspring: sweeping {name} (seeds {seed}..{})",
+                    u128::from(seed) + u128::from(budget.max_trials)
+                )?,
+            }
+        }
+        let detail = svc.run_sync_with_mode(
             &ctx.engine,
             &StartRun {
                 target: name.clone(),
                 seed: Some(seed),
                 budget: Some(budget),
             },
+            mode,
         )?;
         let outcome = svc.outcome(&detail.run.id)?.ok_or("run vanished")?;
         if let Some(f) = &outcome.failure {
@@ -87,6 +119,12 @@ pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write)
             }
         } else if text_mode {
             write!(out, "{}", to_text(name, &outcome))?;
+        }
+        if mode.is_sweep() && text_mode {
+            let completion = svc.completion_for(&detail.run)?;
+            if let Some(note) = sweep_note::note(&completion, outcome.trials, budget.max_trials) {
+                writeln!(out, "  {note}")?;
+            }
         }
         code = code.max(match outcome.status {
             RunStatus::Passed => crate::EXIT_OK,

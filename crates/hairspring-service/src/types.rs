@@ -1,6 +1,8 @@
 use crate::RunCompletion;
 use hairspring_engine::config::Budget;
+use hairspring_engine::mode::RunMode;
 use hairspring_engine::report::Step;
+use hairspring_engine::sweep::SweepSummary;
 use hairspring_store::{Contributor, RunRecord};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -17,6 +19,9 @@ pub(crate) struct JobPayload {
     pub target: String,
     pub seed: u64,
     pub budget: Option<Budget>,
+    /// Absent in jobs queued before sweeps existed, which are searches.
+    #[serde(default)]
+    pub mode: RunMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +55,16 @@ pub struct RunDetail {
     /// Property figures, for runs whose trials were stored.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub properties: Option<PropertySummary>,
+    /// How every trial of a finished sweep ended, counted by the server from the rows it holds. Absent for a search,
+    /// for a run still going, and for a sweep that ended short of its budget without reaching a limit: its counts are
+    /// those of whatever ran before it was stopped, so they are not offered as the figures of a sweep.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sweep: Option<SweepSummary>,
+    /// True when `sweep` is that of a sweep that ended in an error or was cancelled: it stopped when something
+    /// happened, not when its budget ran out, so optional stopping can bias its counts. A client that states a rate from
+    /// `sweep` must check this and the run's state.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub sweep_partial: bool,
 }
 
 /// Text that comes from the program under test. Anything that renders it, or hands it to a model, must treat it as
@@ -111,6 +126,10 @@ pub struct LeasedJob {
     pub target: String,
     pub seed: u64,
     pub budget: Option<Budget>,
+    /// Whether the run stops at its first confirmed failure or runs its whole budget. A worker that predates sweeps
+    /// does not read it and runs a search; the server notices that from the trial rows it receives.
+    #[serde(default)]
+    pub mode: RunMode,
 }
 
 /// Access level of a caller. Higher roles include every lower one.

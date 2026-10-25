@@ -2,7 +2,7 @@
 //!
 //! The wire form is JSON. Seeds travel as decimal strings (a scheduling seed can exceed 2^53, which JSON consumers
 //! cannot represent as a number), and the binary digest as lowercase hex.
-use hairspring_props::CatalogUpdate;
+use hairspring_props::{CatalogUpdate, DigestFlags, TrialDigest};
 use serde::{Deserialize, Serialize};
 
 /// How a trial ended, as far as the run is concerned.
@@ -58,21 +58,100 @@ pub struct TrialReport {
     pub output: Option<String>,
 }
 
+/// Longest reason kept for a trial, in characters.
+pub const MAX_REASON_CHARS: usize = 500;
+
+/// One line of at most [`MAX_REASON_CHARS`] characters: control characters become spaces, runs of spaces collapse.
+pub fn one_line(text: &str) -> String {
+    let spaced: String = text
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let collapsed = spaced.split_whitespace().collect::<Vec<_>>().join(" ");
+    collapsed.chars().take(MAX_REASON_CHARS).collect()
+}
+
+impl TrialReport {
+    /// The record of a trial from a backend that reports no guest events (the simulation and WebAssembly backends).
+    ///
+    /// Its digest is the excluded one, as for a process trial whose guest sent no events: the trial is stored for the
+    /// record and counts toward no property statistic. A timed-out trial is marked inconclusive in its digest, so the
+    /// digest and the verdict agree.
+    pub fn without_events(
+        seq: u64,
+        seed: u64,
+        verdict: ReportedVerdict,
+        reason: &str,
+        elapsed_ms: u64,
+    ) -> TrialReport {
+        let digest = TrialDigest {
+            flags: DigestFlags {
+                excluded: true,
+                inconclusive: verdict == ReportedVerdict::Inconclusive,
+                ..DigestFlags::default()
+            },
+            ..TrialDigest::default()
+        };
+        TrialReport {
+            seq,
+            seed,
+            verdict,
+            reason: one_line(reason),
+            exit_code: None,
+            signal: None,
+            behaviour_hash: None,
+            schedule_fp: None,
+            syscalls: 0,
+            work_ops: 0,
+            elapsed_ms,
+            catalog: Vec::new(),
+            digest: digest.encode(),
+            detail: None,
+            output: None,
+        }
+    }
+}
+
 /// A `u64` as a decimal string.
 pub mod decimal {
     use serde::{de, Deserialize, Deserializer, Serializer};
+
+    /// Plain digits only: no sign, no spaces, no exponent.
+    pub fn parse(text: &str) -> Result<u64, &'static str> {
+        const BAD: &str = "expected a decimal string";
+        if text.is_empty() || text.len() > 20 || !text.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(BAD);
+        }
+        text.parse().map_err(|_| BAD)
+    }
 
     pub fn serialize<S: Serializer>(v: &u64, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&v.to_string())
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
-        let text = String::deserialize(d)?;
-        // Only plain digits: no sign, no spaces, no exponent.
-        if text.is_empty() || text.len() > 20 || !text.bytes().all(|b| b.is_ascii_digit()) {
-            return Err(de::Error::custom("expected a decimal string"));
+        parse(&String::deserialize(d)?).map_err(de::Error::custom)
+    }
+}
+
+/// A list of `u64` as decimal strings.
+pub mod decimal_list {
+    use serde::ser::SerializeSeq;
+    use serde::{de, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &[u64], s: S) -> Result<S::Ok, S::Error> {
+        let mut seq = s.serialize_seq(Some(v.len()))?;
+        for n in v {
+            seq.serialize_element(&n.to_string())?;
         }
-        text.parse().map_err(de::Error::custom)
+        seq.end()
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u64>, D::Error> {
+        Vec::<String>::deserialize(d)?
+            .iter()
+            .map(|t| super::decimal::parse(t).map_err(de::Error::custom))
+            .collect()
     }
 }
 
@@ -134,6 +213,41 @@ mod tests {
         assert!(json.contains("\"digest\":\"0001abff\""), "{json}");
         let back: TrialReport = serde_json::from_str(&json).unwrap();
         assert_eq!(back, report());
+    }
+
+    #[test]
+    fn a_report_without_events_carries_a_digest_the_server_can_decode() {
+        let r = TrialReport::without_events(4, 99, ReportedVerdict::Violation, "boom\nline", 7);
+        let digest = TrialDigest::decode(&r.digest).unwrap();
+        assert!(digest.flags.excluded && digest.entries.is_empty());
+        assert!(!digest.flags.inconclusive);
+        assert_eq!((r.seq, r.seed, r.elapsed_ms), (4, 99, 7));
+        assert_eq!(r.reason, "boom line");
+        assert!(r.catalog.is_empty() && r.detail.is_none() && r.output.is_none());
+    }
+
+    #[test]
+    fn a_timed_out_report_without_events_is_marked_inconclusive_in_its_digest() {
+        let r = TrialReport::without_events(0, 1, ReportedVerdict::Inconclusive, "timeout", 1);
+        assert!(TrialDigest::decode(&r.digest).unwrap().flags.inconclusive);
+    }
+
+    #[test]
+    fn a_reason_is_one_line_and_bounded() {
+        assert_eq!(one_line("a\n\tb   c"), "a b c");
+        assert_eq!(one_line(&"x".repeat(900)).chars().count(), MAX_REASON_CHARS);
+    }
+
+    #[test]
+    fn a_list_of_seeds_round_trips_as_decimal_strings() {
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct Seeds(#[serde(with = "decimal_list")] Vec<u64>);
+        let seeds = Seeds(vec![1, u64::MAX]);
+        let json = serde_json::to_string(&seeds).unwrap();
+        assert_eq!(json, format!("[\"1\",\"{}\"]", u64::MAX));
+        assert_eq!(serde_json::from_str::<Seeds>(&json).unwrap(), seeds);
+        assert!(serde_json::from_str::<Seeds>("[5]").is_err());
+        assert!(serde_json::from_str::<Seeds>("[\"-5\"]").is_err());
     }
 
     #[test]

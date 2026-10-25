@@ -158,7 +158,7 @@ fn interval_text(f: &Figures) -> String {
 fn not_rated_line(counts: &RunCounts) -> Option<String> {
     let parts: Vec<String> = [
         (counts.inconclusive, "inconclusive"),
-        (counts.crashed, "crashed"),
+        (counts.crashed, "failed in the host"),
     ]
     .iter()
     .filter(|(n, _)| *n > 0)

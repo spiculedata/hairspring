@@ -102,6 +102,78 @@ Opening a version 1 database migrates it in place under one transaction (SQLite)
 old runs read back with zero counts. **Back up the database before upgrading: there is no downgrade from version 2
 to version 1**, and an older release refuses a version 2 database.
 
+## Sweep mode
+
+A run has a mode. `search` (the default, and the only behaviour before sweeps) ends at its first confirmed failure, so
+its trial count was decided by its outcome and it has no rate. `sweep` runs every trial of its budget, continues after
+a violation and stores every trial, so a rate can be stated for the trials it ran. The mode travels with the job
+(`start_run_with_mode`, the `mode` field of `POST /api/runs` and of the MCP `start_run`, `hairspring test --sweep`), is
+read back from the stored job, and is absent (so a search) in jobs queued before sweeps existed. It needs no schema
+change: the trial rows added in version 2 already hold every verdict.
+
+- **Trials.** The same unit as in search (one seed on the process and WebAssembly backends, one exploration round on a
+  simulation target), run in the same batches of `parallelism`, judged in seed order, bounded by the trial budget, the
+  wall-clock budget and, for simulations, the step budget. The progress callback is called after every batch and a
+  cancel keeps the trials judged so far.
+- **Rows.** One row per trial: seed, verdict (`pass`, `violation`, `inconclusive` for a timeout or a trial cut short by
+  the wall-clock budget, `unusable`, `infra`), reason, exit status, behaviour hash, schedule fingerprint, counters and
+  digest. The simulation and WebAssembly backends have no guest events, so their rows carry the excluded digest, as a
+  process trial whose guest sent no events does.
+- **Confirmation.** A violating trial is confirmed by re-running its seed, as in search, but the sweep goes on. Only the
+  first ten violations are confirmed (`MAX_CONFIRMED_VIOLATIONS`): a flaky target would otherwise spend its budget on
+  reruns. A confirmation is held to the sweep's wall-clock budget and asks the progress callback first, so a cancel is
+  noticed before it, not only between batches. The row's reason ends with `same-output reruns k/n` (reruns with the
+  same behaviour hash and failing properties), or `not confirmed: ...` (limit reached, out of budget, cancelled). A
+  violation counts toward the rate whether or not its reruns matched. The check is before a confirmation, not between
+  its reruns, so a sweep overruns its wall-clock budget by at most one confirmation (`repro_runs` reruns of up to a
+  trial's timeout each; a test pins the bound); the note says what they showed. Only the lowest failing seed gets a
+  report (trace and replayable bundle), which is also what the run's failure row holds.
+- **Not rated.** The rate is violations out of passes and violations. Timeouts, unusable trials and infrastructure
+  failures (labelled "failed in the host") are listed apart, are never in a denominator and are never described as
+  passes. A host failure is an `infra` row and the sweep goes on, but three in a row end it as an error (the host is
+  broken), keeping the rows. A sweep that rated nothing is an error, not a pass. A sweep that ends in an error
+  (cancelled, or the host kept failing) labels its figures `partial`: it stopped when something happened, so optional
+  stopping can bias them.
+- **Report.** `RunOutcome::sweep` holds the counts (`trials` is always their sum) and up to ten failing seeds. The text
+  report prints the counts, the failing seeds and the rate lines of the merged report code (Wilson interval, or the
+  upper bound for zero violations, and the sensitivity line when trials were left out). A stored run's summary is counted
+  by the server from the verdicts and seeds of its rows, never taken from a worker.
+- **What the server decides.** The stored `stopped_at_first_failure` flag is false for a sweep, from the run's mode and
+  not from the outcome, so its properties have rates. A failed sweep that holds fewer rows than its budget without
+  having reached its wall-clock or step limit (what a worker that predates sweeps produces: it ignores the mode and
+  stops at the first failure) is marked `ingest_incomplete`, like a short pass; for a failed sweep only the server's clock
+  counts as a limit, never the worker's own step count. Such a run (`EndedEarly` in the completion label) has no
+  `sweep` summary, and its report states counts only, not a rate, whatever its status (`RunOutcome::rate_withheld`,
+  set when the server rebuilds the stored run; not stored). The same holds for a run labelled `DigestAllowanceUsedUp`
+  (any stand-in gives that label) that also holds fewer rows than its budget: it stopped short with no limit the server
+  can verify, so its summary is withheld too. Only a run that ran its whole budget and is incomplete solely because the
+  server replaced digests by stand-ins keeps its summary and its rate, since the summary reads verdicts and seeds. A
+  time-limited sweep that also had stand-ins is withheld as well (the label cannot tell the two apart). "Fewer rows
+  than its budget" is counted from the rows the server holds, and the report's trial and inconclusive counts are too:
+  the trial count a worker puts in its outcome (stored as `run.trials`, for display) decides nothing about a sweep. For
+  a withheld sweep the per-property cells in the report (for example `PASS always 'c.id'  0/1 ... exact one-sided 95%
+  upper bound 95.00%`) are property-level figures over the trials that reported that id, not the sweep's rate.
+  `sweep_partial` on the run marks a summary from a sweep that ended in an error or
+  was cancelled. A worker's record numbered at or past the run's trial budget is refused, and so
+  is a sweep record whose seed is not the run's first seed plus its number (wrapping), so a worker cannot name an
+  arbitrary failing seed. A sweep summary that contradicts itself or the trial count is refused, and the worker's
+  summary is dropped. The server serves its own summary as the `sweep` field of `GET /api/runs/{id}` and the MCP
+  `get_run`, once the run is over.
+- **Memory.** A sweep keeps a record per trial until it finishes, so its in-memory log is bounded
+  (`HermitSettings::sweep_kept_bytes` and `sweep_digest_bytes`). Kept detail and output stop at 64 MiB: the later rows
+  stay and leave those parts out. Digests are never altered or left out of a row (they carry the property statistics, and
+  a catalog update must reach the server before a digest refers to it). Instead, a sweep whose digests reach 64 MiB, the
+  server's own per-run allowance (`MAX_DIGEST_BYTES_PER_RUN`; a test keeps the two equal), ends after the batch in
+  progress, so it holds at most one batch more. It then holds fewer rows than its budget without having run out of time,
+  so the server marks it incomplete, withholds its summary and rate, and it makes no must-hit claim. Its label does not
+  name the memory limit: it reads "ended early", or "digest allowance used up" when the server also used stand-ins,
+  whichever the case, and the summary is withheld either way. The worker cannot see the server's configurable allowance (`digest_bytes_per_run`): a server
+  configured below the default applies its stand-ins as described below, and a worker's `sweep_digest_bytes` should be
+  lowered to match if its memory matters more than the stand-ins.
+- **Simulation rounds.** A simulation trial is one exploration round of up to 100,000 steps, and the rounds share the
+  step budget, so a default budget (200,000 steps) runs two rounds. Raise the step budget (`--budget-steps`,
+  `max_steps`) to run more.
+
 ## Trial trees (schema version 3)
 
 Version 3 adds four tables and changes nothing in the existing ones (`runs` and `trials` keep their columns and rows).

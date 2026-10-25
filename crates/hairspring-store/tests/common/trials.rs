@@ -620,6 +620,8 @@ fn strip_rows_carry_the_verdict_and_flags_in_sequence_order(s: &dyn Store) {
     unrated.rated = false;
     let mut failed = trial(4);
     failed.verdict = TrialVerdict::Violation;
+    // A seed above 2^63 is stored as its bit pattern and must read back as the same number.
+    failed.seed = u64::MAX - 5;
     let trials = vec![trial(0), degraded, unreported, unrated, failed];
     s.ingest_trials(
         &job.id,
@@ -643,6 +645,11 @@ fn strip_rows_carry_the_verdict_and_flags_in_sequence_order(s: &dyn Store) {
             (3, TrialVerdict::Pass, false, false, false),
             (4, TrialVerdict::Violation, true, false, false),
         ]
+    );
+    assert_eq!(
+        rows.iter().map(|t| t.seed).collect::<Vec<_>>(),
+        vec![100, 101, 102, 103, u64::MAX - 5],
+        "a strip row names its trial's seed"
     );
     let after = s.list_trial_strip_rows(&r.id, Some(2), 2).unwrap();
     assert_eq!(after.iter().map(|t| t.seq).collect::<Vec<_>>(), vec![3, 4]);

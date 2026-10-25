@@ -65,7 +65,7 @@ impl WasmBackend {
         Ok((bytes, hash))
     }
 
-    fn vm_config(&self, fuel: u64, forced_only: bool) -> VmConfig {
+    pub(crate) fn vm_config(&self, fuel: u64, forced_only: bool) -> VmConfig {
         VmConfig {
             fuel: fuel.max(MIN_FUEL),
             max_memory_bytes: self.settings.max_memory_bytes,
@@ -83,7 +83,7 @@ fn module_hash(bytes: &[u8]) -> String {
 }
 
 /// What counts as the "same failure" while shrinking, so a minimal trace cannot drift into a different bug.
-fn failure_key(r: &RunResult) -> Option<String> {
+pub(crate) fn failure_key(r: &RunResult) -> Option<String> {
     match r {
         RunResult::Exit(0) => None,
         RunResult::Exit(n) => Some(format!("exit:{n}")),
@@ -94,7 +94,7 @@ fn failure_key(r: &RunResult) -> Option<String> {
     }
 }
 
-fn describe(r: &RunResult, fuel: u64) -> String {
+pub(crate) fn describe(r: &RunResult, fuel: u64) -> String {
     match r {
         RunResult::Exit(n) => format!("exit code {n}"),
         RunResult::Violation(m) => m.clone(),
@@ -219,6 +219,81 @@ fn config_error(spec: &TargetSpec) -> EngineError {
     EngineError::BackendUnavailable(spec.kind.name().to_string())
 }
 
+/// A module that was read, compiled and found to export `run`, with what a failure report needs to name it.
+pub(crate) struct Loaded<'a> {
+    pub module: CompiledModule,
+    pub hash: String,
+    pub spec: &'a TargetSpec,
+    pub req: &'a RunRequest,
+    pub fuel: u64,
+}
+
+/// A trial that failed, with the machine it failed on.
+pub(crate) struct Failing<'a> {
+    pub loaded: &'a Loaded<'a>,
+    pub seed: u64,
+    pub key: String,
+    pub result: RunResult,
+    pub vm: WasmVm,
+    pub wall_left: Duration,
+}
+
+impl WasmBackend {
+    /// The report of a failing trial: its decisions shrunk to the fewest that fail the same way, replayed, and bundled.
+    pub(crate) fn failure_report(&self, failing: Failing<'_>) -> FailureReport {
+        let Failing {
+            loaded,
+            seed,
+            key,
+            result,
+            vm,
+            wall_left,
+        } = failing;
+        let (module, fuel) = (&loaded.module, loaded.fuel);
+        let original = vm.choices();
+        let cfg = self.vm_config(fuel, false);
+        let forced = VmConfig {
+            forced_only: true,
+            ..cfg.clone()
+        };
+        let deadline = Instant::now() + SHRINK_WALL.min(wall_left);
+        let mut minimal = shrink(module, seed, &original, &key, &cfg, deadline);
+        let same = |r: &RunResult| failure_key(r).as_deref() == Some(key.as_str());
+        let mut rerun = run_forced(module, seed, &minimal, forced.clone(), REPLAY_WALL);
+        // The shrunk trace must still fail the same way; otherwise fall back to the full one.
+        if !rerun.as_ref().is_some_and(|(r, _)| same(r)) {
+            minimal = original.clone();
+            rerun = run_forced(module, seed, &minimal, forced, REPLAY_WALL);
+        }
+        let (final_result, final_vm) = match rerun {
+            Some((r, v)) if same(&r) => (r, v),
+            // Not even the recorded decisions replay: report the observed run itself.
+            _ => (result.clone(), vm),
+        };
+        let steps = steps_for(&final_vm, &final_result, fuel);
+        let bundle = Bundle::new(seed, BUILD, minimal.clone())
+            .with_target(loaded.req.target.clone())
+            .with_backend("wasm")
+            .with_param("module_hash", loaded.hash.clone())
+            .with_param("fuel", fuel.to_string())
+            .with_param("failure_key", key.clone());
+        FailureReport {
+            target: loaded.spec.name.clone(),
+            backend: "wasm".to_string(),
+            message: format!(
+                "{}; shrunk from {} to {} choices",
+                describe(&final_result, fuel),
+                original.len(),
+                minimal.len()
+            ),
+            original_len: original.len(),
+            shrunk_len: minimal.len(),
+            steps,
+            bundle: bundle.encode(),
+        }
+    }
+}
+
 impl Backend for WasmBackend {
     fn name(&self) -> &'static str {
         "wasm"
@@ -251,10 +326,21 @@ impl Backend for WasmBackend {
                 "module must export a function named `run`",
             ));
         }
+        let fuel = budget.max_steps.max(MIN_FUEL);
+        let loaded = Loaded {
+            module,
+            hash,
+            spec,
+            req,
+            fuel,
+        };
+        if req.mode.is_sweep() {
+            return Ok(crate::sweep::run(self, &loaded, budget, progress));
+        }
+        let module = &loaded.module;
         let started = Instant::now();
         let wall = Duration::from_secs(budget.wall_secs);
         let trials = budget.max_trials.max(1);
-        let fuel = budget.max_steps.max(MIN_FUEL);
         for i in 0..trials {
             if i > 0 && started.elapsed() >= wall {
                 return Ok(RunOutcome::passed(
@@ -281,47 +367,14 @@ impl Backend for WasmBackend {
                 ));
             }
             if let Some(key) = failure_key(&result) {
-                let original = vm.choices();
-                let cfg = self.vm_config(fuel, false);
-                let forced = VmConfig {
-                    forced_only: true,
-                    ..cfg.clone()
-                };
-                let deadline = Instant::now() + SHRINK_WALL.min(wall_left);
-                let mut minimal = shrink(&module, seed, &original, &key, &cfg, deadline);
-                let same = |r: &RunResult| failure_key(r).as_deref() == Some(key.as_str());
-                let mut rerun = run_forced(&module, seed, &minimal, forced.clone(), REPLAY_WALL);
-                // The shrunk trace must still fail the same way; otherwise fall back to the full one.
-                if !rerun.as_ref().is_some_and(|(r, _)| same(r)) {
-                    minimal = original.clone();
-                    rerun = run_forced(&module, seed, &minimal, forced, REPLAY_WALL);
-                }
-                let (final_result, final_vm) = match rerun {
-                    Some((r, v)) if same(&r) => (r, v),
-                    // Not even the recorded decisions replay: report the observed run itself.
-                    _ => (result.clone(), vm),
-                };
-                let steps = steps_for(&final_vm, &final_result, fuel);
-                let bundle = Bundle::new(seed, BUILD, minimal.clone())
-                    .with_target(req.target.clone())
-                    .with_backend("wasm")
-                    .with_param("module_hash", hash.clone())
-                    .with_param("fuel", fuel.to_string())
-                    .with_param("failure_key", key.clone());
-                let failure = FailureReport {
-                    target: spec.name.clone(),
-                    backend: "wasm".to_string(),
-                    message: format!(
-                        "{}; shrunk from {} to {} choices",
-                        describe(&final_result, fuel),
-                        original.len(),
-                        minimal.len()
-                    ),
-                    original_len: original.len(),
-                    shrunk_len: minimal.len(),
-                    steps,
-                    bundle: bundle.encode(),
-                };
+                let failure = self.failure_report(Failing {
+                    loaded: &loaded,
+                    seed,
+                    key,
+                    result,
+                    vm,
+                    wall_left,
+                });
                 return Ok(RunOutcome::failed(
                     i + 1,
                     i + 1,

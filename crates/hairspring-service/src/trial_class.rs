@@ -132,6 +132,7 @@ mod tests {
                 };
                 let strip = hairspring_store::TrialStripRow {
                     seq: 0,
+                    seed: 0,
                     verdict,
                     rated,
                     degraded,

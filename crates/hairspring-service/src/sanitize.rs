@@ -141,6 +141,15 @@ pub fn outcome(outcome: &RunOutcome, run_target: &str) -> Result<RunOutcome, Ser
                 .to_string(),
         ));
     }
+    // A sweep's own summary is not read (the server counts the rows it holds), but a worker that sends one that
+    // contradicts itself or its own trial count is sending data that cannot be right, so the result is refused.
+    if let Some(s) = &outcome.sweep {
+        if !s.is_consistent() || s.trials != outcome.trials {
+            return Err(invalid(
+                "the sweep summary contradicts itself or the number of trials",
+            ));
+        }
+    }
     if let Some(e) = &outcome.error {
         bounded(e, MAX_MESSAGE_CHARS, "error text")?;
     }
@@ -157,6 +166,8 @@ pub fn outcome(outcome: &RunOutcome, run_target: &str) -> Result<RunOutcome, Ser
         // A worker's own property statistics are never read: the server folds the per-trial digests it stored.
         // Trial records arrive through their own checked path, not inside an outcome.
         trial_log: Vec::new(),
+        // The server's own summary is counted from the stored rows when a run is read.
+        sweep: None,
         ..outcome.clone().without_properties()
     })
 }
