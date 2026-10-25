@@ -9,9 +9,9 @@ a v2.
 
 Status: the protocol and the parser are done; the C SDK is in [`sdks/c`](../sdks/c) (see [c-sdk.md](c-sdk.md)), the Go
 SDK in [`sdks/go`](../sdks/go), the Rust SDK in [`sdks/rust`](../sdks/rust) (see [rust-sdk.md](rust-sdk.md)) and the
-Python SDK in [`sdks/python`](../sdks/python) (see [python-sdk.md](python-sdk.md)) and the Java SDK in
-[`sdks/java`](../sdks/java) (see [java-sdk.md](java-sdk.md)). The wire format is frozen once the review findings are
-closed.
+Python SDK in [`sdks/python`](../sdks/python) (see [python-sdk.md](python-sdk.md)), the Java SDK in
+[`sdks/java`](../sdks/java) (see [java-sdk.md](java-sdk.md)) and the .NET SDK in [`sdks/dotnet`](../sdks/dotnet) (see
+[dotnet-sdk.md](dotnet-sdk.md)). The wire format is frozen once the review findings are closed.
 
 ## Transport
 

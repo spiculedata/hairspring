@@ -3,6 +3,7 @@
 #
 #   make test     build and self-check C (with $(CC)), C++ (clang++ unless CXX is given), Go and Python
 #   make test-java  the Java probe and the Java fixture (needs a JDK 21; not part of `make test`)
+#   make test-dotnet  the .NET probe and the .NET fixture (needs the .NET 10 SDK; not part of `make test`)
 #   make clean
 
 .PHONY: test test-scripts test-c test-cpp test-go test-python test-java test-dotnet clean
@@ -29,9 +30,9 @@ test-python:
 test-java:
 	$(MAKE) -C java test flags at-test
 
-# The BCL-only .NET probe: unit checks, build, native tests.
+# The BCL-only .NET probe (unit checks, build, native tests) and the .NET fixture with its SDK.
 test-dotnet:
-	$(MAKE) -C dotnet test
+	$(MAKE) -C dotnet test at-test
 
 clean:
 	$(MAKE) -C c clean

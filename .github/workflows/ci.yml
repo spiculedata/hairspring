@@ -182,6 +182,29 @@ jobs:
         env:
           HS_REQUIRE_JAVA: "1"
 
+  dotnet-sdk:
+    name: .NET SDK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # Any .NET 10 SDK: the unit tests and the sample programs do not check a version beyond the major one.
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Version
+        run: dotnet --info
+      # Base class library only, no framework: the self-test, and the sample programs run as real processes.
+      - name: Test
+        run: make -C sdks/dotnet test
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # With HS_REQUIRE_DOTNET set, a missing or too old .NET SDK fails these tests instead of skipping them.
+      - name: Conformance tests against the .NET SDK
+        run: cargo test -p hairspring-props --test dotnet_sdk
+        env:
+          HS_REQUIRE_DOTNET: "1"
+
   language-fixtures:
     name: Language fixtures (${{ matrix.name }})
     runs-on: ubuntu-24.04
@@ -197,6 +220,7 @@ jobs:
           - { name: Go, dir: go, args: "" }
           - { name: Python, dir: python, args: "" }
           - { name: Java, dir: java, args: "" }
+          - { name: .NET, dir: dotnet, args: "" }
     env:
       GOTOOLCHAIN: local
       GOPROXY: "off"
@@ -219,6 +243,11 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
+      # Any .NET 10 SDK: the self-test and native tests do not check a version (the pinned build is the manual record's job).
+      - uses: actions/setup-dotnet@v4
+        if: matrix.dir == 'dotnet'
+        with:
+          dotnet-version: 10.0.x
       # The check scripts, against a fake program (once, not per compiler).
       - name: Script tests
         if: matrix.name == 'C gcc'
@@ -226,7 +255,7 @@ jobs:
       # Native checks only: one program per language. Its buggy mode must lose an update at least once in 50 runs,
       # its fixed mode never, and its wide mode must follow the same output contract.
       - name: Build and self-check
-        run: make -C examples/language-fixtures/${{ matrix.dir }} test ${{ matrix.dir == 'java' && 'flags at-test' || '' }} ${{ matrix.args }}
+        run: make -C examples/language-fixtures/${{ matrix.dir }} test ${{ (matrix.dir == 'java' && 'flags at-test') || (matrix.dir == 'dotnet' && 'at-test') || '' }} ${{ matrix.args }}
       # Go only: the race detector (needs cgo) finds no data race in the fixture.
       - name: Race detector
         if: matrix.dir == 'go'
@@ -239,7 +268,8 @@ jobs:
   # the rust-probe variant covers probe-rust, the std-only probe program; the java-probe variant covers lang-at.jar, the
   # JDK-only probe program; the java variant covers lang-at.jar of the Java fixture (the Java SDK shaded in); the
   # dotnet-probe variant covers probe-dotnet (LangAtProbe.dll with its runtimeconfig.json and deps.json), built with the
-  # pinned .NET SDK.
+  # pinned .NET SDK; the dotnet variant covers fixture-dotnet (LangAt.dll with its json files and Hairspring.dll, the .NET SDK),
+  # built with the same SDK and run on the pinned runtime.
   fixture-build-records:
     name: Fixture build record (${{ matrix.variant }})
     if: github.event_name == 'workflow_dispatch'
@@ -248,7 +278,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [c, cxx-clang, cxx-gxx, go, python, rust, rust-probe, java-probe, java, dotnet-probe]
+        variant: [c, cxx-clang, cxx-gxx, go, python, rust, rust-probe, java-probe, java, dotnet-probe, dotnet]
     env:
       GOTOOLCHAIN: local
       GOPROXY: "off"
@@ -264,9 +294,9 @@ jobs:
         if: matrix.variant == 'python'
         with:
           python-version: "3.12"
-      # Python and Java run the SDK's conformance tests against the reference parser, which needs cargo.
+      # Python, Java and .NET run the SDK's conformance tests against the reference parser, which needs cargo.
       - uses: dtolnay/rust-toolchain@stable
-        if: matrix.variant == 'python' || matrix.variant == 'java'
+        if: matrix.variant == 'python' || matrix.variant == 'java' || matrix.variant == 'dotnet'
       # The pinned Rust toolchain and the static musl target of the artifact.
       - uses: dtolnay/rust-toolchain@1.99.1
         if: matrix.variant == 'rust' || matrix.variant == 'rust-probe'
@@ -280,14 +310,14 @@ jobs:
           java-version: "21.0.12+101.0.LTS"
       # The .NET SDK that ships runtime 10.0.13, so the record's version checks pass.
       - uses: actions/setup-dotnet@v4
-        if: matrix.variant == 'dotnet-probe'
+        if: matrix.variant == 'dotnet-probe' || matrix.variant == 'dotnet'
         with:
           dotnet-version: 10.0.402
       - name: Install the toolchains
-        if: matrix.variant != 'go' && matrix.variant != 'python' && matrix.variant != 'rust' && matrix.variant != 'rust-probe' && matrix.variant != 'java-probe' && matrix.variant != 'java' && matrix.variant != 'dotnet-probe'
+        if: matrix.variant != 'go' && matrix.variant != 'python' && matrix.variant != 'rust' && matrix.variant != 'rust-probe' && matrix.variant != 'java-probe' && matrix.variant != 'java' && matrix.variant != 'dotnet-probe' && matrix.variant != 'dotnet'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-13 g++-13 clang-18 strace binutils
       - name: Install strace
-        if: matrix.variant == 'go' || matrix.variant == 'python' || matrix.variant == 'rust' || matrix.variant == 'rust-probe' || matrix.variant == 'java-probe' || matrix.variant == 'java' || matrix.variant == 'dotnet-probe'
+        if: matrix.variant == 'go' || matrix.variant == 'python' || matrix.variant == 'rust' || matrix.variant == 'rust-probe' || matrix.variant == 'java-probe' || matrix.variant == 'java' || matrix.variant == 'dotnet-probe' || matrix.variant == 'dotnet'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq strace binutils file unzip
       # Python has no compiler: the record stages the package (fixture, probe and SDK) twice and compares file hashes.
       - name: Build record (Python)
@@ -324,6 +354,13 @@ jobs:
           PRODUCER: GitHub Actions ubuntu-24.04 (native x86-64)
           ARTIFACT_DIR: ${{ runner.temp }}/artifact
         run: IMAGE_DIGEST="runner image $ImageOS $ImageVersion (no digest available)" sh examples/language-fixtures/scripts/build-record-probe-dotnet.sh "$RUNNER_TEMP/record-dotnet-probe.md"
+      # fixture-dotnet: LangAt.dll with the .NET SDK beside it, published twice from two copies of the sources.
+      - name: Build record (.NET)
+        if: matrix.variant == 'dotnet'
+        env:
+          PRODUCER: GitHub Actions ubuntu-24.04 (native x86-64)
+          ARTIFACT_DIR: ${{ runner.temp }}/artifact
+        run: IMAGE_DIGEST="runner image $ImageOS $ImageVersion (no digest available)" sh examples/language-fixtures/scripts/build-record-dotnet.sh "$RUNNER_TEMP/record-dotnet.md"
       # at-rust, built twice for the static musl target.
       - name: Build record (Rust)
         if: matrix.variant == 'rust'
@@ -332,7 +369,7 @@ jobs:
           ARTIFACT_DIR: ${{ runner.temp }}/artifact
         run: IMAGE_DIGEST="runner image $ImageOS $ImageVersion (no digest available)" sh examples/language-fixtures/scripts/build-record-rust.sh "$RUNNER_TEMP/record-rust.md"
       - name: Build record
-        if: matrix.variant != 'python' && matrix.variant != 'rust' && matrix.variant != 'rust-probe' && matrix.variant != 'java-probe' && matrix.variant != 'java' && matrix.variant != 'dotnet-probe'
+        if: matrix.variant != 'python' && matrix.variant != 'rust' && matrix.variant != 'rust-probe' && matrix.variant != 'java-probe' && matrix.variant != 'java' && matrix.variant != 'dotnet-probe' && matrix.variant != 'dotnet'
         env:
           PRODUCER: GitHub Actions ubuntu-24.04 (native x86-64)
           ARTIFACT_DIR: ${{ runner.temp }}/artifact

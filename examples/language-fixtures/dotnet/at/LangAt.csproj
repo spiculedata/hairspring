@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The .NET lost-update fixture: LangAt.dll with its runtimeconfig.json and deps.json, and Hairspring.dll beside it (the SDK,
+       built from sdks/dotnet). Framework-dependent: it runs as `dotnet LangAt.dll <mode>` on a .NET 10 runtime. The settings
+       below keep the build reproducible: nothing in the dlls depends on the time, the build directory or the commit. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>LangAt</AssemblyName>
+    <RootNamespace>LangAt</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <UseAppHost>false</UseAppHost>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Reproducibility">
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <DebugType>none</DebugType>
+    <Version>1.0.0</Version>
+    <InformationalVersion>1.0.0</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <EnableSourceLink>false</EnableSourceLink>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- The SDK's call-site methods take [CallerFilePath], so the compiler writes the full path of each source file into LangAt.dll.
+         Mapping the repository root to /_/ keeps the build directory out of the output, with or without a git checkout. -->
+    <PathMap>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../../../'))=/_/</PathMap>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The self-test project below at/test holds its own sources; they are not part of the program. -->
+    <Compile Remove="test/**" />
+    <ProjectReference Include="../../../../sdks/dotnet/src/Hairspring.csproj" />
+  </ItemGroup>
+
+</Project>

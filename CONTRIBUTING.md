@@ -37,6 +37,12 @@ reference parser are `cargo test -p hairspring-props --test python_sdk` (they sk
 Python 3.12+; `HS_REQUIRE_PYTHON=1` makes that an error, `HS_PYTHON` names the interpreter), and the lost-update
 fixture is checked with `make -C examples/language-fixtures/python test`.
 
+The .NET SDK (`sdks/dotnet`, the .NET 10 SDK, base class library only) has its own tests: `make -C sdks/dotnet test` runs the
+self-test and the sample programs as real processes. Its conformance tests against the reference parser are
+`cargo test -p hairspring-props --test dotnet_sdk` (they skip with a notice when there is no .NET SDK 10 or newer;
+`HS_REQUIRE_DOTNET=1` makes that an error, `HS_DOTNET` names the `dotnet` command), and the lost-update fixture is checked with
+`make -C examples/language-fixtures/dotnet at-test`.
+
 PostgreSQL tests are skipped unless `HAIRSPRING_TEST_PG_URL` is set. Besides the store conformance suite, the
 service and CLI tests also run against PostgreSQL when it is set:
 
