@@ -63,7 +63,7 @@ internal static class FmtTests
             Check.Equal("\"abc\"", Fmt.JsonText("abcdef", 3));
             Check.Equal("\"???\"", Fmt.JsonText("\u00e9\u00e9", 3));
         });
-        s.Add("fmt: free text stops at a NUL", () => Check.Equal("\"ab\"", Fmt.JsonText("ab\0cd", Fmt.MsgMax)));
+        s.Add("fmt: a NUL in free text is sent as a question mark, not as the end of the text", () => Check.Equal("\"ab?cd\"", Fmt.JsonText("ab\0cd", Fmt.MsgMax)));
         s.Add("fmt: a lone surrogate is masked, not an error", () =>
         {
             var json = Fmt.JsonText("a\ud800b", Fmt.MsgMax);

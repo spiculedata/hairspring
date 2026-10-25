@@ -106,6 +106,17 @@ internal static class RecorderRuntimeTests
             Check.Yes(line.EndsWith(",\"key_stable\":true }\n", StringComparison.Ordinal), line);
             Check.Yes(AssertFor(sink, "x").Contains("\"thread\":\"worker-3\"", StringComparison.Ordinal), "the witness names it too");
         });
+        s.Add("recorder: a refused NameThread call takes no slot", () =>
+        {
+            var sink = new ListSink();
+            var r = Make(sink);
+            Check.Raises<ArgumentException>(() => r.NameThread("", 0));
+            Check.Raises<ArgumentOutOfRangeException>(() => r.NameThread("a", -1));
+            Record(r, Kind.Reachable, true, "x", "m");
+            r.Report(EndReason.Exit, null);
+            Check.Yes(AssertFor(sink, "x").Contains("\"thread\":\"t#1\"", StringComparison.Ordinal), AssertFor(sink, "x"));
+            Check.Equal(1, sink.OfKind("thread").Count);
+        });
         s.Add("recorder: work counts per thread and is reported as one total", () =>
         {
             var sink = new ListSink();
@@ -176,6 +187,27 @@ internal static class RecorderRuntimeTests
             Check.Yes(hook.Join(TimeSpan.FromSeconds(2)), "the hook returned promptly once the report was done"); // woken by the writer, not by the 5 second bound
             explicitReport.Join();
             Check.Equal(1, sink.Inner.OfKind("end").Count);
+        });
+        s.Add("recorder: a crash report also waits for a report another thread is still writing", () =>
+        {
+            var sink = new BlockingSink();
+            var r = Make(sink);
+            Record(r, Kind.Reachable, true, "x", "m");
+            var explicitReport = new Thread(() => r.Report(EndReason.Explicit, null));
+            explicitReport.Start();
+            Check.Yes(sink.Entered.Wait(Blocked), "the writer started");
+            var returned = false;
+            var crash = new Thread(() =>
+            {
+                r.Report(EndReason.Signal, 6);
+                Volatile.Write(ref returned, true);
+            });
+            crash.Start();
+            Thread.Sleep(300);
+            Check.No(Volatile.Read(ref returned), "the crash report returned while the report was half written");
+            sink.Release.Set();
+            Check.Yes(crash.Join(TimeSpan.FromSeconds(2)), "returned once the report was done");
+            explicitReport.Join();
         });
         s.Add("recorder: the report is written once and later evaluations are not reported", () =>
         {

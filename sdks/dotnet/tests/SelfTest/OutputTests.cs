@@ -278,6 +278,16 @@ internal static class OutputTests
                 Directory.Delete(dir, true);
             }
         });
+        s.Add("stderr: a file system that cannot say what descriptor 2 is does not silence the report", () =>
+        {
+            var (read, write) = Posix.Pipe();
+            var sink = StderrSink.Open(write, _ => new StatResult(null, 1)); // EPERM, as a filtered statx answers
+            Check.Yes(sink.WriteLine(Bytes("a\n")), "a");
+            Check.Equal("a\n", Posix.ReadSome(read));
+            sink.Close();
+            Posix.Close(read);
+            Posix.Close(write);
+        });
         s.Add("stderr: a descriptor that was never open writes nothing and does not throw", () =>
         {
             var (read, write) = Posix.Pipe();

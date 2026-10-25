@@ -39,6 +39,26 @@ internal static class LinesTests
                 "\"loc\":{\"file\":\"Sample.cs\",\"line\":31}}\n",
                 Text(Lines.Catalog(Proc(), row)));
         });
+        s.Add("lines: numbers in a line do not depend on the culture, and a negative line number is sent as 0", () =>
+        {
+            var saved = System.Globalization.CultureInfo.CurrentCulture;
+            try
+            {
+                System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("sv-SE");
+                var line = Text(Lines.Catalog(Proc(), new Rows.CatalogRow("x", Kind.Always, "m", "F.cs", -5)));
+                Check.Yes(line.Contains("\"line\":0}", System.StringComparison.Ordinal), line);
+                Check.Yes(Text(Lines.End(Proc(), EndReason.Exit, 0, 1, 1)).Contains("\"sites\":7,", System.StringComparison.Ordinal), "sites");
+            }
+            finally
+            {
+                System.Globalization.CultureInfo.CurrentCulture = saved;
+            }
+        });
+        s.Add("lines: hits stop at the largest value instead of wrapping", () =>
+        {
+            var row = new Rows.AssertRow("a", Kind.Always, ulong.MaxValue, 5, null, null);
+            Check.Yes(Text(Lines.AssertLine(Proc(), row)).Contains("\"hits\":18446744073709551615,", System.StringComparison.Ordinal), "hits");
+        });
         s.Add("lines: must_hit is false for unreachable and always_or_unreachable", () =>
         {
             foreach (var kind in new[] { Kind.Unreachable, Kind.AlwaysOrUnreachable })
