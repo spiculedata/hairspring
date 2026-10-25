@@ -237,8 +237,9 @@ fn verify_checks_seq(tx: &mut Transaction<'_>) -> Result<()> {
     }
     Err(StoreError::Backend(
         "database schema version 5 is incomplete: failure_checks has no `seq` column (it was created by an earlier draft of version 5). \
-         It holds only stored confirmation checks: run `DROP TABLE failure_checks` in this schema and open the database again, \
-         or reset the development database"
+         It holds only stored confirmation checks. In this schema run \
+         `DROP TABLE failure_checks; UPDATE schema_version SET version = 4;` and open the database again: it migrates back to version 5. \
+         Or reset the development database"
             .to_string(),
     ))
 }

@@ -284,7 +284,7 @@ fn a_version_four_schema_still_downgrades_to_two() {
 }
 
 #[test]
-fn a_current_schema_whose_checks_table_predates_the_seq_column_is_refused_with_the_fix() {
+fn the_advised_repair_of_a_schema_without_the_seq_column_works() {
     let Some(url) = url() else { return };
     let schema = new_schema("v5q");
     drop(PgStore::connect_in_schema(&url, &schema, 1).unwrap());
@@ -301,8 +301,62 @@ fn a_current_schema_whose_checks_table_predates_the_seq_column_is_refused_with_t
         text.contains("seq") && text.contains("failure_checks"),
         "{text}"
     );
-    assert!(
-        text.contains("drop") || text.contains("DROP"),
-        "says how to recreate it: {text}"
+    // The message gives the SQL; run exactly that in the schema.
+    let advised = "DROP TABLE failure_checks; UPDATE schema_version SET version = 4;";
+    assert!(text.contains(advised), "the message names the SQL: {text}");
+    c.batch_execute(&format!("SET search_path = \"{schema}\"; {advised}"))
+        .unwrap();
+    let s = PgStore::connect_in_schema(&url, &schema, 1).expect("reopens and migrates back to 5");
+    assert_eq!(recorded_version(&mut c, &schema), CURRENT_VERSION);
+    let run = s
+        .create_run(
+            &NewRun {
+                target: "t".into(),
+                backend: "hermit".into(),
+                seed: 1,
+                config_json: "{}".into(),
+            },
+            1,
+        )
+        .unwrap();
+    let bundle = s.put_blob(b"b").unwrap();
+    let failure = s
+        .add_failure(
+            &NewFailure {
+                run_id: run.id,
+                target: "t".into(),
+                message: "m".into(),
+                original_len: 1,
+                shrunk_len: 1,
+                bundle_hash: bundle,
+                steps_json: "[]".into(),
+            },
+            2,
+        )
+        .unwrap();
+    let check = NewCheck {
+        kind: "same_seed_rerun".into(),
+        status: "pass".into(),
+        passed: 1,
+        failed: 0,
+        inconclusive: 0,
+        command: String::new(),
+        detail_json: "{}".into(),
+        artefacts_json: "[]".into(),
+        environment_json: "{}".into(),
+        started_at: 1,
+        finished_at: 2,
+    };
+    let conf = NewConfirmation {
+        id: "conf_a".into(),
+        failure_id: failure.id.clone(),
+        runner: "r".into(),
+        runner_trusted: true,
+        checks: vec![check],
+    };
+    assert_eq!(
+        s.add_confirmation(&conf, 5).unwrap(),
+        ConfirmationOutcome::Stored
     );
+    assert_eq!(s.list_failure_checks(&failure.id).unwrap().len(), 1);
 }

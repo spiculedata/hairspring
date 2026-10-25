@@ -34,14 +34,16 @@ fn skid_text(a: &Attempt) -> Option<&'static str> {
     )
 }
 
-/// Whether the rerun finished and was judged (it failed, or it passed): a hung or infrastructure-failed run has nothing
-/// to be compared with, so it is never the first rerun the others are measured against.
-fn judged_failure_or_pass(ctx: &Ctx, trial: &Trial) -> bool {
-    matches!(
-        ctx.backend
-            .verdict(ctx.p, trial, ctx.backend.trial_timeout(ctx.p)),
-        Verdict::Pass | Verdict::Violation(_) | Verdict::Deadlock(_)
-    )
+/// Whether a rerun may be the first one the others are compared with: it ran at the original margin, the wall budget did
+/// not cut it short (even where that reads as a violation because a hang is the bug), and it finished and was judged,
+/// failing or passing. A hung or infrastructure-failed run has nothing to be compared with.
+fn is_baseline(doubled: bool, clipped: bool, verdict: &Verdict) -> bool {
+    !doubled
+        && !clipped
+        && matches!(
+            verdict,
+            Verdict::Pass | Verdict::Violation(_) | Verdict::Deadlock(_)
+        )
 }
 
 /// What the reruns were compared with where the recording has nothing to compare, or `None` when it had it all.
@@ -173,11 +175,10 @@ pub(super) fn check(ctx: &Ctx, pace: &mut Pace) -> CheckResult {
             if let Some(s) = &t.schedule {
                 tally.add_artefact(s.fingerprint.clone());
             }
-            if first.is_none()
-                && !a.doubled
-                && !a.clipped_by_budget(own_limit)
-                && judged_failure_or_pass(ctx, t)
-            {
+            let verdict = ctx
+                .backend
+                .verdict(ctx.p, t, ctx.backend.trial_timeout(ctx.p));
+            if first.is_none() && is_baseline(a.doubled, a.clipped_by_budget(own_limit), &verdict) {
                 first = Some(First {
                     hash: behaviour_hash(t),
                     fingerprint: t.schedule.as_ref().map(|s| s.fingerprint.clone()),
@@ -252,4 +253,30 @@ fn finish(
         result = result.with_detail("stopped", stop);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_baseline;
+    use crate::trace::Verdict;
+
+    #[test]
+    fn a_budget_clipped_run_is_never_the_baseline_even_if_it_reads_as_a_violation() {
+        let violation = Verdict::Violation("timed out".into());
+        assert!(is_baseline(false, false, &violation));
+        assert!(!is_baseline(false, true, &violation));
+    }
+
+    #[test]
+    fn a_doubled_hung_or_failed_run_is_not_the_baseline() {
+        assert!(!is_baseline(true, false, &Verdict::Pass));
+        assert!(!is_baseline(false, false, &Verdict::Hang("x".into())));
+        assert!(!is_baseline(false, false, &Verdict::Infra("x".into())));
+        assert!(!is_baseline(
+            false,
+            false,
+            &Verdict::Inconclusive("x".into())
+        ));
+        assert!(is_baseline(false, false, &Verdict::Pass));
+    }
 }

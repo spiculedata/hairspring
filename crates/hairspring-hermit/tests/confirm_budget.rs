@@ -181,3 +181,30 @@ fn a_control_the_wall_budget_cut_short_is_inconclusive_not_control_failed() {
     assert_eq!(control.counts.failed, 0);
     assert_ne!(finding_status(&checks), FindingStatus::ControlFailed);
 }
+
+#[test]
+fn a_real_hang_at_the_targets_full_time_limit_is_still_a_violation_where_a_hang_is_the_bug() {
+    let rig = rig(
+        "real-hang",
+        RigOptions {
+            hangs_once: true,
+            hang_is_violation: true,
+            ..RigOptions::default()
+        },
+    );
+    let bundle = without_baseline(rig.bundle());
+    std::fs::write(rig.dir.join("hang_once"), "").unwrap();
+    // The budget is ample, so the run gets the target's own two seconds and hangs through all of them.
+    let req = ConfirmRequest {
+        reruns: 1,
+        ..ConfirmRequest::default()
+    };
+    let checks = rig.engine.confirm(&bundle, &req, &mut |_| true).unwrap();
+    let c = &checks[0].counts;
+    assert_eq!(
+        (c.passed, c.failed, c.inconclusive),
+        (1, 0, 0),
+        "{:?}",
+        checks[0]
+    );
+}
