@@ -68,8 +68,27 @@ internal static partial class Native
     private static readonly int NonBlockFlag = OnLinux ? 0x800 : 0x4;
     private static readonly int NoCttyFlag = OnLinux ? 0x100 : 0x20000;
     private static readonly int CloExecFlag = OnLinux ? 0x80000 : 0x1000000;
-    private static readonly int NoFollowFlag = OnLinux ? (OnX86 ? 0x20000 : 0x8000) : 0x100;
+    private static readonly int? NoFollowFlag = NoFollowFor(RuntimeInformation.ProcessArchitecture, OnLinux);
     private static readonly nuint CloseOnExecRequest = OnLinux ? 0x5451u : 0x20006601u;
+
+    /// <summary>
+    /// <c>O_NOFOLLOW</c> where the value is known: Linux on x86 and x86-64 (0x20000) and on arm and arm64 (0x8000), and macOS
+    /// (0x100). The value differs between Linux architectures (on riscv64, s390x and loongarch64 it is not either of those), so an
+    /// architecture not listed gets null and the events file is refused there rather than opened with a wrong flag.
+    /// </summary>
+    public static int? NoFollowFor(Architecture architecture, bool linux)
+    {
+        if (!linux)
+        {
+            return 0x100;
+        }
+        return architecture switch
+        {
+            Architecture.X64 or Architecture.X86 => 0x20000,
+            Architecture.Arm64 or Architecture.Arm => 0x8000,
+            _ => null,
+        };
+    }
 
     [LibraryImport("libc", EntryPoint = "write", SetLastError = true)]
     private static partial nint SysWrite(int fd, ref byte buffer, nint count);
@@ -155,11 +174,11 @@ internal static partial class Native
     }
 
     /// <summary>Non-zero when the process was started set-uid or set-gid (macOS and the BSDs); a failure to ask counts as privileged.</summary>
-    public static int IsSetUgid()
+    public static int IsSetUgid(Func<int>? ask = null)
     {
         try
         {
-            return SysIsSetUgid();
+            return (ask ?? SysIsSetUgid)();
         }
         catch (Exception e) when (IsMissing(e))
         {
@@ -178,31 +197,44 @@ internal static partial class Native
     {
         try
         {
-            var offset = 0;
-            while (offset < data.Length)
+            return WriteLoop(data, (ReadOnlySpan<byte> rest, out int errno) =>
             {
-                var rest = data[offset..];
                 var written = SysWrite(fd, ref MemoryMarshal.GetReference(rest), rest.Length);
-                if (written < 0)
-                {
-                    if (Marshal.GetLastPInvokeError() == Interrupted)
-                    {
-                        continue;
-                    }
-                    return false;
-                }
-                if (written == 0)
-                {
-                    return false;
-                }
-                offset += (int)written;
-            }
-            return true;
+                errno = written < 0 ? Marshal.GetLastPInvokeError() : 0;
+                return written;
+            });
         }
         catch (Exception e) when (IsMissing(e))
         {
             return false;
         }
+    }
+
+    /// <summary>One attempt to write <paramref name="rest"/>: the byte count, or -1 with the errno.</summary>
+    internal delegate nint WriteStep(ReadOnlySpan<byte> rest, out int errno);
+
+    /// <summary>The loop of <see cref="WriteAll"/> over any single write: pieces until the whole is out, an interrupted call repeated, any other error or a write of nothing a failure.</summary>
+    internal static bool WriteLoop(ReadOnlySpan<byte> data, WriteStep step)
+    {
+        var offset = 0;
+        while (offset < data.Length)
+        {
+            var written = step(data[offset..], out var errno);
+            if (written < 0)
+            {
+                if (errno == Interrupted)
+                {
+                    continue;
+                }
+                return false;
+            }
+            if (written == 0)
+            {
+                return false;
+            }
+            offset += (int)written;
+        }
+        return true;
     }
 
     /// <summary>A duplicate of the descriptor (the lowest free number), or -1.</summary>
@@ -261,16 +293,19 @@ internal static partial class Native
     /// Opens a path write-only for appending, not following a link in the last component, not blocking, not becoming a
     /// controlling terminal, close-on-exec; never creating. The descriptor, or a negative errno.
     /// </summary>
-    public static int OpenAppend(string path)
+    public static int OpenAppend(string path) => OpenAppendWith(path, NoFollowFlag);
+
+    /// <summary>As <see cref="OpenAppend"/>, with the no-follow flag given; without one (null) nothing is opened.</summary>
+    public static int OpenAppendWith(string path, int? noFollow)
     {
-        if (!OnLinux && !OnMac)
+        if ((!OnLinux && !OnMac) || noFollow is not { } noFollowFlag)
         {
             return Unavailable;
         }
         try
         {
             var bytes = CString(path);
-            var flags = WriteOnly | AppendFlag | NoFollowFlag | NonBlockFlag | NoCttyFlag | CloExecFlag;
+            var flags = WriteOnly | AppendFlag | noFollowFlag | NonBlockFlag | NoCttyFlag | CloExecFlag;
             var fd = SysOpen(ref bytes[0], flags);
             return fd >= 0 ? fd : -Marshal.GetLastPInvokeError();
         }

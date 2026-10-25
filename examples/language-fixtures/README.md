@@ -268,9 +268,10 @@ window holds an opaque call; the SDK's work counter and the busy loop's result (
 The main thread then evaluates `dotnet.counter_exact` (with the witness values `[final, 4000, 4, 1000]`) and
 `dotnet.all_started`, writes the one `LANGAT v1 lang=dotnet ...` line with one `write(2)` on descriptor 1, and exits 0; exit 3
 means an internal failure and 64 a usage error. `rand` is `Random.Shared.NextInt64()`. The environment profiles are in
-[`dotnet/profiles.manifest`](dotnet/profiles.manifest) (the probe's). **Not verified:** the machine code the JIT makes of the
-worker loops, and that they are never recompiled; the native self-checks only show that the race fires in the default
-environment and under both profile arms.
+[`dotnet/profiles.manifest`](dotnet/profiles.manifest) (the probe's). `scripts/check-dotnet-jit.sh` (`make -C dotnet at-jit`) reads the JIT's own listing of the worker loops
+(`DOTNET_JitDisasm`) in the default environment and under both profile arms, lists every compilation with its tier, and
+requires each to show the load of the counter, one call of `Spin` and the store of the same field. It covers the compilations of
+that run only.
 
 ```sh
 make -C dotnet at-test      # self-test, source check, native self-checks with a negative control, both profile arms
@@ -281,8 +282,7 @@ make test-dotnet            # the probe and the fixture
 `scripts/build-record-dotnet.sh` writes the build record: B1 publishes the four files twice from two copies of the sources in
 different directories with different file times and requires equal sha256 for each (the fixture maps the repository root to
 `/_/` in its compiler path map, because the SDK's call-site parameters write source paths into the assembly); R1 runs the program on the pinned runtime
-extracted from a checked tarball; B2 and B3 are marked not applicable (and the record says the JIT's machine code was not
-read); B4 is 50 native runs per mode with a negative control, in the default environment and under each profile arm
+extracted from a checked tarball; B2 runs that JIT check and B3 is marked not applicable; B4 is 50 native runs per mode with a negative control, in the default environment and under each profile arm
 (`scripts/run-dotnet-profile-checks.sh`); B5 runs `strace -ff` on one run without a profile and one per arm and requires every
 protocol line (descriptor 2) and the result line (descriptor 1) to be one `write(2)`; B6 runs the SDK's tests and conformance;
 B7 prints the modes. The alignment checklist is ticked from the evidence. The `dotnet` variant of the manual

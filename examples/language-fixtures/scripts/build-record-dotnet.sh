@@ -289,11 +289,12 @@ say "the assemblies, and build without an apphost. B1 builds from two copies of 
 say "different file times. The pinned artifact comes from one named producer: the one named above."
 say ""
 say "The JIT and the window (read this before B2): the window is a load of a plain field, a call of \`Spin\` (marked NoInlining) and a"
-say "store of that field. The design relies on a compiler having to assume that a call it did not inline can write the field. This"
-say "record does **not** read the machine code the JIT makes of the two worker loops, and does **not** check that they are never"
-say "recompiled: B2 is not applicable as stated, and no equivalent step exists here. What the record does show is behaviour: B4"
-say "(in the default environment and under each profile arm, arm b with tiered compilation off) sees the race fire. A reviewer who"
-say "needs more can run the program with DOTNET_JitDisasm set to the two worker methods; that was not done."
+say "store of that field. The design relies on a compiler having to assume that a call it did not inline can write the field. B2 does"
+say "not rely on that: it runs every mode in the default environment and under each profile arm with the JIT's own disassembly turned"
+say "on (DOTNET_JitDisasm, DOTNET_JitDisasmSummary, DOTNET_JitStdOutFile), lists every compilation of the worker method with its"
+say "tier, and requires each listing to show the load of the counter field, exactly one call (of Spin) and the store of the same"
+say "field. It reads the compilations of this run only: a method recompiled after the process ends, or a different tier in another"
+say "run, is not covered. The native runs (B4) show the race firing."
 say ""
 step B1 "SDK, build command and projects" versions
 step R1 "the runtime the program runs on: the pinned version, from the checked tarball" pinned_runtime
@@ -301,7 +302,10 @@ step B1 "the publish, twice, with equal sha256 of every file" build_twice
 if [ -f "$pub_one/LangAt.dll" ]; then
   artifact_sha=$(publish_tree "$pub_one" "$artifact" "$(tree_hash "$pub_one")") || artifact_sha="<not built>"
 fi
-not_applicable B2 "disassembly of the busy loop and the window" "Not applicable as stated: there is no machine code in the artifact, the JIT compiles it at run time, and what it makes of the window is not recorded here (see the note above the steps)." yes
+jit_window() {
+  sh "$here/check-dotnet-jit.sh" "$dnroot/profiles.manifest" "$dll" "$rt_dotnet"
+}
+step B2 "the window in the JIT's listing of the worker loops, in the default environment and under each arm" jit_window
 not_applicable B3 "seccomp self-test" "Not applicable to .NET: the runtime makes system calls on other threads (garbage collector, tiered compilation, signal handling), so a filter that allows only exit would kill it. The window is not free of other activity, and this record does not say it is: \`Spin\` is called inside the window, and a thread can be stopped at a garbage-collection safepoint in it. That only makes the race easier to reach: it gives the other workers more time between the load and the store. What it means for the signature of the race is for the reviewer to say; this record does not." yes
 step F1 "forbidden reads: no seed, /proc, environment, CPU count or clock in the fixture's sources" forbidden_reads
 step E1 "environment profiles: the exact variables of arm a and arm b" profiles

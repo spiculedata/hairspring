@@ -143,7 +143,7 @@ internal static class NativeTests
                 return n;
             });
             Check.Yes(ok, "written");
-            Check.Equal(new[] { "abc", "def", "gh" }, taken);
+            Check.Equal(new[] { "abc", "def", "gh" }, taken.ToArray());
         });
         s.Add("native: a write interrupted by a signal is repeated, and any other error costs the line", () =>
         {

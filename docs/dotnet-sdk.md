@@ -123,7 +123,10 @@ A write that fails (a reader that has gone, `EPIPE`; a full disk) costs that lin
 non-blocking pipe) can leave a torn line, and the next line is then glued to it, so the parser drops both.
 
 Limits of the descriptor handling: if the program was started with standard error closed and the runtime's first open file
-became descriptor 2 and happens to be writable (a pipe or socket of the runtime's own), the report is written into it; the
+became descriptor 2 and happens to be writable, the report is written into it. With standard input and standard error closed
+(`0<&- 2>&-`) or standard output and standard error closed (`1>&- 2>&-`) that file is a pipe the runtime creates for itself,
+and descriptor 2 is the write end of it: the SDK takes it for standard error, writes the report into the pipe, and nobody reads
+it, so the report is lost without a trace (the program still exits normally); the
 private duplicate is made with `dup` and then marked close-on-exec in a second call, so a child started in between could
 inherit it; and the duplicate takes the lowest free number, which a program that counts descriptors may notice.
 
@@ -159,6 +162,10 @@ macOS with runtime 10.0.x):
 | `Environment.FailFast` | no (the runtime runs no handler) | |
 | `SIGTERM`, `SIGINT` | no: with no handler of the program's own the runtime ends the process by the signal, without the exit event (a program that handles the signal and then ends normally is reported) | |
 | `SIGKILL`, `_exit`, a timeout kill | no | |
+
+A report on `SIGTERM` could be had by registering a handler with `PosixSignalRegistration.Create(PosixSignal.SIGTERM, ...)` that
+reports and then lets the process end. That changes how the program under test ends (the runtime no longer ends it by the
+signal), so it is not done; the decision is to leave `SIGTERM` without a report.
 
 Other fatal signals were not tried.
 
@@ -247,13 +254,17 @@ stdout, `LANGAT v1 lang=dotnet mode=<mode> final=<20 digits> expect=<20 digits> 
 `Random.Shared.NextInt64()`, which is never negative, so its top bit is always 0.
 
 **The window and the JIT.** `Spin` is marked `NoInlining`, so the window holds an ordinary call between the load and the store
-of the field, and a compiler has to assume that a call it did not inline can write the field. That is the design; it was **not
-verified in the generated code**: the machine code of the two worker loops was not read, and there is no check that the loops
-are never recompiled (the Java fixture has one for its interpreter and compiler tiers; this one has not). What was checked is
-the behaviour: the native self-check, run in the default environment and under both environment profiles of
-`examples/language-fixtures/dotnet/profiles.manifest` (arm b turns tiered compilation off, so everything is compiled with
-optimisations at once), sees the race fire. These say the race exists and the detector sees it, not how often it fires under
-any other scheduler.
+of the field, and a compiler has to assume that a call it did not inline can write the field. That is the design, and it is
+checked against what the JIT really produced: `scripts/check-dotnet-jit.sh` (`make -C examples/language-fixtures/dotnet
+at-jit`) runs every mode in the default environment and under both environment profiles of `profiles.manifest` with the
+runtime's own disassembly switched on (`DOTNET_JitDisasm`, `DOTNET_JitDisasmSummary`, `DOTNET_JitStdOutFile`), lists every
+compilation of the worker method with its tier, and requires each listing to show a load of a 64-bit field, exactly one call
+(of `Spin`) and a store to the same offset. On macOS arm64 the default environment leaves `RacyIterations` at Instrumented Tier0
+(the on-stack-replacement patchpoint is hit only four times, under its limit), and with tiered compilation off (arm b) it is
+compiled once at FullOpts; both show the load at offset 0x30, the call and the store to 0x30. The check reads the compilations of
+that run only: a run in which the loops are recompiled later, or at a tier not seen, is not covered, and the check does not
+decide which tier is acceptable. The native self-check also sees the race fire in the default environment and under both
+arms. These say the race exists and the detector sees it, not how often it fires under any other scheduler.
 
 Natively (macOS arm64 and Linux arm64 with runtime 10.0.x) `buggy` lost an update in 50 of 50 runs, `fixed` in 0 of 50 and
 `wide` in 10 of 10, in the default environment and under both profile arms.
@@ -317,7 +328,11 @@ environment and under each profile arm.
   and the SDK carries on without that check, except for the events file, which is then refused.
 * The private duplicate of descriptor 2 uses the lowest free descriptor number, not a high one: `fcntl(F_DUPFD_CLOEXEC, 10)`
   is a variadic call. It is close-on-exec.
-* Linux and macOS only. On another system the SDK starts as a recorder that counts and writes nothing.
+* Linux and macOS only. On another system the SDK starts as a recorder that counts and writes nothing. The events file is
+  opened only where the value of `O_NOFOLLOW` is known: Linux on x86, x86-64, arm and arm64, and macOS. On another Linux
+  architecture (riscv64, s390x, loongarch64, powerpc ...) it is refused, and the report goes to standard error with
+  `end.dropped` counting the refusal. The close-on-exec request (`FIOCLEX`, 0x5451) is the one of those same Linux
+  architectures; where it fails the private duplicate of descriptor 2 is dropped.
 * Not tested: Native AOT and trimming (the P/Invoke names are plain, but this was not tried), musl, and macOS on x86-64 (the
   `$INODE64` entry points are used for `stat` there).
 

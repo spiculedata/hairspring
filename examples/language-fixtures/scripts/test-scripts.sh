@@ -1428,4 +1428,111 @@ expect "run-dotnet-profile-checks still runs arm b after arm a fails" 0 sh -c "e
 expect "run-dotnet-profile-checks with a bad manifest fails" 1 env RC_LOG="$tmp/rcd.log" RUN_CHECKS="$rcd_stub" sh "$here/run-dotnet-profile-checks.sh" "$tmp/no_manifest" /x/LangAt.dll /bin/sh
 expect "run-dotnet-profile-checks without arguments is a usage error" 64 sh "$here/run-dotnet-profile-checks.sh"
 
+# check-dotnet-jit.sh: what the JIT made of the two worker loops. A fake dotnet prints the summary and the listings the real
+# one would (arm64 or x86-64 style), and each fake breaks exactly one thing the check looks for.
+jit_dotnet="$tmp/jit-dotnet"
+cat >"$jit_dotnet" <<'EOF2'
+#!/bin/sh
+# usage: jit-dotnet <dll> <mode>; FAKE picks the listing, FAKE_ARCH arm64 (default) or x64. The JIT file is $DOTNET_JitStdOutFile.
+mode=$2
+out=$DOTNET_JitStdOutFile
+want=RacyIterations
+[ "$mode" = fixed ] && want=LockedIterations
+f=${FAKE:-}
+arch=${FAKE_ARCH:-arm64}
+[ "$f" = exit1 ] && exit 1
+[ "$f" = silent ] && exit 0
+{
+  echo "   1: JIT compiled LangAt.Program:Main(System.String[]) [Tier0, IL size=152, code size=1036]"
+  [ "$f" = nospin ] || echo "   2: JIT compiled LangAt.Race:Spin(int):ulong [Tier0, IL size=40, code size=200]"
+  echo "   3: JIT compiled LangAt.Race:$want() [${TIER:-Instrumented Tier0}, IL size=65, code size=284]"
+  [ "$f" = twocompiles ] && echo "   4: JIT compiled LangAt.Race:$want() [Tier1-OSR @0x30, IL size=65, code size=200]"
+  [ "$f" = otherrun ] && echo "   5: JIT compiled LangAt.Race:RacyIterations() [Tier0, IL size=65, code size=284]" && [ "$mode" = fixed ] || true
+  echo
+  [ "$f" = nolisting ] && exit 0
+  emit() { # emit <load> <call> <store> <tier>
+    echo "; Assembly listing for method LangAt.Race:$want():this ($4)"
+    echo "G_M000_IG02:                ;; offset=0x0018"
+    if [ "$arch" = arm64 ]; then
+      echo "            ldr     x0, [fp, #0x38]"
+      echo "            ldr     w1, [x0, #0x38]"
+      echo "            $1"
+      echo "            $2"
+      echo "            $3"
+    else
+      echo "            mov      rax, qword ptr [rbp-0x20]"
+      echo "            $1"
+      echo "            $2"
+      echo "            $3"
+    fi
+    echo
+  }
+  if [ "$arch" = arm64 ]; then
+    L="ldr     x0, [x0, #0x30]"; C="blr     x1"; S="str     x0, [x1, #0x30]"
+    case $f in
+      nostore) S="add     x0, x0, #1" ;;
+      nocall) C="nop" ;;
+      twocalls) C="blr     x1
+            bl      CORINFO_HELP_COUNTPROFILE32" ;;
+      namedother) C="bl      LangAt.Race:Other(int):ulong" ;;
+      otheroffset) S="str     x0, [x1, #0x40]" ;;
+      noload) L="ldr     x0, [fp, #0x30]" ;;
+      narrow) L="ldr     w0, [x0, #0x30]" ;;
+      storebeforeload) ;;
+    esac
+    [ "${TIER:-}" = FullOpts ] && C="bl      LangAt.Race:Spin(int):ulong"
+  else
+    L="mov      rax, qword ptr [rbx+0x30]"; C="call     [LangAt.Race:Spin(int):ulong]"; S="mov      qword ptr [rbx+0x30], rax"
+    case $f in
+      nostore) S="add      rax, 1" ;;
+      nocall) C="nop" ;;
+      twocalls) C="call     [LangAt.Race:Spin(int):ulong]
+            call     [CORINFO_HELP_POLL_GC]" ;;
+      namedother) C="call     [System.Threading.Thread:Yield():bool]" ;;
+      otheroffset) S="mov      qword ptr [rbx+0x40], rax" ;;
+      noload) L="mov      rax, qword ptr [rbp+0x30]" ;;
+      narrow) L="mov      eax, dword ptr [rbx+0x30]" ;;
+    esac
+  fi
+  if [ "$f" = badsecond ] || [ "$f" = twocompiles ]; then
+    emit "$L" "$C" "$S" "${TIER:-Instrumented Tier0}"
+    [ "$f" = twocompiles ] && emit "ldr     x0, [x0, #0x30]" "blr     x1" "str     x0, [x1, #0x30]" "Tier1-OSR" && exit 0
+    emit "$L" "nop" "$S" "Tier1"
+    exit 0
+  fi
+  emit "$L" "$C" "$S" "${TIER:-Instrumented Tier0}"
+} >"$out"
+exit 0
+EOF2
+chmod +x "$jit_dotnet"
+jit_manifest="$fixtures_dir/dotnet/profiles.manifest"
+cdj() { # cdj <name> <wanted exit> <FAKE value> [FAKE_ARCH] [TIER]
+  expect "check-dotnet-jit $1" "$2" env FAKE="$3" FAKE_ARCH="${4:-arm64}" TIER="${5:-}" sh "$here/check-dotnet-jit.sh" "$jit_manifest" "$tmp/fake.dll" "$jit_dotnet"
+}
+cdj "accepts an arm64 window under Instrumented Tier0" 0 ""
+cdj "accepts an arm64 window under FullOpts, where the call is named" 0 "" arm64 FullOpts
+cdj "accepts an x86-64 window" 0 "" x64
+cdj "accepts an OSR compile after a tier 0 compile when both show the window" 0 twocompiles
+cdj "rejects a listing with no store of the loaded field" 1 nostore
+cdj "rejects a listing with no call between the load and the store" 1 nocall
+cdj "rejects a helper call inside the window" 1 twocalls
+cdj "rejects a call to something other than Spin inside the window" 1 namedother
+cdj "rejects a store to another offset than the load" 1 otheroffset
+cdj "rejects a load from the stack frame as the counter" 1 noload
+cdj "rejects a 32-bit load as the counter" 1 narrow
+cdj "rejects a later recompile that lost the call" 1 badsecond
+cdj "rejects an x86-64 listing with no store" 1 nostore x64
+cdj "rejects an x86-64 listing with no call" 1 nocall x64
+cdj "rejects an x86-64 helper call inside the window" 1 twocalls x64
+cdj "rejects an x86-64 call to another method inside the window" 1 namedother x64
+cdj "rejects an x86-64 load from the frame" 1 noload x64
+cdj "rejects a compilation with no listing (the listing control)" 1 nolisting
+cdj "rejects a JIT that printed nothing (the output control)" 1 silent
+cdj "rejects an output without Spin among the compilations (the Spin control)" 1 nospin
+cdj "rejects the other worker method being compiled in a mode that does not run it" 1 otherrun
+cdj "rejects a program that fails" 1 exit1
+expect "check-dotnet-jit names the default environment and each arm" 0 sh -c "env FAKE= sh '$here/check-dotnet-jit.sh' '$jit_manifest' '$tmp/fake.dll' '$jit_dotnet' | grep -c '^arm ' | grep -qx 3"
+expect "check-dotnet-jit with a missing manifest fails" 1 sh "$here/check-dotnet-jit.sh" "$tmp/none.manifest" "$tmp/fake.dll" "$jit_dotnet"
+expect "check-dotnet-jit without arguments is a usage error" 64 sh "$here/check-dotnet-jit.sh"
+
 exit $failures

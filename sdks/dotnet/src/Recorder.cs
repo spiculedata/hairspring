@@ -83,11 +83,22 @@ internal sealed class Recorder
         };
     }
 
-    private static void Warn(string what, Exception failed)
+    /// <summary>
+    /// Says on the report's own output that the report failed. Not a protocol line, so a parser ignores it; the missing end line is
+    /// what the engine sees. It goes through the sink, so it follows the same rules as the report (the events file, or descriptor 2 only
+    /// while it is still the file it was) and says nothing when the output is off.
+    /// </summary>
+    public void WarnAboutFailure(string what, Exception failed)
     {
-        // Not a protocol line, so a parser ignores it; the missing end line is what the engine sees.
-        var text = System.Text.Encoding.UTF8.GetBytes($"hairspring: {what}: {failed.GetType().Name}: {failed.Message}\n");
-        Native.WriteAll(2, text);
+        var text = System.Text.Encoding.ASCII.GetBytes($"hairspring: {what}: {failed.GetType().Name}: {Fmt.JsonText(failed.Message, Fmt.MsgMax).Trim('"')}\n");
+        try
+        {
+            _sink?.WriteLine(text);
+        }
+        catch (Exception)
+        {
+            // Nothing is left to tell.
+        }
     }
 
     private void ReportAtExit()
@@ -98,7 +109,7 @@ internal sealed class Recorder
         }
         catch (Exception failed)
         {
-            Warn("the report could not be written", failed);
+            WarnAboutFailure("the report could not be written", failed);
         }
     }
 
@@ -111,7 +122,7 @@ internal sealed class Recorder
         }
         catch (Exception failed)
         {
-            Warn("the report could not be written", failed);
+            WarnAboutFailure("the report could not be written", failed);
         }
     }
 

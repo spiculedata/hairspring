@@ -16,6 +16,7 @@
 #   make at-sources       only the source check (no seed, /proc, environment, CPU count or clock in the fixture's sources)
 #   make at-native        only the native self-check and the negative control, in the default environment
 #   make at-profile-native  the same self-check once under each profile arm
+#   make at-jit           the JIT's listing of the two worker loops shows the load, the call of Spin and the store
 #
 # Needs the .NET 10 SDK (DOTNET=/path/to/dotnet to choose). The output is framework-dependent: it runs with
 # `dotnet LangAtProbe.dll` (or `dotnet LangAt.dll <mode>`) on any .NET 10 runtime. Nothing here runs Hermit.
@@ -27,7 +28,7 @@ OUT ?= build/publish
 # The same flags the build record uses; --no-restore needs the restore step first.
 PUBLISH_FLAGS := -c Release -p:Deterministic=true -p:ContinuousIntegrationBuild=true --no-restore --nologo -v q
 
-.PHONY: test unit build native clean at-build at-test at-selftest at-sources at-native at-profile-native
+.PHONY: test unit build native clean at-build at-test at-selftest at-sources at-native at-profile-native at-jit
 
 test: unit build native
 
@@ -51,7 +52,7 @@ at-build:
 	$(DOTNET) restore $(AT_PROJECT) --nologo -v q
 	$(DOTNET) publish $(AT_PROJECT) $(PUBLISH_FLAGS) -o $(AT_OUT)
 
-at-test: at-selftest at-sources at-native at-profile-native
+at-test: at-selftest at-sources at-native at-profile-native at-jit
 
 # Run with HAIRSPRING_EVENTS=off so the SDK writes no report for the evaluations the tests make.
 at-selftest:
@@ -74,6 +75,11 @@ at-native: $(AT_OUT)/at-dotnet
 # The same self-checks under each profile arm's environment variables (profiles.manifest).
 at-profile-native: at-build
 	sh ../scripts/run-dotnet-profile-checks.sh profiles.manifest $(AT_OUT)/LangAt.dll "$$(command -v $(DOTNET))" $(RUNS_AT)
+
+# What the JIT made of the two worker loops, in the default environment and under each arm: every compilation of the worker
+# method shows the load of the counter, one call of Spin and the store (see ../scripts/check-dotnet-jit.sh).
+at-jit: at-build
+	sh ../scripts/check-dotnet-jit.sh profiles.manifest $(AT_OUT)/LangAt.dll "$$(command -v $(DOTNET))"
 
 clean:
 	rm -rf build src/bin src/obj selftest/bin selftest/obj at/bin at/obj at/test/bin at/test/obj

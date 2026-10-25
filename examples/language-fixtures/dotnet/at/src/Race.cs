@@ -75,7 +75,7 @@ internal sealed class Race
             var v = _counter;
             var acc = Spin(window);
             _counter = v + 1;
-            _sink = acc;
+            Volatile.Write(ref _sink, acc);
             Hs.Work(1);
         }
     }
@@ -92,7 +92,7 @@ internal sealed class Race
                 acc = Spin(window);
                 _counter = v + 1;
             }
-            _sink = acc;
+            Volatile.Write(ref _sink, acc);
             Hs.Work(1);
         }
     }
