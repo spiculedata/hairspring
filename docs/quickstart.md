@@ -144,7 +144,7 @@ See [Recorded environment](determinism.md#recorded-environment) for the fields a
 | Rust | [`sdks/rust`](../sdks/rust), [rust-sdk.md](rust-sdk.md) | `sdks/rust/fixtures` | yes | not yet run under Hermit |
 | Python | [`sdks/python`](../sdks/python), [python-sdk.md](python-sdk.md) | `examples/language-fixtures/python` | yes | single-threaded CPython only; **not supported yet** as a `process` target |
 | Java | in progress | in progress | a probe program only; SDK and fixture in progress | not yet run under Hermit |
-| .NET | none | none | a probe program only; no SDK | not yet run under Hermit |
+| .NET | [`sdks/dotnet`](../sdks/dotnet), [dotnet-sdk.md](dotnet-sdk.md) | `examples/language-fixtures/dotnet` | yes | not yet run under Hermit; **.NET is not supported on this build** |
 
 "SDK / fixture exists" means the code and its tests are in this repository. Only the last column says whether a
 program in that language has been run under Hermit.

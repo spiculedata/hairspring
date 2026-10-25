@@ -93,7 +93,8 @@ cpp/                   src/lost_update.cc, Makefile (clang++ by default; CXX=g++
 go/                    main.go, internal/race (the program and its unit tests), Makefile
 java/                  the Java probe (no SDK): src/langat, test/, profiles.tsv, manifest.mf, Makefile;
                        the Java fixture (langat.Main, with the Java SDK shaded in): at/src, at/test, at/manifest.mf
-dotnet/                the BCL-only .NET probe: src, selftest, test_probe.sh, profiles.manifest, Makefile
+dotnet/                the BCL-only .NET probe: src, selftest, test_probe.sh, profiles.manifest, Makefile;
+                       the .NET fixture (LangAt.dll, with the .NET SDK beside it as Hairspring.dll): at/src, at/test
 tests/seccomp_window.c test-only: the window makes no system call (used by the build record, Linux only)
 scripts/check-native.sh  the native self-check of one artifact; run-checks.sh adds the negative control;
                        check-sources.sh, check-disasm.sh; check-java-compiled.sh (PrintCompilation) and
@@ -252,6 +253,41 @@ unit checks run on a clean copy. B2, B3, B6 and B7 are marked not applicable, an
 The artifact is identified by the tree hash of its three files. The CI workflow's manual `fixture-build-records` job runs
 it as the `dotnet-probe` variant (with the pinned SDK from `actions/setup-dotnet`);
 `scripts/build-record-docker.sh dotnet-probe` runs it in a container whose image is pinned by digest.
+
+## .NET fixture
+
+[`dotnet/at/`](dotnet/at) holds the .NET lost-update fixture: `LangAt.dll`, one program with the three modes (`buggy`, `fixed`,
+`wide`) of the contract above, run as `dotnet LangAt.dll <mode>`. It reports through the .NET SDK in
+[`sdks/dotnet`](../../sdks/dotnet), which is published beside it as `Hairspring.dll`; the artifact is those two dlls and
+`LangAt.runtimeconfig.json` and `LangAt.deps.json`. It has not been run under Hermit, and .NET is not supported on this
+build.
+
+Four threads wait at a start barrier, then each does 1,000 times `v = counter; Spin(W); counter = v + 1` on one plain `long`
+field (`W` is 1,000, or 10,000 in `wide`; `fixed` holds a `lock` across the three steps). `Spin` is marked `NoInlining`, so the
+window holds an opaque call; the SDK's work counter and the busy loop's result (a static field) are written after the store.
+The main thread then evaluates `dotnet.counter_exact` (with the witness values `[final, 4000, 4, 1000]`) and
+`dotnet.all_started`, writes the one `LANGAT v1 lang=dotnet ...` line with one `write(2)` on descriptor 1, and exits 0; exit 3
+means an internal failure and 64 a usage error. `rand` is `Random.Shared.NextInt64()`. The environment profiles are in
+[`dotnet/profiles.manifest`](dotnet/profiles.manifest) (the probe's). **Not verified:** the machine code the JIT makes of the
+worker loops, and that they are never recompiled; the native self-checks only show that the race fires in the default
+environment and under both profile arms.
+
+```sh
+make -C dotnet at-test      # self-test, source check, native self-checks with a negative control, both profile arms
+make -C dotnet at-build     # publish into build/at
+make test-dotnet            # the probe and the fixture
+```
+
+`scripts/build-record-dotnet.sh` writes the build record: B1 publishes the four files twice from two copies of the sources in
+different directories with different file times and requires equal sha256 for each (the fixture maps the repository root to
+`/_/` in its compiler path map, because the SDK's call-site parameters write source paths into the assembly); R1 runs the program on the pinned runtime
+extracted from a checked tarball; B2 and B3 are marked not applicable (and the record says the JIT's machine code was not
+read); B4 is 50 native runs per mode with a negative control, in the default environment and under each profile arm
+(`scripts/run-dotnet-profile-checks.sh`); B5 runs `strace -ff` on one run without a profile and one per arm and requires every
+protocol line (descriptor 2) and the result line (descriptor 1) to be one `write(2)`; B6 runs the SDK's tests and conformance;
+B7 prints the modes. The alignment checklist is ticked from the evidence. The `dotnet` variant of the manual
+`fixture-build-records` job runs it (with the pinned SDK from `actions/setup-dotnet`, on the runtime extracted from the
+tarball).
 
 ## Java probe
 
