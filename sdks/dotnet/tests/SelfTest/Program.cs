@@ -18,6 +18,7 @@ internal static class Program
         NativeTests.Register(suite);
         OutputTests.Register(suite);
         RecorderTests.Register(suite);
+        RecorderRuntimeTests.Register(suite);
         return suite;
     }
 

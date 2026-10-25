@@ -237,26 +237,39 @@ internal sealed class Recorder
     private Rows.Witness? Witness(Site.Mark? mark) =>
         mark is null ? null : new Rows.Witness(_slots.KeyAt(mark.Slot), mark.Ord, mark.Vals);
 
-    /// <summary>Everything the report says, read at one moment.</summary>
+    /// <summary>
+    /// Everything the report says, read at one moment. The copies are taken with the lock held; the catalog hash, which needs a
+    /// hash of every id, is worked out from the copies after it is released.
+    /// </summary>
     public Snapshot Snapshot()
     {
+        IReadOnlyList<Rows.AssertRow> asserts;
+        IReadOnlyList<ThreadView> threads;
+        int distinctIds;
+        ulong dropped;
+        var catalog = new List<Rows.CatalogRow>();
         lock (_lock)
         {
-            var all = _sites.All();
-            var catalog = new List<Rows.CatalogRow>(all.Count);
-            var entries = new List<Catalog.Entry>(all.Count);
-            foreach (var s in all)
+            foreach (var s in _sites.All())
             {
                 catalog.Add(new Rows.CatalogRow(s.Id, s.Kind, s.Msg, s.File, s.Line));
-                entries.Add(new Catalog.Entry(s.Id, s.Kind));
             }
-            var asserts = new List<Rows.AssertRow>();
+            var rows = new List<Rows.AssertRow>();
             foreach (var s in _sites.Canonical())
             {
-                asserts.Add(new Rows.AssertRow(s.Id, s.Kind, s.Trues, s.Falses, Witness(s.FirstTrue), Witness(s.FirstFalse)));
+                rows.Add(new Rows.AssertRow(s.Id, s.Kind, s.Trues, s.Falses, Witness(s.FirstTrue), Witness(s.FirstFalse)));
             }
-            return new Snapshot(catalog, asserts, _slots.Views(), Catalog.Hash(entries), _sites.DistinctIds, _dropped);
+            asserts = rows;
+            threads = _slots.Views();
+            distinctIds = _sites.DistinctIds;
+            dropped = _dropped;
         }
+        var entries = new List<Catalog.Entry>(catalog.Count);
+        foreach (var row in catalog)
+        {
+            entries.Add(new Catalog.Entry(row.Id, row.Kind));
+        }
+        return new Snapshot(catalog, asserts, threads, Catalog.Hash(entries), distinctIds, dropped);
     }
 
     private long StatusFor(EndReason reason, long? statusOverride)
