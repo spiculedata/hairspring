@@ -74,6 +74,13 @@ internal static class SlotsTests
             Check.Raises<System.ArgumentException>(() => table.SetKey(slot, new string('k', 70), 0));
             Check.Raises<System.ArgumentNullException>(() => table.SetKey(slot, null!, 0));
         });
+        s.Add("slots: a label with a NUL is refused, not shortened", () =>
+        {
+            var table = new SlotTable();
+            var slot = table.Claim().Slot;
+            Check.Raises<System.ArgumentException>(() => table.SetKey(slot, "a\0b", 0));
+            Check.Equal("t#1", slot.Key);
+        });
         s.Add("slots: views are immutable copies", () =>
         {
             var table = new SlotTable();
