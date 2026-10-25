@@ -110,8 +110,13 @@ internal static class RecorderRuntimeTests
         {
             var sink = new ListSink();
             var r = Make(sink);
-            Check.Raises<ArgumentException>(() => r.NameThread("", 0));
-            Check.Raises<ArgumentOutOfRangeException>(() => r.NameThread("a", -1));
+            var refused = new Thread(() =>
+            {
+                Check.Raises<ArgumentException>(() => r.NameThread("", 0));
+                Check.Raises<ArgumentOutOfRangeException>(() => r.NameThread("a", -1));
+            });
+            refused.Start();
+            refused.Join(); // a thread that did nothing but make refused calls
             Record(r, Kind.Reachable, true, "x", "m");
             r.Report(EndReason.Exit, null);
             Check.Yes(AssertFor(sink, "x").Contains("\"thread\":\"t#1\"", StringComparison.Ordinal), AssertFor(sink, "x"));

@@ -130,6 +130,24 @@ internal static class EventsFileTests
                 Directory.Delete(dir, true);
             }
         });
+        s.Add("events file: with no identity to compare against, a descriptor that is not a regular file is still refused", () =>
+        {
+            var dir = Scratch();
+            try
+            {
+                var file = Path.Combine(dir, "events");
+                File.WriteAllText(file, "x"); // exists, so it cannot be created; the look is made to say it does not
+                var (read, write) = Posix.Pipe();
+                var seams = With(stat: _ => new StatResult(null, Native.NoSuchFile), open: _ => write);
+                Check.Raises<IOException>(() => EventsFile.Open(file, seams));
+                Check.No(Posix.IsOpen(write), "the refused descriptor was left open");
+                Posix.Close(read);
+            }
+            finally
+            {
+                Directory.Delete(dir, true);
+            }
+        });
         s.Add("events file: a path that cannot be looked at for a reason other than not existing is refused", () =>
         {
             var dir = Scratch();

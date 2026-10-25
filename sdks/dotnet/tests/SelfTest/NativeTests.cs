@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 
@@ -130,6 +131,40 @@ internal static class NativeTests
             Check.Equal("one\n", Posix.ReadSome(read));
             Posix.Close(read);
             Posix.Close(write);
+        });
+        s.Add("native: a write that the kernel takes in pieces is written in pieces until the whole line is out", () =>
+        {
+            var taken = new List<string>();
+            var ok = Native.WriteLoop("abcdefgh"u8, (ReadOnlySpan<byte> rest, out int errno) =>
+            {
+                errno = 0;
+                var n = Math.Min(3, rest.Length);
+                taken.Add(System.Text.Encoding.ASCII.GetString(rest[..n]));
+                return n;
+            });
+            Check.Yes(ok, "written");
+            Check.Equal(new[] { "abc", "def", "gh" }, taken);
+        });
+        s.Add("native: a write interrupted by a signal is repeated, and any other error costs the line", () =>
+        {
+            var calls = 0;
+            Check.Yes(Native.WriteLoop("abc"u8, (ReadOnlySpan<byte> rest, out int errno) =>
+            {
+                calls++;
+                errno = calls == 1 ? 4 : 0; // EINTR once
+                return calls == 1 ? -1 : rest.Length;
+            }), "written after the interrupt");
+            Check.Equal(2, calls);
+            Check.No(Native.WriteLoop("abc"u8, (ReadOnlySpan<byte> rest, out int errno) =>
+            {
+                errno = 32; // EPIPE
+                return -1;
+            }), "written");
+            Check.No(Native.WriteLoop("abc"u8, (ReadOnlySpan<byte> rest, out int errno) =>
+            {
+                errno = 0;
+                return 0;
+            }), "a write of nothing is not progress");
         });
         s.Add("native: writing to a pipe nobody reads costs the line, not the process", () =>
         {

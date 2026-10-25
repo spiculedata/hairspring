@@ -269,6 +269,7 @@ internal static class OutputTests
                 var fd = Posix.Open(file, Posix.OpenReadOnly);
                 var sink = StderrSink.Open(fd);
                 Check.No(sink.WriteLine(Bytes("a\n")), "written");
+                Check.Equal(-1, sink.CopyDescriptor); // a descriptor that is not open for writing is not duplicated
                 sink.Close();
                 Posix.Close(fd);
                 Check.Equal("keep\n", File.ReadAllText(file));
@@ -317,6 +318,17 @@ internal static class OutputTests
             {
                 Directory.Delete(dir, true);
             }
+        });
+        s.Add("stderr: while descriptor 2 is the file it was, the report goes through it even if there is no private copy", () =>
+        {
+            var (read, write) = Posix.Pipe();
+            var sink = StderrSink.Open(write, null, _ => -1);
+            Check.Equal(-1, sink.CopyDescriptor);
+            Check.Yes(sink.WriteLine(Bytes("a\n")), "a");
+            Check.Equal("a\n", Posix.ReadSome(read));
+            sink.Close();
+            Posix.Close(read);
+            Posix.Close(write);
         });
         s.Add("stderr: a reader that has gone costs the line, not the process", () =>
         {
