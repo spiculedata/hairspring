@@ -54,6 +54,11 @@ internal sealed class SlotTable
         {
             throw new ArgumentException("a thread label must not be empty", nameof(label));
         }
+        if (label.Contains('\0', StringComparison.Ordinal))
+        {
+            // The wire form stops at a NUL, so the key would be sent shortened.
+            throw new ArgumentException("a thread label must not contain a NUL character", nameof(label));
+        }
         if (index < 0 || index > MaxIndex)
         {
             throw new ArgumentOutOfRangeException(nameof(index), index, $"a thread index must be between 0 and {MaxIndex}");
