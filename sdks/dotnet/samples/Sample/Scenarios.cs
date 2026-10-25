@@ -194,6 +194,7 @@ internal static class Scenarios
     /// <summary>A background thread keeps evaluating while the process ends, so the report is taken against live writers.</summary>
     private static int Background()
     {
+        Hs.Start(); // registers the exit report now, so it is not racing the exit when a background thread is the first to call the SDK
         var spinner = new Thread(() =>
         {
             for (long i = 0; ; i++)
