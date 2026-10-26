@@ -1646,8 +1646,8 @@ expect "check-dotnet-jit without arguments is a usage error" 64 sh "$here/check-
 mklog() { # mklog <file> <text after "java buggy: "> [extra line]
   printf '%s\n' "java buggy: $2" 'java fixed: property false in 0 of 50 native runs, final exact in 50' 'java wide:  property false in 4 of 10 native runs' ${3:+"$3"} >"$1"
 }
-sumeq() { # sumeq <name> <wanted output> <log> <k>
-  expect "$1" 0 sh -c '[ "$(sh "$1" "$3" "$4")" = "$2" ]' _ "$here/summarize-at-native.sh" "$2" "$3" "$4"
+sumeq() { # sumeq <name> <wanted output> <log> <k> [profile]
+  expect "$1" 0 sh -c '[ "$(sh "$1" "$3" "$4" ${5:+"$5"})" = "$2" ]' _ "$here/summarize-at-native.sh" "$2" "$3" "$4" ${5:+"$5"}
 }
 sumlog="$tmp/at-native.log"
 mklog "$sumlog" 'property false in 37 of 50 native runs'
@@ -1691,6 +1691,30 @@ expect "summarize-at-native rejects an empty k" 64 sh "$here/summarize-at-native
 expect "summarize-at-native rejects a k that is not a number" 64 sh "$here/summarize-at-native.sh" "$sumlog" 5x
 expect "summarize-at-native without arguments is a usage error" 64 sh "$here/summarize-at-native.sh"
 
+# With a profile: the log of run-java-profile-checks.sh holds one section per arm ("--- arm <name>: <flags>" and the
+# self-check's lines); the summary is that arm's alone and names it.
+proflog="$tmp/profiles.log"
+printf '%s\n' '--- arm a: -Xint' 'java buggy: property false in 7 of 50 native runs' 'java fixed: property false in 0 of 50 native runs, final exact in 50' 'java wide:  property false in 4 of 10 native runs' 'ok   arm a: the self-check passed under these flags' '--- arm b: -XX:TieredStopAtLevel=1' 'java buggy: property false in 41 of 60 native runs' 'java fixed: property false in 0 of 60 native runs, final exact in 60' >"$proflog"
+printf '%s\n' '--- arm a-prime: -Xint -Xshare:auto' 'java buggy: property false in 12 of 50 native runs' 'java fixed: property false in 0 of 50 native runs, final exact in 50' >"$tmp/prime.log"
+sumeq "summarize-at-native names profile a-prime and reports its own buggy count" "profile=a-prime runs=50 fired=12 k=50" "$tmp/prime.log" 50 a-prime
+sumeq "summarize-at-native reports only profile a when the log also holds b" "profile=a runs=50 fired=7 k=50" "$proflog" 50 a
+sumeq "summarize-at-native reports profile b from the same log" "profile=b runs=60 fired=41 k=50" "$proflog" 50 b
+expect "summarize-at-native: profile a is not found in a log that has only a-prime" 1 sh "$here/summarize-at-native.sh" "$tmp/prime.log" 50 a
+expect "summarize-at-native: a profile absent from the log fails" 1 sh "$here/summarize-at-native.sh" "$proflog" 50 c
+printf '%s\n' '--- arm a: -Xint' 'java fixed: property false in 0 of 50 native runs' '--- arm b: -Xint' 'java buggy: property false in 41 of 60 native runs' >"$tmp/nobuggy-a.log"
+expect "summarize-at-native: a profile section without a buggy line fails (b's line is not a's)" 1 sh "$here/summarize-at-native.sh" "$tmp/nobuggy-a.log" 50 a
+printf '%s\n' '--- arm a: -Xint' 'java buggy: property false in 1 of 5 native runs' 'java buggy: property false in 2 of 5 native runs' >"$tmp/twobuggy-a.log"
+expect "summarize-at-native: two buggy lines in the profile's section fail" 1 sh "$here/summarize-at-native.sh" "$tmp/twobuggy-a.log" 50 a
+printf '%s\n' '--- arm a: -Xint' 'java buggy: property false in 1 of 5 native runs' '--- arm a: -Xint' 'java buggy: property false in 2 of 5 native runs' >"$tmp/twosect-a.log"
+expect "summarize-at-native: a profile run twice in one log fails" 1 sh "$here/summarize-at-native.sh" "$tmp/twosect-a.log" 50 a
+printf '%s\n' '--- arm a: -Xint' 'java buggy: property false in 1 of 5 native runs' '--- arm a: -Xint' 'java fixed: property false in 0 of 5 native runs' >"$tmp/twosect2-a.log"
+expect "summarize-at-native: a profile run twice fails even when only one run has a buggy line" 1 sh "$here/summarize-at-native.sh" "$tmp/twosect2-a.log" 50 a
+expect "summarize-at-native rejects a profile with a space" 64 sh "$here/summarize-at-native.sh" "$proflog" 50 "a b"
+expect "summarize-at-native rejects a profile with a shell metacharacter" 64 sh "$here/summarize-at-native.sh" "$proflog" 50 'a;id'
+expect "summarize-at-native rejects an empty profile" 64 sh "$here/summarize-at-native.sh" "$proflog" 50 ""
+expect "summarize-at-native rejects a profile that starts with a dash" 64 sh "$here/summarize-at-native.sh" "$proflog" 50 -x
+expect "summarize-at-native rejects a fourth argument" 64 sh "$here/summarize-at-native.sh" "$proflog" 50 a extra
+
 # The java-native-k workflow: its own file, manual only, read-only, pinned like the java build record. The mutation run
 # points JAVA_NATIVE_K_WORKFLOW at mutated copies.
 WF=${JAVA_NATIVE_K_WORKFLOW:-$here/../../../.github/workflows/java-native-k.yml}
@@ -1718,15 +1742,28 @@ wfexpect "runs is bounded at 200" '          check runs "$RUNS" 200'
 wfexpect "the check step has the id the later steps read" "        id: inputs"
 wfsh "the input check is the first step" '[ "$(awk "/^    steps:/ {s=1; next} s && /^      - / {print; exit}" "$1")" = "      - name: Check the inputs" ]'
 wfsh "no expression in any run: block or one-line run:" '! awk "/^ +run: *[|>]/ {r=1; next} /^ +[a-z-]+:|^ +- / {r=0} r" "$1" | grep -q "\${{" && ! grep -Eq "^ +run: .*\\$\{\{" "$1"'
-wfsh "the raw inputs are read only by the check step's env (two uses)" '[ "$(grep -c "\${{ inputs\." "$1")" = 2 ]'
-wfsh "the later steps read the checked outputs" '[ "$(grep -c "\${{ steps.inputs.outputs.at_k }}" "$1")" = 3 ] && [ "$(grep -c "\${{ steps.inputs.outputs.runs }}" "$1")" = 1 ]'
-wfexpect "the make line: CPUs 1-3, low priority, AT_K and RUNS" '          taskset -c 1-3 nice -n 10 make -C examples/language-fixtures/java at-native AT_K="$AT_K" RUNS="$RUNS" 2>&1 | tee -a "$RUNNER_TEMP/java-native-k.log"'
+wfsh "the raw inputs are read only by the check step's env (three uses)" '[ "$(grep -c "\${{ inputs\." "$1")" = 3 ]'
+wfsh "the later steps read the checked outputs" '[ "$(grep -c "\${{ steps.inputs.outputs.at_k }}" "$1")" = 3 ] && [ "$(grep -c "\${{ steps.inputs.outputs.runs }}" "$1")" = 1 ] && [ "$(grep -c "\${{ steps.inputs.outputs.profile }}" "$1")" = 3 ]'
+wfexpect "profile is a choice input" "        type: choice"
+wfexpect "the choice offers a-prime" "          - a-prime"
+wfexpect "the choice offers a" "          - a"
+wfsh "the choice offers only a-prime and a, and defaults to a-prime" '[ "$(awk "/^      profile:/ {p=1; next} p && /^      [a-z_]+:/ {exit} p && /^          - / {print}" "$1" | tr "\n" ";")" = "          - a-prime;          - a;" ] && awk "/^      profile:/ {p=1; next} p && /^      [a-z_]+:/ {exit} p" "$1" | grep -qx "        default: a-prime"'
+wfexpect "the check step reads the profile input" '          PROFILE: ${{ inputs.profile }}'
+wfexpect "the profile is checked against the two names" '          case "$PROFILE" in a-prime | a) ;; *) echo "profile='"'"'$PROFILE'"'"' is not a-prime or a" >&2; exit 1 ;; esac'
+wfexpect "the checked values are the outputs" "          printf 'at_k=%s\\nruns=%s\\nprofile=%s\\n' \"\$AT_K\" \"\$RUNS\" \"\$PROFILE\" >> \"\$GITHUB_OUTPUT\""
+wfsh "the profile is checked before the outputs are written" '[ "$(grep -n "case \"\$PROFILE\" in a-prime | a)" "$1" | cut -d: -f1)" -lt "$(grep -n "GITHUB_OUTPUT" "$1" | cut -d: -f1)" ]'
+wfexpect "profile a-prime runs at-extra-native" "            a-prime) target=at-extra-native ;;"
+wfexpect "profile a runs at-profile-native" "            a) target=at-profile-native ;;"
+wfexpect "any other profile is refused in the run step" '            *) echo "unknown profile $PROFILE" >&2; exit 1 ;;'
+wfexpect "the make line: CPUs 1-3, low priority, the profile's target, AT_K and RUNS" '          taskset -c 1-3 nice -n 10 make -C examples/language-fixtures/java "$target" AT_K="$AT_K" RUNS="$RUNS" 2>&1 | tee -a "$RUNNER_TEMP/java-native-k.log"'
+wfexpect "the summary names the profile" '          summary=$(sh examples/language-fixtures/scripts/summarize-at-native.sh "$RUNNER_TEMP/java-native-k.log" "$AT_K" "$PROFILE") || { echo "RUN FAILED: the log has no valid summary line. This is not a result." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }'
+wfsh "the run and summary steps get the profile from the step output" '[ "$(grep -c "PROFILE: \${{ steps.inputs.outputs.profile }}" "$1")" = 2 ]'
 wfexpect "a failed make fails the step (pipefail)" "          set -o pipefail"
 wfexpect "builds the fixture first" "        run: make -C examples/language-fixtures/java at-jar"
 wfsh "exactly the Summary and Upload steps run if always()" '[ "$(awk "/^      - /{name=\$0} /^        if: always\(\)$/ {print name}" "$1" | tr "\n" ";")" = "      - name: Summary;      - name: Upload the log;" ]'
 wfexpect "the summary says clearly when the run failed" '            echo "RUN FAILED (job status: $JOB_STATUS). This is not a result." | tee -a "$GITHUB_STEP_SUMMARY"'
 wfexpect "the summary reads the job status" '          JOB_STATUS: ${{ job.status }}'
-wfexpect "the artifact name is a fixed prefix and the checked K" "          name: java-native-k-\${{ steps.inputs.outputs.at_k }}"
+wfexpect "the artifact name is a fixed prefix, the checked profile and the checked K" "          name: java-native-k-\${{ steps.inputs.outputs.profile }}-\${{ steps.inputs.outputs.at_k }}"
 wfexpect "a missing log only warns" "          if-no-files-found: warn"
 wfsh "uses no secrets" '! grep -Eq "[$][{][{] *secrets|^ *secrets:" "$1"'
 wfsh "ci.yml has no java-native-k job and no dispatch inputs" '! grep -Eq "java-native-k|^    inputs:" "$2"'
