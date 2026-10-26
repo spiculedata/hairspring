@@ -36,13 +36,10 @@ enum Mode {
         return locked;
     }
 
-    /** The mode named by exactly one argument, or empty for a usage error. */
-    static Optional<Mode> parse(String[] args) {
-        if (args.length != 1) {
-            return Optional.empty();
-        }
+    /** The mode with this exact name, or empty. */
+    static Optional<Mode> byName(String name) {
         for (Mode mode : values()) {
-            if (mode.wire.equals(args[0])) {
+            if (mode.wire.equals(name)) {
                 return Optional.of(mode);
             }
         }

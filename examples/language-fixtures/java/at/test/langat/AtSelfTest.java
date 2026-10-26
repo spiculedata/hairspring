@@ -57,7 +57,7 @@ public final class AtSelfTest {
     }
 
     private static Optional<Mode> parse(String... args) {
-        return Mode.parse(args);
+        return Invocation.parse(args).invocation().map(Invocation::mode);
     }
 
     /** An output stream that records how many write calls it saw and what they held. */
@@ -119,7 +119,8 @@ public final class AtSelfTest {
             equal(1000, Contract.ITERATIONS);
             equal(1000, Contract.WINDOW);
             equal(10000, Contract.WINDOW_WIDE);
-            equal(4000, Contract.EXPECTED);
+            equal(4000, Contract.THREADS * Contract.ITERATIONS);
+            equal(5000, Contract.MAX_ITERATIONS);
             equal("java", Contract.LANG);
         });
         check("mode: wide differs from buggy only in the busy loop length, fixed only in the lock", () -> {
@@ -235,8 +236,16 @@ public final class AtSelfTest {
             }) {
                 Invocation.Parsed parsed = invoke("buggy", bad);
                 yes(parsed.error().isPresent(), "refused: " + bad);
-                yes(parsed.error().get().contains("--k"), "message names --k: " + bad);
+                yes(parsed.error().get().startsWith("--k must be"), "reason names --k: " + parsed.error().get());
             }
+        });
+        check("args: the message does not echo control characters and shortens a long value", () -> {
+            String reason = invoke("buggy", "--k=a\u0007b\n\u001b[31m").error().get();
+            yes(reason.chars().allMatch(c -> c >= ' ' && c <= '~'), "printable only: " + reason);
+            yes(reason.contains("a?b??[31m"), "replaced: " + reason);
+            String longReason = invoke("buggy", "--k=" + "9".repeat(500)).error().get();
+            yes(longReason.length() < 100, "short: " + longReason.length());
+            yes(invoke("racy\u0000").error().get().chars().allMatch(c -> c >= ' ' && c <= '~'), "mode echo is printable");
         });
         check("args: other second arguments, a misspelt option and a third argument are usage errors", () -> {
             for (String[] bad : new String[][] {
@@ -288,7 +297,8 @@ public final class AtSelfTest {
                 equal(64, mainRun(new String[] {"buggy", bad}, out, err, never));
                 equal(0, out.writes.size());
                 String message = err.toString(StandardCharsets.US_ASCII);
-                yes(message.contains("--k") && message.contains("usage"), "message: " + message);
+                yes(message.contains("usage error: --k must be an integer from 1 to 5000"), "reason line: " + message);
+                yes(message.contains("usage: java"), "usage line: " + message);
             }
         });
         check("race: a short run at K iterations ends at T*K when locked", () -> {

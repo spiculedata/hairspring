@@ -12,10 +12,12 @@ import java.util.function.LongSupplier;
 
 /**
  * The Java lost-update fixture: one program with three modes chosen by its first argument ({@code buggy}, {@code fixed},
- * {@code wide}) and, as an optional second argument, {@code --k=N}: the iterations per worker, 1,000 when absent. Four threads each do 1,000 times: load a shared counter, run a busy loop, store the value read plus one.
- * It reports through the Hairspring Java SDK: {@code java.counter_exact} ({@code always}, the final counter is 4,000, with
- * the witness values {@code [final, 4000, 4, 1000]}) and {@code java.all_started} ({@code sometimes}), each evaluated once
- * in the main thread after the workers are joined. Stdout gets one line, in one write:
+ * {@code wide}) and, as an optional second argument, {@code --k=N}, the iterations per worker (1,000 when absent). Four
+ * threads each do K times: load a shared counter, run a busy loop, store the value read plus one. It reports through the
+ * Hairspring Java SDK: {@code java.counter_exact} ({@code always}, the final counter is 4 x K, with the witness values
+ * {@code [final, 4*K, 4, K]}; {@code [final, 4000, 4, 1000]} without {@code --k}) and {@code java.all_started}
+ * ({@code sometimes}), each evaluated once in the main thread after the workers are joined. Stdout gets one line, in one
+ * write:
  *
  * <pre>LANGAT v1 lang=java mode=&lt;mode&gt; final=&lt;20 digits&gt; expect=&lt;20 digits&gt; order=&lt;16 hex&gt; rand=&lt;16 hex&gt;</pre>
  *

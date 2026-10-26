@@ -339,14 +339,17 @@ artifact. The mode is `argv[1]` and the JVM flags are not part of the jar: `java
 
 **`--k=N`.** An optional second argument, `buggy --k=50` for example, sets the iterations per worker (K) for every mode
 (`buggy`, `wide` and the locked `fixed`); without it K is 1,000 and the run is the one described below, unchanged. `N` is
-plain decimal digits from 1 to 100,000 with no sign, no leading zero and no space; anything else (and any other second
+plain decimal digits from 1 to 5,000 with no sign, no leading zero and no space; anything else (and any other second
 argument, or a third argument) is a usage error: exit 64, a message naming `--k` and the usage line on stderr, nothing on
 stdout, no worker started. The workers (4), the window (1,000 rounds, 10,000 in `wide`), the barrier, the property ids, the
 exit codes and the format of the stdout line do not change. The line does not carry K; with `--k=N` its `expect=` field is
 4 x N (the final counter a run without a lost update reaches) and so is the second witness value of `java.counter_exact`,
 whose fourth witness value is N. Without `--k` the line, the witness values and the exit codes are exactly those of the jar
 before the argument existed. A smaller K means fewer chances per run to lose an update (and a shorter locked run), so it
-changes what a run tests; name K wherever a result is quoted.
+changes what a run tests; name K wherever a result is quoted. The cap is the JIT: with `-XX:+PrintCompilation` on
+OpenJDK 21.0.5 the worker loop was compiled at K = 20,000 (default flags), 16,000 (C1 only) and 10,000
+(`-XX:-TieredCompilation`), which would remove the window; 5,000 was clean under all three. `make -C java at-compiled`
+and the build record run every flag set at the default K and again at the largest K.
 
 Four platform threads wait at a start barrier, then each does 1,000 times `v = counter; spin(W); counter = v + 1` on one
 plain `long` field (`W` is 1,000, or 10,000 in `wide`; `fixed` holds a `synchronized` monitor across the three steps). The

@@ -67,13 +67,47 @@ else
 fi
 
 status=$(fixture wide --k=3)
-if [ "$status" = 0 ] && line_matches wide '[0-9]{20}' 00000000000000000012; then
-  ok "--k=3: wide runs and expects 12"
+final=$(sed -n 's/.* final=\([0-9]*\) .*/\1/p' "$tmp/out" | sed 's/^0*//')
+if [ "$status" = 0 ] && line_matches wide '[0-9]{20}' 00000000000000000012 && [ "${final:-0}" -le 12 ] && [ "${final:-0}" -ge 1 ]; then
+  ok "--k=3: wide runs, expects 12 and ends between 1 and 12"
 else
-  bad "--k=3: wide runs and expects 12 (status $status): $(cat "$tmp/out")"
+  bad "--k=3: wide runs, expects 12 and ends between 1 and 12 (status $status): $(cat "$tmp/out")"
 fi
 
-for bad_args in "buggy --k=" "buggy --k=abc" "buggy --k=0" "buggy --k=-1" "buggy --k=1.5" "buggy --k=050" "buggy --k=100001" \
+# events_check <mode> <k>: the SDK's report. counter_exact is evaluated once with the witness values [final, 4*k, 4, k];
+# the assertion is true exactly when final = 4*k, and the work counter is 4*k operations.
+events_check() {
+  mode=$1
+  k=$2
+  want=$((4 * k))
+  rm -f "$tmp/events"
+  HAIRSPRING_EVENTS_FILE="$tmp/events" "$java" -cp "$jar" langat.Main "$mode" --k="$k" >"$tmp/out" 2>"$tmp/err"
+  status=$?
+  line=$(grep '"id":"java.counter_exact"' "$tmp/events" 2>/dev/null | grep '"kind":"assert"' | tr -s ' ')
+  final=$(sed -n 's/.* final=\([0-9]*\) .*/\1/p' "$tmp/out" | sed 's/^0*//')
+  final=${final:-0}
+  if [ "$final" -eq "$want" ]; then
+    truth='"trues": 1,"falses": 0'
+  else
+    truth='"trues": 0,"falses": 1'
+  fi
+  if [ "$status" = 0 ] && [ -n "$line" ] &&
+    printf '%s\n' "$line" | grep -Fq "$truth" &&
+    printf '%s\n' "$line" | grep -Eq "\"vals\":\[$final,$want,4,$k\]" &&
+    grep '"kind":"work"' "$tmp/events" | tr -s ' ' | grep -Fq "\"ops\": $want"; then
+    ok "events: $mode --k=$k: counter_exact witness values [$final,$want,4,$k], truth matches final = $want"
+  else
+    bad "events: $mode --k=$k (status $status, final $final): $line"
+  fi
+}
+
+events_check fixed 50
+events_check fixed 3
+events_check buggy 50
+events_check wide 3
+events_check fixed 5000
+
+for bad_args in "buggy --k=" "buggy --k=abc" "buggy --k=0" "buggy --k=-1" "buggy --k=1.5" "buggy --k=050" "buggy --k=5001" "buggy --k=10000" \
   "buggy --k=99999999999999999999" "fixed --k=50 extra" "fixed --k" "fixed --switch=1.0" "--k=50 fixed" "--k=50"; do
   # shellcheck disable=SC2086  # the words are the arguments on purpose
   status=$(fixture $bad_args)
@@ -85,10 +119,18 @@ for bad_args in "buggy --k=" "buggy --k=abc" "buggy --k=0" "buggy --k=-1" "buggy
 done
 
 fixture buggy --k=0 >/dev/null
-if grep -q -- "--k" "$tmp/err"; then
-  ok "an invalid --k names the option on stderr"
+if grep -q "^usage error: --k" "$tmp/err"; then
+  ok "an invalid --k gets a reason line that names the option on stderr"
 else
-  bad "an invalid --k names the option on stderr: $(cat "$tmp/err")"
+  bad "an invalid --k gets a reason line that names the option on stderr: $(cat "$tmp/err")"
+fi
+
+# A control character in the value is not echoed raw.
+fixture buggy "--k=$(printf 'a\007b')" >/dev/null
+if [ -s "$tmp/err" ] && ! LC_ALL=C grep -q "$(printf '\007')" "$tmp/err"; then
+  ok "a control character in --k is not echoed"
+else
+  bad "a control character in --k is not echoed"
 fi
 
 if [ "$failures" -ne 0 ]; then

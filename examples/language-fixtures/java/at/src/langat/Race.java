@@ -19,8 +19,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * back-edge counters pass a threshold. The counters are per method and summed over all threads, so the four workers count
  * together: {@link #racyIterations} is called 4 times and its loop passes 4 x 1,000 = 4,000 times in all, below the
  * thresholds (about 60,000 back-edges for C1 at tier 3, about 10,700 with {@code -XX:-TieredCompilation}). That is a
- * margin, not a guarantee, so the build record runs every mode under {@code -XX:+PrintCompilation}, with the default flags
- * and under each profile, and requires that neither worker loop is ever compiled (check-java-compiled.sh). The busy loop
+ * margin, not a guarantee, and it shrinks with {@code --k=N}: the loop was measured compiled at K = 20,000 (default
+ * flags), 16,000 (C1 only) and 10,000 ({@code -XX:-TieredCompilation}), so {@link Contract#MAX_ITERATIONS} is 5,000.
+ * The build record runs every mode under {@code -XX:+PrintCompilation}, with the default flags and under each profile, at
+ * the default K and at the maximum K, and requires that neither worker loop is ever compiled (check-java-compiled.sh). The busy loop
  * ({@link #spin}) may well be compiled, and that does not matter: its result goes to a volatile field after the store, so
  * the loop cannot be dropped, and it is plain arithmetic (two shifts for the rotation, no library call). The contract does
  * not allow a volatile or atomic counter instead.

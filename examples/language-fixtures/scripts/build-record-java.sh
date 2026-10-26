@@ -160,7 +160,7 @@ profiles() {
 # F3: run-time evidence for the JIT. Every mode under -XX:+PrintCompilation, with the default flags and under each profile:
 # neither worker loop (racyIterations, lockedIterations) may be compiled, normally or by on-stack replacement.
 jit_compiles() {
-  JAVA=$java sh "$here/check-java-compiled.sh" "$javadir/profiles.tsv" "$jar"
+  JAVA=$java sh "$here/check-java-compiled.sh" "$javadir/profiles.tsv" "$jar" "$(sed -n 's/.*MAX_ITERATIONS = \([0-9]*\);.*/\1/p' "$javadir/at/src/langat/Contract.java")"
 }
 
 # B4: the whole contract natively, 50 runs of buggy and fixed, wide as a contract check, a negative control. First with the

@@ -84,6 +84,8 @@ flags: $(BUILD)/lang-at.jar
 # SDK in it.
 
 AT_BUILD ?= $(BUILD)/at
+# The largest --k=N the fixture accepts (Contract.MAX_ITERATIONS), which at-compiled also runs.
+MAX_K := $(shell sed -n 's/.*MAX_ITERATIONS = \([0-9]*\);.*/\1/p' at/src/langat/Contract.java)
 RUNS ?= 50
 ARM_RUNS ?= 5
 SDK_DIR := ../../../sdks/java
@@ -142,9 +144,9 @@ at-native: $(AT_BUILD)/at-java
 at-profile-native: $(AT_BUILD)/at-java
 	sh ../scripts/run-java-profile-checks.sh profiles.tsv $(AT_BUILD)/at-java $(RUNS)
 
-# The JIT never compiled the two worker loops (see Race.java and ../scripts/check-java-compiled.sh).
+# The JIT never compiled the two worker loops, at the default K and at the largest --k (see Race.java and ../scripts/check-java-compiled.sh).
 at-compiled: $(AT_BUILD)/lang-at.jar
-	JAVA="$(JAVA)" sh ../scripts/check-java-compiled.sh profiles.tsv $(AT_BUILD)/lang-at.jar
+	JAVA="$(JAVA)" sh ../scripts/check-java-compiled.sh profiles.tsv $(AT_BUILD)/lang-at.jar $(MAX_K)
 
 at-arms: $(AT_BUILD)/lang-at.jar
 	JAVA="$(JAVA)" ARM_RUNS=$(ARM_RUNS) sh ../scripts/check-java-arms.sh profiles.tsv $(AT_BUILD)/lang-at.jar
