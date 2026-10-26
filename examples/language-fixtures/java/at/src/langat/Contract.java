@@ -8,6 +8,8 @@ final class Contract {
     static final int WINDOW = 1000;
     static final int WINDOW_WIDE = 10000;
     static final int EXPECTED = THREADS * ITERATIONS;
+    /** The most iterations per worker {@code --k} accepts (a hundred times the contract's). */
+    static final int MAX_ITERATIONS = 100000;
 
     static final int EXIT_OK = 0;
     static final int EXIT_INVARIANT = 3;

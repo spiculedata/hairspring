@@ -199,6 +199,11 @@ argument:
 * `fixed`: the same three steps inside `synchronized`.
 * `wide`: `buggy` with a busy loop ten times longer.
 
+An optional second argument, `--k=N` (1 to 100,000, plain digits), sets the iterations per worker for any mode; without it
+K is 1,000 and the run is unchanged. Anything else is a usage error (exit 64, nothing on stdout). Only K changes: the
+workers, the window and the format of the stdout line stay, and with `--k=N` the line's `expect=` and the property's
+expected value are 4 x N. See `examples/language-fixtures/README.md`.
+
 Properties: `java.counter_exact` (`always`, the final counter equals 4,000, witness values `[final, 4000, 4, 1000]`) and
 `java.all_started` (`sometimes`), each evaluated once in the main thread after the workers are joined. Output: one line on
 stdout, `LANGAT v1 lang=java mode=<mode> final=<20 digits> expect=<20 digits> order=<16 hex> rand=<16 hex>`, written with one
@@ -255,8 +260,8 @@ and the detector sees it, not how often it fires under any other scheduler.
   100 and 300 threads, an explicit report, a daemon thread at shutdown, limits, 64 sites, a catalog conflict, a spawned child,
   the events file, a symbolic link, events off, a closed stderr pipe, a harness tag, a usage error).
 
-The fixture has its own tests (`make -C examples/language-fixtures/java at-test`): its command line, its line, its barrier,
-its invariants and its workers; the source check; 50 native runs per mode with a negative control; and each JVM flag profile.
+The fixture has its own tests (`make -C examples/language-fixtures/java at-test`): its command line (including `--k=N`),
+its line, its barrier, its invariants and its workers; the source check; the native tests of `--k=N`; 50 native runs per mode with a negative control; and each JVM flag profile.
 
 ## Differences from the C SDK
 

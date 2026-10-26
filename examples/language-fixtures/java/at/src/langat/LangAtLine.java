@@ -16,11 +16,11 @@ final class LangAtLine {
     }
 
     /** {@code LANGAT v1 lang=java mode=<mode> final=<20 digits> expect=<20 digits> order=<16 hex> rand=<16 hex>} and a newline. */
-    static String format(Mode mode, long finalValue, long order, long rand) {
+    static String format(Mode mode, long finalValue, long expected, long order, long rand) {
         return "LANGAT v1 lang=" + Contract.LANG
                 + " mode=" + mode.wire()
                 + " final=" + zeroPadded(Long.toString(finalValue), COUNT_WIDTH)
-                + " expect=" + zeroPadded(Long.toString(Contract.EXPECTED), COUNT_WIDTH)
+                + " expect=" + zeroPadded(Long.toString(expected), COUNT_WIDTH)
                 + " order=" + hex(order)
                 + " rand=" + hex(rand)
                 + "\n";
