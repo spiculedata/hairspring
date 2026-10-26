@@ -20,13 +20,14 @@ sha256 identifies what ran in every arm.
 | `at-cxx-clang`, `at-cxx-gxx` | `make -C cpp` (clang++ or g++) | `buggy`, `fixed`, `wide` |
 | `at-go` | `make -C go` | `buggy`, `fixed`, `wide` |
 | `python/at_py.py` (with `python/probe_py.py` and the SDK package) | nothing to build; `scripts/stage-python.sh` stages and hashes it | `buggy`, `fixed`, `wide`, and `--switch=1.0` as an optional second argument |
+| `java/at` (`lang-at.jar`, class `langat.Main`) | `make -C java at-jar` | `buggy`, `fixed`, `wide`, and `--k=N` as an optional second argument (see [Java fixture](#java-fixture)) |
 
 - `buggy`: the planted race, no lock.
 - `fixed`: the same program with a mutex held across the read-modify-write (`pthread_mutex_t`, `std::mutex` with
   `std::lock_guard`, `sync.Mutex`, `threading.Lock`); it cannot lose an update.
 - `wide`: `buggy` with a busy loop ten times longer. Nothing else differs.
 
-Any other argument, no argument, or a spare argument prints a usage line on stderr, prints nothing on stdout and exits 64.
+Any other argument (the only optional second arguments are Python's `--switch=1.0` and Java's `--k=N`), no argument, or a spare argument prints a usage line on stderr, prints nothing on stdout and exits 64.
 
 ## The program
 
@@ -336,6 +337,20 @@ entry timestamp, sorted entries, no module descriptor, `Main-Class: langat.Main`
 artifact. The mode is `argv[1]` and the JVM flags are not part of the jar: `java/profiles.tsv` lists the two profiles (arm
 `a`: interpreter only, arm `b`: C1 only) the program is run with.
 
+**`--k=N`.** An optional second argument, `buggy --k=50` for example, sets the iterations per worker (K) for every mode
+(`buggy`, `wide` and the locked `fixed`); without it K is 1,000 and the run is the one described below, unchanged. `N` is
+plain decimal digits from 1 to 5,000 with no sign, no leading zero and no space; anything else (and any other second
+argument, or a third argument) is a usage error: exit 64, a message naming `--k` and the usage line on stderr, nothing on
+stdout, no worker started. The workers (4), the window (1,000 rounds, 10,000 in `wide`), the barrier, the property ids, the
+exit codes and the format of the stdout line do not change. The line does not carry K; with `--k=N` its `expect=` field is
+4 x N (the final counter a run without a lost update reaches) and so is the second witness value of `java.counter_exact`,
+whose fourth witness value is N. Without `--k` the line, the witness values and the exit codes are exactly those of the jar
+before the argument existed. A smaller K means fewer chances per run to lose an update (and a shorter locked run), so it
+changes what a run tests; name K wherever a result is quoted. The cap is the JIT: with `-XX:+PrintCompilation` on
+OpenJDK 21.0.5 the worker loop was compiled at K = 20,000 (default flags), 16,000 (C1 only) and 10,000
+(`-XX:-TieredCompilation`), which would remove the window; 5,000 was clean under all three. `make -C java at-compiled`
+and the build record run every flag set at the default K and again at the largest K.
+
 Four platform threads wait at a start barrier, then each does 1,000 times `v = counter; spin(W); counter = v + 1` on one
 plain `long` field (`W` is 1,000, or 10,000 in `wide`; `fixed` holds a `synchronized` monitor across the three steps). The
 SDK's work counter and the busy loop's result (a volatile field, so the loop cannot be dropped) are written after the
@@ -349,7 +364,8 @@ loop passes 4 x 1,000 = 4,000 times in all, below the thresholds. The record che
 `-XX:+PrintCompilation` (see [docs/java-sdk.md](../../docs/java-sdk.md)).
 
 ```sh
-make -C java at-test        # self-test, source check, native self-checks with a negative control, both flag profiles
+make -C java at-k           # only the native tests of --k=N
+make -C java at-test        # self-test, source check, --k tests, native self-checks with a negative control, both flag profiles
 make -C java at-jar         # build/at/lang-at.jar
 make -C java at-arms        # each profile: valid flags, fixed exact, how often buggy fires
 make test-java              # the probe and the fixture

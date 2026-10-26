@@ -7,7 +7,12 @@ final class Contract {
     static final int ITERATIONS = 1000;
     static final int WINDOW = 1000;
     static final int WINDOW_WIDE = 10000;
-    static final int EXPECTED = THREADS * ITERATIONS;
+    /**
+     * The most iterations per worker {@code --k} accepts. Race.java explains why it is bounded: above some K the JIT
+     * compiles the worker loop and the window can vanish. 5,000 was measured clean (PrintCompilation, default flags, the
+     * two profiles and -XX:-TieredCompilation); 10,000 to 20,000 was not, with some flags.
+     */
+    static final int MAX_ITERATIONS = 5000;
 
     static final int EXIT_OK = 0;
     static final int EXIT_INVARIANT = 3;

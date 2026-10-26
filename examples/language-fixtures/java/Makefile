@@ -11,6 +11,7 @@
 #   make at-test      the fixture's self-test, source check, native self-checks (default flags and each profile's), the
 #                     PrintCompilation check and the two JVM flag profiles
 #   make at-selftest  only the self-test of the fixture's classes
+#   make at-k         only the native tests of the --k=N argument (iterations per worker)
 #   make at-native    only the native self-checks (see ../README.md) and the negative control, with the default JVM flags
 #   make at-profile-native  the same self-checks once under each profile's JVM flags
 #   make at-compiled  -XX:+PrintCompilation: neither worker loop is ever compiled, with the default flags and each profile
@@ -32,7 +33,7 @@ JAVAC_FLAGS = --release 21 -Xlint:all -Werror -encoding UTF-8 -proc:none
 SOURCES := $(sort $(wildcard src/langat/*.java))
 TEST_SOURCES := $(sort $(wildcard test/langat/*.java))
 
-.PHONY: jar test selftest native flags clean FORCE at-jar at-test at-selftest at-sources at-native at-profile-native at-compiled at-arms
+.PHONY: jar test selftest native flags clean FORCE at-jar at-test at-selftest at-sources at-k at-native at-profile-native at-max-k-check at-compiled at-arms
 
 jar: $(BUILD)/lang-at.jar
 
@@ -83,6 +84,8 @@ flags: $(BUILD)/lang-at.jar
 # SDK in it.
 
 AT_BUILD ?= $(BUILD)/at
+# The largest --k=N the fixture accepts (Contract.MAX_ITERATIONS), which at-compiled also runs.
+MAX_K ?= $(shell sed -n 's/.*MAX_ITERATIONS = \([0-9]*\);.*/\1/p' at/src/langat/Contract.java)
 RUNS ?= 50
 ARM_RUNS ?= 5
 SDK_DIR := ../../../sdks/java
@@ -118,7 +121,7 @@ $(AT_BUILD)/test-classes/.built: $(AT_BUILD)/classes/.built $(AT_BUILD)/build-id
 	$(JAVAC) $(JAVAC_FLAGS) -cp $(AT_BUILD)/classes -d $(AT_BUILD)/test-classes $(AT_TEST_SOURCES)
 	touch $@
 
-at-test: at-selftest at-sources at-native at-profile-native at-compiled at-arms
+at-test: at-selftest at-sources at-k at-native at-profile-native at-compiled at-arms
 
 # Run with HAIRSPRING_EVENTS=off so the SDK writes no report for the evaluations the tests make.
 at-selftest: $(AT_BUILD)/test-classes/.built
@@ -127,6 +130,10 @@ at-selftest: $(AT_BUILD)/test-classes/.built
 # No read of the seed, /proc, the CPU count, the environment or the clock in the fixture's own sources.
 at-sources:
 	sh ../scripts/check-sources-java.sh at/src
+
+# The --k=N argument, natively: the default run is unchanged, --k=50 shortens it, invalid values exit 64.
+at-k: $(AT_BUILD)/lang-at.jar
+	JAVA="$(JAVA)" sh at/test/test-k.sh $(AT_BUILD)/lang-at.jar
 
 # The contract, natively, 50 runs of buggy and fixed (buggy must fire at least once, fixed never), wide as a contract
 # check, and a negative control: the racy program standing in for fixed must be rejected.
@@ -137,9 +144,13 @@ at-native: $(AT_BUILD)/at-java
 at-profile-native: $(AT_BUILD)/at-java
 	sh ../scripts/run-java-profile-checks.sh profiles.tsv $(AT_BUILD)/at-java $(RUNS)
 
-# The JIT never compiled the two worker loops (see Race.java and ../scripts/check-java-compiled.sh).
-at-compiled: $(AT_BUILD)/lang-at.jar
-	JAVA="$(JAVA)" sh ../scripts/check-java-compiled.sh profiles.tsv $(AT_BUILD)/lang-at.jar
+# A cap that could not be read (Contract.java reformatted) must fail the check, never skip the largest-K runs.
+at-max-k-check:
+	@case "$(MAX_K)" in '' | *[!0-9]* | 0) echo "FAIL MAX_K is '$(MAX_K)': could not read MAX_ITERATIONS from at/src/langat/Contract.java" >&2; exit 1 ;; esac
+
+# The JIT never compiled the two worker loops, at the default K and at the largest --k (see Race.java and ../scripts/check-java-compiled.sh).
+at-compiled: at-max-k-check $(AT_BUILD)/lang-at.jar
+	JAVA="$(JAVA)" sh ../scripts/check-java-compiled.sh profiles.tsv $(AT_BUILD)/lang-at.jar $(MAX_K)
 
 at-arms: $(AT_BUILD)/lang-at.jar
 	JAVA="$(JAVA)" ARM_RUNS=$(ARM_RUNS) sh ../scripts/check-java-arms.sh profiles.tsv $(AT_BUILD)/lang-at.jar

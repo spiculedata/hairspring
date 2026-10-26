@@ -1254,11 +1254,18 @@ cat >"$compiled_java" <<'EOF2'
 # never spin), spinonlywide (spin is compiled in wide, and no other line in any mode), nocompiles (PrintCompilation prints
 # nothing), exit1 (the program fails).
 interp=0
+big=0
+prev=
 for a in "$@"; do
   [ "$a" = -Xint ] && interp=1
-  mode=$a
+  [ "$prev" = langat.Main ] && mode=$a
+  case "$a" in --k=*) big=1 ;; esac
+  prev=$a
 done
 [ "${FAKE_JAVA:-}" = exit1 ] && exit 1
+# kloop: the locked worker loop is compiled only when --k is given (the large-K case).
+[ "${FAKE_JAVA:-}" = kloop ] && [ "$big" -eq 1 ] && [ "$interp" -eq 0 ] && echo '    900   99 %     3       langat.Race::lockedIterations @ 21 (66 bytes)'
+
 if [ "$interp" -eq 0 ] && [ "${FAKE_JAVA:-}" = spinonlywide ]; then
   [ "$mode" = wide ] && echo '    130   40 %     3       langat.Race::spin @ 8 (30 bytes)'
 elif [ "$interp" -eq 0 ] && [ "${FAKE_JAVA:-}" != nocompiles ]; then
@@ -1286,6 +1293,20 @@ cjc "rejects a log with no compile line in buggy although wide shows spin (the c
 cjc "rejects a PrintCompilation that prints nothing (the check could not see a compile)" 1 nocompiles
 cjc "rejects a program that fails" 1 exit1
 cjc "rejects a missing profiles file" 1 "" "$tmp/none.tsv"
+expect "check-java-compiled accepts clean runs at the default K and at max-k" 0 env FAKE_JAVA= JAVA="$compiled_java" sh "$here/check-java-compiled.sh" "$profiles_tsv" "$tmp/fake.jar" 5000
+expect "check-java-compiled without max-k does not see a loop compiled only at a large K" 0 env FAKE_JAVA=kloop JAVA="$compiled_java" sh "$here/check-java-compiled.sh" "$profiles_tsv" "$tmp/fake.jar"
+expect "check-java-compiled with max-k rejects a loop compiled only at a large K" 1 env FAKE_JAVA=kloop JAVA="$compiled_java" sh "$here/check-java-compiled.sh" "$profiles_tsv" "$tmp/fake.jar" 5000
+expect "check-java-compiled rejects an empty max-k (present, not absent)" 64 env JAVA="$compiled_java" sh "$here/check-java-compiled.sh" "$profiles_tsv" "$tmp/fake.jar" ""
+expect "check-java-compiled rejects a zero max-k" 64 env JAVA="$compiled_java" sh "$here/check-java-compiled.sh" "$profiles_tsv" "$tmp/fake.jar" 0
+expect "check-java-compiled rejects a four-argument call" 64 env JAVA="$compiled_java" sh "$here/check-java-compiled.sh" "$profiles_tsv" "$tmp/fake.jar" 5000 extra
+cap=$(sed -n 's/.*MAX_ITERATIONS = \([0-9]*\);.*/\1/p' "$here/../java/at/src/langat/Contract.java")
+expect "the Java Makefile's at-compiled passes the cap read from Contract.java" 0 sh -c "make -n -C '$here/../java' at-compiled | grep -q 'check-java-compiled.sh profiles.tsv .*lang-at.jar $cap\$'"
+expect "the Java Makefile reads a cap" 0 sh -c "test -n '$cap'"
+expect "the Java Makefile's at-compiled fails when the cap is empty" 2 make -C "$here/../java" at-compiled MAX_K=
+expect "the Java Makefile's at-compiled fails when the cap is not a number" 2 make -C "$here/../java" at-compiled MAX_K=lots
+expect "the Java Makefile's cap check passes with the real cap" 0 make -C "$here/../java" at-max-k-check
+expect "check-java-compiled rejects a max-k that is not a number" 64 env JAVA="$compiled_java" sh "$here/check-java-compiled.sh" "$profiles_tsv" "$tmp/fake.jar" lots
+expect "check-java-compiled runs every arm again at max-k" 0 sh -c "env JAVA='$compiled_java' sh '$here/check-java-compiled.sh' '$profiles_tsv' '$tmp/fake.jar' 5000 | grep -c '^arm ' | grep -qx 6"
 expect "check-java-compiled without arguments is a usage error" 64 sh "$here/check-java-compiled.sh"
 expect "check-java-compiled names the default flags and each profile" 0 sh -c "env JAVA='$compiled_java' sh '$here/check-java-compiled.sh' '$profiles_tsv' '$tmp/fake.jar' | grep -c '^arm ' | grep -qx 3"
 

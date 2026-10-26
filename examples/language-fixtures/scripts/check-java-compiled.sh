@@ -1,7 +1,7 @@
 #!/bin/sh
 # Run-time evidence that the JIT never compiled the fixture's two worker loops.
 #
-#   check-java-compiled.sh <profiles.tsv> <lang-at.jar>
+#   check-java-compiled.sh <profiles.tsv> <lang-at.jar> [max-k]
 #
 # The window of the lost-update fixture is the three steps in langat.Race.racyIterations (and lockedIterations): a load of
 # the plain counter, a call of spin and a store. A JIT could remove the window by keeping the counter in a register across
@@ -16,17 +16,28 @@
 # langat.Race except spin. Positive controls, so a
 # log the check could not read is not taken for a pass: under every run that is not interpreter-only the log must hold at
 # least one compile line, and the wide run must show langat.Race::spin compiled (its loop is the hot one).
+# With max-k (the fixture's largest --k=N, read from Contract.java by the Makefile and the build record) every arm is run
+# a second time with --k=<max-k> appended to each mode: a larger K raises the back-edge count of the worker loops, so the
+# guarantee has to hold at the largest K the program accepts, not only at the default.
 # JAVA is the java command (default java). Nothing here runs Hermit.
 # Exits 0 when every run was clean, 1 when one was not or there is no profile, 64 for a usage error.
 
 set -u
 
-if [ $# -ne 2 ]; then
-  echo "usage: $0 <profiles.tsv> <lang-at.jar>" >&2
+if [ $# -lt 2 ] || [ $# -gt 3 ]; then
+  echo "usage: $0 <profiles.tsv> <lang-at.jar> [max-k]" >&2
   exit 64
 fi
 profiles=$1
 jar=$2
+# max-k present means it must be a positive number: an empty or non-numeric one is an error, never "no max-k".
+maxk=
+if [ $# -eq 3 ]; then
+  case "$3" in
+    '' | *[!0-9]* | 0 | 0[0-9]*) echo "usage: max-k must be a positive number, got \"$3\"" >&2; exit 64 ;;
+  esac
+  maxk=$3
+fi
 java=${JAVA:-java}
 if [ ! -r "$profiles" ]; then
   echo "FAIL $profiles cannot be read" >&2
@@ -41,16 +52,17 @@ count=0
 OTHER_RACE='langat\.Race::([^s]|s[^p]|sp[^i]|spi[^n]|spin[^ ])'
 COMPILE_LINE='^ *[0-9]+ +[0-9]+ '
 
-# check_arm <arm> <flags>: the three modes under the flags, each with the log in $tmp/log.
+# check_arm <arm> <flags> [k-argument]: the three modes under the flags (and the argument), each with the log in $tmp/log.
 check_arm() {
   arm=$1
   flags=$2
-  echo "arm $arm: ${flags:-(default flags)}"
+  karg=${3:-}
+  echo "arm $arm: ${flags:-(default flags)} ${karg:+($karg)}"
   interpreted=0
   case " $flags " in *' -Xint '*) interpreted=1 ;; esac
   for mode in buggy fixed wide; do
     # shellcheck disable=SC2086  # flags is a list of words on purpose
-    "$java" $flags -XX:+PrintCompilation -cp "$jar" langat.Main "$mode" >"$tmp/log" 2>"$tmp/err" </dev/null
+    "$java" $flags -XX:+PrintCompilation -cp "$jar" langat.Main "$mode" $karg >"$tmp/log" 2>"$tmp/err" </dev/null
     rc=$?
     [ "$rc" -eq 0 ] || { echo "FAIL arm $arm, $mode: exit status $rc"; cat "$tmp/err"; return 1; }
     lines=$(grep -Ec "$COMPILE_LINE" "$tmp/log")
@@ -65,16 +77,18 @@ check_arm() {
         return 1
       fi
     fi
-    echo "ok   arm $arm, $mode: $lines compile lines, no Race method but spin among them"
+    echo "ok   arm $arm, $mode ${karg:-(default K)}: $lines compile lines, no Race method but spin among them"
   done
 }
 
 check_arm default "" || status=1
+[ -z "$maxk" ] || check_arm default "" "--k=$maxk" || status=1
 count=1
 while IFS="$tab" read -r arm flags; do
   case "$arm" in '' | '#'*) continue ;; esac
   count=$((count + 1))
   check_arm "$arm" "$flags" || status=1
+  [ -z "$maxk" ] || check_arm "$arm" "$flags" "--k=$maxk" || status=1
 done <"$profiles"
 if [ "$count" -lt 2 ]; then
   echo "FAIL $profiles holds no profile" >&2
