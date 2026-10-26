@@ -1707,6 +1707,15 @@ printf '%s\n' '--- arm a: -Xint' 'java buggy: property false in 1 of 5 native ru
 expect "summarize-at-native: two buggy lines in the profile's section fail" 1 sh "$here/summarize-at-native.sh" "$tmp/twobuggy-a.log" 50 a
 printf '%s\n' '--- arm a: -Xint' 'java buggy: property false in 1 of 5 native runs' '--- arm a: -Xint' 'java buggy: property false in 2 of 5 native runs' >"$tmp/twosect-a.log"
 expect "summarize-at-native: a profile run twice in one log fails" 1 sh "$here/summarize-at-native.sh" "$tmp/twosect-a.log" 50 a
+printf '%s\n' '--- arm a-prime: -Xint -Xshare:auto' 'java buggy: property false in 12 of 50 native runs' '--- arm a: -Xint' 'java buggy: property false in 7 of 50 native runs' >"$tmp/both.log"
+sumeq "summarize-at-native: a log with a and a-prime reports a alone" "profile=a runs=50 fired=7 k=50" "$tmp/both.log" 50 a
+sumeq "summarize-at-native: a log with a and a-prime reports a-prime alone" "profile=a-prime runs=50 fired=12 k=50" "$tmp/both.log" 50 a-prime
+printf '%s\n' '--- arm a-prime: -Xint' 'java buggy: property false in 12 of 50 native runs' >"$tmp/primeonly.log"
+expect "summarize-at-native: a section of a-prime is not a section of a" 1 sh "$here/summarize-at-native.sh" "$tmp/primeonly.log" 50 a
+printf '%s\n' '--- arm a: -Xint' 'java buggy: property false in 0 of 50 native runs' 'java fixed: property false in 0 of 50 native runs, final exact in 50' 'FAIL the buggy mode never fired in 50 runs on 4 CPUs: the planted race is not reachable' >"$tmp/zero.log"
+sumeq "summarize-at-native: fired=0 with the self-check's FAIL line is a result" "profile=a runs=50 fired=0 k=2" "$tmp/zero.log" 2 a
+printf '%s\n' '--- arm a: -Xint' 'java buggy: property false in 3 of 50 native runs' '--- arm b: -Xint' 'java buggy: property false in 0 of 50 native runs' 'FAIL the buggy mode never fired in 50 runs on 4 CPUs: the planted race is not reachable' >"$tmp/b-zero.log"
+sumeq "summarize-at-native: arm b never firing does not hide arm a's result" "profile=a runs=50 fired=3 k=2" "$tmp/b-zero.log" 2 a
 printf '%s\n' '--- arm a: -Xint' 'java buggy: property false in 1 of 5 native runs' '--- arm a: -Xint' 'java fixed: property false in 0 of 5 native runs' >"$tmp/twosect2-a.log"
 expect "summarize-at-native: a profile run twice fails even when only one run has a buggy line" 1 sh "$here/summarize-at-native.sh" "$tmp/twosect2-a.log" 50 a
 expect "summarize-at-native rejects a profile with a space" 64 sh "$here/summarize-at-native.sh" "$proflog" 50 "a b"
@@ -1761,8 +1770,16 @@ wfsh "the run and summary steps get the profile from the step output" '[ "$(grep
 wfexpect "a failed make fails the step (pipefail)" "          set -o pipefail"
 wfexpect "builds the fixture first" "        run: make -C examples/language-fixtures/java at-jar"
 wfsh "exactly the Summary and Upload steps run if always()" '[ "$(awk "/^      - /{name=\$0} /^        if: always\(\)$/ {print name}" "$1" | tr "\n" ";")" = "      - name: Summary;      - name: Upload the log;" ]'
-wfexpect "the summary says clearly when the run failed" '            echo "RUN FAILED (job status: $JOB_STATUS). This is not a result." | tee -a "$GITHUB_STEP_SUMMARY"'
-wfexpect "the summary reads the job status" '          JOB_STATUS: ${{ job.status }}'
+wfexpect "the native step has an id" "        id: native"
+wfexpect "the summary reads the outcome of the native step" '          NATIVE_OUTCOME: ${{ steps.native.outcome }}'
+wfsh "the outcome is read once, by the Summary step" '[ "$(grep -c "steps.native.outcome" "$1")" = 1 ]'
+wfsh "the job status no longer short-circuits the summary" '! grep -q "JOB_STATUS\|job.status" "$1"'
+wfexpect "a native step that did not run is not a result" '            *) echo "RUN FAILED (native runs: ${NATIVE_OUTCOME:-not run}). This is not a result." | tee -a "$GITHUB_STEP_SUMMARY"; exit 0 ;;'
+wfexpect "only a finished native step (success or failure) has its log read" "            success | failure) ;;"
+wfexpect "a log with no valid summary line is not a result and fails the step" '          summary=$(sh examples/language-fixtures/scripts/summarize-at-native.sh "$RUNNER_TEMP/java-native-k.log" "$AT_K" "$PROFILE") || { echo "RUN FAILED: the log has no valid summary line. This is not a result." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }'
+wfexpect "the summary line carries the make outcome" '          line="$summary (make self-check: $NATIVE_OUTCOME)"'
+wfexpect "the summary lists the FAIL lines of the log" '            grep "^FAIL" "$RUNNER_TEMP/java-native-k.log" || true'
+wfexpect "the summary says fired=0 is a result and the make failure is the self-check's rule" '              echo "fired=0 is a result. The make failure is the self-check'"'"'s own rule (for example the buggy mode never fired); the FAIL lines above say which."'
 wfexpect "the artifact name is a fixed prefix, the checked profile and the checked K" "          name: java-native-k-\${{ steps.inputs.outputs.profile }}-\${{ steps.inputs.outputs.at_k }}"
 wfexpect "a missing log only warns" "          if-no-files-found: warn"
 wfsh "uses no secrets" '! grep -Eq "[$][{][{] *secrets|^ *secrets:" "$1"'
