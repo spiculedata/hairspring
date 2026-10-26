@@ -30,10 +30,14 @@ if [ $# -lt 2 ] || [ $# -gt 3 ]; then
 fi
 profiles=$1
 jar=$2
-maxk=${3:-}
-case "$maxk" in
-  *[!0-9]*) echo "usage: max-k must be a number, got \"$maxk\"" >&2; exit 64 ;;
-esac
+# max-k present means it must be a positive number: an empty or non-numeric one is an error, never "no max-k".
+maxk=
+if [ $# -eq 3 ]; then
+  case "$3" in
+    '' | *[!0-9]* | 0 | 0[0-9]*) echo "usage: max-k must be a positive number, got \"$3\"" >&2; exit 64 ;;
+  esac
+  maxk=$3
+fi
 java=${JAVA:-java}
 if [ ! -r "$profiles" ]; then
   echo "FAIL $profiles cannot be read" >&2

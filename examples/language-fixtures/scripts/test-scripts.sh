@@ -1296,6 +1296,15 @@ cjc "rejects a missing profiles file" 1 "" "$tmp/none.tsv"
 expect "check-java-compiled accepts clean runs at the default K and at max-k" 0 env FAKE_JAVA= JAVA="$compiled_java" sh "$here/check-java-compiled.sh" "$profiles_tsv" "$tmp/fake.jar" 5000
 expect "check-java-compiled without max-k does not see a loop compiled only at a large K" 0 env FAKE_JAVA=kloop JAVA="$compiled_java" sh "$here/check-java-compiled.sh" "$profiles_tsv" "$tmp/fake.jar"
 expect "check-java-compiled with max-k rejects a loop compiled only at a large K" 1 env FAKE_JAVA=kloop JAVA="$compiled_java" sh "$here/check-java-compiled.sh" "$profiles_tsv" "$tmp/fake.jar" 5000
+expect "check-java-compiled rejects an empty max-k (present, not absent)" 64 env JAVA="$compiled_java" sh "$here/check-java-compiled.sh" "$profiles_tsv" "$tmp/fake.jar" ""
+expect "check-java-compiled rejects a zero max-k" 64 env JAVA="$compiled_java" sh "$here/check-java-compiled.sh" "$profiles_tsv" "$tmp/fake.jar" 0
+expect "check-java-compiled rejects a four-argument call" 64 env JAVA="$compiled_java" sh "$here/check-java-compiled.sh" "$profiles_tsv" "$tmp/fake.jar" 5000 extra
+cap=$(sed -n 's/.*MAX_ITERATIONS = \([0-9]*\);.*/\1/p' "$here/../java/at/src/langat/Contract.java")
+expect "the Java Makefile's at-compiled passes the cap read from Contract.java" 0 sh -c "make -n -C '$here/../java' at-compiled | grep -q 'check-java-compiled.sh profiles.tsv .*lang-at.jar $cap\$'"
+expect "the Java Makefile reads a cap" 0 sh -c "test -n '$cap'"
+expect "the Java Makefile's at-compiled fails when the cap is empty" 2 make -C "$here/../java" at-compiled MAX_K=
+expect "the Java Makefile's at-compiled fails when the cap is not a number" 2 make -C "$here/../java" at-compiled MAX_K=lots
+expect "the Java Makefile's cap check passes with the real cap" 0 make -C "$here/../java" at-max-k-check
 expect "check-java-compiled rejects a max-k that is not a number" 64 env JAVA="$compiled_java" sh "$here/check-java-compiled.sh" "$profiles_tsv" "$tmp/fake.jar" lots
 expect "check-java-compiled runs every arm again at max-k" 0 sh -c "env JAVA='$compiled_java' sh '$here/check-java-compiled.sh' '$profiles_tsv' '$tmp/fake.jar' 5000 | grep -c '^arm ' | grep -qx 6"
 expect "check-java-compiled without arguments is a usage error" 64 sh "$here/check-java-compiled.sh"
