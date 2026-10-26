@@ -1,0 +1,4 @@
+# Extra JVM flag profiles, kept apart from profiles.tsv (which is pinned to arms a and b).
+# a-prime is profile a with -Xshare:off replaced by -Xshare:auto, so the JVM maps its default class-data archive.
+# Same format as profiles.tsv: the profile name, a tab, the flags (a list of words).
+a-prime	-Xint -XX:+UseSerialGC -XX:ActiveProcessorCount=1 -XX:-UsePerfData -Xshare:auto

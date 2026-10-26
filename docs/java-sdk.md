@@ -220,7 +220,8 @@ and those counters are per method, summed over all threads: `racyIterations` is 
 `-XX:-TieredCompilation`). That is a margin, so `scripts/check-java-compiled.sh` runs every mode under
 `-XX:+PrintCompilation`, with the default flags and under each profile, and requires that neither worker loop is ever
 compiled. The two flag profiles in `examples/language-fixtures/java/profiles.tsv` are `-Xint ...` (interpreter only) and
-`-XX:TieredStopAtLevel=1 ...` (C1 only). `scripts/check-window-java.sh` reads the bytecode of the two worker loops and
+`-XX:TieredStopAtLevel=1 ...` (C1 only); `profiles-extra.tsv` in the same directory adds `a-prime`, profile `a` with `-Xshare:off`
+replaced by `-Xshare:auto`, which `make at-compiled` checks the same way. `scripts/check-window-java.sh` reads the bytecode of the two worker loops and
 requires a load of the counter, one call of `spin` and a store of the counter with nothing else that calls, locks or
 allocates between them. `spin` itself is a call inside the window: under arm b a worker can wait for a compile of it, and under
 both arms a worker can stop at a safepoint in its loop; both only make the race easier to reach. The native self-check, run
@@ -264,7 +265,9 @@ and the detector sees it, not how often it fires under any other scheduler.
 
 The fixture has its own tests (`make -C examples/language-fixtures/java at-test`): its command line (including `--k=N`),
 its line, its barrier, its invariants and its workers; the source check; the native tests of `--k=N`; 50 native runs per
-mode with a negative control; and each JVM flag profile.
+mode with a negative control; and each JVM flag profile. The native targets take an optional `AT_K=<n>`
+(`make -C examples/language-fixtures/java at-native AT_K=50`), which runs the program at `--k=<n>` and checks for 4 x n; without
+it they run exactly as before.
 
 ## Differences from the C SDK
 

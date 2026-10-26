@@ -14,8 +14,15 @@
 #   make at-k         only the native tests of the --k=N argument (iterations per worker)
 #   make at-native    only the native self-checks (see ../README.md) and the negative control, with the default JVM flags
 #   make at-profile-native  the same self-checks once under each profile's JVM flags
+#   make at-extra-native    the same self-checks once under each profile of profiles-extra.tsv (a-prime: profile a with
+#                     -Xshare:auto in place of -Xshare:off); not part of at-test
+#
+# The native self-check targets take an optional AT_K (make at-native AT_K=50): the wrapper then passes --k=50 and the self-check
+# expects 4 x K (AT_K is 1 to MAX_K). Without AT_K every command, the wrapper and every expectation is the default (K = 1,000).
 #   make at-compiled  -XX:+PrintCompilation: neither worker loop is ever compiled, with the default flags and each profile
-#   make at-arms      each JVM flag profile of profiles.tsv: valid flags, a clean run of fixed, how often buggy fires
+#                     of profiles.tsv and of profiles-extra.tsv
+#   make at-arms      each JVM flag profile of profiles.tsv and profiles-extra.tsv: valid flags, a clean run of fixed, how
+#                     often buggy fires
 #
 # Needs a JDK 21: JAVA_HOME selects it (the acceptance run pins Temurin 21.0.12.1+1; `java -version` shows which one this is).
 # SOURCE_DATE is the fixed timestamp of every jar entry. Nothing here runs Hermit.
@@ -33,7 +40,7 @@ JAVAC_FLAGS = --release 21 -Xlint:all -Werror -encoding UTF-8 -proc:none
 SOURCES := $(sort $(wildcard src/langat/*.java))
 TEST_SOURCES := $(sort $(wildcard test/langat/*.java))
 
-.PHONY: jar test selftest native flags clean FORCE at-jar at-test at-selftest at-sources at-k at-native at-profile-native at-max-k-check at-compiled at-arms
+.PHONY: jar test selftest native flags clean FORCE at-jar at-test at-selftest at-sources at-k at-native at-profile-native at-max-k-check at-compiled at-arms at-extra-native
 
 jar: $(BUILD)/lang-at.jar
 
@@ -87,6 +94,9 @@ AT_BUILD ?= $(BUILD)/at
 # The largest --k=N the fixture accepts (Contract.MAX_ITERATIONS), which at-compiled also runs.
 MAX_K ?= $(shell sed -n 's/.*MAX_ITERATIONS = \([0-9]*\);.*/\1/p' at/src/langat/Contract.java)
 RUNS ?= 50
+# AT_K, when set on the command line, is the iterations per worker the native self-checks run at: the wrapper passes
+# --k=AT_K and the check expects 4 x AT_K. Unset or empty is the default run: no argument, K = 1,000, and the wrapper
+# below is the one it always was. It is validated where AT_JAVA is defined, below.
 ARM_RUNS ?= 5
 SDK_DIR := ../../../sdks/java
 AT_SOURCES := $(sort $(wildcard $(SDK_DIR)/src/hairspring/*.java)) $(SOURCES) $(sort $(wildcard at/src/langat/*.java))
@@ -111,8 +121,33 @@ $(AT_BUILD)/lang-at.jar: $(AT_BUILD)/classes/.built at/manifest.mf
 
 # The program as the self-checks run it: a command that takes the mode as its first argument. JAVA_FLAGS (read when it
 # runs) are extra JVM flags, which is how the two flag profiles are tried.
-$(AT_BUILD)/at-java: $(AT_BUILD)/lang-at.jar
-	printf '#!/bin/sh\nexec "%s" $$JAVA_FLAGS -cp "%s" langat.Main "$$@"\n' "$(JAVA)" "$(abspath $(AT_BUILD)/lang-at.jar)" >$@
+# With AT_K the wrapper is a separate file, at-java-k<AT_K>, so a wrapper made for another K is never reused.
+# Only the make command line sets AT_K (make at-native AT_K=50): an AT_K exported in the environment is ignored, so it cannot
+# change the targets the build record builds. The value is checked in make itself, before it reaches a shell: digits only,
+# no leading zero, no space, 1 to MAX_K.
+ifeq ($(origin AT_K),environment)
+AT_K :=
+endif
+empty :=
+space := $(empty) $(empty)
+digits_left = $(subst 9,,$(subst 8,,$(subst 7,,$(subst 6,,$(subst 5,,$(subst 4,,$(subst 3,,$(subst 2,,$(subst 1,,$(subst 0,,$(1)))))))))))
+ifneq ($(subst $(space),S,$(AT_K)),)
+ifneq ($(call digits_left,$(subst $(space),S,$(AT_K))),)
+$(error AT_K='$(AT_K)' is not a number from 1 to $(MAX_K): digits only)
+endif
+ifneq ($(filter 0%,$(AT_K)),)
+$(error AT_K='$(AT_K)' is not a number from 1 to $(MAX_K): no leading zero)
+endif
+ifneq ($(shell [ $(AT_K) -ge 1 ] && [ $(AT_K) -le '$(MAX_K)' ] 2>/dev/null && echo ok),ok)
+$(error AT_K='$(AT_K)' is not a number from 1 to $(MAX_K) (Contract.MAX_ITERATIONS))
+endif
+endif
+AT_JAVA := $(AT_BUILD)/at-java$(if $(AT_K),-k$(AT_K))
+AT_K_ARG := $(if $(AT_K), --k=$(AT_K))
+AT_K_ENV := $(if $(AT_K),LANG_AT_K=$(AT_K) )
+
+$(AT_JAVA): $(AT_BUILD)/lang-at.jar
+	printf '#!/bin/sh\nexec "%s" $$JAVA_FLAGS -cp "%s" langat.Main "$$@"$(AT_K_ARG)\n' "$(JAVA)" "$(abspath $(AT_BUILD)/lang-at.jar)" >$@
 	chmod +x $@
 
 $(AT_BUILD)/test-classes/.built: $(AT_BUILD)/classes/.built $(AT_BUILD)/build-id $(AT_TEST_SOURCES)
@@ -137,12 +172,16 @@ at-k: $(AT_BUILD)/lang-at.jar
 
 # The contract, natively, 50 runs of buggy and fixed (buggy must fire at least once, fixed never), wide as a contract
 # check, and a negative control: the racy program standing in for fixed must be rejected.
-at-native: $(AT_BUILD)/at-java
-	sh ../scripts/run-checks.sh java $(AT_BUILD)/at-java $(RUNS)
+at-native: $(AT_JAVA)
+	$(AT_K_ENV)sh ../scripts/run-checks.sh java $(AT_JAVA) $(RUNS)
 
 # The same self-checks under each profile's JVM flags (the at-java wrapper reads JAVA_FLAGS when it runs).
-at-profile-native: $(AT_BUILD)/at-java
-	sh ../scripts/run-java-profile-checks.sh profiles.tsv $(AT_BUILD)/at-java $(RUNS)
+at-profile-native: $(AT_JAVA)
+	$(AT_K_ENV)sh ../scripts/run-java-profile-checks.sh profiles.tsv $(AT_JAVA) $(RUNS)
+
+# The same, under each profile of profiles-extra.tsv (a-prime, which uses the JVM's default class-data archive).
+at-extra-native: $(AT_JAVA)
+	$(AT_K_ENV)sh ../scripts/run-java-profile-checks.sh profiles-extra.tsv $(AT_JAVA) $(RUNS)
 
 # A cap that could not be read (Contract.java reformatted) must fail the check, never skip the largest-K runs.
 at-max-k-check:
@@ -151,9 +190,11 @@ at-max-k-check:
 # The JIT never compiled the two worker loops, at the default K and at the largest --k (see Race.java and ../scripts/check-java-compiled.sh).
 at-compiled: at-max-k-check $(AT_BUILD)/lang-at.jar
 	JAVA="$(JAVA)" sh ../scripts/check-java-compiled.sh profiles.tsv $(AT_BUILD)/lang-at.jar $(MAX_K)
+	JAVA="$(JAVA)" sh ../scripts/check-java-compiled.sh profiles-extra.tsv $(AT_BUILD)/lang-at.jar $(MAX_K)
 
 at-arms: $(AT_BUILD)/lang-at.jar
 	JAVA="$(JAVA)" ARM_RUNS=$(ARM_RUNS) sh ../scripts/check-java-arms.sh profiles.tsv $(AT_BUILD)/lang-at.jar
+	JAVA="$(JAVA)" ARM_RUNS=$(ARM_RUNS) sh ../scripts/check-java-arms.sh profiles-extra.tsv $(AT_BUILD)/lang-at.jar
 
 clean:
 	rm -rf $(BUILD)
