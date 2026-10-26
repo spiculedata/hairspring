@@ -51,14 +51,19 @@ n=$(cat "$state/n" 2>/dev/null || echo 0)
 n=$((n + 1))
 echo "$n" >"$state/n"
 
-final=4000
+# FAKE_K is the K the fake pretends to run at (default 1000): the full count is 4 x K.
+k=${FAKE_K:-1000}
+full=$((4 * k))
+lost=10
+[ "$full" -le 10 ] && lost=1
+final=$full
 case "${FAKE:-}:$mode" in
   :*) ;;
-  *:fixed) [ "$FAKE" = fixedfires ] && final=3990 ;;
-  *) [ $((n % 2)) -eq 1 ] && final=3990 ;;
+  *:fixed) [ "$FAKE" = fixedfires ] && final=$((full - lost)) ;;
+  *) [ $((n % 2)) -eq 1 ] && final=$((full - lost)) ;;
 esac
 falses=0
-[ "$final" -ne 4000 ] && falses=1
+[ "$final" -ne "$full" ] && falses=1
 [ "${FAKE:-}" = disagree ] && falses=0
 
 shown=$mode
@@ -69,8 +74,8 @@ head="LANGAT v1"
 [ "${FAKE:-}" = oldline ] && head="lang=$lang"
 id=$lang
 [ "${FAKE:-}" = wrongid ] && id=cpp
-vals="[$final,4000,4,1000]"
-[ "${FAKE:-}" = twovals ] && vals="[$final,4000,0,0]"
+vals="[$final,$full,4,$k]"
+[ "${FAKE:-}" = twovals ] && vals="[$final,$full,0,0]"
 [ "${FAKE:-}" = garbage ] && vals="[7,1,2,3]"
 thread="t#5"
 [ "$lang" = go ] && thread="go"
@@ -101,10 +106,10 @@ event "$id.all_started" 0 "[4,0,0,0]" "$hits"
 event "$id.counter_exact" "$falses" "$vals" "$hits"
 [ "${FAKE:-}" = incomplete ] && echo "hairspring: incomplete catalog: 1 evaluation(s) ran at call sites that are missing from the catalog section" >&2
 
-[ "${FAKE:-}" = dupe ] && event "$id.counter_exact" 1 "[3990,4000,4,1000]" 1
+[ "${FAKE:-}" = dupe ] && event "$id.counter_exact" 1 "[$((full - lost)),$full,4,$k]" 1
 if [ "${FAKE:-}" = garbage ]; then
   echo "garbage"
-elif ! printf "%s lang=%s mode=%s final=%0${digits}d expect=%020d order=0123456789abcdef rand=0123456789abcdef\n" "$head" "$lang" "$shown" "$final" 4000 2>/dev/null; then
+elif ! printf "%s lang=%s mode=%s final=%0${digits}d expect=%020d order=0123456789abcdef rand=0123456789abcdef\n" "$head" "$lang" "$shown" "$final" "$full" 2>/dev/null; then
   if [ "${FAKE:-}" != noexit3 ]; then
     echo "fake: cannot write the result line" >&2
     exit 3
@@ -167,6 +172,39 @@ if [ -w /dev/full ]; then
 else
   echo "skip a program that survives an unwritable stdout is rejected (no /dev/full here)"
 fi
+
+# LANG_AT_K: the K the artifact is run at (default 1000). The expected total is 4 x K, in the line's expect= field, in the
+# witness values [final, 4K, 4, K] and in the final-value comparisons.
+kcheck() { # kcheck <name> <wanted exit> <FAKE value> <FAKE_K> <LANG_AT_K or "unset">
+  if [ "$5" = unset ]; then
+    expect "$1" "$2" env -u LANG_AT_K FAKE="$3" FAKE_K="$4" FAKE_STATE="$(newstate)" LANG_AT_CPUS=4 WIDE_RUNS=2 sh "$here/check-native.sh" t "$fake" 6
+  else
+    expect "$1" "$2" env FAKE="$3" FAKE_K="$4" LANG_AT_K="$5" FAKE_STATE="$(newstate)" LANG_AT_CPUS=4 WIDE_RUNS=2 sh "$here/check-native.sh" t "$fake" 6
+  fi
+}
+kcheck "K=50: a conforming program run at --k=50 passes" 0 racy 50 50
+kcheck "K=5000: a conforming program run at the largest K passes" 0 racy 5000 5000
+kcheck "K=1: a conforming program run at K=1 passes" 0 racy 1 1
+kcheck "K=50: a program still at K=1000 is rejected (expect= and witness values are 4000)" 1 racy 1000 50
+kcheck "K=1000 given explicitly: the default program passes" 0 racy 1000 1000
+kcheck "K=1000 given explicitly: a program that ran at K=50 is rejected" 1 racy 50 1000
+kcheck "no LANG_AT_K: a program that ran at K=50 is rejected" 1 racy 50 unset
+kcheck "K=50: a fixed mode that loses an update is rejected" 1 fixedfires 50 50
+kcheck "K=50: a detector that disagrees with the program is rejected" 1 disagree 50 50
+kcheck "K=50: witness values other than [final, 200, 4, 50] are rejected" 1 twovals 50 50
+for badk in 0 abc -1 1.5 "" 050 "5 0"; do
+  expect "LANG_AT_K='$badk' is a usage error" 64 env LANG_AT_K="$badk" FAKE=racy FAKE_STATE="$(newstate)" LANG_AT_CPUS=4 WIDE_RUNS=2 sh "$here/check-native.sh" t "$fake" 6
+done
+# The default is unchanged: with LANG_AT_K unset or 1000 the script prints the same bytes and ends the same way.
+env -u LANG_AT_K FAKE=racy FAKE_STATE="$(newstate)" LANG_AT_CPUS=4 WIDE_RUNS=2 sh "$here/check-native.sh" t "$fake" 6 >"$tmp/native.unset" 2>&1
+echo "exit $?" >>"$tmp/native.unset"
+env LANG_AT_K=1000 FAKE=racy FAKE_STATE="$(newstate)" LANG_AT_CPUS=4 WIDE_RUNS=2 sh "$here/check-native.sh" t "$fake" 6 >"$tmp/native.1000" 2>&1
+echo "exit $?" >>"$tmp/native.1000"
+expect "check-native prints the same bytes with LANG_AT_K unset and 1000" 0 cmp -s "$tmp/native.unset" "$tmp/native.1000"
+expect "check-native's default summary names no K" 0 sh -c "grep -q 'native runs' '$tmp/native.unset' && ! grep -qi 'k=' '$tmp/native.unset'"
+env -u LANG_AT_K FAKE=twovals FAKE_STATE="$(newstate)" LANG_AT_CPUS=4 WIDE_RUNS=2 sh "$here/check-native.sh" t "$fake" 6 >"$tmp/native.twovals" 2>&1
+expect "check-native's default witness message still names [N,4000,4,1000]" 0 grep -Fq 'are not [' "$tmp/native.twovals"
+expect "check-native's default witness message ends with 4000,4,1000]" 0 grep -Fq ',4000,4,1000]:' "$tmp/native.twovals"
 
 # run-checks.sh: the real artifact, then the negative control (the fixed mode run as buggy must be rejected).
 expect "run-checks passes a conforming racy program with its control" 0 env FAKE=racy FAKE_STATE="$(newstate)" LANG_AT_CPUS=4 WIDE_RUNS=2 sh "$here/run-checks.sh" t "$fake" 6
@@ -1309,6 +1347,38 @@ expect "check-java-compiled rejects a max-k that is not a number" 64 env JAVA="$
 expect "check-java-compiled runs every arm again at max-k" 0 sh -c "env JAVA='$compiled_java' sh '$here/check-java-compiled.sh' '$profiles_tsv' '$tmp/fake.jar' 5000 | grep -c '^arm ' | grep -qx 6"
 expect "check-java-compiled without arguments is a usage error" 64 sh "$here/check-java-compiled.sh"
 expect "check-java-compiled names the default flags and each profile" 0 sh -c "env JAVA='$compiled_java' sh '$here/check-java-compiled.sh' '$profiles_tsv' '$tmp/fake.jar' | grep -c '^arm ' | grep -qx 3"
+
+# The extra profile a-prime: profile a with -Xshare:off replaced by -Xshare:auto. It lives in its own file so that
+# profiles.tsv (pinned to arms a and b by --exact, the build record and the tests above) is unchanged.
+extra_tsv="$here/../java/profiles-extra.tsv"
+expect "profiles-extra.tsv names a-prime: profile a with -Xshare:auto in place of -Xshare:off" 0 sh -c "test \"\$(grep -v '^#' '$extra_tsv' | grep -v '^\$')\" = \"\$(grep '^a	' '$profiles_tsv' | sed 's/^a	/a-prime	/; s/-Xshare:off/-Xshare:auto/')\""
+expect "profiles-extra.tsv holds a-prime and nothing else but comments" 0 sh -c "test \$(grep -vc '^#' '$extra_tsv') -eq 1"
+expect "profiles-extra.tsv's flags are exactly the five of the acceptance profile" 0 grep -Fxq "$(printf 'a-prime\t-Xint -XX:+UseSerialGC -XX:ActiveProcessorCount=1 -XX:-UsePerfData -Xshare:auto')" "$extra_tsv"
+expect "profiles.tsv still holds exactly arms a and b" 0 sh -c "test \$(grep -vc '^#' '$profiles_tsv') -eq 2 && ! grep -q a-prime '$profiles_tsv'"
+expect "check-java-arms accepts profiles-extra.tsv with a conforming java" 0 env FAKE_JAVA= JAVA="$arms_java" sh "$here/check-java-arms.sh" "$extra_tsv" "$tmp/fake.jar"
+expect "check-java-compiled accepts profiles-extra.tsv (default flags, a-prime, each at max-k)" 0 sh -c "env JAVA='$compiled_java' sh '$here/check-java-compiled.sh' '$extra_tsv' '$tmp/fake.jar' 5000 | grep -c '^arm ' | grep -qx 4"
+jmake="make -n -C $here/../java"
+expect "the Java Makefile's at-compiled also checks profiles-extra.tsv" 0 sh -c "$jmake at-compiled | grep -q 'check-java-compiled.sh profiles-extra.tsv .*lang-at.jar $cap\$'"
+expect "the Java Makefile's at-compiled still checks profiles.tsv with the cap" 0 sh -c "$jmake at-compiled | grep -q 'check-java-compiled.sh profiles.tsv .*lang-at.jar $cap\$'"
+expect "the Java Makefile's at-arms also checks profiles-extra.tsv" 0 sh -c "$jmake at-arms | grep -q 'check-java-arms.sh profiles-extra.tsv'"
+expect "the Java Makefile's at-arms still checks profiles.tsv" 0 sh -c "$jmake at-arms | grep -q 'check-java-arms.sh profiles.tsv'"
+
+# The at-java wrapper takes an optional K. Without it the target, the recipe and the wrapper are what they were.
+make -n -C "$here/../java" build/at/at-java >"$tmp/recipe.default" 2>&1
+make -n -C "$here/../java" build/at/at-java-k50 K=50 >"$tmp/recipe.k50" 2>&1
+expect "at-java without K: the wrapper is exactly the old one (the caller's arguments, nothing else)" 0 grep -Fq "langat.Main \"\$@\"\\n' \"" "$tmp/recipe.default"
+expect "at-java without K: the wrapper does not mention --k" 0 sh -c "! grep -q -e '--k' '$tmp/recipe.default'"
+expect "at-java with K=50: the wrapper appends --k=50 after the caller's arguments" 0 grep -Fq "langat.Main \"\$@\" --k=50\\n' \"" "$tmp/recipe.k50"
+expect "at-java without K: the target is build/at/at-java" 0 sh -c "$jmake at-native | grep -q 'run-checks.sh java build/at/at-java 50\$'"
+expect "at-java with an empty K is the default wrapper" 0 sh -c "$jmake at-native K= | grep -q 'run-checks.sh java build/at/at-java 50\$'"
+expect "at-java with K=50: its own wrapper build/at/at-java-k50, so a stale default one is never reused" 0 sh -c "$jmake at-native K=50 | grep -q 'run-checks.sh java build/at/at-java-k50 50\$'"
+expect "at-native with K=50 sets LANG_AT_K for the self-check" 0 sh -c "$jmake at-native K=50 | grep -q 'LANG_AT_K=50 '"
+expect "at-native without K does not set LANG_AT_K" 0 sh -c "! $jmake at-native | grep -q LANG_AT_K"
+expect "at-profile-native with K=50 sets LANG_AT_K and uses the K wrapper" 0 sh -c "$jmake at-profile-native K=50 | grep 'run-java-profile-checks.sh profiles.tsv' | grep -q 'LANG_AT_K=50 .*at-java-k50'"
+expect "at-extra-native runs the self-check under a-prime with the K wrapper" 0 sh -c "$jmake at-extra-native K=50 | grep 'run-java-profile-checks.sh profiles-extra.tsv' | grep -q 'LANG_AT_K=50 .*at-java-k50'"
+expect "a K that is not a number is refused by the Makefile" 2 make -n -C "$here/../java" at-native K=lots
+expect "a K of 0 is refused by the Makefile" 2 make -n -C "$here/../java" at-native K=0
+expect "a K of 5001 is refused by the Makefile (above the fixture's cap)" 2 make -n -C "$here/../java" at-native K=5001
 
 # run-java-profile-checks.sh: run-checks.sh once per profile, with that profile's flags in JAVA_FLAGS.
 rc_stub="$tmp/rc-stub"

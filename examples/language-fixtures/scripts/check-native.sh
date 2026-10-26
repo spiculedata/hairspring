@@ -1,7 +1,7 @@
 #!/bin/sh
 # Native self-check of a lost-update fixture artifact (no Hermit, no engine).
 #
-#   check-native.sh <lang-id> <artifact> [runs]
+#   [LANG_AT_K=<k>] check-native.sh <lang-id> <artifact> [runs]
 #
 # The artifact is one program that takes its mode as argv[1]: buggy, fixed or wide. This script checks the whole
 # fixture contract, natively:
@@ -9,19 +9,21 @@
 #     print nothing on stdout, and exit 64;
 #   - every run of buggy, fixed and wide (`runs` of buggy and fixed, $WIDE_RUNS of wide, default 10) exits 0 whatever
 #     the property says and prints exactly one stdout line,
-#     `LANGAT v1 lang=<id> mode=<mode> final=<20 digits> expect=0000000000000000<4000> order=<16 hex> rand=<16 hex>`;
+#     `LANGAT v1 lang=<id> mode=<mode> final=<20 digits> expect=<20 digits, 4 x K> order=<16 hex> rand=<16 hex>`;
 #   - with stdout on /dev/full (closed where there is no /dev/full) the artifact exits 3: the result line could not be
 #     written;
 #   - the protocol report on stderr has one evaluation each of <id>.counter_exact (witness values
-#     [final, 4000, 4, 1000]) and <id>.all_started, and no incomplete-catalog notice from the SDK's audit;
-#   - the detector and the program agree: the property is false exactly when final != 4000, and final never exceeds it.
+#     [final, 4K, 4, K], 4000 and 1000 by default) and <id>.all_started, and no incomplete-catalog notice from the SDK's audit;
+#   - the detector and the program agree: the property is false exactly when final != 4K, and final never exceeds it.
 # Then, across the runs:
-#   - fixed never fires and always ends at 4000;
+#   - fixed never fires and always ends at 4 x K (4000 by default);
 #   - buggy fires at least once. On a host where this process may use only one CPU (nproc respects affinity and
 #     cgroup cpusets) four threads cannot overlap, so a buggy mode that never fires there ends the check with the
 #     exit code 77 (skipped), after the other checks. LANG_AT_REQUIRE_PARALLEL=1 turns that skip into a failure (the
 #     build record's check must run on at least two CPUs);
 #   - wide is only checked against the contract; how often it fires is printed.
+# LANG_AT_K is the K (iterations per worker) the artifact is run at, default 1000: the artifact is expected to take it as
+# its own --k=N (the Java fixture's wrapper does), so a run is expected to end at 4 x K. Not a positive number: exit 64.
 # Each run is limited to $RUN_TIMEOUT seconds (default 60) when `timeout` or `gtimeout` is installed.
 # Prints one summary line per mode. Exits 0 when everything holds, 77 when the buggy check was skipped, 1 otherwise,
 # 64 for a usage error.
@@ -30,7 +32,13 @@ set -u
 
 SKIPPED=77
 USAGE_STATUS=64
-EXPECTED=4000
+# K is the iterations per worker the artifact runs at (LANG_AT_K, default 1000); a run without a lost update ends at 4 x K.
+K=${LANG_AT_K-1000}
+case "$K" in
+  "" | *[!0-9]* | 0 | 0[0-9]*) echo "usage: LANG_AT_K must be a positive number without a leading zero, got \"$K\"" >&2; exit 64 ;;
+esac
+EXPECTED=$((4 * K))
+EXPECT_FIELD=$(printf "%020d" "$EXPECTED")
 
 if [ $# -lt 2 ]; then
   echo "usage: $0 <lang-id> <artifact> [runs]" >&2
@@ -96,7 +104,7 @@ one_run() {
     echo "FAIL $mode run $i: exit status $status, want 0" >&2
     return 1
   fi
-  shape="^LANGAT v1 lang=$lang mode=$mode final=[0-9]{20} expect=0{16}$EXPECTED order=[0-9a-f]{16} rand=[0-9a-f]{16}$"
+  shape="^LANGAT v1 lang=$lang mode=$mode final=[0-9]{20} expect=$EXPECT_FIELD order=[0-9a-f]{16} rand=[0-9a-f]{16}$"
   if ! grep -Eq "$shape" "$tmp/out" || [ "$(wc -l <"$tmp/out")" -ne 1 ]; then
     echo "FAIL $mode run $i: stdout is not the one contract line: $(cat "$tmp/out")" >&2
     return 1
@@ -120,8 +128,8 @@ one_run() {
       return 1
     fi
   done
-  if ! echo "$assert_line" | grep -Eq "\"vals\":\[$final,$EXPECTED,4,1000\]"; then
-    echo "FAIL $mode run $i: the witness values of $property are not [$final,$EXPECTED,4,1000]: $assert_line" >&2
+  if ! echo "$assert_line" | grep -Eq "\"vals\":\[$final,$EXPECTED,4,$K\]"; then
+    echo "FAIL $mode run $i: the witness values of $property are not [$final,$EXPECTED,4,$K]: $assert_line" >&2
     return 1
   fi
   if grep -q 'incomplete catalog' "$tmp/err"; then
