@@ -33,10 +33,15 @@ set -u
 SKIPPED=77
 USAGE_STATUS=64
 # K is the iterations per worker the artifact runs at (LANG_AT_K, default 1000); a run without a lost update ends at 4 x K.
+MAX_K=5000  # the fixtures' --k=N cap
 K=${LANG_AT_K-1000}
 case "$K" in
-  "" | *[!0-9]* | 0 | 0[0-9]*) echo "usage: LANG_AT_K must be a positive number without a leading zero, got \"$K\"" >&2; exit 64 ;;
+  "" | *[!0-9]* | 0 | 0[0-9]* | ?????*) echo "usage: LANG_AT_K must be a number from 1 to $MAX_K without a leading zero, got \"$K\"" >&2; exit 64 ;;
 esac
+if [ "$K" -gt "$MAX_K" ]; then
+  echo "usage: LANG_AT_K must be a number from 1 to $MAX_K without a leading zero, got \"$K\"" >&2
+  exit 64
+fi
 EXPECTED=$((4 * K))
 EXPECT_FIELD=$(printf "%020d" "$EXPECTED")
 

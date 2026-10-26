@@ -192,7 +192,7 @@ kcheck "no LANG_AT_K: a program that ran at K=50 is rejected" 1 racy 50 unset
 kcheck "K=50: a fixed mode that loses an update is rejected" 1 fixedfires 50 50
 kcheck "K=50: a detector that disagrees with the program is rejected" 1 disagree 50 50
 kcheck "K=50: witness values other than [final, 200, 4, 50] are rejected" 1 twovals 50 50
-for badk in 0 abc -1 1.5 "" 050 "5 0"; do
+for badk in 0 abc -1 1.5 "" 050 "5 0" 5001 99999999999999999999 " " "50 "; do
   expect "LANG_AT_K='$badk' is a usage error" 64 env LANG_AT_K="$badk" FAKE=racy FAKE_STATE="$(newstate)" LANG_AT_CPUS=4 WIDE_RUNS=2 sh "$here/check-native.sh" t "$fake" 6
 done
 # The default is unchanged: with LANG_AT_K unset or 1000 the script prints the same bytes and ends the same way.
@@ -1365,20 +1365,36 @@ expect "the Java Makefile's at-arms still checks profiles.tsv" 0 sh -c "$jmake a
 
 # The at-java wrapper takes an optional K. Without it the target, the recipe and the wrapper are what they were.
 make -n -C "$here/../java" build/at/at-java >"$tmp/recipe.default" 2>&1
-make -n -C "$here/../java" build/at/at-java-k50 K=50 >"$tmp/recipe.k50" 2>&1
+make -n -C "$here/../java" build/at/at-java-k50 AT_K=50 >"$tmp/recipe.k50" 2>&1
 expect "at-java without K: the wrapper is exactly the old one (the caller's arguments, nothing else)" 0 grep -Fq "langat.Main \"\$@\"\\n' \"" "$tmp/recipe.default"
 expect "at-java without K: the wrapper does not mention --k" 0 sh -c "! grep -q -e '--k' '$tmp/recipe.default'"
-expect "at-java with K=50: the wrapper appends --k=50 after the caller's arguments" 0 grep -Fq "langat.Main \"\$@\" --k=50\\n' \"" "$tmp/recipe.k50"
+expect "at-java with AT_K=50: the wrapper appends --k=50 after the caller's arguments" 0 grep -Fq "langat.Main \"\$@\" --k=50\\n' \"" "$tmp/recipe.k50"
 expect "at-java without K: the target is build/at/at-java" 0 sh -c "$jmake at-native | grep -q 'run-checks.sh java build/at/at-java 50\$'"
-expect "at-java with an empty K is the default wrapper" 0 sh -c "$jmake at-native K= | grep -q 'run-checks.sh java build/at/at-java 50\$'"
-expect "at-java with K=50: its own wrapper build/at/at-java-k50, so a stale default one is never reused" 0 sh -c "$jmake at-native K=50 | grep -q 'run-checks.sh java build/at/at-java-k50 50\$'"
-expect "at-native with K=50 sets LANG_AT_K for the self-check" 0 sh -c "$jmake at-native K=50 | grep -q 'LANG_AT_K=50 '"
+expect "at-java with an empty K is the default wrapper" 0 sh -c "$jmake at-native AT_K= | grep -q 'run-checks.sh java build/at/at-java 50\$'"
+expect "at-java with AT_K=50: its own wrapper build/at/at-java-k50, so a stale default one is never reused" 0 sh -c "$jmake at-native AT_K=50 | grep -q 'run-checks.sh java build/at/at-java-k50 50\$'"
+expect "at-native with AT_K=50 sets LANG_AT_K for the self-check" 0 sh -c "$jmake at-native AT_K=50 | grep -q 'LANG_AT_K=50 '"
 expect "at-native without K does not set LANG_AT_K" 0 sh -c "! $jmake at-native | grep -q LANG_AT_K"
-expect "at-profile-native with K=50 sets LANG_AT_K and uses the K wrapper" 0 sh -c "$jmake at-profile-native K=50 | grep 'run-java-profile-checks.sh profiles.tsv' | grep -q 'LANG_AT_K=50 .*at-java-k50'"
-expect "at-extra-native runs the self-check under a-prime with the K wrapper" 0 sh -c "$jmake at-extra-native K=50 | grep 'run-java-profile-checks.sh profiles-extra.tsv' | grep -q 'LANG_AT_K=50 .*at-java-k50'"
-expect "a K that is not a number is refused by the Makefile" 2 make -n -C "$here/../java" at-native K=lots
-expect "a K of 0 is refused by the Makefile" 2 make -n -C "$here/../java" at-native K=0
-expect "a K of 5001 is refused by the Makefile (above the fixture's cap)" 2 make -n -C "$here/../java" at-native K=5001
+expect "at-profile-native with AT_K=50 sets LANG_AT_K and uses the K wrapper" 0 sh -c "$jmake at-profile-native AT_K=50 | grep 'run-java-profile-checks.sh profiles.tsv' | grep -q 'LANG_AT_K=50 .*at-java-k50'"
+expect "at-extra-native runs the self-check under a-prime with the K wrapper" 0 sh -c "$jmake at-extra-native AT_K=50 | grep 'run-java-profile-checks.sh profiles-extra.tsv' | grep -q 'LANG_AT_K=50 .*at-java-k50'"
+expect "a K that is not a number is refused by the Makefile" 2 make -n -C "$here/../java" at-native AT_K=lots
+expect "a K of 0 is refused by the Makefile" 2 make -n -C "$here/../java" at-native AT_K=0
+expect "a K of 5001 is refused by the Makefile (above the fixture's cap)" 2 make -n -C "$here/../java" at-native AT_K=5001
+expect "a K of 5000 is accepted by the Makefile" 0 make -n -C "$here/../java" at-native AT_K=5000
+expect "a K with a leading zero (007) is refused by the Makefile" 2 make -n -C "$here/../java" at-native AT_K=007
+# make itself drops the whitespace before a command-line value, so a lone space is an empty value (the default run) and
+# " 50" is 50; a trailing space is kept by make and refused here.
+expect "a K that is one space is make's empty value: the default run" 0 sh -c "$jmake at-native 'AT_K= ' | grep -q 'run-checks.sh java build/at/at-java 50\$'"
+expect "a K with a trailing space is refused by the Makefile" 2 make -n -C "$here/../java" at-native "AT_K=50 "
+expect "a K with a leading space is make's own 50" 0 sh -c "$jmake at-native 'AT_K= 50' | grep -q 'LANG_AT_K=50 '"
+expect "a K with a quote and a command is refused by the Makefile, and runs nothing" 2 make -n -C "$here/../java" at-native "AT_K=5';touch $tmp/pwned;'"
+expect "the refused quoted K ran nothing" 1 test -e "$tmp/pwned"
+# An exported AT_K (environment origin) is ignored: only the command line sets it. The old one-letter K is not read at all.
+expect "an exported AT_K is ignored (the default wrapper)" 0 sh -c "AT_K=50 $jmake at-native | grep -q 'run-checks.sh java build/at/at-java 50\$'"
+expect "an exported AT_K does not set LANG_AT_K" 0 sh -c "! AT_K=50 $jmake at-native | grep -q LANG_AT_K"
+expect "an exported bad AT_K is ignored, not an error" 0 sh -c "AT_K=lots $jmake at-native"
+expect "an exported AT_K does not break the wrapper target the build record builds" 0 sh -c "AT_K=5 $jmake build/at/at-java"
+expect "an exported K is not read" 0 sh -c "K=5 $jmake build/at/at-java"
+expect "a command-line AT_K wins over an exported one" 0 sh -c "AT_K=7 $jmake at-native AT_K=50 | grep -q 'run-checks.sh java build/at/at-java-k50 50\$'"
 
 # run-java-profile-checks.sh: run-checks.sh once per profile, with that profile's flags in JAVA_FLAGS.
 rc_stub="$tmp/rc-stub"

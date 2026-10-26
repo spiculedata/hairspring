@@ -369,16 +369,16 @@ loop passes 4 x 1,000 = 4,000 times in all, below the thresholds. The record che
 ```sh
 make -C java at-k           # only the native tests of --k=N
 make -C java at-test        # self-test, source check, --k tests, native self-checks with a negative control, both flag profiles
-make -C java at-native K=50 RUNS=10        # the native self-check with the program run at --k=50 (expects 4 x 50)
-make -C java at-extra-native K=50          # the same under profiles-extra.tsv (a-prime); not part of at-test
+make -C java at-native AT_K=50 RUNS=10        # the native self-check with the program run at --k=50 (expects 4 x 50)
+make -C java at-extra-native AT_K=50          # the same under profiles-extra.tsv (a-prime); not part of at-test
 make -C java at-jar         # build/at/lang-at.jar
 make -C java at-arms        # each profile: valid flags, fixed exact, how often buggy fires
 make test-java              # the probe and the fixture
 ```
 
-`K=<n>` (1 to the cap, plain digits) on `at-native`, `at-profile-native` and `at-extra-native` builds a separate wrapper,
+`AT_K=<n>` on the make command line (1 to the cap, plain digits; an exported `AT_K` is ignored) on `at-native`, `at-profile-native` and `at-extra-native` builds a separate wrapper,
 `build/at/at-java-k<n>`, that appends `--k=<n>` to the mode, and sets `LANG_AT_K=<n>` for `scripts/check-native.sh`, which
-then expects `expect=` to be 4 x n and the witness values `[final, 4n, 4, n]`. Without `K` nothing changes: the wrapper
+then expects `expect=` to be 4 x n and the witness values `[final, 4n, 4, n]`. Without `AT_K` nothing changes: the wrapper
 passes the mode alone and the check expects 4,000 and `[final, 4000, 4, 1000]`. Another value of `K` is a different test
 (see "`--k=N`" above): name it wherever a result is quoted.
 

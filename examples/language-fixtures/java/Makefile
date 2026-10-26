@@ -17,8 +17,8 @@
 #   make at-extra-native    the same self-checks once under each profile of profiles-extra.tsv (a-prime: profile a with
 #                     -Xshare:auto in place of -Xshare:off); not part of at-test
 #
-# The native self-check targets take an optional K (make at-native K=50): the wrapper then passes --k=50 and the self-check
-# expects 4 x K (K is 1 to MAX_K). Without K every command, the wrapper and every expectation is the default (K = 1,000).
+# The native self-check targets take an optional AT_K (make at-native AT_K=50): the wrapper then passes --k=50 and the self-check
+# expects 4 x K (AT_K is 1 to MAX_K). Without AT_K every command, the wrapper and every expectation is the default (K = 1,000).
 #   make at-compiled  -XX:+PrintCompilation: neither worker loop is ever compiled, with the default flags and each profile
 #                     of profiles.tsv and of profiles-extra.tsv
 #   make at-arms      each JVM flag profile of profiles.tsv and profiles-extra.tsv: valid flags, a clean run of fixed, how
@@ -94,9 +94,9 @@ AT_BUILD ?= $(BUILD)/at
 # The largest --k=N the fixture accepts (Contract.MAX_ITERATIONS), which at-compiled also runs.
 MAX_K ?= $(shell sed -n 's/.*MAX_ITERATIONS = \([0-9]*\);.*/\1/p' at/src/langat/Contract.java)
 RUNS ?= 50
-# K, when set, is the iterations per worker the native self-checks run at: the wrapper passes --k=K and the check expects
-# 4 x K. Unset or empty is the default run: no argument, K = 1,000, and the wrapper below is the one it always was.
-K ?=
+# AT_K, when set on the command line, is the iterations per worker the native self-checks run at: the wrapper passes
+# --k=AT_K and the check expects 4 x AT_K. Unset or empty is the default run: no argument, K = 1,000, and the wrapper
+# below is the one it always was. It is validated where AT_JAVA is defined, below.
 ARM_RUNS ?= 5
 SDK_DIR := ../../../sdks/java
 AT_SOURCES := $(sort $(wildcard $(SDK_DIR)/src/hairspring/*.java)) $(SOURCES) $(sort $(wildcard at/src/langat/*.java))
@@ -121,15 +121,30 @@ $(AT_BUILD)/lang-at.jar: $(AT_BUILD)/classes/.built at/manifest.mf
 
 # The program as the self-checks run it: a command that takes the mode as its first argument. JAVA_FLAGS (read when it
 # runs) are extra JVM flags, which is how the two flag profiles are tried.
-# With K the wrapper is a separate file, at-java-k<K>, so a wrapper made for another K is never reused.
-AT_JAVA := $(AT_BUILD)/at-java$(if $(K),-k$(K))
-AT_K_ARG := $(if $(K), --k=$(K))
-AT_K_ENV := $(if $(K),LANG_AT_K=$(K) )
-ifneq ($(K),)
-ifneq ($(shell printf '%s' '$(K)' | grep -Eq '^[1-9][0-9]*$$$$' && [ '$(K)' -le '$(MAX_K)' ] 2>/dev/null && echo ok),ok)
-$(error K='$(K)' is not a number from 1 to $(MAX_K) (Contract.MAX_ITERATIONS))
+# With AT_K the wrapper is a separate file, at-java-k<AT_K>, so a wrapper made for another K is never reused.
+# Only the make command line sets AT_K (make at-native AT_K=50): an AT_K exported in the environment is ignored, so it cannot
+# change the targets the build record builds. The value is checked in make itself, before it reaches a shell: digits only,
+# no leading zero, no space, 1 to MAX_K.
+ifeq ($(origin AT_K),environment)
+AT_K :=
+endif
+empty :=
+space := $(empty) $(empty)
+digits_left = $(subst 9,,$(subst 8,,$(subst 7,,$(subst 6,,$(subst 5,,$(subst 4,,$(subst 3,,$(subst 2,,$(subst 1,,$(subst 0,,$(1)))))))))))
+ifneq ($(subst $(space),S,$(AT_K)),)
+ifneq ($(call digits_left,$(subst $(space),S,$(AT_K))),)
+$(error AT_K='$(AT_K)' is not a number from 1 to $(MAX_K): digits only)
+endif
+ifneq ($(filter 0%,$(AT_K)),)
+$(error AT_K='$(AT_K)' is not a number from 1 to $(MAX_K): no leading zero)
+endif
+ifneq ($(shell [ $(AT_K) -ge 1 ] && [ $(AT_K) -le '$(MAX_K)' ] 2>/dev/null && echo ok),ok)
+$(error AT_K='$(AT_K)' is not a number from 1 to $(MAX_K) (Contract.MAX_ITERATIONS))
 endif
 endif
+AT_JAVA := $(AT_BUILD)/at-java$(if $(AT_K),-k$(AT_K))
+AT_K_ARG := $(if $(AT_K), --k=$(AT_K))
+AT_K_ENV := $(if $(AT_K),LANG_AT_K=$(AT_K) )
 
 $(AT_JAVA): $(AT_BUILD)/lang-at.jar
 	printf '#!/bin/sh\nexec "%s" $$JAVA_FLAGS -cp "%s" langat.Main "$$@"$(AT_K_ARG)\n' "$(JAVA)" "$(abspath $(AT_BUILD)/lang-at.jar)" >$@
