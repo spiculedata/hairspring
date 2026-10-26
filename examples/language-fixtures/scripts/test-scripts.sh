@@ -1642,4 +1642,22 @@ expect "check-dotnet-jit names the default environment and each arm" 0 sh -c "en
 expect "check-dotnet-jit with a missing manifest fails" 1 sh "$here/check-dotnet-jit.sh" "$tmp/none.manifest" "$tmp/fake.dll" "$jit_dotnet"
 expect "check-dotnet-jit without arguments is a usage error" 64 sh "$here/check-dotnet-jit.sh"
 
+# summarize-at-native.sh: the one-line summary of a native self-check log, for the manual java-native-k CI job.
+sumlog="$tmp/at-native.log"
+printf '%s\n' 'java buggy: property false in 37 of 50 native runs' 'java fixed: property false in 0 of 50 native runs, final exact in 50' 'java wide:  property false in 4 of 10 native runs' 'ok   the self-check rejects a fixed mode that is really the buggy one' >"$sumlog"
+expect "summarize-at-native prints runs, fired and k" 0 sh -c "[ \"\$(sh '$here/summarize-at-native.sh' '$sumlog' 50)\" = 'runs=50 fired=37 k=50' ]"
+expect "summarize-at-native reads the log from stdin" 0 sh -c "[ \"\$(sh '$here/summarize-at-native.sh' - 7 <'$sumlog')\" = 'runs=50 fired=37 k=7' ]"
+expect "summarize-at-native fails on a log with no buggy line" 1 sh "$here/summarize-at-native.sh" /dev/null 50
+expect "summarize-at-native rejects a k that is not a number" 64 sh "$here/summarize-at-native.sh" "$sumlog" 5x
+expect "summarize-at-native without arguments is a usage error" 64 sh "$here/summarize-at-native.sh"
+
+# The java-native-k job of ci.yml is manual only and pinned like the java build record.
+ci="$here/../../../.github/workflows/ci.yml"
+job=$(awk '/^  java-native-k:/ {on=1; print; next} on && /^  [a-z]/ {exit} on {print}' "$ci")
+expect "ci.yml has a java-native-k job" 0 test -n "$job"
+expect "java-native-k runs only on workflow_dispatch" 0 sh -c "printf '%s\n' \"\$1\" | grep -qx \"    if: github.event_name == 'workflow_dispatch'\"" _ "$job"
+expect "java-native-k uses the pinned Temurin of the java build record" 0 sh -c "printf '%s\n' \"\$1\" | grep -q 'java-version: \"21.0.12+101.0.LTS\"'" _ "$job"
+expect "java-native-k uses no secrets" 1 sh -c "printf '%s\n' \"\$1\" | grep -q 'secrets\\.'" _ "$job"
+expect "java-native-k has no push or pull_request condition" 0 sh -c "! printf '%s\n' \"\$1\" | grep -Eq 'github.event_name == .(push|pull_request)'" _ "$job"
+
 exit $failures

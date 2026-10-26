@@ -5,6 +5,17 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      at_k:
+        description: Iterations per worker for the java-native-k job (1 to 5000)
+        default: "50"
+        required: false
+        type: string
+      runs:
+        description: Runs of each mode for the java-native-k job (1 to 200)
+        default: "50"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -405,6 +416,60 @@ jobs:
           cat "$RUNNER_TEMP/verify.txt"
           { echo "### Artifact as downloaded: ${{ matrix.variant }}"; echo '```'; cat "$RUNNER_TEMP/verify.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           exit $rc
+
+  # Manual only: the Java fixture's native runs at a chosen K (iterations per worker), so a recorded run shows how often
+  # the planted race fires. Same pinned Temurin as the java build record. No secrets.
+  java-native-k:
+    name: Java fixture native runs at K=${{ inputs.at_k }}
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21.0.12+101.0.LTS"
+      # The inputs are checked before any use: digits only, no leading zero, in range.
+      - name: Check the inputs
+        env:
+          AT_K: ${{ inputs.at_k }}
+          RUNS: ${{ inputs.runs }}
+        run: |
+          check() { # check <name> <value> <max>
+            case "$2" in
+              "" | *[!0-9]* | 0*) echo "$1='$2' is not a number from 1 to $3 (digits only, no leading zero)" >&2; exit 1 ;;
+            esac
+            [ "$2" -le "$3" ] || { echo "$1='$2' is above $3" >&2; exit 1; }
+          }
+          check at_k "$AT_K" 5000
+          check runs "$RUNS" 200
+      - name: Build the fixture
+        run: make -C examples/language-fixtures/java at-jar
+      - name: Native runs
+        env:
+          AT_K: ${{ inputs.at_k }}
+          RUNS: ${{ inputs.runs }}
+        run: |
+          set -o pipefail
+          java -version 2>&1 | tee "$RUNNER_TEMP/java-native-k.log"
+          taskset -c 1-3 nice -n 10 make -C examples/language-fixtures/java at-native AT_K="$AT_K" RUNS="$RUNS" 2>&1 | tee -a "$RUNNER_TEMP/java-native-k.log"
+      - name: Summary
+        if: always()
+        env:
+          AT_K: ${{ inputs.at_k }}
+        run: |
+          summary=$(sh examples/language-fixtures/scripts/summarize-at-native.sh "$RUNNER_TEMP/java-native-k.log" "$AT_K") || summary="no summary: the run did not finish"
+          echo "$summary"
+          { echo "### Java fixture, native buggy runs"; echo '```'; echo "$summary"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-native-k-${{ inputs.at_k }}
+          path: ${{ runner.temp }}/java-native-k.log
+          if-no-files-found: error
+          retention-days: 90
 
   glibc-condlock-example:
     name: glibc condlock example (unit tests)
