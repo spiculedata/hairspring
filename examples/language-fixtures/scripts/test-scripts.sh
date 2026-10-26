@@ -1642,4 +1642,93 @@ expect "check-dotnet-jit names the default environment and each arm" 0 sh -c "en
 expect "check-dotnet-jit with a missing manifest fails" 1 sh "$here/check-dotnet-jit.sh" "$tmp/none.manifest" "$tmp/fake.dll" "$jit_dotnet"
 expect "check-dotnet-jit without arguments is a usage error" 64 sh "$here/check-dotnet-jit.sh"
 
+# summarize-at-native.sh: the one-line summary of a native self-check log, for the manual java-native-k workflow.
+mklog() { # mklog <file> <text after "java buggy: "> [extra line]
+  printf '%s\n' "java buggy: $2" 'java fixed: property false in 0 of 50 native runs, final exact in 50' 'java wide:  property false in 4 of 10 native runs' ${3:+"$3"} >"$1"
+}
+sumeq() { # sumeq <name> <wanted output> <log> <k>
+  expect "$1" 0 sh -c '[ "$(sh "$1" "$3" "$4")" = "$2" ]' _ "$here/summarize-at-native.sh" "$2" "$3" "$4"
+}
+sumlog="$tmp/at-native.log"
+mklog "$sumlog" 'property false in 37 of 50 native runs'
+sumeq "summarize-at-native prints runs, fired and k" "runs=50 fired=37 k=50" "$sumlog" 50
+sumeq "summarize-at-native accepts the largest k" "runs=50 fired=37 k=5000" "$sumlog" 5000
+sumeq "summarize-at-native accepts k=1" "runs=50 fired=37 k=1" "$sumlog" 1
+mklog "$tmp/all.log" 'property false in 5 of 5 native runs'
+sumeq "summarize-at-native accepts fired equal to runs" "runs=5 fired=5 k=1" "$tmp/all.log" 1
+mklog "$tmp/none.log" 'property false in 0 of 5 native runs'
+sumeq "summarize-at-native accepts fired 0" "runs=5 fired=0 k=1" "$tmp/none.log" 1
+expect "summarize-at-native reads the log from stdin" 0 sh -c '[ "$(sh "$1" - 7 <"$2")" = "runs=50 fired=37 k=7" ]' _ "$here/summarize-at-native.sh" "$sumlog"
+expect "summarize-at-native fails on an empty log" 1 sh "$here/summarize-at-native.sh" /dev/null 50
+expect "summarize-at-native fails on a missing log" 1 sh "$here/summarize-at-native.sh" "$tmp/missing.log" 50
+printf 'java wide:  property false in 4 of 10 native runs\n' >"$tmp/wide.log"
+expect "summarize-at-native does not take a wide line for the buggy one" 1 sh "$here/summarize-at-native.sh" "$tmp/wide.log" 50
+printf 'java fixed: property false in 4 of 10 native runs\n' >"$tmp/fixed.log"
+expect "summarize-at-native does not take a fixed line for the buggy one" 1 sh "$here/summarize-at-native.sh" "$tmp/fixed.log" 50
+mklog "$tmp/fired-gt.log" 'property false in 51 of 50 native runs'
+expect "summarize-at-native rejects fired above runs" 1 sh "$here/summarize-at-native.sh" "$tmp/fired-gt.log" 50
+mklog "$tmp/runs0.log" 'property false in 0 of 0 native runs'
+expect "summarize-at-native rejects 0 runs" 1 sh "$here/summarize-at-native.sh" "$tmp/runs0.log" 50
+mklog "$tmp/two.log" 'property false in 37 of 50 native runs' 'java buggy: property false in 1 of 50 native runs'
+expect "summarize-at-native rejects two valid buggy lines" 1 sh "$here/summarize-at-native.sh" "$tmp/two.log" 50
+mklog "$tmp/two-bad.log" 'property false in 99 of 50 native runs' 'java buggy: property false in 1 of 50 native runs'
+expect "summarize-at-native rejects two buggy lines when only the second is valid" 1 sh "$here/summarize-at-native.sh" "$tmp/two-bad.log" 50
+mklog "$tmp/two-bad2.log" 'property false in 1 of 50 native runs' 'java buggy: property false in 99 of 50 native runs'
+expect "summarize-at-native rejects two buggy lines when only the first is valid" 1 sh "$here/summarize-at-native.sh" "$tmp/two-bad2.log" 50
+mklog "$tmp/trail.log" 'property false in 37 of 50 native runs, extra'
+expect "summarize-at-native rejects trailing text on the buggy line" 1 sh "$here/summarize-at-native.sh" "$tmp/trail.log" 50
+mklog "$tmp/trail0.log" 'property false in 37 of 50 native runs0'
+expect "summarize-at-native rejects digits glued to the end of the buggy line" 1 sh "$here/summarize-at-native.sh" "$tmp/trail0.log" 50
+printf '%s\n' 'java fixed: property false in 0 of 40 native runs' 'note: java buggy: see above' 'java buggy: property false in 3 of 9 native runs' >"$tmp/order.log"
+sumeq "summarize-at-native reports the buggy line wherever it is, and a mention of buggy: mid-line is not a second line" "runs=9 fired=3 k=2" "$tmp/order.log" 2
+mklog "$tmp/huge.log" 'property false in 1 of 99999999999999999999 native runs'
+expect "summarize-at-native rejects a huge runs count" 1 sh "$here/summarize-at-native.sh" "$tmp/huge.log" 50
+expect "summarize-at-native rejects k=0" 64 sh "$here/summarize-at-native.sh" "$sumlog" 0
+expect "summarize-at-native rejects k with a leading zero" 64 sh "$here/summarize-at-native.sh" "$sumlog" 050
+expect "summarize-at-native rejects k above 5000" 64 sh "$here/summarize-at-native.sh" "$sumlog" 5001
+expect "summarize-at-native rejects a very long k" 64 sh "$here/summarize-at-native.sh" "$sumlog" 99999999999999999999
+expect "summarize-at-native rejects an empty k" 64 sh "$here/summarize-at-native.sh" "$sumlog" ""
+expect "summarize-at-native rejects a k that is not a number" 64 sh "$here/summarize-at-native.sh" "$sumlog" 5x
+expect "summarize-at-native without arguments is a usage error" 64 sh "$here/summarize-at-native.sh"
+
+# The java-native-k workflow: its own file, manual only, read-only, pinned like the java build record. The mutation run
+# points JAVA_NATIVE_K_WORKFLOW at mutated copies.
+WF=${JAVA_NATIVE_K_WORKFLOW:-$here/../../../.github/workflows/java-native-k.yml}
+CI=${CI_WORKFLOW:-$here/../../../.github/workflows/ci.yml}
+wfexpect() { # wfexpect <name> <the whole line that must be in the workflow>
+  expect "java-native-k.yml: $1" 0 sh -c 'grep -qxF -- "$1" "$2"' _ "$2" "$WF"
+}
+wfsh() { # wfsh <name> <sh code taking the workflow as $1 (and ci.yml as $2) and succeeding when the property holds>
+  expect "java-native-k.yml: $1" 0 sh -c "$2" _ "$WF" "$CI"
+}
+wfexpect "triggers on workflow_dispatch" "  workflow_dispatch:"
+wfsh "workflow_dispatch is the only trigger" '[ "$(awk "/^on:/ {on=1; next} on && /^[^ ]/ {exit} on && /^  [a-z_]+:/ {n++} END {print n}" "$1")" = 1 ] && ! grep -Eq "^on:.+" "$1" && ! grep -Eq "pull_request|^  push:|schedule:|workflow_run|workflow_call" "$1"'
+wfsh "top-level permissions are contents: read and nothing else" '[ "$(awk "/^permissions:/ {p=1; next} p && /^[^ ]/ {exit} p {print}" "$1")" = "  contents: read" ] && [ "$(grep -c "permissions:" "$1")" = 1 ]'
+wfsh "no write permission anywhere" '! grep -Eq "write|read-all|id-token" "$1"'
+wfexpect "runs on ubuntu-24.04" "    runs-on: ubuntu-24.04"
+wfexpect "has a 45 minute timeout" "    timeout-minutes: 45"
+wfexpect "uses the pinned Temurin" '          java-version: "21.0.12+101.0.LTS"'
+wfexpect "uses Temurin" "          distribution: temurin"
+wfsh "the pinned Temurin equals the java build record's in ci.yml" 'a=$(grep -m1 "java-version: .*+" "$1"); b=$(grep -m1 "java-version: .*+" "$2"); [ -n "$a" ] && [ "$a" = "$b" ]'
+wfsh "every action is pinned to @v4 (three uses)" '[ "$(grep -c "uses:" "$1")" = 3 ] && [ "$(grep -c "uses: actions/[a-z-]*@v4$" "$1")" = 3 ]'
+wfexpect "the digits-only, no-leading-zero check" '              "" | *[!0-9]* | 0*) echo "$1='"'"'$2'"'"' is not a number from 1 to $3 (digits only, no leading zero)" >&2; exit 1 ;;'
+wfexpect "the range check" '            [ "${#2}" -le 4 ] && [ "$2" -le "$3" ] || { echo "$1='"'"'$2'"'"' is above $3" >&2; exit 1; }'
+wfexpect "at_k is bounded at 5000" '          check at_k "$AT_K" 5000'
+wfexpect "runs is bounded at 200" '          check runs "$RUNS" 200'
+wfexpect "the check step has the id the later steps read" "        id: inputs"
+wfsh "the input check is the first step" '[ "$(awk "/^    steps:/ {s=1; next} s && /^      - / {print; exit}" "$1")" = "      - name: Check the inputs" ]'
+wfsh "no expression in any run: block or one-line run:" '! awk "/^ +run: *[|>]/ {r=1; next} /^ +[a-z-]+:|^ +- / {r=0} r" "$1" | grep -q "\${{" && ! grep -Eq "^ +run: .*\\$\{\{" "$1"'
+wfsh "the raw inputs are read only by the check step's env (two uses)" '[ "$(grep -c "\${{ inputs\." "$1")" = 2 ]'
+wfsh "the later steps read the checked outputs" '[ "$(grep -c "\${{ steps.inputs.outputs.at_k }}" "$1")" = 3 ] && [ "$(grep -c "\${{ steps.inputs.outputs.runs }}" "$1")" = 1 ]'
+wfexpect "the make line: CPUs 1-3, low priority, AT_K and RUNS" '          taskset -c 1-3 nice -n 10 make -C examples/language-fixtures/java at-native AT_K="$AT_K" RUNS="$RUNS" 2>&1 | tee -a "$RUNNER_TEMP/java-native-k.log"'
+wfexpect "a failed make fails the step (pipefail)" "          set -o pipefail"
+wfexpect "builds the fixture first" "        run: make -C examples/language-fixtures/java at-jar"
+wfsh "exactly the Summary and Upload steps run if always()" '[ "$(awk "/^      - /{name=\$0} /^        if: always\(\)$/ {print name}" "$1" | tr "\n" ";")" = "      - name: Summary;      - name: Upload the log;" ]'
+wfexpect "the summary says clearly when the run failed" '            echo "RUN FAILED (job status: $JOB_STATUS). This is not a result." | tee -a "$GITHUB_STEP_SUMMARY"'
+wfexpect "the summary reads the job status" '          JOB_STATUS: ${{ job.status }}'
+wfexpect "the artifact name is a fixed prefix and the checked K" "          name: java-native-k-\${{ steps.inputs.outputs.at_k }}"
+wfexpect "a missing log only warns" "          if-no-files-found: warn"
+wfsh "uses no secrets" '! grep -Eq "[$][{][{] *secrets|^ *secrets:" "$1"'
+wfsh "ci.yml has no java-native-k job and no dispatch inputs" '! grep -Eq "java-native-k|^    inputs:" "$2"'
+
 exit $failures
