@@ -19,7 +19,7 @@ The SDKs and fixtures for each language are listed in the [quickstart](quickstar
 
 ## The one configuration
 
-Every result above was measured on this configuration and no other:
+Every result above except Java's was measured on this configuration and no other (Java's exceptions are the last two bullets):
 
 - Ubuntu 24.04.5 LTS, kernel 6.17.0-42-generic.
 - One bare-metal host with an Intel Xeon E5-1410 v2 (Ivy Bridge) CPU.

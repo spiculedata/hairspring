@@ -123,7 +123,7 @@ inconclusive: it does not show the bug is fixed. The API returns the same fact a
 result.
 
 Not recorded yet: the Hermit commit, Hermit's global seed, hashes of declared input files, the full Hermit command
-line beyond `hermit_args`, the `--tmp` pre-seed, and the Hairspring commit. The environment is compared by
+line beyond `hermit_args` (the program's own command line and working directory are covered above), the `--tmp` pre-seed, and the Hairspring commit. The environment is compared by
 `hairspring confirm` (see [Confirming a failure](#confirming-a-failure)), but not by the search's own three reruns or on
 bundle import. Each new field needs its name added to the fixed list in `hairspring-core`.
 

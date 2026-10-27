@@ -404,8 +404,9 @@ Under Hermit, Java is supported on a Java-specific configuration only (see the [
 `skid_margin = 35` (the other languages use 25), the `a-prime` flags in `java/profiles-extra.tsv`
 (`-Xint -XX:+UseSerialGC -XX:ActiveProcessorCount=1 -XX:-UsePerfData -Xshare:auto`) and the fixture at `--k=50` instead of
 1,000 iterations per worker. Keep the JDK install, the jar and the working directory at the same absolute paths for
-recording and replay: a bundle records neither the command line nor the working directory, and renaming the working
-directory alone changed the result. Trials take about 100 to 210 s each. The Makefile targets here run natively and never
+recording and replay: a bundle records neither the command line nor the working directory, and replay matched only from the
+same paths as the recording (JDK install, program jar and working directory); a differently named directory changed the
+result. Trials take about 210 s as run (up to three at once; about 105 s alone). The Makefile targets here run natively and never
 start Hermit.
 
 ## Compilers

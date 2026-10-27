@@ -151,7 +151,7 @@ Hermit build) and was not tested elsewhere. The [support matrix](support-matrix.
 configuration; the results apply only to that configuration. Java is supported only on its own configuration:
 `skid_margin = 35` (the other languages: 25), the JVM flags `-Xint -XX:+UseSerialGC -XX:ActiveProcessorCount=1
 -XX:-UsePerfData -Xshare:auto`, Temurin 21.0.12.1, and a reduced fixture (50 iterations per worker instead of 1,000). A
-Java replay matches only from the same paths as the recording; see [Replay and paths](../sdks/java/README.md#replay-and-paths).
+Java replay matched only from the same paths as the recording (JDK install, program jar and working directory); see [Replay and paths](../sdks/java/README.md#replay-and-paths).
 
 A program does not need an SDK to be run: the backend runs any Linux command and treats a non-zero exit as a failure.
 An SDK adds named properties (`always`, `sometimes`, `reachable`) that are tracked across trials.

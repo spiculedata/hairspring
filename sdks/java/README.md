@@ -57,5 +57,6 @@ for the exact wording and the configuration it was measured on. In short:
   worker (`--k=50`) instead of 1,000.
 * Keep the JDK install, the program jar and the working directory at the same absolute paths for recording and for replay.
   A bundle does not record the command line or the working directory ([determinism](../../docs/determinism.md)), and a JVM
-  reads those paths: renaming the working directory alone changed the replay result. Re-record if the paths must change.
-* Trials are slow, about 100 to 210 s each as measured, so this suits nightly runs rather than every commit.
+  reads those paths: replay matched only from the same paths as the recording (JDK install, program jar and working
+  directory); a differently named directory changed the result. Re-record if the paths must change.
+* Trials are slow, about 210 s as run (up to three at once; about 105 s alone), so this suits nightly runs rather than every commit.
