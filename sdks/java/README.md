@@ -44,4 +44,18 @@ samples/hssample/           sample programs, one per scenario
 * Hello and the catalog are written with the report, so a process killed before it reports leaves no lines.
 * A child process must be started through `Hairspring.prepare(builder)` to get its own tag.
 * Virtual threads each claim a thread slot; use platform threads for code that asserts.
-* No signal-time report, fork handler or JVM agent. For Hermit results see the [support matrix](../../docs/support-matrix.md).
+* No signal-time report, fork handler or JVM agent. For Hermit results see the [support matrix](../../docs/support-matrix.md) and "Replay and paths" below.
+
+## Replay and paths
+
+Java is supported under Hermit on one Java-specific configuration only; see the [support matrix](../../docs/support-matrix.md)
+for the exact wording and the configuration it was measured on. In short:
+
+* Run under Hermit with `skid_margin = 35` (the other languages use 25) and the JVM flags
+  `-Xint -XX:+UseSerialGC -XX:ActiveProcessorCount=1 -XX:-UsePerfData -Xshare:auto` (the `a-prime` profile in
+  `examples/language-fixtures/java/profiles-extra.tsv`), on Temurin 21.0.12.1. The fixture was reduced to 50 iterations per
+  worker (`--k=50`) instead of 1,000.
+* Keep the JDK install, the program jar and the working directory at the same absolute paths for recording and for replay.
+  A bundle does not record the command line or the working directory ([determinism](../../docs/determinism.md)), and a JVM
+  reads those paths: renaming the working directory alone changed the replay result. Re-record if the paths must change.
+* Trials are slow, about 100 to 210 s each as measured, so this suits nightly runs rather than every commit.

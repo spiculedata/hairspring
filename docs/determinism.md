@@ -93,6 +93,8 @@ printable ASCII only, and the `.sha256` fields are lowercase hex (or `absent` fo
 that is not is malformed, is named in a warning, is not compared, and also counts as changed. The values are read when the run starts, before any trial or confirmation rerun, and they
 are the same fields for every failure the run reports.
 
+A bundle also does not record the program's command line or working directory: replay runs the command and directory from the current configuration. A program whose behaviour depends on the text of its own paths can follow a different schedule when the same files run from a differently named directory, and the replay then reads as a mismatch even though the recorded environment matches. This has been seen with a JVM, where the install path, the class path and the working directory are part of what the program reads. Replay from the same absolute paths as the recording.
+
 On replay, the recorded fields are compared with the current host. Each recorded field is checked on its own: a
 malformed one is named in a warning and skipped, and the others are still compared.
 

@@ -291,4 +291,4 @@ it they run exactly as before.
 * A JVM agent (`-javaagent`) that would catalog every call site before it runs, instead of `declare`.
 * Signal-time reports, `HS_EVAL_*` equivalents, a fork handler, the tape API.
 * Windows.
-* Hermit: not supported on this build; the probe program did not complete under Hermit. See the [support matrix](support-matrix.md).
+* Hermit: supported on a Java-specific configuration only (`skid_margin = 35`, interpreter-only JVM flags, a reduced fixture, slow trials), and a replay matches only from the same paths as the recording. See the [support matrix](support-matrix.md) and [Replay and paths](../sdks/java/README.md#replay-and-paths).
