@@ -20,6 +20,11 @@ final class OutputTests {
 
     private OutputTests() {}
 
+    /** What Linux shows in /proc/self/fdinfo/2 for a descriptor with these open flags (octal). */
+    private static String fdinfo(String octalFlags) {
+        return "pos:\t0\nflags:\t" + octalFlags + "\nmnt_id:\t30\nino:\t1234\n";
+    }
+
     private static byte[] bytes(String text) {
         return text.getBytes(StandardCharsets.US_ASCII);
     }
@@ -188,6 +193,70 @@ final class OutputTests {
             } finally {
                 remove(dir);
             }
+        });
+        s.add("output: fdinfo text of a descriptor opened for writing is read as writable, read-only is not", () -> {
+            Check.yes(StderrSink.openedForWriting(fdinfo("0100001")), "O_WRONLY");
+            Check.yes(StderrSink.openedForWriting(fdinfo("0102002")), "O_RDWR with other flags");
+            Check.yes(StderrSink.openedForWriting(fdinfo("02101")), "O_WRONLY | O_CREAT | O_TRUNC");
+            Check.yes(!StderrSink.openedForWriting(fdinfo("0100000")), "O_RDONLY");
+            Check.yes(!StderrSink.openedForWriting(fdinfo("0100003")), "access mode 3 is not a mode");
+            Check.yes(!StderrSink.openedForWriting(null), "no fdinfo");
+            Check.yes(!StderrSink.openedForWriting(""), "empty fdinfo");
+            Check.yes(!StderrSink.openedForWriting("pos:\t0\nmnt_id:\t30\n"), "no flags line");
+            Check.yes(!StderrSink.openedForWriting("flags:\tnot-octal\n"), "flags that are not octal");
+            Check.yes(!StderrSink.openedForWriting("flags:\t\n"), "flags with no value");
+        });
+        s.add("output: a regular file that fdinfo says was opened for writing is reopened, and the line goes there after the close", () -> {
+            Path dir = scratch();
+            try {
+                Path file = dir.resolve("err");
+                Files.writeString(file, "before\n");
+                ByteArrayOutputStream descriptor2 = new ByteArrayOutputStream();
+                boolean[] valid = {true};
+                Sink sink = StderrSink.open(java.util.List.of(file), descriptor2, () -> valid[0], false, () -> fdinfo("0100001"));
+                Check.yes(sink.writeLine(bytes("a\n")), "a");
+                valid[0] = false;
+                Check.yes(sink.writeLine(bytes("b\n")), "b");
+                sink.close();
+                Check.equal("a\n", descriptor2.toString(StandardCharsets.US_ASCII));
+                Check.equal("before\nb\n", Files.readString(file));
+            } finally {
+                remove(dir);
+            }
+        });
+        s.add("output: a regular file that fdinfo says was opened read-only is never written, whatever the file's mode", () -> {
+            Path dir = scratch();
+            try {
+                Path file = dir.resolve("err");
+                Files.writeString(file, "keep\n");
+                ByteArrayOutputStream descriptor2 = new ByteArrayOutputStream();
+                Sink sink = StderrSink.open(java.util.List.of(file), descriptor2, () -> false, false, () -> fdinfo("0100000"));
+                sink.writeLine(bytes("a\n"));
+                sink.close();
+                Check.equal("keep\n", Files.readString(file));
+            } finally {
+                remove(dir);
+            }
+        });
+        s.add("output: a regular file is never written when fdinfo is unavailable (no /proc, as on macOS)", () -> {
+            Path dir = scratch();
+            try {
+                Path file = dir.resolve("err");
+                Files.writeString(file, "keep\n");
+                ByteArrayOutputStream descriptor2 = new ByteArrayOutputStream();
+                Sink sink = StderrSink.open(java.util.List.of(file), descriptor2, () -> false, false, () -> null);
+                sink.writeLine(bytes("a\n"));
+                sink.close();
+                Check.equal("keep\n", Files.readString(file));
+            } finally {
+                remove(dir);
+            }
+        });
+        s.add("output: a reader of /proc/self/fdinfo/2 that is missing gives null, not an error", () -> {
+            Check.equal(null, StderrSink.readFdinfo(Path.of("/nonexistent-dir-for-hairspring/fdinfo/2")));
+        });
+        s.add("output: the fdinfo file of descriptor 2 is the process's own", () -> {
+            Check.equal(Path.of("/proc/self/fdinfo/2"), StderrSink.OWN_FDINFO);
         });
         s.add("output: without a usable path to descriptor 2 the stream on it is used", () -> {
             ByteArrayOutputStream fallback = new ByteArrayOutputStream();

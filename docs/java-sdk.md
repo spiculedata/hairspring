@@ -86,20 +86,23 @@ A program can take descriptor 2 away: `System.err.close()` (or `FileDescriptor.e
 at `/dev/null`, and a report written there would be lost without a trace. The JVM cannot duplicate a descriptor, so at start
 the SDK opens descriptor 2 a second time, through `/proc/self/fd/2` (`/dev/fd/2` where there is no `/proc`) in append mode,
 and writes to that second descriptor only once `FileDescriptor.err` has become invalid. Until then every line goes through
-descriptor 2, like the program's own writes. The second descriptor is opened only when descriptor 2 is **not a regular
-file**, for two reasons:
+descriptor 2, like the program's own writes.
 
-* Reopening a path gives the access the path allows, not the access descriptor 2 had. A JVM started with standard error
-  closed (`2>&-`) gets its first open file, a JDK file opened read-only, as descriptor 2; reopening it for writing would
-  write the report into the JDK.
-* On a regular file (`2>file`) the second descriptor appends at the end instead of sharing the program's write offset, so
-  the program's own later writes to `System.err` would overwrite the report.
+When descriptor 2 is a **regular file** (`2>file`), the second descriptor is opened only if descriptor 2 was opened for
+writing. On Linux the SDK reads this from `/proc/self/fdinfo/2`: the access mode in the octal `flags` line must be
+write-only or read-write. Where that file cannot be read (macOS has no `/proc`), or its flags are missing, malformed or
+read-only, a regular file is not reopened. The reason is that reopening a path gives the access the path allows, not the
+access descriptor 2 had. A JVM started with standard error closed (`2>&-`) gets its first open file, a JDK file opened
+read-only, as descriptor 2; reopening it for writing would write the report into the JDK. The SDK never writes to a file
+that descriptor 2 holds read-only, whatever the file's mode. A pipe or a terminal is the same stream through either
+descriptor and is reopened without this check.
 
-So: with standard error a pipe or a terminal, a program that closes `System.err` still delivers the report. With standard
-error a regular file, or with a program that closes descriptor 2 by other means (native code) or that started the JVM with
-standard error closed, a program that closes `System.err` loses the report (the line writes fail and `end` is missing); the
-program still exits normally. Unlike the C, Rust and Python SDKs there is no private copy kept at a high descriptor number.
-If neither path can be opened (standard error is a socket, there is no descriptor directory) the SDK uses descriptor 2 only.
+So: with standard error a pipe or a terminal, or on Linux a regular file opened for writing, a program that closes
+`System.err` still delivers the report. With standard error a regular file on a system without `/proc`, a regular file
+opened read-only, a program that closes descriptor 2 by other means (native code), or a JVM started with standard error
+closed, a program that closes `System.err` loses the report (the line writes fail and `end` is missing); the program still
+exits normally. Unlike the C, Rust and Python SDKs there is no private copy kept at a high descriptor number. If neither
+path can be opened (standard error is a socket, there is no descriptor directory) the SDK uses descriptor 2 only.
 
 ## What is written, and when
 

@@ -123,6 +123,28 @@ expect "read-only fd 2: the file is untouched" cmp -s "$tmp/readonly" "$tmp/read
 "$java" $flags -cp "$classes:$samples" hssample.Sample basic >"$tmp/out" 2>&-
 expect "closed fd 2: the program exits 0" is "$?" 0
 
+# standard error is a regular file the program has open for reading only (mode 644, so the path would allow a write), and
+# the program closes System.err: the SDK must not reopen the file, whatever the platform
+printf 'a file that must not change\n' >"$tmp/readonly644"
+chmod 644 "$tmp/readonly644"
+cp "$tmp/readonly644" "$tmp/readonly644.before"
+# shellcheck disable=SC2086
+"$java" $flags -cp "$classes:$samples" hssample.Sample close_err >"$tmp/out" 2<"$tmp/readonly644"
+expect "read-only fd 2, close_err: the program exits 0" is "$?" 0
+expect "read-only fd 2, close_err: the file (mode 644) is unchanged" cmp -s "$tmp/readonly644" "$tmp/readonly644.before"
+
+# standard error is a regular file opened for writing and the program closes System.err. Where Linux shows the open flags
+# (/proc/self/fdinfo/2) the report is kept; elsewhere it is not reopened, so only the exit status is checked.
+: >"$tmp/err"
+# shellcheck disable=SC2086
+"$java" $flags -cp "$classes:$samples" hssample.Sample close_err >"$tmp/out" 2>"$tmp/err"
+expect "close_err on a file: the program exits 0" is "$?" 0
+if [ -r /proc/self/fdinfo/2 ]; then
+  expect "close_err on a file (Linux): the report is kept, hello to end" is "$(lines_of hello)$(lines_of end)$(lines_of catalog)" 112
+else
+  echo "skip close_err on a file: no /proc/self/fdinfo here, so the report is not kept (the unit tests simulate Linux)"
+fi
+
 # an explicit report from a daemon thread is finished before the JVM exits
 rc=$(sample daemon_report)
 expect "daemon_report: exit 0 and a complete report" is "$rc$(lines_of hello)$(lines_of end)" 011
