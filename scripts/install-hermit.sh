@@ -102,7 +102,7 @@ pin_shape_ok() {
     HERMIT_BASE_COMMIT) [[ "$2" =~ ^[0-9a-f]{40}$ ]] ;;
     HERMIT_PATCH_SHA256) [[ "$2" =~ ^[0-9a-f]{64}$ ]] ;;
     HERMIT_PATCH_REL) [[ "$2" =~ ^[A-Za-z0-9._/-]+$ ]] && [[ "$2" != /* ]] && [[ "$2" != *..* ]] ;;
-    RUST_TOOLCHAIN) [[ "$2" =~ ^[A-Za-z0-9._-]+$ ]] ;;
+    RUST_TOOLCHAIN) [[ "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] ;;
     *) return 1 ;;
   esac
 }
@@ -119,6 +119,9 @@ set_pin() {
 
 load_pins() {
   [ "$PINS_LOADED" = "no" ] || return 0
+  if [ -n "${HAIRSPRING_HERMIT_PIN:-}" ]; then
+    warn "HAIRSPRING_HERMIT_PIN overrides the pin file; using $PIN_FILE"
+  fi
   [ -f "$PIN_FILE" ] && [ -r "$PIN_FILE" ] || die "the pin file $PIN_FILE is missing or unreadable; refusing to continue without the pins"
   local line key value seen=" "
   while IFS= read -r line || [ -n "$line" ]; do
@@ -142,6 +145,9 @@ load_pins() {
     case "$seen" in *" $key "*) ;; *) die "pin file $PIN_FILE: $key is missing" ;; esac
   done
   HERMIT_REPO="${HAIRSPRING_HERMIT_REPO:-$HERMIT_REPO_DEFAULT}"
+  if [ -n "${HAIRSPRING_HERMIT_REPO:-}" ]; then
+    warn "HAIRSPRING_HERMIT_REPO overrides the pinned fork; using $HERMIT_REPO"
+  fi
   HERMIT_PATCH="${HAIRSPRING_HERMIT_PATCH:-$SCRIPT_DIR/../$HERMIT_PATCH_REL}"
   PINS_LOADED="yes"
 }
@@ -494,6 +500,7 @@ install_binary() {
 
 print_plan() {
   say "plan:"
+  say "  pin file    $PIN_FILE"
   say "  fork        $HERMIT_REPO"
   say "  commit      $HERMIT_BASE_COMMIT"
   say "  patch       $HERMIT_PATCH (sha256 $HERMIT_PATCH_SHA256)"

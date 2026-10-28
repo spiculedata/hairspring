@@ -180,12 +180,15 @@ runx() {
   done
   shift
   RC=0
+  local pin_env=()
+  [ -z "${PIN_UNDER_TEST:-}" ] || pin_env=("HAIRSPRING_HERMIT_PIN=$PIN_UNDER_TEST")
   env -i \
     PATH="$BIN:$TMP/real" HOME="$SB/home" TMPDIR="$SB/tmp" \
     FAKE_LOG="$SB/calls.log" FAKE_FORBIDDEN="$SB/forbidden.log" FAKE_STATE="$SB/state" \
     FAKE_HERMIT_SRC="$SB/fake-hermit" FAKE_HAIRSPRING_SRC="$SB/fake-hairspring" \
     HAIRSPRING_PROC_ROOT="$SB/proc" HAIRSPRING_SYS_ROOT="$SB/sys" HAIRSPRING_ROOT_DIR="$SB/root" \
-    FAKE_PINNED_COMMIT="$PINNED_COMMIT" HAIRSPRING_HERMIT_PIN="${PIN_UNDER_TEST:-$SCRIPTS_DIR/hermit.pin}" \
+    FAKE_PINNED_COMMIT="$PINNED_COMMIT" \
+    ${pin_env[@]+"${pin_env[@]}"} \
     HAIRSPRING_HERMIT_PATCH="${PATCH_UNDER_TEST:-$REAL_PATCH}" CARGO_TARGET_DIR="$SB/target" \
     ${extra[@]+"${extra[@]}"} \
     "$@" >"$SB/out" 2>"$SB/err" || RC=$?
@@ -566,7 +569,7 @@ write_pin_with() {
 
 t_install_refuses_a_missing_pin_file() {
   new_sandbox "$1"
-  expect_pin_refused "$SB/no-such.pin" "pin file"
+  expect_pin_refused "$SB/no-such.pin" "is missing or unreadable"
 }
 
 t_install_refuses_an_empty_pin_file() {
@@ -611,6 +614,29 @@ t_install_refuses_a_pin_file_with_an_unknown_duplicate_or_unparsable_line() {
   cp "$PIN_FILE" "$SB/pin"
   printf 'this is not a pin\n' >>"$SB/pin"
   expect_pin_refused "$SB/pin" "not a KEY=VALUE"
+}
+
+t_install_refuses_a_toolchain_pin_that_looks_like_an_option() {
+  new_sandbox "$1"
+  write_pin_with RUST_TOOLCHAIN "RUST_TOOLCHAIN=--foo"
+  expect_pin_refused "$SB/pin" "RUST_TOOLCHAIN"
+  write_pin_with RUST_TOOLCHAIN "RUST_TOOLCHAIN=-nightly"
+  expect_pin_refused "$SB/pin" "RUST_TOOLCHAIN"
+}
+
+t_overriding_the_pin_file_or_repo_is_warned_about_and_shown_in_the_plan() {
+  new_sandbox "$1"
+  hermit_run -- install --dry-run --prefix "$SB/prefix"
+  assert_rc 0
+  grep -qE '^  pin file    .*/hermit\.pin$' "$SB/out" || fail_now "the plan does not show the default pin file" "$(cat "$SB/out")"
+  ! grep -qF "overrid" "$SB/err" || fail_now "a warning about an override appeared with no override set" "$(cat "$SB/err")"
+  cp "$PIN_FILE" "$SB/pin"
+  PIN_UNDER_TEST="$SB/pin" hermit_run -- install --dry-run --prefix "$SB/prefix"
+  assert_rc 0
+  assert_err_has "warning: HAIRSPRING_HERMIT_PIN overrides the pin file; using $SB/pin"
+  assert_out_has "pin file    $SB/pin"
+  hermit_run HAIRSPRING_HERMIT_REPO=https://example.invalid/hermit -- install --dry-run --prefix "$SB/prefix"
+  assert_err_has "warning: HAIRSPRING_HERMIT_REPO overrides the pinned fork; using https://example.invalid/hermit"
 }
 
 t_install_does_not_execute_the_pin_file() {
@@ -1081,6 +1107,10 @@ run_mutations() {
   mutate hermit-pin-commit-shape-unchecked install-hermit.sh '[[ "$2" =~ ^[0-9a-f]{40}$ ]]' 'true'
   mutate hermit-pin-patch-hash-shape-unchecked install-hermit.sh '[[ "$2" =~ ^[0-9a-f]{64}$ ]]' 'true'
   mutate hermit-pin-value-shape-unchecked install-hermit.sh '    pin_shape_ok "$key" "$value" ||' '    true ||'
+  mutate hermit-pin-toolchain-may-start-with-dash install-hermit.sh '[[ "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]' '[[ "$2" =~ ^[A-Za-z0-9._-]+$ ]]'
+  mutate hermit-pin-file-override-silent install-hermit.sh 'warn "HAIRSPRING_HERMIT_PIN overrides the pin file; using $PIN_FILE"' 'true'
+  mutate hermit-repo-override-silent install-hermit.sh 'warn "HAIRSPRING_HERMIT_REPO overrides the pinned fork; using $HERMIT_REPO"' 'true'
+  mutate hermit-plan-hides-pin-file install-hermit.sh '  say "  pin file    $PIN_FILE"' '  true'
   mutate hermit-summary-hides-unverified install-hermit.sh '    say "installed: $PREFIX/bin/hermit (UNVERIFIED' '    say "installed: $PREFIX/bin/hermit (checked'
   mutate hermit-check-accepts-install-options install-hermit.sh '  if [ "$COMMAND" = "check" ]; then' '  if false; then'
   mutate cli-redirects-not-restricted install.sh ' --proto-redir =https' ''
