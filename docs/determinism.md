@@ -66,8 +66,8 @@ verify, its two run logs. A trial that runs past `trial_timeout_secs` is stopped
 clean-up, so they were left behind.
 
 Each Hermit trial now gets a private directory (mode 0700) that the engine removes itself after the trial, however it
-ended. It is made under `trial_dir` in the Hermit backend settings, which defaults to the system temporary directory,
-the place Hermit used. It is not under `summary_dir`: `/dev/shm` is small in some containers and mounted `noexec`, and
+ended. It is made under `trial_dir` in the Hermit backend settings, which defaults to `/tmp`, the place Hermit made
+its files (it is started with a cleared environment, so the engine's own `TMPDIR` never applied). It is not under `summary_dir`: `/dev/shm` is small in some containers and mounted `noexec`, and
 the guest's `/tmp` has to stay where it was. If the directory cannot be made the trial fails as a Hermit start-up fault,
 and nothing is run with a different `/tmp`.
 
@@ -77,7 +77,7 @@ as before), so Hermit keeps making the guest's `/tmp` itself and the guest's vie
 | Base environment | Set for Hermit | Left behind by a timeout |
 |---|---|---|
 | `--base-env=minimal` or `empty` | `TMPDIR` and `HERMIT_VERIFY_TMPDIR` | nothing in the host temporary directory |
-| default (`host`) | `HERMIT_VERIFY_TMPDIR` only | Hermit's private guest `/tmp` and its `/etc/group` copy (`.tmpXXXXXX`) |
+| default (`host`) | `HERMIT_VERIFY_TMPDIR` only | Hermit's private guest `/tmp`, its `/etc/group` copy and, when `/var/run/nscd` exists, its empty nscd directory (all named `.tmpXXXXXX`) |
 
 `TMPDIR` is withheld under the default base environment because Hermit hands its own environment to the guest there: the
 guest would see a host path that changes from trial to trial. `HERMIT_VERIFY_TMPDIR` is Hermit's own setting, removed
@@ -93,6 +93,13 @@ files have, and the engine's clean-up. `hairspring confirm` records the Hermit c
 as it does for `HAIRSPRING_SEED` and the other variables the engine sets outside the command line; they belong to the
 engine and are not part of what a replay needs. A result pinned to an engine version is tied to the version that
 made it, so a newer engine needs re-checking before a claim names it.
+
+A failed strict verify used to leave Hermit's two run logs in `/tmp`, and Hermit prints where they are. They are now
+inside the trial's directory, which the engine removes after the trial, so those printed paths no longer exist. The
+verify's verdict is read from its result file, which is unaffected.
+
+A directory the trial could not be cleaned of (for example on a filesystem that refuses the mode change) is reported on
+the engine's standard error and never changes the trial's verdict.
 
 A directory the engine makes for a trial is not removed if the engine itself is killed with `SIGKILL`. It is empty then
 except for what a running trial held, and is named `hairspring-trials-<uid>-<pid>-<hex>`.

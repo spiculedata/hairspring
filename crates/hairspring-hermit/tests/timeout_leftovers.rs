@@ -15,6 +15,15 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+/// Whether the tests run as root, which ignores the permissions they use to make a removal fail.
+fn is_root() -> bool {
+    extern "C" {
+        fn geteuid() -> u32;
+    }
+    // SAFETY: `geteuid` has no preconditions and cannot fail.
+    unsafe { geteuid() == 0 }
+}
+
 /// `@MARK@` is replaced with the marker directory. The fake records, one file each, the paths it made (`file`, `dir`,
 /// `nscd`, `log`), the `--tmp` value (`tmp-arg`), and what it was started with (`tmpdir`, `verify-tmpdir`). The guest
 /// command records what it can see (`guest-tmpdir`, `guest-verify-tmpdir`).
@@ -44,6 +53,7 @@ echo "$l" > "$MARK/log"
 echo "$tmp" > "$MARK/tmp-arg"
 echo "${TMPDIR-unset}" > "$MARK/tmpdir"
 echo "${HERMIT_VERIFY_TMPDIR-unset}" > "$MARK/verify-tmpdir"
+if [ -e "$MARK/lockparent" ] && [ -n "${TMPDIR-}" ]; then chmod 500 "$(dirname "$TMPDIR")"; fi
 echo guest-owned > "$d/guest-file"
 echo hermit-owned > "$n/hermit-file"
 trap 'rm -rf "$t" "$n" "$l" "$made"' EXIT TERM
@@ -263,13 +273,13 @@ fn neither_variable_reaches_the_guest() {
 }
 
 #[test]
-fn trial_directories_default_to_the_system_temp_dir_and_not_the_summary_directory() {
+fn trial_directories_default_to_slash_tmp_and_not_the_summary_directory() {
     let mut o = Options::new(MINIMAL);
     o.default_trial_dir = true;
     let r = rig("default-base", "echo done", o);
     r.run();
     let tmpdir = PathBuf::from(r.marker("tmpdir"));
-    assert!(tmpdir.starts_with(std::env::temp_dir()), "{tmpdir:?}");
+    assert!(tmpdir.starts_with("/tmp"), "{tmpdir:?}");
     assert!(!tmpdir.starts_with(&r.summaries), "{tmpdir:?}");
     assert!(
         tmpdir.components().any(|c| c
@@ -278,7 +288,7 @@ fn trial_directories_default_to_the_system_temp_dir_and_not_the_summary_director
             .starts_with("hairspring-trials-")),
         "{tmpdir:?}"
     );
-    assert_eq!(HermitSettings::default().trial_dir, std::env::temp_dir());
+    assert_eq!(HermitSettings::default().trial_dir, Path::new("/tmp"));
 }
 
 #[test]
@@ -322,4 +332,52 @@ fn the_events_file_still_uses_its_own_tmp_and_hermit_keeps_its_own_directory() {
     assert!(tmpdir.starts_with(r.trials.to_str().unwrap()), "{tmpdir}");
     assert_ne!(tmp_arg, tmpdir);
     assert!(!exists(&tmp_arg) && r.engine_leftovers().is_empty());
+}
+
+/// The engine's per-run base directory for trial directories (`hairspring-trials-...` inside `trials`).
+fn trial_base(r: &Rig) -> PathBuf {
+    std::fs::read_dir(&r.trials)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .next()
+        .expect("the backend made its base directory")
+}
+
+fn set_mode(p: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+#[test]
+fn a_failed_cleanup_of_the_trial_directory_does_not_change_the_verdict() {
+    if is_root() {
+        return;
+    }
+    for args in [MINIMAL, HOST] {
+        let r = rig("cleanup-fails", "echo done", Options::new(args));
+        std::fs::write(r.markers.join("lockparent"), "").unwrap();
+        let t = r.run();
+        // Put the permissions back so the test can clean up after itself.
+        set_mode(&trial_base(&r), 0o700);
+        assert_eq!(t.exit_code, Some(0), "{args:?} {t:?}");
+        assert!(t.events_error.is_none(), "{args:?} {:?}", t.events_error);
+        assert_eq!(t.stdout, "done\n", "no message in the guest's output");
+    }
+}
+
+#[test]
+fn a_trial_directory_that_cannot_be_made_for_one_trial_fails_it_without_starting_hermit() {
+    if is_root() {
+        return;
+    }
+    let r = rig("cannot-make-one", "echo done", Options::new(MINIMAL));
+    let base = trial_base(&r);
+    set_mode(&base, 0o500);
+    let err = r.backend.run_one(&r.spec, 1);
+    set_mode(&base, 0o700);
+    let err = err.unwrap_err().to_string();
+    assert!(err.contains("cannot start hermit"), "{err}");
+    assert!(err.contains("private directory"), "{err}");
+    assert!(!r.markers.join("tmpdir").exists(), "hermit was started");
 }

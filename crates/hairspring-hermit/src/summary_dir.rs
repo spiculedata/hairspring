@@ -101,6 +101,28 @@ fn chmod_no_follow(path: &Path, mode: u32) {
     }
 }
 
+/// `O_DIRECTORY | O_NOFOLLOW`: the open fails, instead of following a link or blocking on a FIFO or a device that a
+/// surviving guest process swapped in. The values are fixed per platform.
+#[cfg(all(target_os = "linux", any(target_arch = "x86", target_arch = "x86_64")))]
+const OPEN_DIRECTORY_FLAGS: i32 = 0o200000 | 0o400000;
+#[cfg(all(
+    target_os = "linux",
+    not(any(target_arch = "x86", target_arch = "x86_64"))
+))]
+const OPEN_DIRECTORY_FLAGS: i32 = 0o40000 | 0o100000;
+#[cfg(target_os = "macos")]
+const OPEN_DIRECTORY_FLAGS: i32 = 0x0010_0000 | 0x0100;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const OPEN_DIRECTORY_FLAGS: i32 = 0;
+
+fn open_directory(dir: &Path) -> io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(OPEN_DIRECTORY_FLAGS)
+        .open(dir)
+}
+
 /// A path that names the directory `handle` is open on, whatever `dir` now points at. Linux resolves paths through
 /// `/dev/fd`; elsewhere (development machines, where Hermit does not run) the path is used as given.
 #[cfg(target_os = "linux")]
@@ -125,7 +147,7 @@ fn make_accessible(dir: &Path) {
         return;
     }
     chmod_no_follow(dir, 0o700);
-    let Ok(handle) = std::fs::File::open(dir) else {
+    let Ok(handle) = open_directory(dir) else {
         return;
     };
     match handle.metadata() {
@@ -311,6 +333,11 @@ mod tests {
         let b = base("symlink-out");
         let outside = b.join("outside");
         std::fs::create_dir_all(outside.join("inner")).unwrap();
+        std::fs::set_permissions(
+            outside.join("inner"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
         std::fs::write(outside.join("file"), "keep").unwrap();
         std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::set_permissions(outside.join("file"), std::fs::Permissions::from_mode(0o644))
@@ -322,6 +349,11 @@ mod tests {
         s.remove().unwrap();
         let mode = |p: &Path| std::fs::metadata(p).unwrap().mode() & 0o777;
         assert_eq!(mode(&outside), 0o755, "the directory behind the link");
+        assert_eq!(
+            mode(&outside.join("inner")),
+            0o755,
+            "a subdirectory behind the link"
+        );
         assert_eq!(
             mode(&outside.join("file")),
             0o644,

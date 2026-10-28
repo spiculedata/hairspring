@@ -57,7 +57,7 @@ queued --lease--> running --finish_job--> done            (run: passed | failed 
   worker cannot overwrite a finished or cancelled run.
 - **Trial temporary files.** A trial timeout and Ctrl-C end Hermit with `SIGKILL`, which skips the clean-up Hermit does
   for its own temporary files. So each Hermit trial gets a directory the engine owns and removes itself, after a
-  timeout as after any other end, under `trial_dir` (the system temporary directory by default). Hermit's temporary
+  timeout as after any other end, under `trial_dir` (`/tmp` by default). Hermit's temporary
   directory is pointed at it: `TMPDIR` and `HERMIT_VERIFY_TMPDIR` under `--base-env=minimal` or `empty`, and only
   `HERMIT_VERIFY_TMPDIR` under the default base environment, which passes Hermit's environment to the guest. So in that
   mode Hermit's private guest `/tmp` and its `/etc/group` copy can still be left after a timeout. No `--tmp` is

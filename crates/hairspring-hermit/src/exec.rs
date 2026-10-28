@@ -289,16 +289,15 @@ pub fn run_trial_with(
     let cleanup_fault = events_dir
         .and_then(|dir| dir.remove().err())
         .map(|e| EventsFault::Infra(format!("cannot remove the events directory: {e}")));
-    // The trial is over (or never started); Hermit's temporary files go whether it finished, failed or timed out.
-    let temp_fault = temp_dir
-        .and_then(|dir| dir.remove().err())
-        .map(|e| EventsFault::Infra(format!("cannot remove the trial's private directory: {e}")));
+    // The trial is over (or never started); Hermit's temporary files go whether it finished, failed or timed out. A
+    // directory that cannot be removed leaves files on the host but says nothing about the guest, so it is warned
+    // about on standard error and never changes the trial's result.
+    if let Some(e) = temp_dir.and_then(|dir| dir.remove().err()) {
+        eprintln!("hairspring: warning: cannot remove the trial's private directory: {e}");
+    }
     trial.map(|t| Trial {
         schedule,
-        events_error: scratch_fault
-            .or(cleanup_fault)
-            .or(temp_fault)
-            .or(t.events_error),
+        events_error: scratch_fault.or(cleanup_fault).or(t.events_error),
         ..t
     })
 }
