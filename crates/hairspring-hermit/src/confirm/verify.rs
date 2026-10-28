@@ -74,6 +74,7 @@ pub(super) fn check(ctx: &Ctx, pace: &mut Pace) -> CheckResult {
         Dirs {
             summaries: None,
             events: dirs.events,
+            trials: dirs.trials,
         },
         &extra,
     );

@@ -1,25 +1,39 @@
 //! Where Hermit puts its own temporary files for one trial.
 //!
-//! Hermit keeps a private copy of the host `/etc/group` in a file made in the temporary directory (`$TMPDIR`, else
-//! `/tmp`), and removes it when it exits. A `SIGKILL` at the trial timeout skips that, so the file stays. Giving the
-//! Hermit process a `TMPDIR` inside the trial's engine-owned directory puts the file where the engine removes it.
+//! Hermit makes temporary entries in the host temporary directory (`$TMPDIR`, else `/tmp`) and removes them when it
+//! exits: its private guest `/tmp` (when it is not given `--tmp`), a private copy of the host `/etc/group`, an empty
+//! directory over the nscd socket directory, and, for a strict verify, the two run logs. A `SIGKILL` at the trial
+//! timeout skips that, so they stay. Pointing Hermit's temporary directory into the trial's engine-owned directory
+//! puts them where the engine removes them. No `--tmp` is passed for this: Hermit keeps making the guest's `/tmp`
+//! itself, so the guest sees what it always saw.
 //!
-//! The catch is that `TMPDIR` must not reach the guest. Hermit's default base environment (`host`) passes its own
-//! environment through to the guest, so a `TMPDIR` set for Hermit would be the guest's: a host path that differs from
-//! trial to trial. The guest starts without a `TMPDIR` today, and giving it one would change its environment, so the
-//! variable is set only when the base environment is one Hermit builds without looking at its own.
+//! Two variables do this, and they differ in what reaches the guest:
+//!
+//! - `TMPDIR` is read from Hermit's environment for everything but the verify logs. Hermit's default base environment
+//!   (`host`) hands its environment to the guest, so a `TMPDIR` there would be the guest's: a host path that changes
+//!   from trial to trial. It is set only for `--base-env=minimal` and `empty`, which build the guest's environment
+//!   without looking at Hermit's own.
+//! - `HERMIT_VERIFY_TMPDIR` is Hermit's own setting for the verify logs, which Hermit removes from the guest's
+//!   environment under `host` and which `minimal` and `empty` never pass on. It is set in every mode.
+//!
+//! So under the default base environment the private guest `/tmp` and the `/etc/group` copy can still be left behind
+//! by a timeout. Either variable is left alone when the target sets it, passes it through to the guest, or names a
+//! Hermit run config file (whose contents cannot be read here).
 use crate::host_identity::base_env_mode;
 use crate::summary_dir::ScratchDir;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 const TMPDIR: &str = "TMPDIR";
-/// Base environments Hermit builds from nothing but its own flags (`minimal`, `empty`).
+const VERIFY_TMPDIR: &str = "HERMIT_VERIFY_TMPDIR";
+/// Base environments Hermit builds from nothing but its own flags.
 const SELF_CONTAINED_BASE_ENVS: [&str; 2] = ["minimal", "empty"];
+/// Base environments whose guest environment is known: those above, and the one that passes Hermit's through.
+const KNOWN_BASE_ENVS: [&str; 4] = ["minimal", "empty", "host", "default"];
 
-/// Whether an argument passes `TMPDIR` from Hermit's environment to the guest: `--env TMPDIR`, `-e TMPDIR`, and the
+/// Whether an argument passes variable `name` from Hermit's environment to the guest: `--env NAME`, `-e NAME`, and the
 /// joined forms.
-fn passes_tmpdir_through(args: &[String]) -> bool {
+fn passes_through(args: &[String], name: &str) -> bool {
     args.iter().enumerate().any(|(i, arg)| {
         let joined = ["--env=", "-e=", "-e"]
             .iter()
@@ -27,7 +41,7 @@ fn passes_tmpdir_through(args: &[String]) -> bool {
         let separate = matches!(arg.as_str(), "--env" | "-e")
             .then(|| args.get(i + 1).map(String::as_str))
             .flatten();
-        joined == Some(TMPDIR) || separate == Some(TMPDIR)
+        joined == Some(name) || separate == Some(name)
     })
 }
 
@@ -38,22 +52,30 @@ fn reads_a_config_file(args: &[String]) -> bool {
         .any(|a| a == "--config" || a.starts_with("--config="))
 }
 
-/// The `TMPDIR` to start Hermit with for this trial, or `None` when setting one could reach the guest (or the target
-/// has already chosen its own).
-pub(crate) fn hermit_tmpdir(
+/// The variables to start Hermit with so that its temporary files go into `dir`.
+pub(crate) fn hermit_temp_env(
     hermit_args: &[String],
     guest_env: &BTreeMap<String, String>,
     extra_env: &[(String, String)],
-    scratch: Option<&ScratchDir>,
-) -> Option<PathBuf> {
-    let scratch = scratch?;
-    let self_contained = SELF_CONTAINED_BASE_ENVS.contains(&base_env_mode(hermit_args).as_str());
-    let chosen = guest_env.contains_key(TMPDIR) || extra_env.iter().any(|(name, _)| name == TMPDIR);
-    (self_contained
-        && !chosen
-        && !passes_tmpdir_through(hermit_args)
-        && !reads_a_config_file(hermit_args))
-    .then(|| scratch.hermit_tmp())
+    dir: &ScratchDir,
+) -> Vec<(&'static str, PathBuf)> {
+    if reads_a_config_file(hermit_args) {
+        return Vec::new();
+    }
+    let mode = base_env_mode(hermit_args);
+    let free = |name: &str| {
+        !guest_env.contains_key(name)
+            && !extra_env.iter().any(|(n, _)| n == name)
+            && !passes_through(hermit_args, name)
+    };
+    let mut vars = Vec::new();
+    if SELF_CONTAINED_BASE_ENVS.contains(&mode.as_str()) && free(TMPDIR) {
+        vars.push((TMPDIR, dir.path().to_path_buf()));
+    }
+    if KNOWN_BASE_ENVS.contains(&mode.as_str()) && free(VERIFY_TMPDIR) {
+        vars.push((VERIFY_TMPDIR, dir.path().to_path_buf()));
+    }
+    vars
 }
 
 #[cfg(test)]
@@ -65,32 +87,48 @@ mod tests {
         list.iter().map(|a| a.to_string()).collect()
     }
 
-    fn scratch() -> (PrivateDir, ScratchDir) {
+    fn names(list: &[&str]) -> Vec<&'static str> {
+        names_with(list, &BTreeMap::new(), &[])
+    }
+
+    fn names_with(
+        list: &[&str],
+        env: &BTreeMap<String, String>,
+        extra: &[(String, String)],
+    ) -> Vec<&'static str> {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let base = std::env::temp_dir().join(format!("hairspring-tt-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&base).unwrap();
         let private = PrivateDir::create(&base).unwrap();
         let dir = private.scratch_for().unwrap();
-        (private, dir)
+        let vars = hermit_temp_env(&args(list), env, extra, &dir);
+        assert!(vars.iter().all(|(_, path)| path == dir.path()));
+        vars.into_iter().map(|(name, _)| name).collect()
     }
 
-    fn chosen(list: &[&str]) -> bool {
-        let (_keep, dir) = scratch();
-        hermit_tmpdir(&args(list), &BTreeMap::new(), &[], Some(&dir)).is_some()
+    const BOTH: [&str; 2] = [TMPDIR, VERIFY_TMPDIR];
+
+    #[test]
+    fn a_self_contained_base_environment_gets_both_variables() {
+        assert_eq!(names(&["--base-env=minimal"]), BOTH);
+        assert_eq!(names(&["--base-env", "empty"]), BOTH);
     }
 
     #[test]
-    fn only_a_base_environment_hermit_builds_itself_gets_a_tmpdir() {
-        assert!(chosen(&["--base-env=minimal"]));
-        assert!(chosen(&["--base-env", "empty"]));
-        assert!(!chosen(&[]), "the default passes the environment through");
-        assert!(!chosen(&["--base-env=host"]));
-        assert!(!chosen(&["--base-env=surprise"]));
+    fn the_host_base_environment_gets_only_the_one_hermit_strips() {
+        assert_eq!(names(&[]), [VERIFY_TMPDIR]);
+        assert_eq!(names(&["--base-env=host"]), [VERIFY_TMPDIR]);
+        assert_eq!(names(&["--base-env", "host"]), [VERIFY_TMPDIR]);
     }
 
     #[test]
-    fn a_tmpdir_that_hermit_would_pass_to_the_guest_is_never_set() {
+    fn an_unknown_base_environment_gets_nothing() {
+        assert!(names(&["--base-env=surprise"]).is_empty());
+    }
+
+    #[test]
+    fn a_variable_hermit_would_pass_to_the_guest_is_never_set() {
         for pass in [
             &["--env=TMPDIR"][..],
             &["--env", "TMPDIR"][..],
@@ -99,40 +137,33 @@ mod tests {
         ] {
             let mut list = vec!["--base-env=minimal"];
             list.extend(pass);
-            assert!(!chosen(&list), "{pass:?}");
+            assert_eq!(names(&list), [VERIFY_TMPDIR], "{pass:?}");
         }
-        assert!(chosen(&["--base-env=minimal", "--env=TMPDIR_NOT=1"]));
-        assert!(chosen(&["--base-env=minimal", "--env=A=TMPDIR"]));
+        assert_eq!(
+            names(&["--base-env=minimal", "--env=HERMIT_VERIFY_TMPDIR"]),
+            [TMPDIR]
+        );
+        assert_eq!(names(&["--base-env=minimal", "--env=TMPDIR_NOT=1"]), BOTH);
+        assert_eq!(names(&["--base-env=minimal", "--env=A=TMPDIR"]), BOTH);
     }
 
     #[test]
     fn a_run_config_file_makes_it_unknowable() {
-        assert!(!chosen(&["--base-env=minimal", "--config=run.yaml"]));
-        assert!(!chosen(&["--base-env=minimal", "--config", "run.yaml"]));
+        assert!(names(&["--base-env=minimal", "--config=run.yaml"]).is_empty());
+        assert!(names(&["--base-env=minimal", "--config", "run.yaml"]).is_empty());
     }
 
     #[test]
-    fn a_tmpdir_the_target_configured_is_kept() {
-        let (_keep, dir) = scratch();
-        let a = args(&["--base-env=minimal"]);
+    fn a_variable_the_target_configured_is_kept() {
         let env = BTreeMap::from([("TMPDIR".to_string(), "/x".to_string())]);
-        assert!(hermit_tmpdir(&a, &env, &[], Some(&dir)).is_none());
-        let extra = [("TMPDIR".to_string(), "/x".to_string())];
-        assert!(hermit_tmpdir(&a, &BTreeMap::new(), &extra, Some(&dir)).is_none());
-    }
-
-    #[test]
-    fn without_a_scratch_directory_there_is_none() {
-        let a = args(&["--base-env=minimal"]);
-        assert!(hermit_tmpdir(&a, &BTreeMap::new(), &[], None).is_none());
-    }
-
-    #[test]
-    fn the_directory_chosen_is_the_hermit_one_not_the_guests() {
-        let (_keep, dir) = scratch();
-        let a = args(&["--base-env=minimal"]);
-        let chosen = hermit_tmpdir(&a, &BTreeMap::new(), &[], Some(&dir)).unwrap();
-        assert_eq!(chosen, dir.hermit_tmp());
-        assert_ne!(chosen, dir.guest_tmp());
+        assert_eq!(
+            names_with(&["--base-env=minimal"], &env, &[]),
+            [VERIFY_TMPDIR]
+        );
+        let extra = [("HERMIT_VERIFY_TMPDIR".to_string(), "/x".to_string())];
+        assert_eq!(
+            names_with(&["--base-env=minimal"], &BTreeMap::new(), &extra),
+            [TMPDIR]
+        );
     }
 }

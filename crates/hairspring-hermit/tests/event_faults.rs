@@ -138,7 +138,7 @@ fn a_failed_cleanup_is_reported_as_an_infrastructure_fault() {
     );
     std::fs::write(r.dir.join("lockparent"), "").unwrap();
     let t = r.run(1);
-    let parent = r.trial_dir(1).parent().unwrap().to_path_buf();
+    let parent = r.tmp_dir(1).parent().unwrap().to_path_buf();
     std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(
         matches!(&t.events_error, Some(EventsFault::Infra(m)) if m.contains("remove")),
@@ -241,7 +241,7 @@ fn a_scratch_directory_that_cannot_be_made_is_an_infrastructure_fault_and_the_gu
 fn the_host_path_does_not_depend_on_the_seed() {
     let r = rig("width", "true", true, vec![]);
     let _ = (r.run(1), r.run(987_654_321));
-    let (a, b) = (r.trial_dir(1), r.trial_dir(987_654_321));
+    let (a, b) = (r.tmp_dir(1), r.tmp_dir(987_654_321));
     let (na, nb) = (
         a.file_name().unwrap().to_str().unwrap().to_string(),
         b.file_name().unwrap().to_str().unwrap().to_string(),

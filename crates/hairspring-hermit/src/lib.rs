@@ -73,14 +73,17 @@ pub struct HermitSettings {
     /// Where Hermit writes each trial's `--summary-json`. It must be outside `/tmp` (Hermit gives the guest its own).
     /// `None` turns schedule fingerprints off; defaults to `/dev/shm` when that exists.
     pub summary_dir: Option<PathBuf>,
-    /// Offer the guest an events file (`HAIRSPRING_EVENTS_FILE`) in addition to stdout and stderr. Needs `summary_dir`
-    /// (or `events_dir`), and puts the file in the guest's `/tmp`. Off by default.
+    /// Offer the guest an events file (`HAIRSPRING_EVENTS_FILE`) in addition to stdout and stderr. Needs `summary_dir`,
+    /// and uses Hermit's `--tmp` for the guest's `/tmp`. Off by default: it changes what the guest's `/tmp` is.
     pub events_file: bool,
-    /// Where each trial's private directories go: the directory Hermit mounts as the guest's `/tmp`, and Hermit's own
-    /// temporary files (see `trial_tmp`). `None` uses `summary_dir`; set this to a disk-backed directory when guests
-    /// may write more than `/dev/shm` can hold. Without either, trials get no private directories and Hermit chooses
-    /// the guest's `/tmp` itself.
+    /// Where the events file's per-trial directories go. `None` uses `summary_dir`; set this to a disk-backed
+    /// directory when guests may write more than `/dev/shm` can hold.
     pub events_dir: Option<PathBuf>,
+    /// Where each trial's private directory goes: Hermit's own temporary files for the trial (see `trial_tmp`), which the
+    /// engine removes itself, so that a trial killed at its timeout leaves nothing in the host temporary directory.
+    /// Defaults to the system temporary directory, where Hermit would have made them. Not `summary_dir`: `/dev/shm` is
+    /// small in some containers and mounted `noexec`, and what Hermit puts here must look to the guest as it always did.
+    pub trial_dir: PathBuf,
     /// Most event-line bytes accepted from one trial, shared by stdout, stderr and the events file. Defaults to
     /// 4 MiB (about 4,900 ids at roughly 850 bytes each). The buffer grows as events arrive, so only trials that emit
     /// events spend memory.
@@ -114,6 +117,7 @@ impl Default for HermitSettings {
                 .then(|| PathBuf::from(DEFAULT_SUMMARY_DIR)),
             events_file: false,
             events_dir: None,
+            trial_dir: std::env::temp_dir(),
             max_event_bytes: DEFAULT_MAX_EVENT_BYTES_PER_TRIAL,
             sweep_kept_bytes: MAX_KEPT_BYTES_IN_MEMORY,
             sweep_digest_bytes: MAX_DIGEST_BYTES_IN_MEMORY,

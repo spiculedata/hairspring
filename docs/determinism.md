@@ -57,32 +57,45 @@ Cause (verified from Hermit's debug log): Hermit virtualises file timestamps, so
 Hermit backend therefore starts guests from a minimal pinned environment and freezes bytecode caches. Idle
 time, CPU load and drop-caches did not matter (110/110 runs identical across gaps up to 90 s).
 
-### The guest's /tmp and Hermit's temporary files
+### Hermit's temporary files and a trial timeout
 
-Hermit mounts a private directory over the guest's `/tmp`. Left to itself it makes that directory, and a private copy
-of the host `/etc/group`, in the host temporary directory (`$TMPDIR`, else `/tmp`), and removes both when it exits. A
-trial that runs past `trial_timeout_secs` is stopped with `SIGKILL`, which skips that, so both stayed behind.
+Hermit makes temporary entries in the host temporary directory (`$TMPDIR`, else `/tmp`) and removes them when it exits:
+the private directory it mounts as the guest's `/tmp` (when it is not given `--tmp`), a private copy of the host
+`/etc/group`, an empty directory over the nscd socket directory (when `/var/run/nscd` exists), and, for a strict
+verify, its two run logs. A trial that runs past `trial_timeout_secs` is stopped with `SIGKILL`, which skips that
+clean-up, so they were left behind.
 
-The Hermit backend now makes a private directory for each trial (mode 0700, below `events_dir`, or `summary_dir` when
-that is not set, which is `/dev/shm` by default) and removes it itself after the trial, however it ended:
+Each Hermit trial now gets a private directory (mode 0700) that the engine removes itself after the trial, however it
+ended. It is made under `trial_dir` in the Hermit backend settings, which defaults to the system temporary directory,
+the place Hermit used. It is not under `summary_dir`: `/dev/shm` is small in some containers and mounted `noexec`, and
+the guest's `/tmp` has to stay where it was. If the directory cannot be made the trial fails as a Hermit start-up fault,
+and nothing is run with a different `/tmp`.
 
-- Hermit is always given `--tmp=<directory>/tmp`. The guest still sees an empty, writable `/tmp` at the same path, and
-  never sees the host path. In the Hermit source we read, the mount's root in `/proc/self/mountinfo` is rewritten to a
-  fixed name. The guest's events file already worked this way when `events_file` was on; the change is that it is now
-  the case for every trial. The `--tmp` argument is rebuilt by every path that runs a trial (search, rerun, replay,
-  confirmation), so replay has the same `/tmp` semantics as the run it replays, and a bundle records no host path. A
-  target whose own `hermit_args` already choose the guest's `/tmp` keeps its choice.
-- When the target's `--base-env` is `minimal` or `empty`, the Hermit process is also started with `TMPDIR=<directory>/hermit`,
-  so the `/etc/group` copy lands there. `TMPDIR` is not set otherwise: Hermit's default base environment (`host`) passes
-  its own environment to the guest, so the guest would see a host path that changes from trial to trial. Under the default
-  base environment a timed-out trial can therefore still leave the `/etc/group` copy (a small file named `.tmpXXXXXX`) in
-  the host temporary directory; the guest's own `/tmp` is no longer left there.
-- Writes to the guest's `/tmp` now go to `/dev/shm` by default (memory), where they went to the host temporary directory
-  before. A guest that writes a lot there can fill `/dev/shm` (small in some containers). The directory is the `events_dir` setting of the Rust library; it is not a key in `hairspring.toml`.
-- With no `events_dir` or `summary_dir`, trials get no private directory and run as before.
+Hermit is pointed at that directory with two environment variables. No `--tmp` is passed (the events file still uses it,
+as before), so Hermit keeps making the guest's `/tmp` itself and the guest's view of `/tmp` is the one it always had.
 
-The guest's environment, the Hermit scheduler flags, the schedules and the hashes are not changed by this. It is a change
-in how the engine runs Hermit, so a result pinned to an engine version is tied to the version that made it.
+| Base environment | Set for Hermit | Left behind by a timeout |
+|---|---|---|
+| `--base-env=minimal` or `empty` | `TMPDIR` and `HERMIT_VERIFY_TMPDIR` | nothing in the host temporary directory |
+| default (`host`) | `HERMIT_VERIFY_TMPDIR` only | Hermit's private guest `/tmp` and its `/etc/group` copy (`.tmpXXXXXX`) |
+
+`TMPDIR` is withheld under the default base environment because Hermit hands its own environment to the guest there: the
+guest would see a host path that changes from trial to trial. `HERMIT_VERIFY_TMPDIR` is Hermit's own setting, removed
+from the guest's environment under `host` and never passed on by `minimal` or `empty` (checked in the Hermit source at
+the pinned revision `25781c5c`, by reading, not by running). Either variable is left alone when the target sets it,
+passes it through with `--env`, or names a Hermit `--config` file. A fix for the default base environment needs a
+Hermit-only temporary-directory variable that Hermit strips the way it strips `HERMIT_VERIFY_TMPDIR`.
+
+What this changes for a guest: nothing it can see. The guest's environment, `/tmp` and `/proc/self/mountinfo` are as
+before, and the scheduler flags, schedules, hashes and verdicts are unchanged. What it does change is Hermit's own
+process environment (two variables, both with a fixed meaning and a per-trial path), the host paths Hermit's temporary
+files have, and the engine's clean-up. `hairspring confirm` records the Hermit command without these two variables,
+as it does for `HAIRSPRING_SEED` and the other variables the engine sets outside the command line; they belong to the
+engine and are not part of what a replay needs. A result pinned to an engine version is tied to the version that
+made it, so a newer engine needs re-checking before a claim names it.
+
+A directory the engine makes for a trial is not removed if the engine itself is killed with `SIGKILL`. It is empty then
+except for what a running trial held, and is named `hairspring-trials-<uid>-<pid>-<hex>`.
 
 ### Recorded environment
 

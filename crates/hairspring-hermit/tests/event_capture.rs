@@ -126,15 +126,12 @@ fn a_guest_without_events_is_unchanged() {
 }
 
 #[test]
-fn without_the_setting_the_guest_gets_no_events_variable_and_an_empty_engine_owned_tmp() {
+fn without_the_setting_the_guest_gets_no_events_variable_and_no_tmp_mount() {
     let r = rig("off", "echo ${HAIRSPRING_EVENTS_FILE-unset}", false, vec![]);
     let t = r.run(4);
     assert_eq!(t.stdout, "unset\n");
     assert_eq!(r.logged("env", 4), "unset");
-    // The guest's /tmp is a directory of the engine's, which it removes after the trial, but it carries no events file.
-    assert!(r.logged("args", 4).contains("--tmp="));
-    assert!(t.events.is_none() && t.events_error.is_none());
-    assert!(!r.tmp_dir(4).exists(), "removed after the trial");
+    assert!(!r.logged("args", 4).contains("--tmp"));
 }
 
 #[test]

@@ -57,12 +57,11 @@ queued --lease--> running --finish_job--> done            (run: passed | failed 
   worker cannot overwrite a finished or cancelled run.
 - **Trial temporary files.** A trial timeout and Ctrl-C end Hermit with `SIGKILL`, which skips the clean-up Hermit does
   for its own temporary files. So each Hermit trial gets a directory the engine owns and removes itself, after a
-  timeout as after any other end: below `events_dir`, or `summary_dir` when that is not set (`/dev/shm` by default).
-  Hermit is always given `--tmp=<that directory>/tmp`, so the guest's `/tmp` is an empty engine-owned directory (the
-  guest still sees `/tmp`). When the target's `--base-env` is `minimal` or `empty`, Hermit's own `TMPDIR` is
-  `<that directory>/hermit` too, which holds its private copy of `/etc/group`. With Hermit's default base environment
-  the Hermit environment is passed to the guest, so no `TMPDIR` is set and that one small file can still be left in
-  the host temp directory after a timeout. See [determinism.md](determinism.md#the-guests-tmp-and-hermits-temporary-files).
+  timeout as after any other end, under `trial_dir` (the system temporary directory by default). Hermit's temporary
+  directory is pointed at it: `TMPDIR` and `HERMIT_VERIFY_TMPDIR` under `--base-env=minimal` or `empty`, and only
+  `HERMIT_VERIFY_TMPDIR` under the default base environment, which passes Hermit's environment to the guest. So in that
+  mode Hermit's private guest `/tmp` and its `/etc/group` copy can still be left after a timeout. No `--tmp` is
+  passed for this. See [determinism.md](determinism.md#hermits-temporary-files-and-a-trial-timeout).
 - Jobs that exhaust their attempts through expiry are reported by `fail_expired_jobs` so their runs never hang.
 - **Ctrl-C.** `hairspring test` and `hairspring confirm` catch the first SIGINT (a second one ends the process in the
   usual way). The foreground run is cancelled like any other cancel, so it ends `cancelled` and keeps the trials already

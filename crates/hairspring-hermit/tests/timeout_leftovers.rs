@@ -1,10 +1,10 @@
 //! A trial that is killed at its timeout must not leave temporary files in the host temp directory.
 //!
-//! The fake `hermit` below behaves as the real one does in the two respects that matter: the guest's `/tmp` is the
-//! `--tmp` directory when one is given (otherwise a fresh directory in `$TMPDIR`), and a private copy of a host file
-//! goes to `mktemp`, which honours `$TMPDIR`. It removes what it made in a `trap`, which a `SIGKILL` skips. With
-//! `--base-env=minimal` it also starts the guest from an empty environment, as Hermit does; otherwise it passes its
-//! own environment on, which is what Hermit's default `host` base environment does.
+//! The fake `hermit` below makes what the real one makes in the host temporary directory (`$TMPDIR`, else `/tmp`): a
+//! private guest `/tmp` when it is not given `--tmp`, a copy of a host file, an empty directory, and a strict-verify
+//! log (in `$HERMIT_VERIFY_TMPDIR` when that is set). It removes them in a `trap`, which a `SIGKILL` skips. It starts
+//! the guest as Hermit does: from an empty environment with `--base-env=minimal`, and otherwise from its own
+//! environment without `HERMIT_VERIFY_TMPDIR`, which Hermit's default `host` base environment strips.
 mod common;
 
 use common::{scratch, write_fake};
@@ -15,9 +15,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// `@MARK@` is replaced with the marker directory. The fake records, one file each: the `mktemp` file (`file`), the
-/// guest's `/tmp` (`dir`), the `--tmp` value (`tmp-arg`), the `$TMPDIR` it was started with (`tmpdir`), and what the
-/// guest saw of `$TMPDIR` (`guest-tmpdir`, written by the guest command).
+/// `@MARK@` is replaced with the marker directory. The fake records, one file each, the paths it made (`file`, `dir`,
+/// `nscd`, `log`), the `--tmp` value (`tmp-arg`), and what it was started with (`tmpdir`, `verify-tmpdir`). The guest
+/// command records what it can see (`guest-tmpdir`, `guest-verify-tmpdir`).
 const FAKE: &str = r#"#!/bin/sh
 MARK='@MARK@'
 shift
@@ -31,51 +31,80 @@ while [ "$1" != "--" ]; do
   shift
 done
 shift
-t=$(mktemp "${TMPDIR:-/tmp}/.tmpXXXXXX")
+base=${TMPDIR:-/tmp}
+t=$(mktemp "$base/.tmpXXXXXX")
+n=$(mktemp -d "$base/.tmpXXXXXX")
+l=$(mktemp "${HERMIT_VERIFY_TMPDIR:-$base}/run1_log_XXXXXX")
 made=
-if [ -n "$tmp" ]; then d=$tmp; mkdir -p "$d"; else d=$(mktemp -d "${TMPDIR:-/tmp}/.tmpXXXXXX"); made=$d; fi
+if [ -n "$tmp" ]; then d=$tmp; mkdir -p "$d"; else d=$(mktemp -d "$base/.tmpXXXXXX"); made=$d; fi
 echo "$t" > "$MARK/file"
 echo "$d" > "$MARK/dir"
+echo "$n" > "$MARK/nscd"
+echo "$l" > "$MARK/log"
 echo "$tmp" > "$MARK/tmp-arg"
 echo "${TMPDIR-unset}" > "$MARK/tmpdir"
-echo hermit-owned > "$t"
+echo "${HERMIT_VERIFY_TMPDIR-unset}" > "$MARK/verify-tmpdir"
 echo guest-owned > "$d/guest-file"
-if [ -n "${TMPDIR-}" ]; then echo hermit-owned > "$TMPDIR/hermit-file"; fi
-trap 'rm -rf "$t" "$made"' EXIT TERM
+echo hermit-owned > "$n/hermit-file"
+trap 'rm -rf "$t" "$n" "$l" "$made"' EXIT TERM
 if [ -n "$minimal" ]; then
-  MARK="$MARK" env -i MARK="$MARK" PATH=/usr/bin:/bin "$@"
+  env -i MARK="$MARK" PATH=/usr/bin:/bin "$@"
 else
-  MARK="$MARK" "$@"
+  env -u HERMIT_VERIFY_TMPDIR MARK="$MARK" "$@"
 fi
 "#;
 
-/// The guest: records its `$TMPDIR`, then either spins (a hang) or returns.
-const SPIN: &str = "echo \"${TMPDIR-unset}\" > \"$MARK/guest-tmpdir\"; while :; do :; done";
-const RETURN: &str = "echo \"${TMPDIR-unset}\" > \"$MARK/guest-tmpdir\"; echo done";
+const RECORD: &str = "echo \"${TMPDIR-unset}\" > \"$MARK/guest-tmpdir\"; echo \"${HERMIT_VERIFY_TMPDIR-unset}\" > \"$MARK/guest-verify-tmpdir\";";
+const SPIN: &str = "while :; do :; done";
+const MINIMAL: &[&str] = &["--base-env=minimal"];
+const HOST: &[&str] = &[];
 
 struct Rig {
     markers: PathBuf,
-    /// The base directory the engine keeps its private directories in (`summary_dir`).
-    base: PathBuf,
+    bin: PathBuf,
+    /// The base directory for `summary_dir`.
+    summaries: PathBuf,
+    /// The base directory for the per-trial directories.
+    trials: PathBuf,
     backend: HermitBackend,
     spec: TargetSpec,
 }
 
-fn rig(name: &str, guest: &str, hermit_args: &[&str], with_base: bool) -> Rig {
+struct Options {
+    hermit_args: &'static [&'static str],
+    events_file: bool,
+    summaries: bool,
+    /// Leave `trial_dir` at its default, the system temporary directory.
+    default_trial_dir: bool,
+}
+
+impl Options {
+    fn new(hermit_args: &'static [&'static str]) -> Options {
+        Options {
+            hermit_args,
+            events_file: false,
+            summaries: true,
+            default_trial_dir: false,
+        }
+    }
+}
+
+fn rig(name: &str, guest: &str, o: Options) -> Rig {
     let dir = scratch(name);
     let markers = dir.join("markers");
-    let base = dir.join("shm");
-    std::fs::create_dir_all(&markers).unwrap();
-    std::fs::create_dir_all(&base).unwrap();
-    let fake = FAKE.replace("@MARK@", &markers.display().to_string());
+    let summaries = dir.join("shm");
+    let trials = dir.join("trials");
+    for d in [&markers, &summaries, &trials] {
+        std::fs::create_dir_all(d).unwrap();
+    }
     let spec = TargetSpec {
         name: "svc".into(),
         description: String::new(),
         kind: TargetKind::Process {
-            command: vec!["/bin/sh".into(), "-c".into(), guest.into()],
+            command: vec!["/bin/sh".into(), "-c".into(), format!("{RECORD} {guest}")],
             env: BTreeMap::new(),
             cwd: None,
-            hermit_args: hermit_args.iter().map(|a| a.to_string()).collect(),
+            hermit_args: o.hermit_args.iter().map(|a| a.to_string()).collect(),
             trial_timeout_secs: Some(1),
             scheduler: SchedulerSpec::default(),
             hang_is_violation: false,
@@ -87,15 +116,25 @@ fn rig(name: &str, guest: &str, hermit_args: &[&str], with_base: bool) -> Rig {
             wall_secs: 60,
         },
     };
-    let settings = HermitSettings {
-        bin: write_fake(&dir, &fake),
+    let bin = write_fake(
+        &dir,
+        &FAKE.replace("@MARK@", &markers.display().to_string()),
+    );
+    let mut settings = HermitSettings {
+        bin: bin.clone(),
         trial_timeout: Duration::from_secs(20),
-        summary_dir: with_base.then(|| base.clone()),
+        summary_dir: o.summaries.then(|| summaries.clone()),
+        events_file: o.events_file,
         ..HermitSettings::default()
     };
+    if !o.default_trial_dir {
+        settings.trial_dir = trials.clone();
+    }
     Rig {
         markers,
-        base,
+        bin,
+        summaries,
+        trials,
         backend: HermitBackend::new(settings),
         spec,
     }
@@ -113,10 +152,10 @@ impl Rig {
             .to_string()
     }
 
-    /// What is left inside the engine's private base directory: nothing, once a trial has been cleaned up.
+    /// What is left in the engine's own per-trial base directory: nothing, once a trial has been cleaned up.
     fn engine_leftovers(&self) -> Vec<PathBuf> {
         let mut found = Vec::new();
-        for private in std::fs::read_dir(&self.base).unwrap().flatten() {
+        for private in std::fs::read_dir(&self.trials).unwrap().flatten() {
             found.extend(
                 std::fs::read_dir(private.path())
                     .unwrap()
@@ -131,7 +170,7 @@ impl Rig {
 impl Drop for Rig {
     /// A failing test must not leave the files it is about to complain about.
     fn drop(&mut self) {
-        for name in ["file", "dir"] {
+        for name in ["file", "dir", "nscd", "log"] {
             if let Ok(p) = std::fs::read_to_string(self.markers.join(name)) {
                 let p = PathBuf::from(p.trim());
                 let _ = std::fs::remove_dir_all(&p).or_else(|_| std::fs::remove_file(&p));
@@ -145,43 +184,14 @@ fn exists(p: &str) -> bool {
 }
 
 #[test]
-fn a_timed_out_trial_leaves_no_guest_tmp_directory_behind() {
-    let r = rig("dir", SPIN, &[], true);
-    let t = r.run();
-    assert!(t.timed_out, "{t:?}");
-    let dir = r.marker("dir");
-    assert!(!exists(&dir), "the guest's /tmp {dir} was left behind");
-    assert!(
-        r.engine_leftovers().is_empty(),
-        "{:?}",
-        r.engine_leftovers()
-    );
-}
-
-#[test]
-fn the_guest_tmp_is_always_an_engine_owned_directory() {
-    let r = rig("always-tmp", RETURN, &[], true);
-    let t = r.run();
-    assert!(!t.timed_out, "{t:?}");
-    let tmp_arg = r.marker("tmp-arg");
-    assert!(
-        tmp_arg.starts_with(r.base.to_str().unwrap()),
-        "hermit was given --tmp={tmp_arg:?}, not a directory below {}",
-        r.base.display()
-    );
-}
-
-#[test]
 fn a_timed_out_trial_under_the_minimal_base_environment_leaves_nothing() {
-    let r = rig("minimal-timeout", SPIN, &["--base-env=minimal"], true);
+    let r = rig("minimal-timeout", SPIN, Options::new(MINIMAL));
     let t = r.run();
     assert!(t.timed_out, "{t:?}");
-    let (file, dir) = (r.marker("file"), r.marker("dir"));
-    assert!(
-        !exists(&file),
-        "hermit's temporary file {file} was left behind"
-    );
-    assert!(!exists(&dir), "the guest's /tmp {dir} was left behind");
+    for what in ["file", "dir", "nscd", "log"] {
+        let path = r.marker(what);
+        assert!(!exists(&path), "{what} {path} was left behind");
+    }
     assert!(
         r.engine_leftovers().is_empty(),
         "{:?}",
@@ -190,90 +200,126 @@ fn a_timed_out_trial_under_the_minimal_base_environment_leaves_nothing() {
 }
 
 #[test]
-fn hermits_own_temporary_files_do_not_land_in_the_guests_tmp() {
-    let r = rig("separate", RETURN, &["--base-env=minimal"], true);
-    r.run();
-    let (file, tmp_arg, tmpdir) = (r.marker("file"), r.marker("tmp-arg"), r.marker("tmpdir"));
-    assert_ne!(tmpdir, "unset", "hermit was given no TMPDIR");
-    assert_ne!(
-        tmpdir, tmp_arg,
-        "TMPDIR and the guest's /tmp are one directory"
-    );
+fn a_timed_out_trial_under_the_host_base_environment_leaves_no_verify_log() {
+    // Hermit's private guest `/tmp` and its copy of a host file cannot be redirected here without a `TMPDIR` that the
+    // guest would inherit, so those two can still be left (documented); the run logs and the engine's directory cannot.
+    let r = rig("host-timeout", SPIN, Options::new(HOST));
+    let t = r.run();
+    assert!(t.timed_out, "{t:?}");
+    assert!(!exists(&r.marker("log")), "the verify log was left behind");
     assert!(
-        !file.starts_with(&tmp_arg) && !tmpdir.starts_with(&format!("{tmp_arg}/")),
-        "hermit's own file {file} is inside the guest's /tmp {tmp_arg}"
+        r.engine_leftovers().is_empty(),
+        "{:?}",
+        r.engine_leftovers()
     );
 }
 
 #[test]
 fn a_trial_that_exits_normally_leaves_nothing_behind() {
-    for args in [&[][..], &["--base-env=minimal"][..]] {
-        let r = rig("control", RETURN, args, true);
+    for args in [MINIMAL, HOST] {
+        let r = rig("control", "echo done", Options::new(args));
         let t = r.run();
         assert!(!t.timed_out && t.exit_code == Some(0), "{t:?}");
-        assert!(!exists(&r.marker("dir")), "{args:?}");
-        assert!(!exists(&r.marker("file")), "{args:?}");
+        for what in ["file", "dir", "nscd", "log"] {
+            assert!(!exists(&r.marker(what)), "{what} {args:?}");
+        }
         assert!(r.engine_leftovers().is_empty(), "{args:?}");
     }
 }
 
 #[test]
-fn tmpdir_does_not_reach_the_guest_under_the_minimal_base_environment() {
-    let r = rig("guest-env-minimal", RETURN, &["--base-env=minimal"], true);
-    r.run();
-    assert_ne!(
-        r.marker("tmpdir"),
-        "unset",
-        "the test needs hermit to have a TMPDIR"
-    );
-    assert_eq!(r.marker("guest-tmpdir"), "unset");
+fn no_tmp_is_passed_unless_the_events_file_needs_it() {
+    for args in [MINIMAL, HOST] {
+        let r = rig("no-tmp", "echo done", Options::new(args));
+        r.run();
+        assert_eq!(r.marker("tmp-arg"), "", "{args:?}");
+    }
 }
 
 #[test]
-fn tmpdir_is_not_set_where_hermit_would_pass_it_to_the_guest() {
-    // Hermit's default base environment passes its own environment through, so a TMPDIR here would be the guest's.
-    for args in [
-        &[][..],
-        &["--base-env=host"][..],
-        &["--base-env", "host"][..],
-    ] {
-        let r = rig("guest-env-host", RETURN, args, true);
+fn hermits_temporary_directory_is_set_only_where_it_cannot_reach_the_guest() {
+    let r = rig("vars-minimal", "echo done", Options::new(MINIMAL));
+    r.run();
+    let (tmpdir, verify) = (r.marker("tmpdir"), r.marker("verify-tmpdir"));
+    assert!(tmpdir.starts_with(r.trials.to_str().unwrap()), "{tmpdir}");
+    assert_eq!(tmpdir, verify);
+
+    let r = rig("vars-host", "echo done", Options::new(HOST));
+    r.run();
+    assert_eq!(r.marker("tmpdir"), "unset", "a TMPDIR would be inherited");
+    assert!(r
+        .marker("verify-tmpdir")
+        .starts_with(r.trials.to_str().unwrap()));
+}
+
+#[test]
+fn neither_variable_reaches_the_guest() {
+    for args in [MINIMAL, HOST] {
+        let r = rig("guest-env", "echo done", Options::new(args));
         r.run();
-        assert_eq!(r.marker("tmpdir"), "unset", "{args:?}");
         assert_eq!(r.marker("guest-tmpdir"), "unset", "{args:?}");
+        assert_eq!(r.marker("guest-verify-tmpdir"), "unset", "{args:?}");
     }
 }
 
 #[test]
-fn tmpdir_is_not_set_when_the_target_passes_it_through_to_the_guest() {
-    for args in [
-        &["--base-env=minimal", "--env=TMPDIR"][..],
-        &["--base-env=minimal", "--env", "TMPDIR"][..],
-    ] {
-        let r = rig("passthrough", RETURN, args, true);
-        r.run();
-        assert_eq!(r.marker("tmpdir"), "unset", "{args:?}");
-    }
-}
-
-#[test]
-fn a_target_that_chooses_the_guests_tmp_itself_is_left_alone() {
-    let r = rig("own-tmp", RETURN, &["--bind=/somewhere:/tmp/data"], true);
+fn trial_directories_default_to_the_system_temp_dir_and_not_the_summary_directory() {
+    let mut o = Options::new(MINIMAL);
+    o.default_trial_dir = true;
+    let r = rig("default-base", "echo done", o);
     r.run();
-    assert_eq!(
-        r.marker("tmp-arg"),
-        "",
-        "the engine passed --tmp over the target's own /tmp mount"
+    let tmpdir = PathBuf::from(r.marker("tmpdir"));
+    assert!(tmpdir.starts_with(std::env::temp_dir()), "{tmpdir:?}");
+    assert!(!tmpdir.starts_with(&r.summaries), "{tmpdir:?}");
+    assert!(
+        tmpdir.components().any(|c| c
+            .as_os_str()
+            .to_string_lossy()
+            .starts_with("hairspring-trials-")),
+        "{tmpdir:?}"
     );
+    assert_eq!(HermitSettings::default().trial_dir, std::env::temp_dir());
 }
 
 #[test]
-fn without_a_private_directory_the_trial_runs_as_before() {
-    let r = rig("no-base", RETURN, &["--base-env=minimal"], false);
+fn trial_directories_do_not_need_a_summary_directory() {
+    let mut o = Options::new(MINIMAL);
+    o.summaries = false;
+    let r = rig("no-summaries", SPIN, o);
     let t = r.run();
-    assert_eq!(t.exit_code, Some(0), "{t:?}");
-    assert_eq!(r.marker("tmp-arg"), "");
-    assert_eq!(r.marker("tmpdir"), "unset");
-    let _ = std::fs::remove_file(r.marker("file"));
-    let _ = std::fs::remove_dir_all(r.marker("dir"));
+    assert!(t.timed_out, "{t:?}");
+    assert!(!exists(&r.marker("log")));
+    assert!(r.engine_leftovers().is_empty());
+}
+
+#[test]
+fn a_trial_directory_that_cannot_be_made_fails_the_trial_without_starting_hermit() {
+    let mut r = rig("cannot-make", "echo done", Options::new(MINIMAL));
+    let blocker = r.trials.join("a-file");
+    std::fs::write(&blocker, "").unwrap();
+    let settings = HermitSettings {
+        bin: r.bin.clone(),
+        trial_dir: blocker,
+        ..HermitSettings::default()
+    };
+    r.backend = HermitBackend::new(settings);
+    let err = r.backend.run_one(&r.spec, 1).unwrap_err().to_string();
+    assert!(err.contains("private directory"), "{err}");
+    assert!(!r.markers.join("tmpdir").exists(), "hermit was started");
+}
+
+#[test]
+fn the_events_file_still_uses_its_own_tmp_and_hermit_keeps_its_own_directory() {
+    let mut o = Options::new(MINIMAL);
+    o.events_file = true;
+    let r = rig("events", "echo done", o);
+    r.run();
+    let (tmp_arg, tmpdir) = (r.marker("tmp-arg"), r.marker("tmpdir"));
+    assert!(
+        tmp_arg.starts_with(r.summaries.to_str().unwrap()),
+        "{tmp_arg}"
+    );
+    assert!(tmpdir.starts_with(r.trials.to_str().unwrap()), "{tmpdir}");
+    assert_ne!(tmp_arg, tmpdir);
+    assert!(!exists(&tmp_arg) && r.engine_leftovers().is_empty());
 }

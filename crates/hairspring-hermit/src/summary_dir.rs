@@ -5,12 +5,25 @@
 //! `/dev/shm`), refused if it already exists as anything but our own private directory, and holds randomly named files.
 use std::fs::DirBuilder;
 use std::io::{self, Read};
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
 
 extern "C" {
     fn geteuid() -> u32;
+    fn fchmodat(dirfd: i32, path: *const std::os::raw::c_char, mode: u32, flags: i32) -> i32;
 }
+
+/// `AT_FDCWD` and `AT_SYMLINK_NOFOLLOW`, whose values differ between Linux and macOS.
+#[cfg(target_os = "linux")]
+const AT_FDCWD: i32 = -100;
+#[cfg(target_os = "linux")]
+const AT_SYMLINK_NOFOLLOW: i32 = 0x100;
+#[cfg(not(target_os = "linux"))]
+const AT_FDCWD: i32 = -2;
+#[cfg(not(target_os = "linux"))]
+const AT_SYMLINK_NOFOLLOW: i32 = 0x20;
 
 #[derive(Debug)]
 pub struct PrivateDir {
@@ -36,22 +49,31 @@ impl PrivateDir {
         Ok(PrivateDir { path })
     }
 
+    /// Creates `<base>/<prefix>-<euid>-<pid>-<random>` with mode 0700. The name is new every time, so two of these in
+    /// one process never share (or remove) one another's directory.
+    pub fn create_unique(base: &Path, prefix: &str) -> io::Result<PrivateDir> {
+        // SAFETY: see `create`.
+        let uid = unsafe { geteuid() };
+        let path = base.join(format!(
+            "{prefix}-{uid}-{}-{:016x}",
+            std::process::id(),
+            random_u64()
+        ));
+        DirBuilder::new().mode(0o700).create(&path)?;
+        Ok(PrivateDir { path })
+    }
+
     /// A fresh, unpredictable file path inside the directory.
     pub fn file_for(&self, seed: u64) -> PathBuf {
         self.path.join(format!("{seed}-{:016x}.json", random_u64()))
     }
 
-    /// A fresh private directory (mode 0700) for one trial, removed on drop, holding two more: [`ScratchDir::guest_tmp`]
-    /// and [`ScratchDir::hermit_tmp`]. The name is a fixed-width random number and nothing else, so the path's length
-    /// never depends on the seed.
+    /// A fresh private directory (mode 0700) for one trial's scratch files, removed on drop. The name is a fixed-width
+    /// random number and nothing else, so the path's length never depends on the seed.
     pub fn scratch_for(&self) -> io::Result<ScratchDir> {
         let path = self.path.join(format!("{:016x}.d", random_u64()));
         DirBuilder::new().mode(0o700).create(&path)?;
-        let dir = ScratchDir { path };
-        // On any failure `dir` is dropped here, which removes what was made.
-        DirBuilder::new().mode(0o700).create(dir.guest_tmp())?;
-        DirBuilder::new().mode(0o700).create(dir.hermit_tmp())?;
-        Ok(dir)
+        Ok(ScratchDir { path })
     }
 
     #[cfg(test)]
@@ -67,18 +89,53 @@ impl Drop for PrivateDir {
     }
 }
 
+/// `chmod` that never follows a symlink at `path`: a link is left alone (the call fails, which is fine).
+fn chmod_no_follow(path: &Path, mode: u32) {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return;
+    };
+    // SAFETY: `c_path` is a valid NUL-terminated string that outlives the call.
+    unsafe {
+        fchmodat(AT_FDCWD, c_path.as_ptr(), mode, AT_SYMLINK_NOFOLLOW);
+    }
+}
+
+/// A path that names the directory `handle` is open on, whatever `dir` now points at. Linux resolves paths through
+/// `/dev/fd`; elsewhere (development machines, where Hermit does not run) the path is used as given.
+#[cfg(target_os = "linux")]
+fn through(_dir: &Path, handle: &std::fs::File) -> PathBuf {
+    PathBuf::from(format!("/dev/fd/{}", handle.as_raw_fd()))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn through(dir: &Path, _handle: &std::fs::File) -> PathBuf {
+    dir.to_path_buf()
+}
+
 /// Makes `dir` and everything below it owner-accessible, so a directory the guest left at mode 000 cannot stop the
-/// removal. Symlinks are not followed.
+/// removal. A guest process that outlives the trial (one that left the process group) can swap a path for a symlink
+/// while this runs, so no mode is ever set through a path that could be one: the mode is set without following links,
+/// and a directory is entered through an open handle that is checked to be the directory that was looked at.
 fn make_accessible(dir: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let is_dir = std::fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_dir());
-    if !is_dir {
+    let Ok(before) = std::fs::symlink_metadata(dir) else {
+        return;
+    };
+    if !before.file_type().is_dir() {
         return;
     }
-    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
-    if let Ok(entries) = std::fs::read_dir(dir) {
+    chmod_no_follow(dir, 0o700);
+    let Ok(handle) = std::fs::File::open(dir) else {
+        return;
+    };
+    match handle.metadata() {
+        Ok(opened) if (opened.dev(), opened.ino()) == (before.dev(), before.ino()) => {}
+        _ => return,
+    }
+    let through_handle = through(dir, &handle);
+    if let Ok(entries) = std::fs::read_dir(&through_handle) {
         for entry in entries.flatten() {
-            make_accessible(&entry.path());
+            make_accessible(&through_handle.join(entry.file_name()));
         }
     }
 }
@@ -92,28 +149,15 @@ fn remove_tree(path: &Path) -> io::Result<()> {
     }
 }
 
-/// One trial's scratch directory inside a [`PrivateDir`]. The engine removes it after the trial, so it survives a
-/// `SIGKILL` of Hermit, which a temporary file Hermit removes itself does not.
+/// One trial's scratch directory inside a [`PrivateDir`].
 #[derive(Debug)]
 pub struct ScratchDir {
     path: PathBuf,
 }
 
 impl ScratchDir {
-    #[cfg(test)]
     pub fn path(&self) -> &Path {
         &self.path
-    }
-
-    /// The directory Hermit mounts as the guest's `/tmp` (`--tmp`). Empty when the trial starts, and only the guest
-    /// writes to it; Hermit's own temporary files go to [`ScratchDir::hermit_tmp`].
-    pub fn guest_tmp(&self) -> PathBuf {
-        self.path.join("tmp")
-    }
-
-    /// The directory for Hermit's own temporary files (`TMPDIR` of the Hermit process), kept apart from the guest's.
-    pub fn hermit_tmp(&self) -> PathBuf {
-        self.path.join("hermit")
     }
 
     /// Removes the directory and says why if it could not be removed. Dropping does the same but cannot report.
@@ -246,16 +290,47 @@ mod tests {
     }
 
     #[test]
-    fn a_scratch_directory_holds_separate_private_guest_and_hermit_directories() {
-        let b = base("layout");
+    fn unique_private_directories_never_share_a_name() {
+        let b = base("unique");
+        let (a, c) = (
+            PrivateDir::create_unique(&b, "trials").unwrap(),
+            PrivateDir::create_unique(&b, "trials").unwrap(),
+        );
+        assert_ne!(a.path(), c.path());
+        assert_eq!(std::fs::metadata(a.path()).unwrap().mode() & 0o777, 0o700);
+        let gone = a.path().to_path_buf();
+        drop(a);
+        assert!(
+            !gone.exists() && c.path().exists(),
+            "only its own is removed"
+        );
+    }
+
+    #[test]
+    fn cleanup_does_not_follow_a_symlink_out_of_the_tree() {
+        let b = base("symlink-out");
+        let outside = b.join("outside");
+        std::fs::create_dir_all(outside.join("inner")).unwrap();
+        std::fs::write(outside.join("file"), "keep").unwrap();
+        std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(outside.join("file"), std::fs::Permissions::from_mode(0o644))
+            .unwrap();
         let d = PrivateDir::create(&b).unwrap();
         let s = d.scratch_for().unwrap();
-        assert_ne!(s.guest_tmp(), s.hermit_tmp());
-        for sub in [s.guest_tmp(), s.hermit_tmp()] {
-            assert!(sub.starts_with(s.path()));
-            assert_eq!(std::fs::metadata(&sub).unwrap().mode() & 0o777, 0o700);
-            assert!(std::fs::read_dir(&sub).unwrap().next().is_none(), "empty");
-        }
+        symlink(&outside, s.path().join("link-to-dir")).unwrap();
+        symlink(outside.join("file"), s.path().join("link-to-file")).unwrap();
+        s.remove().unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().mode() & 0o777;
+        assert_eq!(mode(&outside), 0o755, "the directory behind the link");
+        assert_eq!(
+            mode(&outside.join("file")),
+            0o644,
+            "the file behind the link"
+        );
+        assert!(
+            outside.join("file").exists(),
+            "nothing behind the link removed"
+        );
     }
 
     #[test]
