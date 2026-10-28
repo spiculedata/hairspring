@@ -37,7 +37,9 @@ pub fn is_new_enough(version_output: &str) -> bool {
     parse_major(version_output).is_some_and(|major| major >= MIN_DOTNET_MAJOR)
 }
 
-/// Whether `command --version` runs and reports an SDK new enough.
+/// Whether `command --version` runs and reports an SDK new enough. It runs in the working directory of the tests, inside the
+/// repository, so the root `global.json` (a floor: 10.0.100 or later of the same major and minor version) applies: an SDK that
+/// does not satisfy it makes `dotnet --version` fail, and so counts as absent (a skip, or an error under `HS_REQUIRE_DOTNET`).
 pub fn dotnet_usable(command: &str) -> bool {
     Command::new(command)
         .arg("--version")

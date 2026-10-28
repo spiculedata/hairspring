@@ -1788,4 +1788,132 @@ wfexpect "a missing log only warns" "          if-no-files-found: warn"
 wfsh "uses no secrets" '! grep -Eq "[$][{][{] *secrets|^ *secrets:" "$1"'
 wfsh "ci.yml has no java-native-k job and no dispatch inputs" '! grep -Eq "java-native-k|^    inputs:" "$2"'
 
+# The pinned .NET SDK. Two files: the root global.json is a floor for everyone who builds in the repository (any .NET 10 SDK of
+# feature band 100 or later is accepted); scripts/record-global.json is the exact pin for the build records, the single source of
+# the pinned version. The record scripts read it, copy it as global.json into the directories they build from, and CI installs it.
+# The fake dotnet behaves like the real one about global.json: it looks for the file from the working directory upwards; with
+# "rollForward": "disable" it reports exactly the pinned version if that is installed (FAKE_INSTALLED, a list) and fails otherwise;
+# with a floor it reports the newest installed SDK (FAKE_NEWEST) if that is not below the floor; with no global.json it reports
+# the newest installed SDK. Everything else fails, so a record run stops after the checks looked at here.
+pin_here=$(cd "$here" && pwd)
+repo_root=$(cd "$here/../../.." && pwd)
+record_pin="$repo_root/scripts/record-global.json"
+pin_dotnet="$tmp/pin_dotnet"
+cat >"$pin_dotnet" <<'PINEOF'
+#!/bin/sh
+case ${1:-} in
+  --list-runtimes) echo "Microsoft.NETCore.App 10.0.13 [/fake]"; exit 0 ;;
+  --version) ;;
+  *) exit 1 ;;
+esac
+d=$(pwd)
+while [ "$d" != "/" ]; do
+  if [ -f "$d/global.json" ]; then
+    flat=$(tr -d '\n' <"$d/global.json")
+    want=$(printf '%s' "$flat" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    roll=$(printf '%s' "$flat" | sed -n 's/.*"rollForward"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    if [ "$roll" = disable ]; then
+      for have in $FAKE_INSTALLED; do [ "$have" = "$want" ] && { echo "$want"; exit 0; }; done
+    else
+      low=$(printf '%s\n%s\n' "$want" "$FAKE_NEWEST" | sort -V | head -1)
+      [ "$low" = "$want" ] && { echo "$FAKE_NEWEST"; exit 0; }
+    fi
+    echo "A compatible .NET SDK was not found. Requested SDK version: $want" >&2
+    exit 145
+  fi
+  d=$(dirname "$d")
+done
+echo "$FAKE_NEWEST"
+PINEOF
+chmod +x "$pin_dotnet"
+# pin_record <dir to run in> <installed SDKs> <newest installed> [VAR=value...]: runs the record named by PIN_SCRIPT (default the
+# .NET fixture's) with the fake dotnet from that directory; the record text is left in $tmp/pin_record.md.
+pin_record() {
+  pr_dir=$1
+  pr_installed=$2
+  pr_newest=$3
+  shift 3
+  rm -f "$tmp/pin_record.md"
+  (cd "$pr_dir" && env DOTNET="$pin_dotnet" FAKE_INSTALLED="$pr_installed" FAKE_NEWEST="$pr_newest" RUNTIME_SOURCE=installed "$@" \
+    sh "$pin_here/${PIN_SCRIPT:-build-record-dotnet.sh}" "$tmp/pin_record.md" >/dev/null 2>&1)
+}
+pin_has() { grep -qF -- "$1" "$tmp/pin_record.md"; }
+# pin_flat <file>: the file on one line without spaces.
+pin_flat() { tr -d ' \n' <"$1"; }
+pin_bare="$tmp/pin_bare"
+mkdir -p "$pin_bare"
+
+# The two files.
+pin_version=$(sh "$pin_here/sdk-pin.sh")
+expect "the record pin file has an exact SDK version" 0 sh -c "case '$pin_version' in [0-9]*.[0-9]*.[0-9]*) exit 0 ;; *) exit 1 ;; esac"
+expect "the record pin does not roll forward" 0 sh -c "tr -d ' \n' <'$record_pin' | grep -q '\"rollForward\":\"disable\"'"
+expect "the root global.json is a floor that rolls forward to a later feature band" 0 sh -c "tr -d ' \n' <'$repo_root/global.json' | grep -q '\"rollForward\":\"latestFeature\"'"
+expect "the floor is the first 10.0 feature band" 0 sh -c "tr -d ' \n' <'$repo_root/global.json' | grep -q '\"version\":\"10.0.100\"'"
+expect "the floor is not above the record pin" 0 sh -c "[ \"\$(printf '10.0.100\n%s\n' '$pin_version' | sort -V | head -1)\" = 10.0.100 ]"
+expect "the fake dotnet: the floor accepts a later band (10.0.400)" 0 sh -c "[ \"\$(cd '$repo_root' && FAKE_NEWEST=10.0.400 '$pin_dotnet' --version)\" = 10.0.400 ]"
+expect "the fake dotnet: the floor rejects a 9.x SDK" 145 sh -c "cd '$repo_root' && FAKE_NEWEST=9.0.300 '$pin_dotnet' --version"
+
+# sdk-pin.sh prints the version of the sdk block of the file, and only that.
+expect "sdk-pin.sh prints the version of the record pin file" 0 sh -c "[ \"\$(sh '$pin_here/sdk-pin.sh')\" = '$pin_version' ]"
+sp="$tmp/sp"
+mkdir -p "$sp"
+printf '{"msbuild-sdks": {"Some.Sdk": "1.2.3", "version": "1"}, "sdk": {"version": "10.0.402", "rollForward": "disable"}}\n' >"$sp/msbuild-first.json"
+expect "sdk-pin.sh ignores a version key outside the sdk block (msbuild-sdks first)" 0 sh -c "[ \"\$(SDK_PIN_FILE='$sp/msbuild-first.json' sh '$pin_here/sdk-pin.sh')\" = 10.0.402 ]"
+printf '{"sdk": {"version": "10.0.402", "rollForward": "disable"}, "msbuild-sdks": {"version": "1"}}\n' >"$sp/msbuild-last.json"
+expect "sdk-pin.sh ignores a version key after the sdk block (msbuild-sdks last)" 0 sh -c "[ \"\$(SDK_PIN_FILE='$sp/msbuild-last.json' sh '$pin_here/sdk-pin.sh')\" = 10.0.402 ]"
+printf '{\n  "sdk": {\n    "rollForward": "disable",\n    "version":\n      "10.0.402"\n  }\n}\n' >"$sp/multiline.json"
+expect "sdk-pin.sh reads a version on its own line" 0 sh -c "[ \"\$(SDK_PIN_FILE='$sp/multiline.json' sh '$pin_here/sdk-pin.sh')\" = 10.0.402 ]"
+printf '{"msbuild-sdks": {"version": "1"}}\n' >"$sp/nosdk.json"
+expect "sdk-pin.sh fails on a file with no sdk block" 1 env SDK_PIN_FILE="$sp/nosdk.json" sh "$pin_here/sdk-pin.sh"
+printf '{"sdk": {"rollForward": "disable"}}\n' >"$sp/nover.json"
+expect "sdk-pin.sh fails on an sdk block with no version" 1 env SDK_PIN_FILE="$sp/nover.json" sh "$pin_here/sdk-pin.sh"
+printf '{"sdk": {"version": "latest"}}\n' >"$sp/badver.json"
+expect "sdk-pin.sh fails on a version that is not major.minor.patch" 1 env SDK_PIN_FILE="$sp/badver.json" sh "$pin_here/sdk-pin.sh"
+expect "sdk-pin.sh fails on a missing file" 1 env SDK_PIN_FILE="$sp/none.json" sh "$pin_here/sdk-pin.sh"
+expect "sdk-pin.sh says what is wrong on stderr" 0 sh -c "[ -n \"\$(SDK_PIN_FILE='$sp/nover.json' sh '$pin_here/sdk-pin.sh' 2>&1 >/dev/null)\" ]"
+
+# The failure seen in CI: the image carries 10.0.403 beside the installed 10.0.402. The record's own pin selects the pinned one,
+# although the repository's floor would pick 10.0.403 (the working directory is the repository, as in CI).
+pin_record "$repo_root" "10.0.402 10.0.403" "10.0.403"
+expect "B1 passes when the image also carries a newer SDK (the record asks dotnet from its own pin)" 0 pin_has "ok   the SDK is the pinned $pin_version"
+expect "the record shows the SDK it ran" 0 pin_has "dotnet SDK $pin_version"
+expect "the SDK that builds the copies of the sources is the pinned one (the pin travels with them)" 1 pin_has "FAIL the SDK that builds the copy"
+# B1 fails when dotnet reports something other than the pin.
+pin_record "$repo_root" "10.0.402 10.0.403" "10.0.403" SDK_PINNED=10.0.403
+expect "B1 fails when dotnet reports an SDK other than the pin" 0 pin_has "FAIL the SDK is not the pinned 10.0.403"
+expect "B1 does not tick the SDK line when the SDK is not the pin" 1 pin_has "ok   the SDK is the pinned"
+expect "the record exits 1 when the SDK is not the pin" 1 pin_record "$repo_root" "10.0.402 10.0.403" "10.0.403" SDK_PINNED=10.0.403
+# Only a newer SDK installed: dotnet refuses (the record's pin does not roll forward) and the record fails.
+pin_record "$repo_root" "10.0.403" "10.0.403"
+expect "with only a newer SDK installed the record does not tick the SDK line" 1 pin_has "ok   the SDK is the pinned"
+expect "with only a newer SDK installed the record exits 1" 1 pin_record "$repo_root" "10.0.403" "10.0.403"
+
+# The probe record has the same exposure and the same fix.
+PIN_SCRIPT=build-record-probe-dotnet.sh
+pin_record "$repo_root" "10.0.402 10.0.403" "10.0.403"
+expect "probe record: B1 passes when the image also carries a newer SDK" 0 pin_has "ok   the SDK is the pinned $pin_version"
+expect "probe record: the SDK that builds the copies of the sources is the pinned one" 1 pin_has "FAIL the SDK that builds the copy"
+pin_record "$repo_root" "10.0.402 10.0.403" "10.0.403" SDK_PINNED=10.0.403
+expect "probe record: B1 fails when dotnet reports an SDK other than the pin" 0 pin_has "FAIL the SDK is not the pinned 10.0.403"
+PIN_SCRIPT=build-record-dotnet.sh
+
+# The docker wrapper resolves the pin first and stops when it cannot: it must not run docker with an empty SDK_PINNED.
+fakebin="$tmp/pin_fakebin"
+mkdir -p "$fakebin"
+printf '#!/bin/sh\necho run >>"%s/docker.log"\nexit 0\n' "$tmp" >"$fakebin/docker"
+chmod +x "$fakebin/docker"
+rm -f "$tmp/docker.log"
+expect "the docker wrapper stops when the pin cannot be read" 1 env PATH="$fakebin:$PATH" SDK_PIN_FILE="$sp/nover.json" SOURCE_COMMIT=test sh "$pin_here/build-record-docker.sh" dotnet-probe "$tmp/docker-out.md"
+expect "the docker wrapper did not run docker with an empty pin" 1 test -e "$tmp/docker.log"
+expect "the docker wrapper passes the pin from the record pin file" 0 grep -q 'SDK_PINNED="\$sdk_pinned"' "$pin_here/build-record-docker.sh"
+
+# One source for the version (scripts/record-global.json); the literals that must repeat it are checked here.
+ci_yml="$repo_root/.github/workflows/ci.yml"
+expect "no record script hard-codes the pinned SDK as a default" 1 grep -nE 'SDK_PINNED:-[0-9]' "$here"/build-record-*.sh
+expect "the docker wrapper's .NET image is the pinned SDK" 0 grep -q "dotnet/sdk:$pin_version@" "$here/build-record-docker.sh"
+expect "the fixtures README names the pinned SDK" 0 grep -q "pinned $pin_version" "$here/../README.md"
+expect "the .NET SDK README names the pinned SDK" 0 grep -q "$pin_version" "$repo_root/sdks/dotnet/README.md"
+expect "ci.yml gives setup-dotnet no version of its own" 1 grep -nE '^ +dotnet-version:' "$ci_yml"
+expect "every setup-dotnet step in ci.yml installs the SDK from the record pin file" 0 sh -c "n=\$(grep -c 'uses: actions/setup-dotnet' '$ci_yml'); [ \"\$n\" -ge 4 ] && [ \"\$(grep -c 'global-json-file: scripts/record-global.json' '$ci_yml')\" = \"\$n\" ]"
+
 exit $failures

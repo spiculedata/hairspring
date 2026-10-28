@@ -44,11 +44,11 @@ fn dotnet() -> Option<&'static str> {
             if found.is_none() {
                 assert!(
                     !dotnet_toolchain::require_dotnet(),
-                    "HS_REQUIRE_DOTNET is set but there is no .NET SDK {} or newer (set HS_DOTNET)",
+                    "HS_REQUIRE_DOTNET is set but there is no usable .NET SDK {} or newer (the repository's global.json asks for 10.0.100 or later in 10.0; set HS_DOTNET)",
                     dotnet_toolchain::MIN_DOTNET_MAJOR
                 );
                 eprintln!(
-                    "skip: no .NET SDK {}+ (set HS_DOTNET, or HS_REQUIRE_DOTNET=1 to make this an error)",
+                    "skip: no usable .NET SDK {}+ (the repository's global.json asks for 10.0.100 or later in 10.0; set HS_DOTNET, or HS_REQUIRE_DOTNET=1 to make this an error)",
                     dotnet_toolchain::MIN_DOTNET_MAJOR
                 );
             }

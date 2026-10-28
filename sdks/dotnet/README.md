@@ -29,7 +29,9 @@ make test       # self-test, then the sample programs as real processes
 make samples    # build samples/Sample
 ```
 
-Needs the .NET 10 SDK (`DOTNET=/path/to/dotnet` selects it). `cargo test -p hairspring-props --test dotnet_sdk` runs the
+Needs the .NET 10 SDK (`DOTNET=/path/to/dotnet` selects it). Inside this repository the root [`global.json`](../../global.json)
+asks for 10.0.100 or later in the same major and minor version, so any 10.0 SDK works for development. The Linux build records
+and CI use exactly 10.0.402, written in [`scripts/record-global.json`](../../scripts/record-global.json). `cargo test -p hairspring-props --test dotnet_sdk` runs the
 conformance tests against the reference parser, including a byte-for-byte comparison with the C SDK (`HS_REQUIRE_DOTNET=1` makes
 a missing SDK an error).
 
