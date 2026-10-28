@@ -128,6 +128,7 @@ change: the trial rows added in version 2 already hold every verdict.
   its reruns, so a sweep overruns its wall-clock budget by at most one confirmation (`repro_runs` reruns of up to a
   trial's timeout each; a test pins the bound); the note says what they showed. Only the lowest failing seed gets a
   report (trace and replayable bundle), which is also what the run's failure row holds.
+- **Simulation sweeps are not confirmed.** A failing seed from a simulation (`sim`) target, in a sweep or a search, cannot be confirmed: `hairspring confirm` stops with ``error: no backend available for target kind ``confirm` is not supported by the sim backend` `` (the stray backticks are in the message) and nothing is stored. Only `process` targets can be confirmed.
 - **Not rated.** The rate is violations out of passes and violations. Timeouts, unusable trials and infrastructure
   failures (labelled "failed in the host") are listed apart, are never in a denominator and are never described as
   passes. A host failure is an `infra` row and the sweep goes on, but three in a row end it as an error (the host is
@@ -170,6 +171,10 @@ change: the trial rows added in version 2 already hold every verdict.
   whichever the case, and the summary is withheld either way. The worker cannot see the server's configurable allowance (`digest_bytes_per_run`): a server
   configured below the default applies its stand-ins as described below, and a worker's `sweep_digest_bytes` should be
   lowered to match if its memory matters more than the stand-ins.
+- **Step count of a passing sweep.** The number of steps a sweep that passed is said to have used is the worker's own
+  figure: the server does not work it out. It is used only to decide whether a sweep that holds fewer rows than its
+  budget stopped at its step limit, so a worker that reports a step count it did not spend can make a short sweep look
+  as if it reached the limit. A failed sweep's step count is ignored for that decision, and only the server's clock counts.
 - **Simulation rounds.** A simulation trial is one exploration round of up to 100,000 steps, and the rounds share the
   step budget, so a default budget (200,000 steps) runs two rounds. Raise the step budget (`--budget-steps`,
   `max_steps`) to run more.
