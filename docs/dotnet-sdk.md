@@ -22,7 +22,8 @@ Work(1);                       // operations done, reported as work.ops
 NameThread("writer", 0);       // stable thread key "writer-0"
 ```
 
-Build it with `make -C sdks/dotnet dll` (`Hairspring.dll`), or reference `sdks/dotnet/src/Hairspring.csproj` from your project.
+Build it with `make -C sdks/dotnet dll` (`Hairspring.dll`; inside this repository `global.json` pins the .NET SDK to 10.0.402, and
+another SDK gives "A compatible .NET SDK was not found"), or reference `sdks/dotnet/src/Hairspring.csproj` from your project.
 A runnable program is `sdks/dotnet/samples/Sample`.
 
 > **A site that never runs is invisible, not unmet.** .NET cannot see a call site before it executes, so a `Reachable`,

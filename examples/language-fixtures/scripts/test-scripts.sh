@@ -1788,4 +1788,86 @@ wfexpect "a missing log only warns" "          if-no-files-found: warn"
 wfsh "uses no secrets" '! grep -Eq "[$][{][{] *secrets|^ *secrets:" "$1"'
 wfsh "ci.yml has no java-native-k job and no dispatch inputs" '! grep -Eq "java-native-k|^    inputs:" "$2"'
 
+# The pinned .NET SDK: global.json is the one place the version is written; the record scripts and the manual job follow it.
+# The fake dotnet behaves like the real one about global.json: it looks for the file from the working directory upwards and,
+# as "rollForward": "disable" demands, reports exactly the pinned version if that is installed (FAKE_INSTALLED, a list) and
+# fails otherwise; with no global.json it reports the newest installed SDK (FAKE_NEWEST). Everything else fails, so a record
+# run stops after the checks looked at here; the record text is what these tests read.
+pin_here=$(cd "$here" && pwd)
+repo_root=$(cd "$here/../../.." && pwd)
+pin_dotnet="$tmp/pin_dotnet"
+cat >"$pin_dotnet" <<'PINEOF'
+#!/bin/sh
+case ${1:-} in
+  --list-runtimes) echo "Microsoft.NETCore.App 10.0.13 [/fake]"; exit 0 ;;
+  --version) ;;
+  *) exit 1 ;;
+esac
+d=$(pwd)
+while [ "$d" != "/" ]; do
+  if [ -f "$d/global.json" ]; then
+    want=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$d/global.json" | head -1)
+    for have in $FAKE_INSTALLED; do [ "$have" = "$want" ] && { echo "$want"; exit 0; }; done
+    echo "A compatible .NET SDK was not found. Requested SDK version: $want" >&2
+    exit 145
+  fi
+  d=$(dirname "$d")
+done
+echo "$FAKE_NEWEST"
+PINEOF
+chmod +x "$pin_dotnet"
+# pin_record <dir to run in> <installed SDKs> <newest installed> [VAR=value...]: runs the .NET record with the fake dotnet
+# from that directory; the record text is left in $tmp/pin_record.md.
+pin_record() {
+  pr_dir=$1
+  pr_installed=$2
+  pr_newest=$3
+  shift 3
+  rm -f "$tmp/pin_record.md"
+  (cd "$pr_dir" && env DOTNET="$pin_dotnet" FAKE_INSTALLED="$pr_installed" FAKE_NEWEST="$pr_newest" RUNTIME_SOURCE=installed "$@" \
+    sh "$pin_here/${PIN_SCRIPT:-build-record-dotnet.sh}" "$tmp/pin_record.md" >/dev/null 2>&1)
+}
+pin_has() { grep -qF -- "$1" "$tmp/pin_record.md"; }
+pin_bare="$tmp/pin_bare"
+mkdir -p "$pin_bare"
+
+pin_version=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$repo_root/global.json" | head -1)
+expect "global.json has an SDK version" 0 test -n "$pin_version"
+expect "global.json does not roll forward" 0 sh -c "tr -d ' \n' <'$repo_root/global.json' | grep -q '\"rollForward\":\"disable\"'"
+expect "sdk-pin.sh prints the version of global.json" 0 sh -c "[ \"\$(sh '$here/sdk-pin.sh')\" = '$pin_version' ]"
+
+# B1 passes when dotnet reports the pinned SDK and fails when it reports another one (nothing pins it here: the working
+# directory has no global.json, as on a runner whose image carries a newer SDK).
+pin_record "$pin_bare" "10.0.402" "10.0.402" SDK_PINNED=10.0.402
+expect "B1 passes when dotnet reports the pinned SDK" 0 pin_has "ok   the SDK is the pinned 10.0.402"
+pin_record "$pin_bare" "10.0.402 10.0.403" "10.0.403" SDK_PINNED=10.0.402
+expect "B1 fails when dotnet reports an SDK other than the pin" 0 pin_has "FAIL the SDK is not the pinned 10.0.402"
+expect "B1 does not tick the SDK line when the SDK is not the pin" 1 pin_has "ok   the SDK is the pinned"
+expect "the record exits 1 when the SDK is not the pin" 1 pin_record "$pin_bare" "10.0.402 10.0.403" "10.0.403" SDK_PINNED=10.0.402
+# The failure seen in CI: the image carries 10.0.403 beside the installed 10.0.402. Run from the repository, global.json
+# selects the pinned one, so B1 passes with the default pin; the copies of the sources get global.json with them.
+pin_record "$repo_root" "10.0.402 10.0.403" "10.0.403"
+expect "with a newer SDK also installed, the default pin is the one in global.json and dotnet reports it" 0 pin_has "ok   the SDK is the pinned $pin_version"
+expect "the SDK that builds the copies of the sources is the pinned one (global.json travels with them)" 1 pin_has "FAIL the SDK that builds the copy"
+# Only a newer SDK installed: dotnet refuses, as global.json says no roll forward; the record fails.
+pin_record "$repo_root" "10.0.403" "10.0.403"
+expect "with only a newer SDK installed the record does not tick the SDK line" 1 pin_has "ok   the SDK is the pinned"
+
+# The probe record has the same exposure and the same fix.
+PIN_SCRIPT=build-record-probe-dotnet.sh
+pin_record "$pin_bare" "10.0.402 10.0.403" "10.0.403" SDK_PINNED=10.0.402
+expect "probe record: B1 fails when dotnet reports an SDK other than the pin" 0 pin_has "FAIL the SDK is not the pinned 10.0.402"
+pin_record "$repo_root" "10.0.402 10.0.403" "10.0.403"
+expect "probe record: with a newer SDK also installed, B1 passes with the default pin" 0 pin_has "ok   the SDK is the pinned $pin_version"
+expect "probe record: the SDK that builds the copies of the sources is the pinned one" 1 pin_has "FAIL the SDK that builds the copy"
+PIN_SCRIPT=build-record-dotnet.sh
+
+# The pin is written once: the record scripts, the docker wrapper, the README and the workflow all follow global.json.
+ci_yml="$repo_root/.github/workflows/ci.yml"
+expect "no record script hard-codes the pinned SDK as a default" 1 grep -nE 'SDK_PINNED:-[0-9]' "$here"/build-record-*.sh
+expect "the docker wrapper's .NET image is the pinned SDK" 0 grep -q "dotnet/sdk:$pin_version@" "$here/build-record-docker.sh"
+expect "the README names the pinned SDK" 0 grep -q "pinned $pin_version" "$here/../README.md"
+expect "ci.yml gives setup-dotnet no version of its own" 1 grep -nE '^ +dotnet-version:' "$ci_yml"
+expect "every setup-dotnet step in ci.yml installs the SDK from global.json" 0 sh -c "n=\$(grep -c 'uses: actions/setup-dotnet' '$ci_yml'); [ \"\$n\" -ge 3 ] && [ \"\$(grep -c 'global-json-file: global.json' '$ci_yml')\" = \"\$n\" ]"
+
 exit $failures

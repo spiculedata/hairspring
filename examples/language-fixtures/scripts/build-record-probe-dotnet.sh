@@ -19,7 +19,7 @@
 # (for a machine that is not x86-64 Linux); the record says which was used, and still requires the version to be pinned.
 #
 # Environment: DOTNET is the dotnet executable (default dotnet), SDK_PINNED and RUNTIME_PINNED the pinned versions (defaults
-# 10.0.402 and 10.0.13), IMAGE_DIGEST is copied into B1, RUNS is the native run count (default 50), ARTIFACT_DIR receives a
+# the version in the repository's global.json, 10.0.402, and 10.0.13), IMAGE_DIGEST is copied into B1, RUNS is the native run count (default 50), ARTIFACT_DIR receives a
 # copy of the pinned files and a SHA256SUMS file. The producer fields come from the GitHub Actions environment (record-lib.sh).
 
 # The check functions below are run through step, which shellcheck cannot see. The record_*, artifact_* variables are the
@@ -33,7 +33,7 @@ repo=$(cd "$root/../.." && pwd)
 dnroot=$root/dotnet
 runs=${RUNS:-50}
 dotnet=${DOTNET:-dotnet}
-sdk_pinned=${SDK_PINNED:-10.0.402}
+sdk_pinned=${SDK_PINNED:-$(sh "$here/sdk-pin.sh")} || exit 1
 runtime_pinned=${RUNTIME_PINNED:-10.0.13}
 out=${1:-$root/build/record-probe-dotnet.md}
 mkdir -p "$(dirname "$out")" || exit 1
@@ -131,6 +131,10 @@ pinned_runtime() {
 publish_copy() {
   mkdir -p "$1" || return 1
   cp "$dnroot"/src/*.cs "$dnroot"/src/*.csproj "$1/" || return 1
+  # The pin travels with the copy: the SDK that builds it is the one in global.json, whatever else the machine has installed.
+  cp "$repo/global.json" "$1/" || return 1
+  in_copy=$(cd "$1" && "$dotnet" --version) || { echo "FAIL dotnet cannot run in the copy of the sources (is the pinned SDK $sdk_pinned installed?)"; return 1; }
+  [ "$in_copy" = "$sdk_pinned" ] || { echo "FAIL the SDK that builds the copy is $in_copy, not the pinned $sdk_pinned"; return 1; }
   if [ "${3:-}" = old ]; then
     touch -t 200001010000 "$1"/*.cs "$1"/*.csproj || return 1
   fi

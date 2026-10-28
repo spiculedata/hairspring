@@ -188,10 +188,11 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      # Any .NET 10 SDK: the unit tests and the sample programs do not check a version beyond the major one.
+      # The SDK pinned in global.json (the one place the version is written; "rollForward": "disable", so the runner image's
+      # own newer SDK cannot be picked instead).
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          global-json-file: global.json
       - name: Version
         run: dotnet --info
       # Base class library only, no framework: the self-test, and the sample programs run as real processes.
@@ -243,11 +244,11 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      # Any .NET 10 SDK: the self-test and native tests do not check a version (the pinned build is the manual record's job).
+      # The SDK pinned in global.json, as for the manual record below.
       - uses: actions/setup-dotnet@v4
         if: matrix.dir == 'dotnet'
         with:
-          dotnet-version: 10.0.x
+          global-json-file: global.json
       # The check scripts, against a fake program (once, not per compiler).
       - name: Script tests
         if: matrix.name == 'C gcc'
@@ -308,11 +309,12 @@ jobs:
         with:
           distribution: temurin
           java-version: "21.0.12+101.0.LTS"
-      # The .NET SDK that ships runtime 10.0.13, so the record's version checks pass.
+      # The .NET SDK pinned in global.json (10.0.402 ships runtime 10.0.13), so the record's version checks pass. The runner
+      # image may carry a newer SDK too; global.json, copied into the record's build directories, selects the pinned one.
       - uses: actions/setup-dotnet@v4
         if: matrix.variant == 'dotnet-probe' || matrix.variant == 'dotnet'
         with:
-          dotnet-version: 10.0.402
+          global-json-file: global.json
       - name: Install the toolchains
         if: matrix.variant != 'go' && matrix.variant != 'python' && matrix.variant != 'rust' && matrix.variant != 'rust-probe' && matrix.variant != 'java-probe' && matrix.variant != 'java' && matrix.variant != 'dotnet-probe' && matrix.variant != 'dotnet'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-13 g++-13 clang-18 strace binutils

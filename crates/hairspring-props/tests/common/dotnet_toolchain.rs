@@ -37,9 +37,12 @@ pub fn is_new_enough(version_output: &str) -> bool {
     parse_major(version_output).is_some_and(|major| major >= MIN_DOTNET_MAJOR)
 }
 
-/// Whether `command --version` runs and reports an SDK new enough.
+/// Whether `command --version` runs and reports an SDK new enough. It runs from the temporary directory, outside the
+/// repository, so the repository's `global.json` pin does not make an installed SDK look absent: a build with the wrong SDK
+/// then fails with dotnet's own message ("Install the [10.0.402] .NET SDK or update global.json") instead of a quiet skip.
 pub fn dotnet_usable(command: &str) -> bool {
     Command::new(command)
+        .current_dir(std::env::temp_dir())
         .arg("--version")
         .stdin(Stdio::null())
         .stderr(Stdio::null())
