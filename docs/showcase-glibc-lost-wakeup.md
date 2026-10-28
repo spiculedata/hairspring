@@ -67,7 +67,7 @@ to the bug report; no code was copied from it.
   it takes the lock's mutex by `trylock` plus short sleeps.
 - Flags: `-n` workers (8), `-r` rounds, `-tick-ms` tick length, `-q` quorum of ticks (10).
 - The workload links statically against the glibc under test and reports through Hairspring's C SDK
-  ([`sdks/c`](../sdks/c), [docs/c-sdk.md](c-sdk.md)). Builds with the SDK are labelled `T2_instrumented`: the SDK's
+  ([`sdks/c`](../sdks/c), [docs/c-sdk.md](c-sdk.md)). Builds with the SDK are labelled `instrumented`: the SDK's
   startup and exit writes change the schedule compared with an unreported build.
 - Exit statuses: 0 completed, 3 property false (the watchdog ends the process, because the workers are blocked for
   good), 4 stall, 5 harness invariant, 64 usage. It never exits with status 1.
@@ -168,8 +168,7 @@ not file hashes.
 ## 4. How the experiment was designed and pre-registered
 
 Each step was a separate specification with its scripts embedded and hashed. Each experiment was specified in
-writing before it ran and read by a separate reviewing agent session before launch; the reviewer was another AI agent
-run, not a human. Each specification fixed, before any of its data existed: the commands, the seeds, the
+writing before it ran. Each specification fixed, before any of its data existed: the commands, the seeds, the
 evaluator code, the outcome table (the first rule that holds gives the outcome), the stop rules, and the sentences that
 each outcome allows. The evaluator, not a person, printed the outcome; results were copied, not re-judged. Hits were
 counted per site from each run's own report, never from a pass/fail verdict of any tool.
@@ -238,7 +237,7 @@ with 534 member lines from the arm's own `libc.a`, 8 from the SDK archive and no
 exactly `pthread_cond_wait.o`; a 60-second virtual sleep under the pinned Hermit completed in 74 to 164 ms of wall time
 on each arm (Hermit's fast-forward of an all-blocked process, which the property's design relies on). The
 same job's plain-run cell recorded hit runs on U; by its pre-registered rule this stopped the native step until the
-dedicated native experiment below was specified and reviewed.
+dedicated native experiment below was specified.
 
 The planted and violation-only builds (2026-10-17, 21:15): twenty planted builds (`drop`, `leak`, `barrier`, `holdg`,
 each with k in 1, 2, 5, 20, 50) linked against arm C, and two violation-only builds (no SDK) against U and P1; rebuilt
@@ -251,7 +250,7 @@ unchanged in 3 of 3 runs each.
 ### 5.2 Native reference (no Hermit)
 
 Labels: native reference, not a claim about Hermit; bug_known_in_advance; targeted_workload;
-structure_from_public_reproducer; environment_pinned; arm U unassisted; arms U, C and P1 T2_instrumented; arm C
+structure_from_public_reproducer; environment_pinned; arm U unassisted; arms U, C and P1 instrumented; arm C
 fixed_branch_control at arm level only. Configuration: the binaries built in 5.1, run as an unprivileged user on three
 cores at nice 10, one run at a time, 2026-10-17 19:01 to 20:21. Build note: glibc built with -U_FORTIFY_SOURCE added to CFLAGS (upstream's default no-fortify build; same effect as upstream fix 127cefd, BZ 31928), Ubuntu gcc 13.3.0 defaults otherwise.
 
@@ -335,7 +334,7 @@ fit.
   started.
 
 At 125 rounds, labels bug_known_in_advance, targeted_workload, structure_from_public_reproducer, environment_pinned,
-U unassisted, T2_instrumented; the planted binaries are detector self-tests only. Build note: glibc built with -U_FORTIFY_SOURCE added to CFLAGS (upstream's default no-fortify build; same effect as upstream fix 127cefd, BZ 31928), Ubuntu gcc 13.3.0 defaults otherwise.
+U unassisted, instrumented; the planted binaries are detector self-tests only. Build note: glibc built with -U_FORTIFY_SOURCE added to CFLAGS (upstream's default no-fortify build; same effect as upstream fix 127cefd, BZ 31928), Ubuntu gcc 13.3.0 defaults otherwise.
 
 - **Fast-forward recheck:** two 60-second virtual sleeps on arm C each completed in under 100 ms of wall time with at
   least 60 s of virtual time.
@@ -351,7 +350,7 @@ U unassisted, T2_instrumented; the planted binaries are detector self-tests only
   respectively, with the property true.
 - **Recorded, not gates:** with the SDK build against the violation-only build of U on 10 seeds, the fingerprints were
   equal in 0 of 10 (the expectation), and the system-call differences ranged from -222 to 228; the design's formula of 33
-  was a hypothesis and did not hold. This is measured support for the `T2_instrumented` label.
+  was a hypothesis and did not hold. This is measured support for the `instrumented` label.
 
 No Hermit failure occurred in any of the three launches.
 
@@ -420,17 +419,17 @@ as root; an unprivileged run was not tested. The raw run records are not publish
 
 ### What the scripts print
 
-The evaluators end with one outcome line. The codes you will see, in reader terms:
+The evaluators end with one short outcome code. In reader terms:
 
-| Printed code | Meaning |
+| Outcome | Meaning |
 |---|---|
-| `PASS`, `PASS+CL-FIRED-U` | build and isolation checks passed; the suffix says the U plain-run cell recorded hit runs, which pauses the native step for a human decision |
-| `N-DONE/NU-HIT` | native reference completed; U had at least one hit run; C had none |
-| `X1C-PASS+CTRL-DIFFER-UCP` | planted builds built, pinned and byte-identical on rebuild; the suffix says the rebuilt U, C and P1 workload binaries differ from the earlier build (equal once debug information and build ID are stripped) |
-| `X1D-RAN`, `PX-RAN` | a probe ran all its runs; nothing is graded |
-| `X1E-PASS` | P2 built, disassembly gate passed, binaries pinned, smoke passed, probe ran all its runs (nothing graded); this run's line also shows `b2=REPRO` (rebuild identical) |
-| `GLG-A-STOP/G0T-LOWER-R` | determinism gates stopped on the timing rule; halve the rounds and launch the next row |
-| `GLG-A-PASS` | every gate under Hermit passed and the round count is frozen |
+| build and isolation checks passed (optionally with a note on the plain-run cell) | build and isolation checks passed; the note says the U plain-run cell recorded hit runs, which pauses the native step for a human decision |
+| native reference completed, U hit | native reference completed; U had at least one hit run; C had none |
+| planted builds passed (optionally with a note on rebuilt binaries) | planted builds built, pinned and byte-identical on rebuild; the note says the rebuilt U, C and P1 workload binaries differ from the earlier build (equal once debug information and build ID are stripped) |
+| probe ran | a probe ran all its runs; nothing is graded |
+| P2 checks passed | P2 built, disassembly gate passed, binaries pinned, smoke passed, probe ran all its runs (nothing graded); this run's line also shows that the rebuild was identical |
+| determinism gates stopped on the timing rule | determinism gates stopped on the timing rule; halve the rounds and launch the next row |
+| determinism gates passed | every gate under Hermit passed and the round count is frozen |
 
 ## 8. Acknowledgements
 
@@ -447,7 +446,7 @@ Weimer.
 | targeted_workload | the workload was written to exercise this bug |
 | structure_from_public_reproducer | the workload's structure follows a public reproducer; no code copied |
 | environment_pinned | the number belongs to the stated machine, kernel, compiler, build and run |
-| T2_instrumented | built with the reporting SDK, which changes the schedule compared with an unreported build |
+| instrumented | built with the reporting SDK, which changes the schedule compared with an unreported build |
 | unassisted | the library is unmodified upstream source |
 | fixed_branch_control | the fixed source state, compared at arm level only, never seed for seed |
 | assisted, window_widening, library_patched | a hunk added by hand to the library to widen the race window |

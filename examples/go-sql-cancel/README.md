@@ -140,10 +140,10 @@ The experiment that used this workload is described in
 rated runs) and in 0 of 2,000 on each of go1.24.6 and go1.24.5 plus only the fix, for the same 2,000 seeds. The first
 100 hit seeds in seed order were each confirmed by three direct reruns, by the engine at the same seed (in a different
 Hermit environment) and by bundle replay. Labels: bug known in advance; targeted workload; environment pinned;
-go1.24.5 unassisted and built with the protocol shim (`T2_instrumented`); go1.24.6 a fixed release, compared at arm
-level only; go1.24.5 plus the fix a patched toolchain. The evaluator's mechanical code for these runs is
-`C1-DONE/R-CRASH+R-CRASH-hermit(u=2,c=0,cp=0)`; the statements above are made under its `OUTCOME-SKID-B` reading,
-`C1-DONE/R-HIT+R-CRASH-hermit(u=4,c=0,cp=0)`, which the write-up explains. These are counts of runs in one setup, not
+go1.24.5 unassisted and built with the protocol shim (`instrumented`); go1.24.6 a fixed release, compared at arm
+level only; go1.24.5 plus the fix a patched toolchain. The evaluator gives two readings of these runs: under the strict
+reading two of the four Hermit failures are in the ledger; the statements above are made under the ledger reading, in
+which all four are, which the write-up explains. These are counts of runs in one setup, not
 a rate of defects and not a claim about any other driver, Go version or machine. The scripts are in
 [`experiment/`](experiment). The binaries' sha256 values are in `BUILD-RECORD`.
 

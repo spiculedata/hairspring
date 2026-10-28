@@ -161,8 +161,8 @@ copy's number, or closes every descriptor, loses the events from then on: the SD
 This check is best effort, not a guarantee. The check and the `write` are separate steps, so a program thread that
 `dup2`s a file onto the descriptor between them can still receive one event line. The same holds while a long exit
 report is being written line by line (one check, many writes), and in the low-`RLIMIT_NOFILE` fallback below when
-another thread closes and reopens descriptor 0, 1 or 2. A reviewer reproduced this with a thread flipping the
-descriptor in a loop (10 of 200 runs received a line). User space cannot close the window, so programs under test must
+another thread closes and reopens descriptor 0, 1 or 2. A test with a thread flipping the
+descriptor in a loop showed it (10 of 200 runs received a line). User space cannot close the window, so programs under test must
 not redirect, close or reuse the events descriptor while running.
 
 With a very low `RLIMIT_NOFILE` no private copy can be made; the SDK then falls back
