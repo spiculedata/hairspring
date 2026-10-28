@@ -1,0 +1,7 @@
+# The pinned Hermit build, read by scripts/install-hermit.sh and checked against the docs by scripts/test-scripts.sh.
+# Plain KEY=VALUE lines; the installer parses them and never runs the file. Every key is required.
+HERMIT_REPO=https://github.com/spiculedata/hermit
+HERMIT_BASE_COMMIT=25781c5c48d47c316324fd912b7dcafa394c339a
+HERMIT_PATCH_SHA256=1f5d06401ccd8ed7adfa3f0dccd4426640a64c97def169bbec82db1c16a8e957
+HERMIT_PATCH_REL=examples/glibc-condlock/experiment/patches/hermit-25781c5-replay-backport.diff
+RUST_TOOLCHAIN=nightly-2026-07-12
