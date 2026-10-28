@@ -12,15 +12,13 @@ What you can take from it:
   exactly the fix's two files, pinned by hash, and use the unpatched-versus-fixed pair as a control;
 - an "always" check on the value `Scan` returns, for a pooled-connection race, designed not to be false when `Scan`
   copies under the lock (the argument is in 2.2), plus a deliberately assisted version of the workload that checks the detector fires;
-- a count, under the skid-b reading of the outcome (mechanical code `C1-DONE/R-CRASH+R-CRASH-hermit(u=2,c=0,cp=0)`; both
-  codes are given in 5.5): in this configuration the property site was false at least once in 934 of the 1,996 rated runs on
+- a count, under the ledger reading of the outcome (both readings are given in 5.5): in this configuration the property site was false at least once in 934 of the 1,996 rated runs on
   Go 1.24.5, and in none of 2,000 runs on each of the two controls (labels in 6.2);
 - under the same reading, confirmation of the first 100 of those hit runs, each three times by direct rerun, once by
-  Hairspring's engine at the same seed (a different Hermit environment), and once by replaying the engine's bundle (codes
-  in 6.4);
+  Hairspring's engine at the same seed (a different Hermit environment), and once by replaying the engine's bundle (6.4);
 - an account of the one place where the pre-registered outcome table and our reading of it disagree: Hermit itself
-  stopped in four of the unpatched runs, and the evaluator prints two outcome codes, which differ only in how two of those
-  runs (the two "shape B" failures) are read (5.5, 6.5).
+  stopped in four of the unpatched runs, and the evaluator gives two readings of the outcome, which differ only in how two
+  of those runs (the two cleanup-unconfirmed failures) are read (5.5, 6.5).
 
 What it does not have: any statement about other drivers, other Go versions, other machines, or why the interleavings
 happened. A hit here is a counted run, not a defect report, and the number is not a rate of anything outside this setup.
@@ -72,7 +70,7 @@ The workload (`sqlcancel`) is new code written for this experiment, standard lib
   harness invariant failed, 64 on a usage error; a Go crash exits 2.
 
 The workload reports through a small Go shim for Hairspring's guest-event protocol
-([docs/guest-protocol.md](guest-protocol.md)), which makes it `T2_instrumented` (6.1). No engine feature produced any
+([docs/guest-protocol.md](guest-protocol.md)), which makes it `instrumented` (6.1). No engine feature produced any
 counted number on this page: the 6,000 runs were direct Hermit runs driven by the scripts in
 `examples/go-sql-cancel/experiment`, and hits were counted from each run's own report. The engine was used only for the
 100 confirmations (6.4).
@@ -109,16 +107,16 @@ timeslices at random points, measured in retired conditional branches, and gives
 here is pinned by its sha256 (`666a8713d510bcd57cf2ea4c419c23368f8e7f5fb6c279a7b4766a142e62674a`, `hermit 0.4.1
 (2026-10-15)`): commit `25781c5` of the maintained fork with two replay commits cherry-picked on top. The recipe is in the experiment
 folder. Every number below that was measured under Hermit
-belongs to that build; [I] a different build may give different schedules for the same seed.
+belongs to that build; a different build may give different schedules for the same seed.
 
 ## 3. Arms, builds and labels
 
 | Arm | Toolchain | Role and labels |
 |---|---|---|
-| A-u | official go1.24.5 | the claim arm; `unassisted` (`-mode=std`), `T2_instrumented`, `bug_known_in_advance`, `targeted_workload` |
+| A-u | official go1.24.5 | the claim arm; `unassisted` (`-mode=std`), `instrumented`, `bug_known_in_advance`, `targeted_workload` |
 | A-c | official go1.24.6 | `fixed_release_control`, at arm level only (six other commits, see 1); `bug_known_in_advance`, `targeted_workload` |
-| A-c' | go1.24.5 built from source with only `patches/fix-only.patch` (the two non-test files of the fix) | `patched_toolchain`, the narrow control; `T2_instrumented`, `bug_known_in_advance`, `targeted_workload` |
-| P-u, P-c, P-c' | the same three | the assisted control only: `assisted`, `window_widening`, `T2_instrumented`, `bug_known_in_advance`, `targeted_workload` |
+| A-c' | go1.24.5 built from source with only `patches/fix-only.patch` (the two non-test files of the fix) | `patched_toolchain`, the narrow control; `instrumented`, `bug_known_in_advance`, `targeted_workload` |
+| P-u, P-c, P-c' | the same three | the assisted control only: `assisted`, `window_widening`, `instrumented`, `bug_known_in_advance`, `targeted_workload` |
 
 Every counted binary is a static linux/amd64 build with `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v1 go build
 -trimpath -buildvcs=false -ldflags=-buildid=`, built twice with equal sha256 on the build machine (an Apple-silicon
@@ -135,7 +133,7 @@ The fix-only patch has sha256 `5e9603cf389584c39e11f26d1f7bcc04f4cd38c6d548303b9
 exactly `sql.go` and `convert.go`. The binaries rebuild from `examples/go-sql-cancel` at the repository commit of this page (no tag), on darwin-arm64
 with the toolchains of `scripts/fetch-go.sh` (the recorded sha256 values were built there).
 
-**`T2_instrumented`:** built with the protocol shim; the schedule differs from an unreported build (fingerprints differ on
+**`instrumented`:** built with the protocol shim; the schedule differs from an unreported build (fingerprints differ on
 10 of 10 seeds, syscall counts by -156 to 2,201 in one run each); detection agrees with the unreported build (the
 comparison of 6.1).
 
@@ -160,8 +158,7 @@ counted runs wrote their summaries into mode-1777 directories.
 
 ## 5. How the experiment was designed and pre-registered
 
-Each step was a separate specification with its scripts embedded and hashed. An independent review step signed each
-experiment before it ran. Each specification fixed, before any of its data existed: the commands, the seeds, the evaluator
+Each step was a separate specification with its scripts embedded and hashed, written before the step ran. Each specification fixed, before any of its data existed: the commands, the seeds, the evaluator
 code, the outcome table (the first rule that holds gives the outcome), and the sentences each outcome allows. The
 evaluator, not a person, printed the outcome; results were copied, not re-judged.
 
@@ -172,11 +169,12 @@ A *block* is one seed run in the three arms, with the starting arm rotating from
 number of runs and the same positions. There are no spare or replacement seeds, and a seed that has run is never run again.
 The number of seeds was fixed before any counted run; no early stopping.
 
-### 5.2 Windows
+### 5.2 Batches
 
-The counted runs were run in five windows of 400 seeds (1,200 runs each), then the confirmations in two more windows.
-Each later window started only after the earlier one was archived and its code read. Nothing stops a window on a result:
-the halts are infrastructure only (for example, the first 15 runs of a window all failing).
+The counted runs were run in five batches of 400 seeds (1,200 runs each): seeds 330001 to 330400, 330401 to 330800,
+330801 to 331200, 331201 to 331600 and 331601 to 332000. The confirmations were run in two further batches. Each later
+batch started only after the earlier one was archived and its code read. Nothing stops a batch on a result: the halts are
+infrastructure only (for example, the first 15 runs of a batch all failing).
 
 ### 5.3 The outcome table in one paragraph
 
@@ -192,8 +190,8 @@ count and the interval come from all the counted runs.
 - The 100-seed confirmation cap was fixed before the first counted run, with a budget-only reason.
 - `--verify` was not run on the hits (a departure from the design note): Hermit's `--verify` uses a lossy comparison, and
   it was judged to add little over identical output and fingerprints across three direct reruns plus the bundle replay.
-- The reading of Hermit failures of "shape B" (5.5) was fixed after window 1 had produced one, so it is not
-  pre-registered in the strict sense; this is why the mechanical code is stated beside every result.
+- The reading of cleanup-unconfirmed Hermit failures (5.5) was fixed after the first batch had produced one, so it is not
+  pre-registered in the strict sense; this is why the strict reading is stated beside every result.
 
 ### 5.5 Hermit failures, and the two readings
 
@@ -201,26 +199,26 @@ Hermit has an internal consistency check on its branch counter (a "skid overshoo
 exit status 125 and a Hermit failure message. Before the counted runs it was pre-registered that such a run is not a
 rated run, is not replaced, does not change the seed list, and is listed per arm as a ledger.
 
-In window 1 one run (`C1.u.i0172`) stopped on the same trigger but a different path: the same overshoot message and panic
+In the first batch one run (the A-u run at seed 330172) stopped on the same trigger but a different path: the same overshoot message and panic
 at the same source line, followed by Hermit's "cleanup remains unconfirmed" path instead of a task exit. We call this
-"shape B". It was not part of the pre-registered ledger, so the pre-registered table treats it as an unrecognised Hermit
-failure that blocks claims. After window 1, a rule was fixed that selects shape B by its stderr signature and reads it as
-the same ledger, only for a window whose leftover-process scan afterwards was clean; the rule is applied mechanically to
-every run, not run by run. A second shape-B run occurred in window 2. The evaluator therefore prints two codes:
+a cleanup-unconfirmed failure. It was not part of the pre-registered ledger, so the pre-registered table treats it as an unrecognised Hermit
+failure that blocks claims. After the first batch, a rule was fixed that selects this kind by its stderr signature and reads it as
+the same ledger, only for a batch whose leftover-process scan afterwards was clean; the rule is applied mechanically to
+every run, not run by run. A second cleanup-unconfirmed run occurred in the second batch. The evaluator therefore gives two readings of the outcome:
 
-- the **mechanical code** (`OUTCOME`), which treats shape B as a blocking Hermit failure:
-  `OUTCOME C1-DONE/R-CRASH+R-CRASH-hermit(u=2,c=0,cp=0)`;
-- the **skid-b reading** (`OUTCOME-SKID-B`), which reads shape B as the ledger:
-  `OUTCOME-SKID-B C1-DONE/R-HIT+R-CRASH-hermit(u=4,c=0,cp=0)`.
+- the **strict reading**, which treats a cleanup-unconfirmed failure as a blocking Hermit failure, so that two Hermit
+  failures are in the ledger;
+- the **ledger reading**, which reads a cleanup-unconfirmed failure as part of the ledger, so that four Hermit failures are
+  in the ledger. (The experiment's `c1_eval.py verdict` selects this reading with `--skid-b`.)
 
-The two codes come apart only because of the two shape-B runs (`C1.u.i0172`, `C1.u.i0458`). The other two failures
-(`C1.u.i0284`, `C1.u.i1711`) carry the pre-registered signature and are in the ledger under both codes; that is why the
-mechanical suffix counts two and the skid-b suffix four.
+The two readings come apart only because of the two cleanup-unconfirmed runs (the A-u runs at seeds 330172 and 330458). The
+other two failures (the A-u runs at seeds 330284 and 331711) carry the pre-registered signature and are in the ledger under
+both readings; that is why the strict reading counts two and the ledger reading four.
 
-The two codes differ only in how two runs are read, and the evaluator's tables (6.2) are printed identically under both. The
+The two readings differ only in how two runs are read, and the evaluator's tables (6.2) are printed identically under both. The
 sentences built on them (the counts in words, the comparison with the controls in 6.3, the confirmation in 6.4) are made
-under the skid-b reading; under the mechanical code only the tables and the failing runs in full may be stated. We state
-the mechanical code beside every result below.
+under the ledger reading; under the strict reading only the tables and the failing runs in full may be stated. We state
+the strict reading beside every result below.
 
 ## 6. Each step and its result
 
@@ -245,10 +243,10 @@ All results are for one machine and one run of each configuration, on the dates 
 
 ### 6.2 The counted runs: arm A-u and the controls
 
-Labels: bug_known_in_advance; targeted_workload; environment_pinned; A-u unassisted and T2_instrumented; A-c
-fixed_release_control at arm level only; A-c' patched_toolchain and T2_instrumented. Configuration: section 4, binaries
-of section 3, `-mode=std -q 250`, seeds 330001 to 332000 in every arm. The five counted windows ran from 2026-10-17 23:44
-to 2026-10-18 about 10:00; each ended at its planned size, and no binary changed during any window.
+Labels: bug_known_in_advance; targeted_workload; environment_pinned; A-u unassisted and instrumented; A-c
+fixed_release_control at arm level only; A-c' patched_toolchain and instrumented. Configuration: section 4, binaries
+of section 3, `-mode=std -q 250`, seeds 330001 to 332000 in every arm. The five counted batches ran from 2026-10-17 23:44
+to 2026-10-18 about 10:00; each ended at its planned size, and no binary changed during any batch.
 
 | Arm | Decided | Rated | Runs with the property site false at least once | Wilson 95% | Not rated |
 |---|---|---|---|---|---|
@@ -256,19 +254,19 @@ to 2026-10-18 about 10:00; each ended at its planned size, and no binary changed
 | A-c (go1.24.6) | 2,000 | 2,000 | 0 (exact one-sided upper bound 0.1497%) | [0.00%, 0.19%] | none |
 | A-c' (go1.24.5 plus the fix) | 2,000 | 2,000 | 0 (exact one-sided upper bound 0.1497%) | [0.00%, 0.19%] | none |
 
-Under the skid-b reading, in this configuration, A-u had 934 of 1,996 rated seeds with at least one false evaluation of the
+Under the ledger reading, in this configuration, A-u had 934 of 1,996 rated seeds with at least one false evaluation of the
 property, Wilson 95% [44.6129%, 48.9866%]; A-c and A-c' had 0 of 2,000 each. No timeout, Go crash or harness failure
 occurred in any arm. This is a count of runs on one machine with our test driver, not a rate of defects.
 
-Codes: mechanical `C1-DONE/R-CRASH+R-CRASH-hermit(u=2,c=0,cp=0)`; skid-b reading `C1-DONE/R-HIT+R-CRASH-hermit(u=4,c=0,cp=0)`.
-The table above is printed identically under both; the sentence under it is made under the skid-b reading.
+Readings: under the strict reading two Hermit failures are in the ledger; under the ledger reading four are.
+The table above is printed identically under both; the sentence under it is made under the ledger reading.
 
 The median wall time per run was 4,202 ms (A-u), 4,228 ms (A-c) and 4,215.5 ms (A-c'), context only; no speed claim is
 made.
 
 ### 6.3 The comparison with the controls
 
-Under the skid-b reading, with A-c and A-c' both at 0 of 2,000, the lower Wilson bound of A-u (44.6129%) is above the
+Under the ledger reading, with A-c and A-c' both at 0 of 2,000, the lower Wilson bound of A-u (44.6129%) is above the
 larger upper Wilson bound of the two controls (0.1917%), and the 8-hit threshold of the design is passed by a wide margin.
 The three counts side by side, with the assisted control for context: A-u 934 of 1,996 [44.61%, 48.99%]; A-c 0
 of 2,000 [0.00%, 0.19%]; A-c' 0 of 2,000 [0.00%, 0.19%]; assisted control P-u 199 of 199 and P-c, P-c' 0 of 200 each
@@ -276,12 +274,12 @@ of 2,000 [0.00%, 0.19%]; A-c' 0 of 2,000 [0.00%, 0.19%]; assisted control P-u 19
 comparison is not "the same seed passes on 1.24.6". The sensitivity line (information, not a rule): had every unrated A-u
 cell been a hit, the count would be at most 938 of 2,000.
 
-Codes: mechanical `C1-DONE/R-CRASH+R-CRASH-hermit(u=2,c=0,cp=0)` (the comparison is not stated under this code); skid-b
-reading `C1-DONE/R-HIT+R-CRASH-hermit(u=4,c=0,cp=0)`.
+Readings: strict reading, two Hermit failures in the ledger (the comparison is not stated under this reading); ledger
+reading, four.
 
 ### 6.4 Confirmation of the first 100 hits
 
-The hit seeds in seed order begin 330003, 330004, 330008; the first 100 end at 330228, all within window 1. For each of the
+The hit seeds in seed order begin 330003, 330004, 330008; the first 100 end at 330228, all within the first batch. For each of the
 100:
 
 - **Direct reruns** (2026-10-19, same wrapper, binary, flags and seed): three more runs, all three a hit, each with the same
@@ -295,22 +293,22 @@ The hit seeds in seed order begin 330003, 330004, 330008; the first 100 end at 3
   direct run.
 - **The recorded `first_false` witness** of each of the 100 was of class 1 (foreign): a complete row belonging to another query.
 
-The other 834 hits are counted and listed, and were not confirmed. Under the skid-b reading, the statement is: the property
+The other 834 hits are counted and listed, and were not confirmed. Under the ledger reading, the statement is: the property
 site was false in 934 of 1,996 rated runs (seeds fixed in advance; Wilson 95% [44.6129%, 48.9866%]); the first m = 100 of them in
 seed order were each confirmed (3/3 identical direct reruns, the engine at the same seed, bundle replay), on Go 1.24.5, with
-our test driver, bug known in advance, `T2_instrumented`; the engine ran in a different Hermit environment. No rate
+our test driver, bug known in advance, `instrumented`; the engine ran in a different Hermit environment. No rate
 comparison with the controls is part of this sentence (see 6.3). The confirmation of a hit seed is an observation of this
 setup; it says nothing about why the interleaving happened.
 
-Codes: mechanical `OUTCOME C1-DONE/R-CRASH+R-CRASH-hermit(u=2,c=0,cp=0)` (the confirmation rows are recorded; no claim is
-made under this code); skid-b reading `OUTCOME-SKID-B C1-DONE/R-HIT+R-CRASH-hermit(u=4,c=0,cp=0)`.
+Readings: strict reading, two Hermit failures in the ledger (the confirmation rows are recorded; no claim is made under
+this reading); ledger reading, four.
 
 ### 6.5 The Hermit failures
 
-Four A-u runs ended in a Hermit failure with exit status 125 and were not rated or replaced: `C1.u.i0284` (window 1) and
-`C1.u.i1711` (window 5) with the pre-registered skid signature, and `C1.u.i0172` (window 1) and `C1.u.i0458` (window 2)
-with the shape-B signature of 5.5. The skid-b reading was available for those two because the leftover scan after
-windows 1 and 2 was clean (no Hermit process, mount, control group or shared-memory entry). A-c and A-c' had no Hermit
+Four A-u runs ended in a Hermit failure with exit status 125 and were not rated or replaced: the runs at seeds 330284 (first batch) and
+331711 (fifth batch) with the pre-registered skid signature, and the runs at seeds 330172 (first batch) and 330458 (second batch)
+with the cleanup-unconfirmed signature of 5.5. The ledger reading was available for those two because the leftover scan after
+the first and second batches was clean (no Hermit process, mount, control group or shared-memory entry). A-c and A-c' had no Hermit
 failure. Hermit failures are outside the rated runs; nothing here says they are harmless, rare in general or unrelated to
 the workload, and the sensitivity line above shows how far they could move a count.
 
@@ -318,13 +316,13 @@ the workload, and the sensitivity line above shows how far they could move a cou
 
 **Can be said**, each for the stated configuration only, labels as in 6.2:
 
-- Under the skid-b reading, on one machine, with our fake driver, under the pinned Hermit, the property site was false at
+- Under the ledger reading, on one machine, with our fake driver, under the pinned Hermit, the property site was false at
   least once in 934 of 1,996 rated seeds of the unmodified Go 1.24.5 workload (Wilson 95% [44.6129%, 48.9866%]), and in 0 of
   2,000 on each of Go 1.24.6 and Go 1.24.5 with only the fix.
-- Under the skid-b reading, the first 100 hit seeds in seed order were each confirmed (3/3 identical direct reruns, the
+- Under the ledger reading, the first 100 hit seeds in seed order were each confirmed (3/3 identical direct reruns, the
   engine at the same seed in a different Hermit environment, bundle replay).
-- Under the skid-b reading, the lower bound of the A-u interval is above the upper bounds of both controls.
-- Under the mechanical code only the tables of 6.2 and the failing runs of 6.5 stand; the sentences above do not.
+- Under the ledger reading, the lower bound of the A-u interval is above the upper bounds of both controls.
+- Under the strict reading only the tables of 6.2 and the failing runs of 6.5 stand; the sentences above do not.
 
 **Cannot be said:**
 
@@ -350,26 +348,28 @@ The scripts that ran, with machine paths replaced, are in
    binary sha256 values were built). On Linux, download the `linux-amd64` archives pinned in the example's `PINS` by hand.
 2. **Workload binaries.** Build `cmd/sqlcancel` with each toolchain and the flags of section 3; compare the sha256 values.
 3. **Hermit.** Build it with the recipe in the experiment folder (root is needed to run it).
-4. **Counted runs.** Use the five windows of 400 seeds from 330001 with `c1.sh count`, and
-   `python3 rev1b/c1_eval.py verdict --g1 PASS --skid-b WINDOW_DIR...` over the windows in order (with `g_eval.py` and `sclib.py` next to it);
-   `bin/c1_eval.py` gives only the mechanical code.
+4. **Counted runs.** Use the five batches of 400 seeds from 330001 with `c1.sh count`, and
+   `python3 rev1b/c1_eval.py verdict --g1 PASS --skid-b WINDOW_DIR...` over the batches in order (with `g_eval.py` and `sclib.py` next to it);
+   `bin/c1_eval.py` gives only the strict reading.
 5. **Confirmation.** `c1.sh confirm` for the direct reruns and `c2e.sh` for the engine, on the first 100 hit seeds.
 
 Before running the drivers on any machine, read "Security notes for running the drivers" in the experiment folder's
 README: `c2e.sh` runs the engine as root against a configuration file in a world-writable directory, and the drivers
 use world-writable summary and temporary directories; they were run on a machine with a single local user.
 
-What you cannot repeat exactly: our Hermit binary ([I] a rebuild will probably have a different sha256, so seeds and
+What you cannot repeat exactly: our Hermit binary (a rebuild will probably have a different sha256, so seeds and
 fingerprints are not comparable), our machine, and our raw run records (not published). The scripts' gates compare every
 input with the hash recorded in our run, so they stop on your builds until you replace the pins.
 
 ### What the scripts print
 
-| Printed code | Meaning |
+The scripts print a one-line outcome code. In words:
+
+| Outcome | Meaning |
 |---|---|
-| `C1-DONE/R-HIT+R-CRASH-hermit(u=4,c=0,cp=0)` (`OUTCOME-SKID-B` line) | all 2,000 seeds decided in every arm; the unpatched-arm count passes the pre-registered comparison; four Hermit failures in the unpatched arm, read as the ledger |
-| `C1-DONE/R-CRASH+R-CRASH-hermit(u=2,c=0,cp=0)` (`OUTCOME` line) | the same tables; the two shape-B failures are read as blocking, which stops every claim beyond the rows themselves |
-| `C1-DONE/C2-PENDING`, `C1-DONE/R-HIT-CANDIDATE` | counted runs complete; confirmation not yet complete. These two appeared only on the `OUTCOME-SKID-B` line (after window 5 and after the direct reruns); the mechanical `OUTCOME` line stayed `C1-DONE/R-CRASH+...` throughout |
+| ledger reading, complete | all 2,000 seeds decided in every arm; the unpatched-arm count passes the pre-registered comparison; four Hermit failures in the unpatched arm, read as the ledger |
+| strict reading, complete | the same tables; the two cleanup-unconfirmed failures are read as blocking, which stops every claim beyond the rows themselves |
+| counted runs complete, confirmation pending | counted runs complete; confirmation not yet complete. These two stages appeared only under the ledger reading (after the fifth batch and after the direct reruns); the strict reading stayed blocked by the cleanup-unconfirmed failures throughout |
 
 ## 9. Acknowledgements
 
@@ -382,7 +382,7 @@ The advisory credits Spike Curtis from Coder. The fix is Go commit `83b4a5db2409
 | bug_known_in_advance | the bug, its fix and the conditions that expose it were public before any run |
 | targeted_workload | the workload was written to exercise this bug |
 | environment_pinned | the number belongs to the stated machine, kernel, Hermit build, flags and run |
-| T2_instrumented | built with the reporting shim, which changes the schedule compared with an unreported build |
+| instrumented | built with the reporting shim, which changes the schedule compared with an unreported build |
 | unassisted | the standard-library toolchain unmodified, a `*string` destination |
 | fixed_release_control | the official release that contains the fix, compared at arm level only |
 | patched_toolchain | the unpatched release plus only the fix's two files |

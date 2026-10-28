@@ -384,10 +384,10 @@ passes the mode alone and the check expects 4,000 and `[final, 4000, 4, 1000]`. 
 
 `scripts/build-record-java.sh` writes the build record: B1 builds the jar twice (two directories, two time zones) and
 requires equal sha256, and checks the layout; B2 reads the window off the bytecode (`scripts/check-window-java.sh`: a load of
-the counter, one call of `spin`, a store, nothing else that calls, locks or allocates between them); B3 is a code-review
+the counter, one call of `spin`, a store, nothing else that calls, locks or allocates between them); B3 is a written
 statement (the JVM makes system calls on other threads, so there is no seccomp test; the statement says plainly that `spin`
 is called inside the window, that a compile wait under arm b and a safepoint stop under both arms can happen there, and that
-this only makes the race easier to reach, and leaves the signature to the reviewer); F3 runs every mode under
+this only makes the race easier to reach, and says nothing about what that means for the signature of the race); F3 runs every mode under
 `-XX:+PrintCompilation` with the default flags and each profile (`scripts/check-java-compiled.sh`) and requires that neither
 worker loop is ever compiled; F4 requires the probe's classes in `lang-at.jar` to be byte-identical (sha256, one by one) to
 those of the probe-only jar; the source check allows no clock, environment, `/proc`, CPU count or process-table read in the fixture; the flag

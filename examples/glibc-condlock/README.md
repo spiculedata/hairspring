@@ -86,7 +86,7 @@ In short, on one machine (Ubuntu 24.04.5, kernel 6.17.0-42-generic, Intel Xeon E
 the property site was false at least once in 1,025 of 2,029 runs on the unmodified `release/2.40/master` state
 `d8a1a1ae` (unassisted) and in 0 of 2,029 runs on the fixed state `8d3dd23e` (fixed state compared at arm level
 only). Labels: native reference; bug known in advance; targeted workload; structure from a public reproducer;
-environment pinned; T2_instrumented (built with the protocol SDK). Two positive controls (the unmodified library plus
+environment pinned; instrumented (built with the protocol SDK). Two positive controls (the unmodified library plus
 one hunk that widens the race window; assisted, window_widening, library_patched) did not make the property false in
 any of the runs made under the pinned Hermit (P1: 90 runs including 30 informational; P2: 60), so the counted runs
 under Hermit were not started, and nothing is claimed about whether Hermit reaches the bug's state.
