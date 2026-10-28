@@ -58,7 +58,7 @@ queued --lease--> running --finish_job--> done            (run: passed | failed 
 - Jobs that exhaust their attempts through expiry are reported by `fail_expired_jobs` so their runs never hang.
 - **Ctrl-C.** `hairspring test` and `hairspring confirm` catch the first SIGINT (a second one ends the process in the
   usual way). The foreground run is cancelled like any other cancel, so it ends `cancelled` and keeps the trials already
-  stored, and every Hermit trial in progress is killed through its process group, the kill a trial timeout uses. No
+  stored, and every Hermit trial in progress is killed through its process group, the kill a trial timeout uses (a child that calls `setsid` leaves the group and survives). No
   further trial starts. The CLI says so and exits with status 130. Each guest runs in a process group of its own, so the
   terminal's SIGINT never reaches it directly. `hairspring serve` and `hairspring worker` are unchanged. A confirmation
   that is interrupted stores the checks that finished and records the rest as skipped, as for any cancel.
@@ -135,8 +135,11 @@ change: the trial rows added in version 2 already hold every verdict.
   trial's timeout each; a test pins the bound); the note says what they showed. The lowest failing seed gets a
   report (trace and replayable bundle), which is also what the run's first failure row holds; so does each later seed
   at which a property fails for the first time (`RunOutcome::more_failures`, at most 16 reports in all), so the claim gate
-  can see every first-failure seed. Those later reports are confirmed by the sweep's own reruns like the first, even
-  past the limit on confirmed violations, and a sweep that sees one property fail has no extra report.
+  can see every first-failure seed. Those later reports carry the sweep's own rerun note like the first (reruns of the
+  seed, made even past the limit on confirmed violations), but the sweep does not run the full confirmation pipeline:
+  `hairspring confirm <run id>` does that for every row. A sweep that sees one property fail has no extra report, except
+  that a property failing after a first failure that named none gets its own. The server refuses further failures
+  unless the run is a sweep with a first failure, with strictly rising seeds and at most 1.5 MiB of bundles in all.
 - **Simulation sweeps are not confirmed.** A failing seed from a simulation (`sim`) target, in a sweep or a search, cannot be confirmed: `hairspring confirm` stops with ``error: no backend available for target kind ``confirm` is not supported by the sim backend` `` (the stray backticks are in the message) and nothing is stored. Only `process` targets can be confirmed.
 - **Not rated.** The rate is violations out of passes and violations. Timeouts, unusable trials and infrastructure
   failures (labelled "failed in the host") are listed apart, are never in a denominator and are never described as
@@ -290,8 +293,8 @@ and rows, so migrating rewrites no existing row). A failure with no row has neve
 The pipeline runs where the engine is: the CLI's own process, or the server's embedded engine. It is bounded (at most ten
 reruns, each limited by the target's trial timeout, and a wall budget of at most ten minutes) and cancellable: the engine
 stops between runs (the replay and each skid retry included) and records what did not run as skipped, for a caller that
-uses the progress callback. Ctrl-C on the CLI cancels it the same way and kills the Hermit process group of the
-run in progress (see "Ctrl-C" below); the confirmation stored is the partial one, with what did not run skipped. A remote worker does not run confirmations yet.
+uses the progress callback. Ctrl-C on the CLI cancels it the same way and kills the processes still in the Hermit process group of the
+run in progress (a child that calls `setsid` escapes) (see "Ctrl-C" under Job lifecycle, above); the confirmation stored is the partial one: the check that was running and the ones after it are recorded as skipped, so it never changes an earlier finding. A remote worker does not run confirmations yet.
 
 Opening a version 4 database adds the table and its index in the same transaction as the version bump. A version 4
 database that lost one of its own tables or indexes is refused rather than repaired, on both backends, and a current

@@ -59,6 +59,9 @@ use std::time::{Duration, Instant};
 
 /// Largest bundle text accepted from a caller.
 pub const MAX_BUNDLE_BYTES: usize = 1024 * 1024;
+/// Most bytes of bundles one run's failures may total in a result. A result travels in one request, whose body is limited
+/// to 2 MiB, so a sweep with several failure rows cannot be allowed one full-size bundle each.
+pub const MAX_RUN_BUNDLE_BYTES: usize = MAX_BUNDLE_BYTES * 3 / 2;
 /// Longest reproduction path a caller may ask the server to replay.
 pub const MAX_REPLAY_STEPS: usize = 20_000;
 const MAX_TARGET_LEN: usize = 64;

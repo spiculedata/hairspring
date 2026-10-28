@@ -134,6 +134,50 @@ fn clean_failure(f: &FailureReport, run_target: &str) -> Result<FailureReport, S
     })
 }
 
+fn seed_of(failure: &FailureReport) -> Result<u64, ServiceError> {
+    Bundle::decode(&failure.bundle)
+        .map(|b| crate::confirm_claims::seed_of(&b))
+        .map_err(|e| invalid(&format!("bundle is not valid: {e}")))
+}
+
+/// Checks the further failures of a result (see [`RunOutcome::more_failures`]): there are none unless the run is a
+/// sweep and has a first failure, their seeds rise strictly from the first failure's, and the bundles of all of them
+/// fit in one request. An outcome with none always fits.
+pub fn check_more_failures(outcome: &RunOutcome, is_sweep: bool) -> Result<(), ServiceError> {
+    if outcome.more_failures.is_empty() {
+        return Ok(());
+    }
+    let Some(first) = &outcome.failure else {
+        return Err(invalid("further failures need a first failure"));
+    };
+    if !is_sweep {
+        return Err(invalid("only a sweep reports further failures"));
+    }
+    let mut last = seed_of(first)?;
+    for f in &outcome.more_failures {
+        let seed = seed_of(f)?;
+        if seed <= last {
+            return Err(invalid(
+                "further failures must have distinct seeds, rising after the first failure's",
+            ));
+        }
+        last = seed;
+    }
+    let total: usize = outcome
+        .failure
+        .iter()
+        .chain(&outcome.more_failures)
+        .map(|f| f.bundle.len())
+        .sum();
+    if total > crate::MAX_RUN_BUNDLE_BYTES {
+        return Err(invalid(&format!(
+            "the bundles of one run's failures total more than {} bytes",
+            crate::MAX_RUN_BUNDLE_BYTES
+        )));
+    }
+    Ok(())
+}
+
 /// Returns a bounded, sanitised copy of `outcome`, or an error if it breaks the limits.
 pub fn outcome(outcome: &RunOutcome, run_target: &str) -> Result<RunOutcome, ServiceError> {
     if outcome.inconclusive > outcome.trials || outcome.distinct_schedules > outcome.trials {

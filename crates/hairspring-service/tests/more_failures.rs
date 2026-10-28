@@ -73,10 +73,19 @@ struct Rig {
 }
 
 fn rig() -> Rig {
+    rig_in(true)
+}
+
+/// The same trials, in a sweep run or in a search run.
+fn rig_in(sweep: bool) -> Rig {
     let (svc, _, engine) = setup();
     let (remote, secret) = svc.register_remote_worker(TRUSTED, "{}").unwrap();
     svc.set_worker_trust(&remote.id, true).unwrap();
-    let job = lease_sweep(&svc, &engine, &remote.id, TRIALS);
+    let job = if sweep {
+        lease_sweep(&svc, &engine, &remote.id, TRIALS)
+    } else {
+        lease_with_budget(&svc, &engine, &remote.id, TRIALS)
+    };
     svc.ingest_trials_with_secret(&job.job_id, &remote.id, Some(&secret), &trials())
         .unwrap();
     Rig {
@@ -167,4 +176,54 @@ fn the_claim_stays_withheld_until_every_first_failure_seed_is_confirmed() {
         claim_allowed(&rig),
         "both first-failure seeds are confirmed"
     );
+}
+
+fn refused(rig: &Rig, outcome: &RunOutcome) {
+    let err = complete(rig, outcome).unwrap_err();
+    assert!(matches!(err, ServiceError::InvalidRequest(_)), "{err:?}");
+    assert!(failure_ids(rig).is_empty(), "nothing was stored");
+}
+
+#[test]
+fn further_failures_without_a_first_failure_are_refused() {
+    let rig = rig();
+    let orphan = RunOutcome {
+        failure: None,
+        ..outcome(vec![report_at(5)])
+    };
+    refused(&rig, &orphan);
+}
+
+#[test]
+fn further_failures_in_a_run_that_is_not_a_sweep_are_refused() {
+    let rig = rig_in(false);
+    refused(&rig, &outcome(vec![report_at(5)]));
+}
+
+#[test]
+fn further_failures_must_have_strictly_ascending_distinct_seeds_after_the_first() {
+    for seeds in [vec![2], vec![3], vec![5, 5], vec![6, 5]] {
+        let rig = rig();
+        let more = seeds.iter().map(|s| report_at(*s)).collect();
+        refused(&rig, &outcome(more));
+    }
+}
+
+#[test]
+fn the_bundles_of_one_run_may_not_total_more_than_the_request_can_carry() {
+    let rig = rig();
+    let big = |seed: u64| {
+        let mut f = report_at(seed);
+        let bundle = Bundle::new(seed, "t", vec![])
+            .with_target("lock-lease")
+            .with_param("sched_seed", seed.to_string())
+            .with_param("padding", "x".repeat(700_000));
+        f.bundle = bundle.encode();
+        f
+    };
+    let oversized = RunOutcome {
+        failure: Some(big(3)),
+        ..outcome(vec![big(5), big(6)])
+    };
+    refused(&rig, &oversized);
 }

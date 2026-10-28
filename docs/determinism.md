@@ -157,10 +157,11 @@ was used up, is stored as `skipped` and says why. The budget and the cancel reac
 retry included: a run is given only what is left of the budget (at least one second), and a rerun, replay or control the budget cut short
 is `inconclusive`, never a miss, a hang or (where a hang is the bug) a violation.
 
-**Cancelling.** A cancelled confirmation is recorded as `skipped` only for a caller that uses the progress callback (the
-server and the embedded engine). `hairspring confirm` on the command line has no signal handling: Ctrl-C stops
-hairspring, records nothing for that confirmation, and may leave Hermit child processes running, exactly as it does for
-`hairspring test`.
+**Cancelling.** A cancelled confirmation is recorded as `skipped` for a caller that uses the progress callback (the
+server and the embedded engine) and for Ctrl-C on `hairspring confirm`. Ctrl-C kills the Hermit processes still in the
+guest's process group, as a timeout does (a child that calls `setsid` leaves the group and is not killed), and the check
+that was running, if any, is recorded as `skipped` with the detail `cancelled`, like the checks after it, so an
+interrupted confirmation never lifts or withdraws what an earlier one found. The command exits 130.
 
 **The environment.** The host is compared with the bundle's recorded environment once, before anything runs. If a
 loader field differs and `--allow-environment-change` is not given, nothing runs: the rerun and replay checks are stored as
@@ -226,14 +227,21 @@ confirmation.
 **Sweep failures: one row for each property's first failing seed.** A sweep stores a failure row (with its trace and
 replayable bundle) for the lowest failing seed and for every later seed at which a property failed for the first time.
 Two properties that first fail at the same seed share one row, and a property that fails again at a later seed gets no
-further row, so a sweep in which only one property fails has one row, as before. The claim gate needs every
-first-failure seed of the run confirmed, and each of these rows can be confirmed: `hairspring confirm <run id>`
-confirms every failure of the run in turn and stores the checks for each (a sweep does not confirm its rows by itself
-when it ends; each row's message says how many of the sweep's own reruns matched). A sweep stores at most 16 rows; a
-property whose first failing seed comes after that has no row, and the run's claim stays withheld. A failure that
-does not name a property (a non-zero exit or a `HAIRSPRING_VIOLATION:` line) only ever has the row of the lowest failing
-seed. Rows are read in the order they were written, which is seed order. No stored data changes: the failures table
-already held any number of rows for a run, and a sweep stored before this change has the rows it had.
+further row, so a sweep in which only one property fails has one row, as before. The exception: if the lowest failing
+seed is a failure that names no property (a non-zero exit or a `HAIRSPRING_VIOLATION:` line), a property that fails at
+a later seed still gets a row of its own, because the claim gate needs that property's first failing seed confirmed;
+that run has two rows, and the property may have failed at the first seed too, unnamed.
+
+The sweep does not run the confirmation pipeline by itself. What each row carries is the sweep's own rerun note (its
+message says how many reruns of the seed matched). To confirm, run `hairspring confirm <run id>`: it confirms every
+failure of the run in turn and stores the checks for each. The claim gate needs every first-failure seed confirmed that
+way.
+
+A sweep stores at most 16 rows; a property whose first failing seed comes after that has no row, and the run's claim
+stays withheld. The server refuses a result with further failures unless the run is a sweep with a first failure, the
+seeds rise strictly after that failure's, and the bundles total at most 1.5 MiB (a result travels in one request of at
+most 2 MiB). Rows are read in the order they were written, which is seed order. No stored data changes: the failures
+table already held any number of rows for a run, and a sweep stored before this change has the rows it had.
 
 **Other limits.** SQLite allows one writer at a time. A write takes the write lock when its transaction begins and waits
 up to 5 seconds for another process to finish; if the file is still locked after that it fails with

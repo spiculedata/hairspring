@@ -14,6 +14,8 @@ extern "C" {
 const SIGINT: i32 = 2;
 /// `SIG_DFL`: the default action, which for SIGINT ends the process.
 const SIG_DFL: usize = 0;
+/// What `signal` returns when it fails.
+const SIG_ERR: usize = usize::MAX;
 
 /// Asks every running and future trial to stop. Only stores to an atomic, so a signal handler may call it.
 pub fn request() {
@@ -46,10 +48,13 @@ extern "C" fn on_sigint(_signum: i32) {
 
 /// Makes Ctrl-C request the interrupt instead of ending the process, and clears any earlier request. The first Ctrl-C
 /// is a request; a second one ends the process.
-pub fn install_sigint_handler() {
+/// An error means the handler was not installed and Ctrl-C will end the process in the usual way.
+pub fn install_sigint_handler() -> std::io::Result<()> {
     clear();
     // SAFETY: `on_sigint` only stores to an atomic and calls `signal`, both async-signal-safe.
-    unsafe {
-        signal(SIGINT, on_sigint as extern "C" fn(i32) as usize);
+    let previous = unsafe { signal(SIGINT, on_sigint as extern "C" fn(i32) as usize) };
+    if previous == SIG_ERR {
+        return Err(std::io::Error::last_os_error());
     }
+    Ok(())
 }

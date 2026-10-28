@@ -174,3 +174,93 @@ fn ctrl_c_during_a_confirmation_kills_the_reruns_and_exits_130() {
     assert!(text(&out).contains("interrupted"), "{}", text(&out));
     assert!(gone(&guest) && gone(&child));
 }
+
+/// The lines of `hairspring show` that state what the stored checks say about the failure.
+fn finding_lines(dir: &Path, run_id: &str) -> Vec<String> {
+    text(&run(dir, &["show", run_id]))
+        .lines()
+        .filter(|l| l.contains("finding"))
+        // The number of checks grows with every confirmation; the standing is what is compared.
+        .map(|l| l.split(" (").next().unwrap_or(l).to_string())
+        .collect()
+}
+
+#[test]
+fn ctrl_c_during_the_bundle_replay_stores_it_as_skipped_and_leaves_the_earlier_finding_alone() {
+    let dir = scratch("replay");
+    // Seed 3 fails. Once ARMED exists, the fourth run of it hangs: the three reruns come first, so that is the replay.
+    let guest = format!(
+        "[ $((FAKE_SCHED_SEED % 5)) -eq 3 ] || {{ echo ok; exit 0; }}; if [ -f {d}/ARMED ]; then n=$(cat {d}/count 2>/dev/null || echo 0); n=$((n+1)); echo $n > {d}/count; [ $n -ge 4 ] && {{ {hang}; }}; fi; echo 'HAIRSPRING_VIOLATION: lost update'; exit 1",
+        d = dir.display(),
+        hang = hanging(&dir)
+    );
+    project(&dir, &guest);
+    assert_eq!(
+        run(&dir, &["test", "svc", "--seed", "1"]).status.code(),
+        Some(1)
+    );
+    let run_id = text(&run(&dir, &["results", "--limit", "1"]))
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string();
+    let first = run(&dir, &["confirm", &run_id]);
+    assert!(
+        text(&first).contains("finding: confirmed"),
+        "{}",
+        text(&first)
+    );
+    let before = finding_lines(&dir, &run_id);
+    assert!(before.iter().any(|l| l.contains("confirmed")), "{before:?}");
+
+    std::fs::write(dir.join("ARMED"), "").unwrap();
+    let cli = spawn(&dir, &["confirm", &run_id]);
+    let (guest_pid, child, out) = interrupt_once_running(&dir, cli);
+    assert_eq!(out.status.code(), Some(EXIT_INTERRUPTED), "{}", text(&out));
+    assert!(gone(&guest_pid) && gone(&child));
+
+    assert_eq!(
+        finding_lines(&dir, &run_id),
+        before,
+        "the standing did not change"
+    );
+    // The check that was running is stored as skipped for cancellation, not as one that could not run.
+    use hairspring_store::{SqliteStore, Store};
+    let store = SqliteStore::open(&dir.join(".hairspring/hairspring.db")).unwrap();
+    let failure = store.list_failures(&run_id).unwrap().remove(0);
+    let checks = store.list_failure_checks(&failure.id).unwrap();
+    let newest = checks.last().expect("a stored check");
+    assert_eq!(newest.kind, "bundle_replay");
+    assert_eq!(newest.status, "skipped", "{newest:?}");
+    assert!(newest.detail_json.contains("cancelled"), "{newest:?}");
+    assert!(checks
+        .iter()
+        .all(|c| !c.detail_json.contains("host or Hermit fault")));
+}
+
+#[test]
+fn ctrl_c_during_a_sweep_keeps_the_trials_judged_before_it() {
+    let dir = scratch("kept");
+    // Seed 1 passes at once; the later seeds hang.
+    let guest = format!(
+        "[ \"$FAKE_SCHED_SEED\" = 1 ] && {{ echo ok; exit 0; }}; {hang}",
+        hang = hanging(&dir)
+    );
+    project(&dir, &guest);
+    let cli = spawn(
+        &dir,
+        &["test", "svc", "--sweep", "--trials", "5", "--seed", "1"],
+    );
+    let (guest_pid, child, out) = interrupt_once_running(&dir, cli);
+    assert_eq!(out.status.code(), Some(EXIT_INTERRUPTED), "{}", text(&out));
+    assert!(gone(&guest_pid) && gone(&child));
+    assert_eq!(latest_run_state(&dir), "cancelled");
+    use hairspring_store::{SqliteStore, Store};
+    let store = SqliteStore::open(&dir.join(".hairspring/hairspring.db")).unwrap();
+    let run_id = store.list_runs(1).unwrap().remove(0).id;
+    assert_eq!(
+        store.count_trials(&run_id).unwrap(),
+        1,
+        "the passing trial is kept"
+    );
+}

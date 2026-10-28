@@ -126,12 +126,12 @@ fn confirm_bundle(
     input: &str,
     req: &ConfirmRequest,
     json: bool,
-    out: &mut dyn Write,
+    (out, err): (&mut dyn Write, &mut dyn Write),
 ) -> CmdResult<i32> {
     let text = bundle_text(ctx, input)?;
     let checks = svc.confirm_bundle(&ctx.engine, &text, req, &mut |_| !interrupt::requested())?;
     if interrupt::requested() {
-        return write_interrupted(out, false);
+        return write_interrupted(err, false);
     }
     let finding = finding_status(&checks).as_str();
     if json {
@@ -151,28 +151,38 @@ fn confirm_bundle(
 }
 
 /// What Ctrl-C leaves behind, said on stdout where the rest of the confirmation is.
-fn write_interrupted(out: &mut dyn Write, stored: bool) -> CmdResult<i32> {
+fn write_interrupted(err: &mut dyn Write, stored: bool) -> CmdResult<i32> {
     let kept = if stored {
         "the checks that finished are stored and the rest are recorded as skipped"
     } else {
         "nothing was stored"
     };
     writeln!(
-        out,
+        err,
         "hairspring: interrupted; the confirmation was stopped and its Hermit processes were killed ({kept})"
     )?;
     Ok(crate::EXIT_INTERRUPTED)
 }
 
-pub fn run(ctx: &Ctx, args: &ConfirmArgs, out: &mut dyn Write) -> CmdResult<i32> {
-    interrupt::install_sigint_handler();
+pub fn run(
+    ctx: &Ctx,
+    args: &ConfirmArgs,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> CmdResult<i32> {
+    if let Err(e) = interrupt::install_sigint_handler() {
+        writeln!(
+            err,
+            "warning: cannot catch Ctrl-C ({e}); it will end hairspring without stopping Hermit"
+        )?;
+    }
     let req = request(args);
     let svc = ctx.service()?;
     let input = args.input.as_str();
     if input.starts_with(FAILURE_ID_PREFIX) {
         let checks = confirm_stored(ctx, &svc, input, &req)?;
         if interrupt::requested() {
-            return write_interrupted(out, true);
+            return write_interrupted(err, true);
         }
         if args.json {
             writeln!(out, "{}", serde_json::to_string(&checks)?)?;
@@ -191,7 +201,7 @@ pub fn run(ctx: &Ctx, args: &ConfirmArgs, out: &mut dyn Write) -> CmdResult<i32>
         for failure in &detail.failures {
             all.push(confirm_stored(ctx, &svc, &failure.id, &req)?);
             if interrupt::requested() {
-                return write_interrupted(out, true);
+                return write_interrupted(err, true);
             }
         }
         if args.json {
@@ -208,5 +218,5 @@ pub fn run(ctx: &Ctx, args: &ConfirmArgs, out: &mut dyn Write) -> CmdResult<i32>
         }
         return Ok(code);
     }
-    confirm_bundle(ctx, &svc, input, &req, args.json, out)
+    confirm_bundle(ctx, &svc, input, &req, args.json, (out, err))
 }

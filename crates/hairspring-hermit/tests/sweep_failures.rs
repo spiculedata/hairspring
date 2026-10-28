@@ -7,7 +7,7 @@ use hairspring_core::bundle::Bundle;
 use hairspring_engine::engine::{Engine, RunRequest};
 use hairspring_engine::mode::RunMode;
 use hairspring_engine::report::{FailureReport, RunOutcome, RunStatus};
-use hairspring_engine::sweep::MAX_FAILURE_ROWS;
+use hairspring_engine::sweep::{MAX_CONFIRMED_VIOLATIONS, MAX_FAILURE_ROWS};
 
 /// One process's report of the always-properties `ids`; those in `failing` were false once.
 fn report_of(ids: &[&str], failing: &[&str]) -> String {
@@ -158,4 +158,50 @@ fn the_number_of_failure_rows_is_bounded() {
     let arms: Vec<(u64, &[&str])> = failing.iter().map(|(s, v)| (*s, v.as_slice())).collect();
     let out = sweep("bounded", &names, &arms, count as u64 + 2, 1);
     assert_eq!(failing_seeds(&out).len(), MAX_FAILURE_ROWS);
+}
+
+#[test]
+fn rows_past_the_limit_on_confirmed_violations_are_confirmed_too() {
+    let count = MAX_FAILURE_ROWS;
+    let ids: Vec<String> = (0..count).map(|i| format!("p{i:02}")).collect();
+    let names: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let failing: Vec<(u64, Vec<&str>)> = names
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (i as u64 + 1, vec![*id]))
+        .collect();
+    let arms: Vec<(u64, &[&str])> = failing.iter().map(|(s, v)| (*s, v.as_slice())).collect();
+    let out = sweep("past-limit", &names, &arms, count as u64 + 1, 1);
+    let reports: Vec<&FailureReport> = out.failure.iter().chain(&out.more_failures).collect();
+    assert_eq!(reports.len(), MAX_FAILURE_ROWS);
+    const { assert!(MAX_FAILURE_ROWS > MAX_CONFIRMED_VIOLATIONS) };
+    for (i, r) in reports.iter().enumerate().skip(MAX_CONFIRMED_VIOLATIONS) {
+        assert!(
+            r.message.contains("reproduced 3/3"),
+            "row {}: {}",
+            i + 1,
+            r.message
+        );
+    }
+}
+
+#[test]
+fn a_property_that_fails_after_a_violation_that_named_none_gets_its_own_row() {
+    // Seed 3 breaks the run with a bare violation line, which names no property. Seed 6 then fails property `a`: the
+    // claim gate needs that property's first failing seed confirmed, so it has a row of its own.
+    let arms = vec![
+        (3, "HAIRSPRING_VIOLATION: lost update\n".to_string()),
+        (6, report_of(&["a"], &["a"])),
+    ];
+    let script = by_seed(&arms, &report_of(&["a"], &[]));
+    let mut r = rig_with("unnamed-first", &script, false, vec![], |_| {});
+    configure(&mut r, 8, 1);
+    let (engine, _dir): (Engine, _) = r.engine();
+    let out = engine
+        .run(
+            &RunRequest::new("svc", 1).with_mode(RunMode::Sweep),
+            &mut |_| true,
+        )
+        .unwrap();
+    assert_eq!(failing_seeds(&out), vec![3, 6]);
 }

@@ -8,6 +8,7 @@ use hairspring_engine::mode::RunMode;
 use hairspring_engine::report::{RunOutcome, RunStatus};
 use hairspring_hermit::interrupt;
 use hairspring_service::StartRun;
+use hairspring_store::RunState;
 use hairspring_store::{random_seed, sha256_hex};
 use serde_json::json;
 use std::io::Write;
@@ -61,7 +62,12 @@ pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write)
         host::write_warnings(err, &HostFacts::probe())?;
     }
     let svc = ctx.service()?;
-    interrupt::install_sigint_handler();
+    if let Err(e) = interrupt::install_sigint_handler() {
+        writeln!(
+            err,
+            "warning: cannot catch Ctrl-C ({e}); it will end hairspring without stopping Hermit"
+        )?;
+    }
     let (seed, requested_trials) = match args.seeds {
         Some(range) => (range.start, Some(range.trials())),
         None => (args.seed.unwrap_or_else(random_seed), args.trials),
@@ -76,6 +82,13 @@ pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write)
     let mut code = crate::EXIT_OK;
 
     for name in &names {
+        if interrupt::requested() {
+            writeln!(
+                err,
+                "hairspring: interrupted; the remaining targets were not run"
+            )?;
+            return Ok(crate::EXIT_INTERRUPTED);
+        }
         let spec = ctx
             .engine
             .config()
@@ -121,7 +134,7 @@ pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write)
             mode,
             interrupt::flag(),
         )?;
-        if interrupt::requested() {
+        if interrupt::requested() && detail.run.state == RunState::Cancelled {
             writeln!(
                 err,
                 "hairspring: interrupted; run {} is cancelled, the trials already judged are kept and its Hermit processes were stopped",
