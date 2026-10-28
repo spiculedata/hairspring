@@ -35,6 +35,7 @@ mod tally;
 mod tally_log_tests;
 mod trace;
 mod trial_log;
+mod trial_tmp;
 #[cfg(test)]
 mod verdict_tests;
 
@@ -78,6 +79,12 @@ pub struct HermitSettings {
     /// Where the events file's per-trial directories go. `None` uses `summary_dir`; set this to a disk-backed
     /// directory when guests may write more than `/dev/shm` can hold.
     pub events_dir: Option<PathBuf>,
+    /// Where each trial's private directory goes: Hermit's own temporary files for the trial (see `trial_tmp`), which the
+    /// engine removes itself, so that a trial killed at its timeout leaves nothing in the host temporary directory.
+    /// Defaults to `/tmp`, where Hermit made them (it is started with a cleared environment, so it never used the
+    /// engine's own `TMPDIR`). Not `summary_dir`: `/dev/shm` is
+    /// small in some containers and mounted `noexec`, and what Hermit puts here must look to the guest as it always did.
+    pub trial_dir: PathBuf,
     /// Most event-line bytes accepted from one trial, shared by stdout, stderr and the events file. Defaults to
     /// 4 MiB (about 4,900 ids at roughly 850 bytes each). The buffer grows as events arrive, so only trials that emit
     /// events spend memory.
@@ -91,6 +98,9 @@ pub struct HermitSettings {
     /// digests.
     pub sweep_digest_bytes: u64,
 }
+
+/// Where Hermit made its temporary files before the engine took them over.
+const DEFAULT_TRIAL_DIR: &str = "/tmp";
 
 /// Memory-backed and not `/tmp`, so Hermit accepts it and the files cost nothing.
 const DEFAULT_SUMMARY_DIR: &str = "/dev/shm";
@@ -111,6 +121,7 @@ impl Default for HermitSettings {
                 .then(|| PathBuf::from(DEFAULT_SUMMARY_DIR)),
             events_file: false,
             events_dir: None,
+            trial_dir: PathBuf::from(DEFAULT_TRIAL_DIR),
             max_event_bytes: DEFAULT_MAX_EVENT_BYTES_PER_TRIAL,
             sweep_kept_bytes: MAX_KEPT_BYTES_IN_MEMORY,
             sweep_digest_bytes: MAX_DIGEST_BYTES_IN_MEMORY,

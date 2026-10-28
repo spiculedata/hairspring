@@ -57,6 +57,53 @@ Cause (verified from Hermit's debug log): Hermit virtualises file timestamps, so
 Hermit backend therefore starts guests from a minimal pinned environment and freezes bytecode caches. Idle
 time, CPU load and drop-caches did not matter (110/110 runs identical across gaps up to 90 s).
 
+### Hermit's temporary files and a trial timeout
+
+Hermit makes temporary entries in the host temporary directory (`$TMPDIR`, else `/tmp`) and removes them when it exits:
+the private directory it mounts as the guest's `/tmp` (when it is not given `--tmp`), a private copy of the host
+`/etc/group`, an empty directory over the nscd socket directory (when `/var/run/nscd` exists), and, for a strict
+verify, its two run logs. A trial that runs past `trial_timeout_secs` is stopped with `SIGKILL`, which skips that
+clean-up, so they were left behind.
+
+Each Hermit trial now gets a private directory (mode 0700) that the engine removes itself after the trial, however it
+ended. It is made under `trial_dir` in the Hermit backend settings, which defaults to `/tmp`, the place Hermit made
+its files (it is started with a cleared environment, so the engine's own `TMPDIR` never applied). It is not under `summary_dir`: `/dev/shm` is small in some containers and mounted `noexec`, and
+the guest's `/tmp` has to stay where it was. If the directory cannot be made the trial fails as a Hermit start-up fault,
+and nothing is run with a different `/tmp`.
+
+Hermit is pointed at that directory with two environment variables. No `--tmp` is passed (the events file still uses it,
+as before), so Hermit keeps making the guest's `/tmp` itself and the guest's view of `/tmp` is the one it always had.
+
+| Base environment | Set for Hermit | Left behind by a timeout |
+|---|---|---|
+| `--base-env=minimal` or `empty` | `TMPDIR` and `HERMIT_VERIFY_TMPDIR` | nothing in the host temporary directory |
+| default (`host`) | `HERMIT_VERIFY_TMPDIR` only | Hermit's private guest `/tmp`, its `/etc/group` copy and, when `/var/run/nscd` exists, its empty nscd directory (all named `.tmpXXXXXX`) |
+
+`TMPDIR` is withheld under the default base environment because Hermit hands its own environment to the guest there: the
+guest would see a host path that changes from trial to trial. `HERMIT_VERIFY_TMPDIR` is Hermit's own setting, removed
+from the guest's environment under `host` and never passed on by `minimal` or `empty` (checked in the Hermit source at
+the pinned revision `25781c5c`, by reading, not by running). Either variable is left alone when the target sets it,
+passes it through with `--env`, or names a Hermit `--config` file. A fix for the default base environment needs a
+Hermit-only temporary-directory variable that Hermit strips the way it strips `HERMIT_VERIFY_TMPDIR`.
+
+What this changes for a guest: nothing it can see. The guest's environment, `/tmp` and `/proc/self/mountinfo` are as
+before, and the scheduler flags, schedules, hashes and verdicts are unchanged. What it does change is Hermit's own
+process environment (two variables, both with a fixed meaning and a per-trial path), the host paths Hermit's temporary
+files have, and the engine's clean-up. `hairspring confirm` records the Hermit command without these two variables,
+as it does for `HAIRSPRING_SEED` and the other variables the engine sets outside the command line; they belong to the
+engine and are not part of what a replay needs. A result pinned to an engine version is tied to the version that
+made it, so a newer engine needs re-checking before a claim names it.
+
+A failed strict verify used to leave Hermit's two run logs in `/tmp`, and Hermit prints where they are. They are now
+inside the trial's directory, which the engine removes after the trial, so those printed paths no longer exist. The
+verify's verdict is read from its result file, which is unaffected.
+
+A directory the trial could not be cleaned of (for example on a filesystem that refuses the mode change) is reported on
+the engine's standard error and never changes the trial's verdict.
+
+A directory the engine makes for a trial is not removed if the engine itself is killed with `SIGKILL`. It is empty then
+except for what a running trial held, and is named `hairspring-trials-<uid>-<pid>-<hex>`.
+
 ### Recorded environment
 
 The measurements above mean a recorded schedule depends on more than the seed and the Hermit flags. Two cases

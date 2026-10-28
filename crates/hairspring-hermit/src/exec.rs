@@ -6,6 +6,7 @@ use crate::interrupt;
 use crate::line_scan::Findings;
 use crate::summary::{self, Summary};
 use crate::summary_dir::{PrivateDir, ScratchDir};
+use crate::trial_tmp::hermit_temp_env;
 use crate::{env::guest_env, HermitSettings};
 use hairspring_engine::scheduler::{Heuristic, SchedulerSpec};
 use hairspring_props::TrialProps;
@@ -85,6 +86,10 @@ pub struct Dirs<'a> {
     pub summaries: Option<&'a PrivateDir>,
     /// The per-trial directories mounted as the guest's `/tmp` for the events file.
     pub events: Option<&'a PrivateDir>,
+    /// Where each trial's directory for Hermit's own temporary files goes. `None`: no such directory (a caller that
+    /// has none). `Some(Err)`: it was wanted and could not be made, which fails the trial rather than running it with
+    /// Hermit's temporary files somewhere the engine cannot clean.
+    pub trials: Option<&'a Result<PrivateDir, String>>,
 }
 
 #[derive(Debug)]
@@ -254,13 +259,24 @@ pub fn run_trial_with(
 ) -> Result<Trial, SpawnError> {
     let summary_path = dirs.summaries.map(|dir| dir.file_for(seed));
     let (events_dir, scratch_fault) = events_scratch(settings, spec, dirs.events);
+    let temp_dir = match trial_dir(dirs.trials) {
+        Ok(dir) => dir,
+        Err(e) => {
+            // Nothing has started; the summary path has not been written.
+            let _ = events_dir.map(|d| d.remove());
+            return Err(e);
+        }
+    };
     let trial = run_trial_with_summary(
         settings,
         spec,
         seed,
         timeout,
         summary_path.as_deref(),
-        events_dir.as_ref(),
+        TrialDirs {
+            events: events_dir.as_ref(),
+            temp: temp_dir.as_ref(),
+        },
         extra,
     );
     // Always remove the file, including when the trial failed to start or timed out.
@@ -273,11 +289,30 @@ pub fn run_trial_with(
     let cleanup_fault = events_dir
         .and_then(|dir| dir.remove().err())
         .map(|e| EventsFault::Infra(format!("cannot remove the events directory: {e}")));
+    // The trial is over (or never started); Hermit's temporary files go whether it finished, failed or timed out. A
+    // directory that cannot be removed leaves files on the host but says nothing about the guest, so it is warned
+    // about on standard error and never changes the trial's result.
+    if let Some(e) = temp_dir.and_then(|dir| dir.remove().err()) {
+        eprintln!("hairspring: warning: cannot remove the trial's private directory: {e}");
+    }
     trial.map(|t| Trial {
         schedule,
         events_error: scratch_fault.or(cleanup_fault).or(t.events_error),
         ..t
     })
+}
+
+/// This trial's directory for Hermit's own temporary files, made before the trial and removed after it.
+fn trial_dir(
+    trials: Option<&Result<PrivateDir, String>>,
+) -> Result<Option<ScratchDir>, SpawnError> {
+    match trials {
+        None => Ok(None),
+        Some(Err(why)) => Err(SpawnError::Other(why.clone())),
+        Some(Ok(base)) => base.scratch_for().map(Some).map_err(|e| {
+            SpawnError::Other(format!("cannot create the trial's private directory: {e}"))
+        }),
+    }
 }
 
 /// Reads the events file (when there is one) and folds it with the lines captured from the output.
@@ -304,24 +339,39 @@ fn collect_events(
     (folded, digest, error)
 }
 
+/// The engine-owned directories of one trial.
+struct TrialDirs<'a> {
+    /// Mounted as the guest's `/tmp` when the events file is on.
+    events: Option<&'a ScratchDir>,
+    /// Hermit's own temporary files.
+    temp: Option<&'a ScratchDir>,
+}
+
 fn run_trial_with_summary(
     settings: &HermitSettings,
     spec: &ProcessSpec,
     seed: u64,
     timeout: Duration,
     summary: Option<&std::path::Path>,
-    events_dir: Option<&ScratchDir>,
+    dirs: TrialDirs,
     extra: &[String],
 ) -> Result<Trial, SpawnError> {
+    let (events_dir, temp_dir) = (dirs.events, dirs.temp);
+    let guest = guest_env(spec.command, spec.env);
+    // Hermit's own temporary files; see `trial_tmp` for which variables are safe in which base environment.
+    let temp_env = temp_dir.map_or_else(Vec::new, |dir| {
+        hermit_temp_env(spec.hermit_args, &guest, &settings.extra_env, dir)
+    });
     let mut cmd = Command::new(resolve_bin(&settings.bin));
     cmd.args(hermit_args(
         settings, spec, seed, summary, events_dir, extra,
     ))
     .env_clear()
-    .envs(guest_env(spec.command, spec.env))
+    .envs(guest)
     // The trial seed is an input like any other; tools such as hairspring-dapr-sim derive their faults from it.
     .env("HAIRSPRING_SEED", seed.to_string())
     .envs(settings.extra_env.iter().map(|(k, v)| (k, v)))
+    .envs(temp_env)
     .envs(events_dir.map(|_| (events::EVENTS_FILE_ENV, events::GUEST_EVENTS_FILE)))
     // Last, so nothing configured or passed through can change it: the root process tag is the same bytes for
     // every seed and trial, and a stray pid variable (which would make the root `p1.s<pid>`) never reaches the guest.

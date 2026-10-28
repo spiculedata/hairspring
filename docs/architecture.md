@@ -55,6 +55,13 @@ queued --lease--> running --finish_job--> done            (run: passed | failed 
 - A lease lasts `lease_secs`; workers renew it with a heartbeat thread even when a run is silent.
 - `finish_job` is one transaction: failure rows, run state, the `finished` event and closing the job. A stale
   worker cannot overwrite a finished or cancelled run.
+- **Trial temporary files.** A trial timeout and Ctrl-C end Hermit with `SIGKILL`, which skips the clean-up Hermit does
+  for its own temporary files. So each Hermit trial gets a directory the engine owns and removes itself, after a
+  timeout as after any other end, under `trial_dir` (`/tmp` by default). Hermit's temporary
+  directory is pointed at it: `TMPDIR` and `HERMIT_VERIFY_TMPDIR` under `--base-env=minimal` or `empty`, and only
+  `HERMIT_VERIFY_TMPDIR` under the default base environment, which passes Hermit's environment to the guest. So in that
+  mode Hermit's private guest `/tmp` and its `/etc/group` copy can still be left after a timeout. No `--tmp` is
+  passed for this. See [determinism.md](determinism.md#hermits-temporary-files-and-a-trial-timeout).
 - Jobs that exhaust their attempts through expiry are reported by `fail_expired_jobs` so their runs never hang.
 - **Ctrl-C.** `hairspring test` and `hairspring confirm` catch the first SIGINT (a second one ends the process in the
   usual way). The foreground run is cancelled like any other cancel, so it ends `cancelled` and keeps the trials already

@@ -36,6 +36,8 @@ if [ -n "$tmp" ]; then
   if [ -e "$EV_LOG/plant" ]; then ln -s /etc/hosts "$tmp/hairspring-events"; fi
   if [ -e "$EV_LOG/lockparent" ]; then chmod 500 "$(dirname "$tmp")"; fi
 fi
+# Hermit keeps its own temporary-directory setting out of the guest (default base environment).
+unset HERMIT_VERIFY_TMPDIR
 exec "$@"
 "#;
 

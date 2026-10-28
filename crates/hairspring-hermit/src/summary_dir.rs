@@ -5,12 +5,25 @@
 //! `/dev/shm`), refused if it already exists as anything but our own private directory, and holds randomly named files.
 use std::fs::DirBuilder;
 use std::io::{self, Read};
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
 
 extern "C" {
     fn geteuid() -> u32;
+    fn fchmodat(dirfd: i32, path: *const std::os::raw::c_char, mode: u32, flags: i32) -> i32;
 }
+
+/// `AT_FDCWD` and `AT_SYMLINK_NOFOLLOW`, whose values differ between Linux and macOS.
+#[cfg(target_os = "linux")]
+const AT_FDCWD: i32 = -100;
+#[cfg(target_os = "linux")]
+const AT_SYMLINK_NOFOLLOW: i32 = 0x100;
+#[cfg(not(target_os = "linux"))]
+const AT_FDCWD: i32 = -2;
+#[cfg(not(target_os = "linux"))]
+const AT_SYMLINK_NOFOLLOW: i32 = 0x20;
 
 #[derive(Debug)]
 pub struct PrivateDir {
@@ -33,6 +46,20 @@ impl PrivateDir {
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => verify_ours(&path, uid)?,
             Err(e) => return Err(e),
         }
+        Ok(PrivateDir { path })
+    }
+
+    /// Creates `<base>/<prefix>-<euid>-<pid>-<random>` with mode 0700. The name is new every time, so two of these in
+    /// one process never share (or remove) one another's directory.
+    pub fn create_unique(base: &Path, prefix: &str) -> io::Result<PrivateDir> {
+        // SAFETY: see `create`.
+        let uid = unsafe { geteuid() };
+        let path = base.join(format!(
+            "{prefix}-{uid}-{}-{:016x}",
+            std::process::id(),
+            random_u64()
+        ));
+        DirBuilder::new().mode(0o700).create(&path)?;
         Ok(PrivateDir { path })
     }
 
@@ -62,18 +89,75 @@ impl Drop for PrivateDir {
     }
 }
 
+/// `chmod` that never follows a symlink at `path`: a link is left alone (the call fails, which is fine).
+fn chmod_no_follow(path: &Path, mode: u32) {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return;
+    };
+    // SAFETY: `c_path` is a valid NUL-terminated string that outlives the call.
+    unsafe {
+        fchmodat(AT_FDCWD, c_path.as_ptr(), mode, AT_SYMLINK_NOFOLLOW);
+    }
+}
+
+/// `O_DIRECTORY | O_NOFOLLOW`: the open fails, instead of following a link or blocking on a FIFO or a device that a
+/// surviving guest process swapped in. The values are fixed per platform.
+#[cfg(all(target_os = "linux", any(target_arch = "x86", target_arch = "x86_64")))]
+const OPEN_DIRECTORY_FLAGS: i32 = 0o200000 | 0o400000;
+#[cfg(all(
+    target_os = "linux",
+    not(any(target_arch = "x86", target_arch = "x86_64"))
+))]
+const OPEN_DIRECTORY_FLAGS: i32 = 0o40000 | 0o100000;
+#[cfg(target_os = "macos")]
+const OPEN_DIRECTORY_FLAGS: i32 = 0x0010_0000 | 0x0100;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const OPEN_DIRECTORY_FLAGS: i32 = 0;
+
+fn open_directory(dir: &Path) -> io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(OPEN_DIRECTORY_FLAGS)
+        .open(dir)
+}
+
+/// A path that names the directory `handle` is open on, whatever `dir` now points at. Linux resolves paths through
+/// `/dev/fd`; elsewhere (development machines, where Hermit does not run) the path is used as given.
+#[cfg(target_os = "linux")]
+fn through(_dir: &Path, handle: &std::fs::File) -> PathBuf {
+    PathBuf::from(format!("/dev/fd/{}", handle.as_raw_fd()))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn through(dir: &Path, _handle: &std::fs::File) -> PathBuf {
+    dir.to_path_buf()
+}
+
 /// Makes `dir` and everything below it owner-accessible, so a directory the guest left at mode 000 cannot stop the
-/// removal. Symlinks are not followed.
+/// removal. A guest process that outlives the trial (one that left the process group) can swap a path for a symlink
+/// while this runs, so no mode is ever set through a path that could be one: the mode is set without following links,
+/// and a directory is entered through an open handle that is checked to be the directory that was looked at.
 fn make_accessible(dir: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let is_dir = std::fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_dir());
-    if !is_dir {
+    let Ok(before) = std::fs::symlink_metadata(dir) else {
+        return;
+    };
+    if !before.file_type().is_dir() {
         return;
     }
-    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
-    if let Ok(entries) = std::fs::read_dir(dir) {
+    chmod_no_follow(dir, 0o700);
+    let Ok(handle) = open_directory(dir) else {
+        return;
+    };
+    match handle.metadata() {
+        Ok(opened) if (opened.dev(), opened.ino()) == (before.dev(), before.ino()) => {}
+        _ => return,
+    }
+    let through_handle = through(dir, &handle);
+    if let Ok(entries) = std::fs::read_dir(&through_handle) {
         for entry in entries.flatten() {
-            make_accessible(&entry.path());
+            make_accessible(&through_handle.join(entry.file_name()));
         }
     }
 }
@@ -225,6 +309,60 @@ mod tests {
         let gone = a.path().to_path_buf();
         drop(a);
         assert!(!gone.exists());
+    }
+
+    #[test]
+    fn unique_private_directories_never_share_a_name() {
+        let b = base("unique");
+        let (a, c) = (
+            PrivateDir::create_unique(&b, "trials").unwrap(),
+            PrivateDir::create_unique(&b, "trials").unwrap(),
+        );
+        assert_ne!(a.path(), c.path());
+        assert_eq!(std::fs::metadata(a.path()).unwrap().mode() & 0o777, 0o700);
+        let gone = a.path().to_path_buf();
+        drop(a);
+        assert!(
+            !gone.exists() && c.path().exists(),
+            "only its own is removed"
+        );
+    }
+
+    #[test]
+    fn cleanup_does_not_follow_a_symlink_out_of_the_tree() {
+        let b = base("symlink-out");
+        let outside = b.join("outside");
+        std::fs::create_dir_all(outside.join("inner")).unwrap();
+        std::fs::set_permissions(
+            outside.join("inner"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        std::fs::write(outside.join("file"), "keep").unwrap();
+        std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(outside.join("file"), std::fs::Permissions::from_mode(0o644))
+            .unwrap();
+        let d = PrivateDir::create(&b).unwrap();
+        let s = d.scratch_for().unwrap();
+        symlink(&outside, s.path().join("link-to-dir")).unwrap();
+        symlink(outside.join("file"), s.path().join("link-to-file")).unwrap();
+        s.remove().unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().mode() & 0o777;
+        assert_eq!(mode(&outside), 0o755, "the directory behind the link");
+        assert_eq!(
+            mode(&outside.join("inner")),
+            0o755,
+            "a subdirectory behind the link"
+        );
+        assert_eq!(
+            mode(&outside.join("file")),
+            0o644,
+            "the file behind the link"
+        );
+        assert!(
+            outside.join("file").exists(),
+            "nothing behind the link removed"
+        );
     }
 
     #[test]

@@ -25,6 +25,8 @@ fn quote(word: &str) -> String {
 }
 
 /// `hermit run ... -- <command>` for one run at `seed`, with `extra` Hermit flags.
+/// The variables the engine sets for Hermit's own temporary files (`TMPDIR`, `HERMIT_VERIFY_TMPDIR`) are left out, like
+/// the rest of the environment: they belong to the engine's clean-up and are not part of what a replay needs.
 pub(super) fn line(
     settings: &HermitSettings,
     p: &ProcessSpec,

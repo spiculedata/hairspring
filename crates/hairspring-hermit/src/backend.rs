@@ -90,6 +90,8 @@ pub struct HermitBackend {
     summaries: Option<PrivateDir>,
     /// Where the events file's per-trial directories go when `events_dir` is set; otherwise `summaries` is used.
     events_scratch: Option<PrivateDir>,
+    /// Where each trial's own directory for Hermit's temporary files goes, or why it could not be made.
+    trials: Result<PrivateDir, String>,
     /// Told about every trial of every run; `None` does nothing.
     observer: Option<Arc<dyn TrialObserver>>,
     /// Reads the host's identity: the running machine unless a test says otherwise.
@@ -106,10 +108,18 @@ impl HermitBackend {
             .events_dir
             .as_deref()
             .and_then(|base| PrivateDir::create(base).ok());
+        let trials =
+            PrivateDir::create_unique(&settings.trial_dir, "hairspring-trials").map_err(|e| {
+                format!(
+                    "cannot create a private directory for trials in {}: {e}",
+                    settings.trial_dir.display()
+                )
+            });
         HermitBackend {
             settings,
             summaries,
             events_scratch,
+            trials,
             observer: None,
             probe: EnvironmentProbe::new(HostSources::system()),
         }
@@ -148,6 +158,7 @@ impl HermitBackend {
         Dirs {
             summaries: self.summaries.as_ref(),
             events: self.events_scratch.as_ref().or(self.summaries.as_ref()),
+            trials: Some(&self.trials),
         }
     }
 

@@ -233,7 +233,7 @@ fn allowlisted_hash(env: &BTreeMap<String, String>) -> String {
 
 /// The base-environment mode Hermit was asked for. With no flag Hermit's own default decides, which this cannot
 /// see; a flag with a value we do not know, or none, fails closed to `unknown`.
-fn base_env_mode(args: &[String]) -> String {
+pub(crate) fn base_env_mode(args: &[String]) -> String {
     let mut mode = BASE_ENV_DEFAULT.to_string();
     let mut i = 0;
     while i < args.len() {
