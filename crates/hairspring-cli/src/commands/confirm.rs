@@ -3,6 +3,7 @@ use crate::cli::ConfirmArgs;
 use crate::ctx::{CmdResult, Ctx};
 use hairspring_core::bundle::Bundle;
 use hairspring_engine::confirm::{environment_pinned, finding_status, CheckResult, ConfirmRequest};
+use hairspring_hermit::interrupt;
 use hairspring_service::{CheckView, FailureChecks, Service, MAX_BUNDLE_BYTES};
 use std::io::{Read, Write};
 use std::path::Path;
@@ -70,7 +71,9 @@ fn confirm_stored(
     failure_id: &str,
     req: &ConfirmRequest,
 ) -> CmdResult<FailureChecks> {
-    Ok(svc.confirm_failure(&ctx.engine, failure_id, req, &mut |_| true)?)
+    Ok(svc.confirm_failure(&ctx.engine, failure_id, req, &mut |_| {
+        !interrupt::requested()
+    })?)
 }
 
 fn write_stored(out: &mut dyn Write, checks: &FailureChecks) -> CmdResult<i32> {
@@ -123,10 +126,13 @@ fn confirm_bundle(
     input: &str,
     req: &ConfirmRequest,
     json: bool,
-    out: &mut dyn Write,
+    (out, err): (&mut dyn Write, &mut dyn Write),
 ) -> CmdResult<i32> {
     let text = bundle_text(ctx, input)?;
-    let checks = svc.confirm_bundle(&ctx.engine, &text, req, &mut |_| true)?;
+    let checks = svc.confirm_bundle(&ctx.engine, &text, req, &mut |_| !interrupt::requested())?;
+    if interrupt::requested() {
+        return write_interrupted(err, false);
+    }
     let finding = finding_status(&checks).as_str();
     if json {
         let value = serde_json::json!({ "finding": finding, "stored": false, "checks": checks });
@@ -144,12 +150,40 @@ fn confirm_bundle(
     Ok(exit_code(finding))
 }
 
-pub fn run(ctx: &Ctx, args: &ConfirmArgs, out: &mut dyn Write) -> CmdResult<i32> {
+/// What Ctrl-C leaves behind, said on stdout where the rest of the confirmation is.
+fn write_interrupted(err: &mut dyn Write, stored: bool) -> CmdResult<i32> {
+    let kept = if stored {
+        "the checks that finished are stored and the rest are recorded as skipped"
+    } else {
+        "nothing was stored"
+    };
+    writeln!(
+        err,
+        "hairspring: interrupted; any check still running was stopped and its Hermit processes were killed ({kept})"
+    )?;
+    Ok(crate::EXIT_INTERRUPTED)
+}
+
+pub fn run(
+    ctx: &Ctx,
+    args: &ConfirmArgs,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> CmdResult<i32> {
+    if let Err(e) = interrupt::install_sigint_handler() {
+        writeln!(
+            err,
+            "warning: cannot catch Ctrl-C ({e}); it will end hairspring without stopping Hermit"
+        )?;
+    }
     let req = request(args);
     let svc = ctx.service()?;
     let input = args.input.as_str();
     if input.starts_with(FAILURE_ID_PREFIX) {
         let checks = confirm_stored(ctx, &svc, input, &req)?;
+        if interrupt::requested() {
+            return write_interrupted(err, true);
+        }
         if args.json {
             writeln!(out, "{}", serde_json::to_string(&checks)?)?;
             return Ok(exit_code(&checks.finding));
@@ -166,6 +200,9 @@ pub fn run(ctx: &Ctx, args: &ConfirmArgs, out: &mut dyn Write) -> CmdResult<i32>
         let mut all = Vec::new();
         for failure in &detail.failures {
             all.push(confirm_stored(ctx, &svc, &failure.id, &req)?);
+            if interrupt::requested() {
+                return write_interrupted(err, true);
+            }
         }
         if args.json {
             // One document however many failures the run has: an array with an entry per failure.
@@ -181,5 +218,5 @@ pub fn run(ctx: &Ctx, args: &ConfirmArgs, out: &mut dyn Write) -> CmdResult<i32>
         }
         return Ok(code);
     }
-    confirm_bundle(ctx, &svc, input, &req, args.json, out)
+    confirm_bundle(ctx, &svc, input, &req, args.json, (out, err))
 }

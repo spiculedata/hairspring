@@ -58,6 +58,12 @@ pub struct RunOutcome {
     pub work: u64,
     pub elapsed_ms: u64,
     pub failure: Option<FailureReport>,
+    /// A sweep's further failures: one for each later seed at which a property failed for the first time, in seed
+    /// order, so that every property's first failing seed has a report of its own. `failure` is the lowest failing seed
+    /// and is not repeated here. Empty for every run but a sweep that saw properties first fail at different seeds,
+    /// and then left out of the serialised outcome; absent in older stored runs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub more_failures: Vec<FailureReport>,
     pub error: Option<String>,
     /// True when the run ended because its first failure stopped it, so its trial count was decided by the outcome and
     /// no property of it has a rate. Absent in older stored runs.
@@ -101,6 +107,14 @@ impl RunOutcome {
         RunOutcome {
             sweep: Some(summary),
             stopped_at_first_failure: false,
+            ..self
+        }
+    }
+
+    /// Attaches a sweep's further failures (see [`RunOutcome::more_failures`]).
+    pub fn with_more_failures(self, more_failures: Vec<FailureReport>) -> Self {
+        RunOutcome {
+            more_failures,
             ..self
         }
     }
@@ -179,6 +193,7 @@ impl RunOutcome {
             work: 0,
             elapsed_ms,
             failure: None,
+            more_failures: Vec::new(),
             error: None,
             stopped_at_first_failure: false,
             properties: Vec::new(),
@@ -204,6 +219,7 @@ impl RunOutcome {
             work: 0,
             elapsed_ms,
             failure: Some(failure),
+            more_failures: Vec::new(),
             error: None,
             stopped_at_first_failure: true,
             properties: Vec::new(),
@@ -224,6 +240,7 @@ impl RunOutcome {
             work: 0,
             elapsed_ms: 0,
             failure: None,
+            more_failures: Vec::new(),
             error: Some(message.into()),
             stopped_at_first_failure: false,
             properties: Vec::new(),

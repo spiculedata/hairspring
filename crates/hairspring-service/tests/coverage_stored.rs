@@ -37,6 +37,7 @@ fn finish_with_stored_series(
         trials: 2,
         error: None,
         failure: None,
+        more_failures: Vec::new(),
         event_payload_json: "{}".to_string(),
         stats: RunStats {
             coverage_json: s.map(str::to_owned),

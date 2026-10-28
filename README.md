@@ -151,7 +151,9 @@ in the host apart: they are never in the denominator and never counted as passes
 Up to the first ten violations are each confirmed by re-running their seed, and the trial's row says how many reruns
 gave the same output (`same-output reruns k/n`). A confirmation is skipped, and the row says so, when the limit of ten
 is reached, when the sweep is out of wall-clock budget, or when it was cancelled. The exit code is 1 when any trial was
-a violation. `--trials` is at most 10,000, and a sweep also ends at `--budget-secs`. For a simulation target a trial is
+a violation, and 130 when Ctrl-C stopped the sweep (the run is left cancelled and its Hermit processes are killed). When
+different properties first fail at different seeds, the sweep keeps a failure row and a bundle for each of those seeds.
+`--trials` is at most 10,000, and a sweep also ends at `--budget-secs`. For a simulation target a trial is
 one exploration round and the rounds share `--budget-steps`, so raise it to run more of them; a default simulation
 sweep runs only a few rounds. The report says when a sweep ended before its trial budget, and why as far as the server
 can tell.

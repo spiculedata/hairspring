@@ -7,7 +7,7 @@ use hairspring_engine::backend::Progress;
 use hairspring_engine::config::Budget;
 use hairspring_engine::engine::{Engine, RunRequest};
 use hairspring_engine::mode::RunMode;
-use hairspring_engine::report::{RunOutcome, RunStatus};
+use hairspring_engine::report::{FailureReport, RunOutcome, RunStatus};
 use hairspring_store::{
     now_ms, FinishOutcome, JobResult, JobStatus, NewEvent, NewFailure, RunState, RunStats,
 };
@@ -23,6 +23,20 @@ const SYNC_POLL: Duration = Duration::from_millis(100);
 const SYNC_MAX_WAIT: Duration = Duration::from_secs(3600);
 const PROGRESS_FORGET_AFTER: Duration = Duration::from_secs(60);
 const MAX_TRACKED_RUNS: usize = 10_000;
+
+/// What running the engine on a job came back with: a panic, an engine error, or an outcome.
+type EngineResult =
+    std::thread::Result<std::result::Result<RunOutcome, hairspring_engine::EngineError>>;
+
+/// What a job does when its caller's stop flag is set.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OnStop<'a> {
+    /// Give the job up for another attempt (a server shutting down).
+    Requeue,
+    /// Cancel the run named (a foreground command interrupted from the terminal). A job of any other run is never
+    /// cancelled.
+    Cancel(&'a str),
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Abort {
@@ -166,6 +180,10 @@ impl Service {
             .get_run(&job.run_id)?
             .ok_or_else(|| ServiceError::NotFound(format!("run {}", job.run_id)))?;
         let clean = sanitize::outcome(outcome, &run.target)?;
+        let payload = serde_json::from_str::<JobPayload>(&job.payload_json).ok();
+        let budget = payload.as_ref().and_then(|p| p.budget);
+        let mode = payload.map_or(RunMode::Search, |p| p.mode);
+        sanitize::check_more_failures(&clean, mode.is_sweep())?;
         let reported = self
             .ingest_local_log(job_id, worker_id, outcome)?
             .or(clean.trials_reported);
@@ -174,26 +192,16 @@ impl Service {
             RunStatus::Failed => RunState::Failed,
             RunStatus::Error => RunState::Error,
         };
-        let failure = match &clean.failure {
-            Some(f) => {
-                let bundle_hash = self.store.put_blob(f.bundle.as_bytes())?;
-                let steps_json = serde_json::to_string(&f.steps)
-                    .map_err(|e| ServiceError::Internal(e.to_string()))?;
-                Some(NewFailure {
-                    run_id: job.run_id.clone(),
-                    target: f.target.clone(),
-                    message: f.message.clone(),
-                    original_len: f.original_len,
-                    shrunk_len: f.shrunk_len,
-                    bundle_hash,
-                    steps_json,
-                })
-            }
-            None => None,
-        };
-        let payload = serde_json::from_str::<JobPayload>(&job.payload_json).ok();
-        let budget = payload.as_ref().and_then(|p| p.budget);
-        let mode = payload.map_or(RunMode::Search, |p| p.mode);
+        let failure = clean
+            .failure
+            .as_ref()
+            .map(|f| self.new_failure(&job.run_id, f))
+            .transpose()?;
+        let more_failures = clean
+            .more_failures
+            .iter()
+            .map(|f| self.new_failure(&job.run_id, f))
+            .collect::<Result<Vec<_>>>()?;
         let stats = self.run_stats(&job.run_id, job.attempts, &clean, reported, (budget, mode))?;
         let event_payload_json = finished_payload(state, Some(&clean));
         let result = JobResult {
@@ -202,6 +210,7 @@ impl Service {
             trials: clean.trials,
             error: clean.error,
             failure,
+            more_failures,
             event_payload_json,
             stats,
         };
@@ -216,6 +225,71 @@ impl Service {
                 self.forget_progress(&job.run_id);
                 Ok(())
             }
+        }
+    }
+
+    /// Gives a job back untouched (see [`Store::release_job`](hairspring_store::Store::release_job)). `false` means the
+    /// lease was already gone, which is reported on stderr, the way this crate reports what it cannot act on.
+    fn release(&self, job_id: &str, worker_id: &str) -> Result<()> {
+        if !self.store.release_job(job_id, worker_id)? {
+            eprintln!("hairspring: job {job_id} was not released: its lease was already gone");
+        }
+        Ok(())
+    }
+
+    /// Cancels the run of `job`, after storing the trials the engine judged before it stopped (a cancelled run accepts
+    /// no more), and hands back the engine's result without them so that recording it does not store them twice.
+    fn cancel_keeping_trials(
+        &self,
+        job: &LeasedJob,
+        worker_id: &str,
+        result: EngineResult,
+    ) -> Result<EngineResult> {
+        let result = match result {
+            Ok(Ok(outcome)) => {
+                self.ingest_local_log(&job.job_id, worker_id, &outcome)?;
+                Ok(Ok(RunOutcome {
+                    trial_log: Vec::new(),
+                    ..outcome
+                }))
+            }
+            other => other,
+        };
+        self.cancel_run(&job.run_id)?;
+        Ok(result)
+    }
+
+    /// A worker's failure report as the row to store: its bundle goes into the blob store.
+    fn new_failure(&self, run_id: &str, f: &FailureReport) -> Result<NewFailure> {
+        let bundle_hash = self.store.put_blob(f.bundle.as_bytes())?;
+        let steps_json =
+            serde_json::to_string(&f.steps).map_err(|e| ServiceError::Internal(e.to_string()))?;
+        Ok(NewFailure {
+            run_id: run_id.to_owned(),
+            target: f.target.clone(),
+            message: f.message.clone(),
+            original_len: f.original_len,
+            shrunk_len: f.shrunk_len,
+            bundle_hash,
+            steps_json,
+        })
+    }
+
+    /// Like [`Service::complete`], but a result the server refuses (over a size limit, seeds out of order and the like)
+    /// ends the run as an error with the reason, and closes the job, instead of leaving the job leased until its lease
+    /// runs out. For a worker that runs in this process; a remote worker is told of the refusal and decides itself.
+    pub fn complete_or_error(
+        &self,
+        job_id: &str,
+        worker_id: &str,
+        outcome: &RunOutcome,
+    ) -> Result<()> {
+        match self.complete(job_id, worker_id, outcome) {
+            Err(ServiceError::InvalidRequest(why)) => {
+                let refused = format!("the result was refused: {}", sanitize::public_text(&why));
+                self.complete(job_id, worker_id, &RunOutcome::error(refused))
+            }
+            other => other,
         }
     }
 
@@ -378,8 +452,44 @@ impl Service {
         worker_id: &str,
         stop: &AtomicBool,
     ) -> Result<bool> {
+        self.execute_next_on_stop(engine, worker_id, stop, OnStop::Requeue)
+    }
+
+    /// Leases and executes one job, and cancels its run, instead of requeuing the job, when `stop` becomes true and the
+    /// job belongs to `own_run`: a job of another run is requeued untouched, and not started at all once `stop` is set. The
+    /// cancel is made before the engine's result is recorded, so the run ends `cancelled` however the engine ended.
+    fn execute_next_cancelling(
+        &self,
+        engine: &Engine,
+        worker_id: &str,
+        stop: &AtomicBool,
+        own_run: &str,
+    ) -> Result<bool> {
+        self.execute_next_on_stop(engine, worker_id, stop, OnStop::Cancel(own_run))
+    }
+
+    fn execute_next_on_stop(
+        &self,
+        engine: &Engine,
+        worker_id: &str,
+        stop: &AtomicBool,
+        on_stop: OnStop,
+    ) -> Result<bool> {
         let Some(job) = self.lease(worker_id)? else {
             return Ok(false);
+        };
+        // The oldest queued job is leased, whoever's it is. One that is not the caller's own run is never cancelled
+        // here: it is given back untouched when the caller has been interrupted, and otherwise run as a shutdown would.
+        let foreign = matches!(on_stop, OnStop::Cancel(own) if own != job.run_id);
+        let on_stop = match on_stop {
+            OnStop::Cancel(_) if foreign => {
+                if stop.load(Ordering::SeqCst) {
+                    self.release(&job.job_id, worker_id)?;
+                    return Ok(true);
+                }
+                OnStop::Requeue
+            }
+            other => other,
         };
         let req = RunRequest {
             target: job.target.clone(),
@@ -410,7 +520,10 @@ impl Service {
                     let _ = self.report_progress(&job.run_id, &p);
                     let _ = self.heartbeat(&job.job_id, worker_id);
                     if stop.load(Ordering::SeqCst) {
-                        abort.set(Abort::Stop);
+                        abort.set(match on_stop {
+                            OnStop::Requeue => Abort::Stop,
+                            OnStop::Cancel(_) => Abort::Cancelled,
+                        });
                         return false;
                     }
                     if self
@@ -430,9 +543,26 @@ impl Service {
             outcome
         });
 
+        // An interrupt that ended the engine early (it saw the flag between batches, or a trial it was running was
+        // killed and came back as an error) cancels the run now, before the result is recorded: left to a later cancel,
+        // the result could end the run as an error first. A run that finished on its own stands.
+        let ended_early = abort.get() == Abort::Cancelled
+            || !matches!(&result, Ok(Ok(o)) if o.status != RunStatus::Error);
+        // Another run's job that was cut short is given back and its result is not recorded, whatever the engine made of
+        // being interrupted: it is not this command's run to cancel or to fail.
+        if foreign && stop.load(Ordering::SeqCst) && ended_early {
+            self.release(&job.job_id, worker_id)?;
+            return Ok(true);
+        }
+        let result =
+            if matches!(on_stop, OnStop::Cancel(_)) && stop.load(Ordering::SeqCst) && ended_early {
+                self.cancel_keeping_trials(&job, worker_id, result)?
+            } else {
+                result
+            };
         match (result, abort.get()) {
             (Ok(_), Abort::Stop) => self.fail(&job.job_id, worker_id, "interrupted by shutdown")?,
-            (Ok(Ok(outcome)), _) => self.complete(&job.job_id, worker_id, &outcome)?,
+            (Ok(Ok(outcome)), _) => self.complete_or_error(&job.job_id, worker_id, &outcome)?,
             (Ok(Err(e)), _) => {
                 self.complete(&job.job_id, worker_id, &RunOutcome::error(e.to_string()))?
             }
@@ -457,18 +587,65 @@ impl Service {
         req: &StartRun,
         mode: RunMode,
     ) -> Result<RunDetail> {
+        self.run_sync_until(engine, req, mode, &AtomicBool::new(false))
+    }
+
+    /// Like [`Service::run_sync_with_mode`], but cancels the run once `stop` becomes true (an interrupt from the
+    /// terminal). The engine hears it through its progress callback (or, for a trial it was running, as a failed
+    /// trial), the run ends `cancelled` with the trials stored so far, and whatever the engine returns afterwards is
+    /// not recorded. Whoever sets `stop` is also responsible for stopping any child process that is mid-trial.
+    pub fn run_sync_until(
+        &self,
+        engine: &Engine,
+        req: &StartRun,
+        mode: RunMode,
+        stop: &AtomicBool,
+    ) -> Result<RunDetail> {
         let run = self.start_run_with_mode(engine, req, mode)?;
+        self.drive_until_finished(engine, &run.id, stop)
+    }
+
+    /// Runs queued jobs here until the existing run `run_id` is over (see [`Service::run_sync_until`] for `stop`), or
+    /// waits for another process that holds its job.
+    pub fn finish_run_until(
+        &self,
+        engine: &Engine,
+        run_id: &str,
+        stop: &AtomicBool,
+    ) -> Result<RunDetail> {
+        self.drive_until_finished(engine, run_id, stop)
+    }
+
+    /// Runs queued jobs here until the run is over, waiting for another process that holds the job.
+    fn drive_until_finished(
+        &self,
+        engine: &Engine,
+        run_id: &str,
+        stop: &AtomicBool,
+    ) -> Result<RunDetail> {
         let worker = Service::local_worker_id();
         let deadline = Instant::now() + SYNC_MAX_WAIT;
         loop {
             let detail = self
-                .get_run(&run.id)?
-                .ok_or_else(|| ServiceError::NotFound(run.id.clone()))?;
+                .get_run(run_id)?
+                .ok_or_else(|| ServiceError::NotFound(run_id.to_string()))?;
             if detail.run.state.is_terminal() {
                 return Ok(detail);
             }
+            // Interrupted before leasing anything: the job first in line may be another run's. Cancel ours and be done.
+            if stop.load(Ordering::SeqCst) {
+                self.cancel_run(run_id)?;
+                continue;
+            }
+            let ran = self.execute_next_cancelling(engine, &worker, stop, run_id)?;
+            // Interrupted while a job ran, or with our run still open: it may be held by another process, or another
+            // run's job came first. Cancel it now rather than wait for it.
+            if stop.load(Ordering::SeqCst) {
+                self.cancel_run(run_id)?;
+                continue;
+            }
             // If nothing is left to execute here, another process may hold our job; wait for it.
-            if !self.execute_next(engine, &worker)? {
+            if !ran {
                 if Instant::now() >= deadline {
                     return Err(ServiceError::Internal(
                         "timed out waiting for the run to finish".to_string(),

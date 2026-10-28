@@ -19,7 +19,7 @@ pub(crate) struct CheckedFailure {
 }
 
 /// The scheduling seed a bundle records, read as a replay reads it.
-fn seed_of(bundle: &Bundle) -> u64 {
+pub(crate) fn seed_of(bundle: &Bundle) -> u64 {
     bundle
         .params
         .get("sched_seed")

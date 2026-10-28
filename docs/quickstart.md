@@ -110,7 +110,11 @@ that does not finish within `trial_timeout_secs` is reported as inconclusive, ne
 ## Read the output
 
 - The command exits 0 when every target passed, 1 when a property was violated, 2 on an error. With a violation it
-  prints the target, the scheduler seed, and where the bundle was written (`.hairspring/bundles/`).
+  prints the target, the scheduler seed, and where the bundle was written (`.hairspring/bundles/`). A sweep writes one
+  bundle for the lowest failing seed and one for each later seed at which a different property failed for the first
+  time.
+- Ctrl-C stops the command, kills the Hermit processes it started, leaves the run `cancelled` with the trials already
+  judged, and exits 130, also when Ctrl-C comes just after the last run finished (that run's result stands as stored). `hairspring confirm` does the same.
 - `--format json`, `junit` or `sarif` write the same result for tools.
 - `hairspring results` lists stored runs; `hairspring show <run id>` shows one, including the properties it checked.
 - A small budget may or may not hit the race. Whether it does depends on the machine and the budget, so a pass with a

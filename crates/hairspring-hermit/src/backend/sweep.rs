@@ -5,24 +5,33 @@
 //! - a violating trial is confirmed by re-running its seed (the same check as in search), the note goes on its row, and
 //!   the sweep goes on; only the first [`MAX_CONFIRMED_VIOLATIONS`] violations are confirmed, so a flaky target cannot
 //!   spend its budget on reruns;
-//! - the report (bundle and trace) is built for the lowest failing seed only;
+//! - a report (bundle and trace) is built for the lowest failing seed and for each later seed at which a property
+//!   fails for the first time, so every property's first failing seed has a failure row to be confirmed; two
+//!   properties that first fail at the same seed share one, and a sweep keeps at most [`MAX_FAILURE_ROWS`];
 //! - a trial that failed in the host is stored as an `infra` row and the sweep goes on, unless
 //!   [`MAX_CONSECUTIVE_INFRA`] of them follow one another, which means the host is broken;
 //! - nothing but a pass or a violation is ever rated.
 use super::{Confirmation, FailureKind, Found, HermitBackend, Judged, CANCELLED};
+use crate::exec::Trial;
+use crate::property_verdict;
 use crate::tally::Tally;
 use crate::trace::Verdict;
 use hairspring_engine::backend::{Progress, RunRequest};
 use hairspring_engine::config::{Budget, TargetSpec};
 use hairspring_engine::report::{FailureReport, RunOutcome};
-use hairspring_engine::sweep::{MAX_CONFIRMED_VIOLATIONS, MAX_CONSECUTIVE_INFRA};
+use hairspring_engine::sweep::{MAX_CONFIRMED_VIOLATIONS, MAX_CONSECUTIVE_INFRA, MAX_FAILURE_ROWS};
 use hairspring_engine::EngineError;
+use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 /// What a sweep has seen so far, besides its tally.
 struct Findings {
     /// The report of the lowest failing seed.
     failure: Option<FailureReport>,
+    /// The reports of later seeds at which a property failed for the first time, in seed order.
+    more: Vec<FailureReport>,
+    /// The ids of the properties that have failed in a judged trial so far.
+    failed_ids: BTreeSet<String>,
     /// Violations confirmed by a rerun so far.
     confirmed: usize,
     /// Trials in a row that failed in the host.
@@ -35,9 +44,36 @@ impl Findings {
     fn new(wall: Duration) -> Findings {
         Findings {
             failure: None,
+            more: Vec::new(),
+            failed_ids: BTreeSet::new(),
             confirmed: 0,
             infra_run: 0,
             wall,
+        }
+    }
+}
+
+impl Findings {
+    /// Notes the properties failing in `trial` and says whether it needs a failure row of its own: it is the first
+    /// violation, or a property fails in it that had not failed before (and the sweep still has room for the row).
+    fn needs_row(&mut self, trial: &Trial) -> bool {
+        let ids: BTreeSet<String> = property_verdict::failing_keys(trial)
+            .into_iter()
+            .map(|k| k.id)
+            .collect();
+        let fresh = !ids.is_subset(&self.failed_ids);
+        self.failed_ids.extend(ids);
+        match self.failure {
+            None => true,
+            Some(_) => fresh && self.more.len() + 1 < MAX_FAILURE_ROWS,
+        }
+    }
+
+    /// Keeps a report: the first is the run's failure, the others follow it.
+    fn keep(&mut self, report: FailureReport) {
+        match self.failure {
+            None => self.failure = Some(report),
+            Some(_) => self.more.push(report),
         }
     }
 }
@@ -137,7 +173,9 @@ impl HermitBackend {
                 return Ok(tally.sweep_error(started, CANCELLED));
             }
         }
-        Ok(tally.finish_sweep(started, found.failure))
+        Ok(tally
+            .finish_sweep(started, found.failure)
+            .with_more_failures(found.more))
     }
 
     /// Judges one finished trial of a sweep. `Some(why)` says the sweep cannot go on.
@@ -191,12 +229,14 @@ impl HermitBackend {
         }
     }
 
-    /// Counts a violation, confirms it by rerun when the sweep still confirms, and keeps the report of the first one.
+    /// Counts a violation, confirms it by rerun when the sweep still confirms, and keeps its report when it is the first
+    /// violation or the first failure of some property.
     ///
     /// A confirmation is a few more trials, so before each one the sweep checks that it still has wall-clock time and
     /// has not been cancelled (it asks the progress callback, which is how a cancel is delivered). Without that, ten
-    /// violations in one batch could run `repro_runs` timeouts each past the budget. `Some(why)` says the sweep was
-    /// cancelled.
+    /// violations in one batch could run `repro_runs` timeouts each past the budget. A trial that needs a row of its
+    /// own is confirmed whatever the cap on confirmations says, so that every row carries a confirmation; at most
+    /// [`MAX_FAILURE_ROWS`] trials do. `Some(why)` says the sweep was cancelled.
     fn sweep_violation(
         &self,
         j: &Judged,
@@ -207,30 +247,14 @@ impl HermitBackend {
         progress: &mut dyn FnMut(Progress) -> bool,
     ) -> Option<String> {
         tally.violation();
-        let total = self.settings.repro_runs;
-        let mut stop = None;
-        let confirmed = if found.confirmed >= MAX_CONFIRMED_VIOLATIONS {
+        let needs_row = found.needs_row(j.trial);
+        if found.confirmed >= MAX_CONFIRMED_VIOLATIONS && !needs_row {
             tally.note_confirmation(j.index, &not_confirmed_note());
             return None;
-        } else if j.started.elapsed() >= found.wall {
-            tally.note_confirmation(j.index, OUT_OF_BUDGET_NOTE);
-            skipped(total, "out of budget")
-        } else if !progress(Progress {
-            steps: j.index + 1,
-            trials: j.index + 1,
-            message: format!("confirming the violation at seed {}", j.seed),
-        }) {
-            tally.note_confirmation(j.index, CANCELLED_NOTE);
-            stop = Some(CANCELLED.to_string());
-            skipped(total, "cancelled")
-        } else {
-            found.confirmed += 1;
-            let c = self.confirm_violation(j.p, j.seed, j.trial, kind, j.timeout);
-            tally.note_confirmation(j.index, &confirmation_note(&c, total));
-            c
-        };
-        if found.failure.is_none() {
-            found.failure = Some(self.failure(&Found {
+        }
+        let (confirmed, stop) = self.confirm_in_sweep(j, tally, found, kind, progress);
+        if needs_row {
+            found.keep(self.failure(&Found {
                 spec: j.spec,
                 p: j.p,
                 req: j.req,
@@ -243,5 +267,33 @@ impl HermitBackend {
             }));
         }
         stop
+    }
+
+    /// Reruns the violation unless the sweep is out of time or cancelled, and notes the result on its row.
+    fn confirm_in_sweep(
+        &self,
+        j: &Judged,
+        tally: &mut Tally,
+        found: &mut Findings,
+        kind: FailureKind,
+        progress: &mut dyn FnMut(Progress) -> bool,
+    ) -> (Confirmation, Option<String>) {
+        let total = self.settings.repro_runs;
+        if j.started.elapsed() >= found.wall {
+            tally.note_confirmation(j.index, OUT_OF_BUDGET_NOTE);
+            return (skipped(total, "out of budget"), None);
+        }
+        if !progress(Progress {
+            steps: j.index + 1,
+            trials: j.index + 1,
+            message: format!("confirming the violation at seed {}", j.seed),
+        }) {
+            tally.note_confirmation(j.index, CANCELLED_NOTE);
+            return (skipped(total, "cancelled"), Some(CANCELLED.to_string()));
+        }
+        found.confirmed += 1;
+        let c = self.confirm_violation(j.p, j.seed, j.trial, kind, j.timeout);
+        tally.note_confirmation(j.index, &confirmation_note(&c, total));
+        (c, None)
     }
 }

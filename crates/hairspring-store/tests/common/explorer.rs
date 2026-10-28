@@ -384,6 +384,7 @@ fn finish(s: &dyn Store, job: &Job, coverage: Option<&str>) -> FinishOutcome {
         trials: 1,
         error: None,
         failure: None,
+        more_failures: Vec::new(),
         event_payload_json: "{}".to_string(),
         stats: RunStats {
             coverage_json: coverage.map(str::to_owned),

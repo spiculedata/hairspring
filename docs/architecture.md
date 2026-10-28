@@ -56,6 +56,23 @@ queued --lease--> running --finish_job--> done            (run: passed | failed 
 - `finish_job` is one transaction: failure rows, run state, the `finished` event and closing the job. A stale
   worker cannot overwrite a finished or cancelled run.
 - Jobs that exhaust their attempts through expiry are reported by `fail_expired_jobs` so their runs never hang.
+- **Ctrl-C.** `hairspring test` and `hairspring confirm` catch the first SIGINT (a second one ends the process in the
+  usual way). The foreground run is cancelled like any other cancel, so it ends `cancelled` and keeps the trials already
+  stored, and every Hermit trial in progress is killed through its process group, the kill a trial timeout uses (a child
+  that calls `setsid` leaves the group and survives). No further trial starts. Only the command's own run is cancelled:
+  a command that is interrupted leases nothing and cancels its own run. If the Ctrl-C comes while the command is
+  running an older job of another run (one it leased first, for example after a hard kill left it with an expired
+  lease), that job is killed and given back: it is queued again with the attempt its lease spent not counted, and the
+  result of the interrupted trial is not recorded against that run. That run was marked `running` with a `started`
+  event when the command leased it, and stays so. A command that cannot lease its own job because another process
+  holds it cancels its run at once instead of waiting. The CLI says so
+  and exits with status 130, also when Ctrl-C lands after the last run finished on its own (that run stands as stored).
+  Each guest runs in a process group of its own, so the terminal's SIGINT never reaches it directly. `hairspring serve`
+  and `hairspring worker` are unchanged. A confirmation that is interrupted stores the checks that finished and records
+  the rest as skipped, as for any cancel.
+- **A refused result.** A result the server refuses (for example more than 16 failure reports, or bundles totalling more
+  than 1.5 MiB) is refused whole. A worker in the CLI's own process then ends the run as an `error` that says the result
+  was refused, and closes the job; a remote worker is told of the refusal.
 
 ## Trial storage (schema version 2)
 
@@ -126,8 +143,14 @@ change: the trial rows added in version 2 already hold every verdict.
   same behaviour hash and failing properties), or `not confirmed: ...` (limit reached, out of budget, cancelled). A
   violation counts toward the rate whether or not its reruns matched. The check is before a confirmation, not between
   its reruns, so a sweep overruns its wall-clock budget by at most one confirmation (`repro_runs` reruns of up to a
-  trial's timeout each; a test pins the bound); the note says what they showed. Only the lowest failing seed gets a
-  report (trace and replayable bundle), which is also what the run's failure row holds.
+  trial's timeout each; a test pins the bound); the note says what they showed. The lowest failing seed gets a
+  report (trace and replayable bundle), which is also what the run's first failure row holds; so does each later seed
+  at which a property fails for the first time (`RunOutcome::more_failures`, at most 16 reports in all), so the claim gate
+  can see every first-failure seed. Those later reports carry the sweep's own rerun note like the first (reruns of the
+  seed, made even past the limit on confirmed violations), but the sweep does not run the full confirmation pipeline:
+  `hairspring confirm <run id>` does that for every row. A sweep that sees one property fail has no extra report, except
+  that a property failing after a first failure that named none gets its own. The server refuses further failures
+  unless the run is a sweep with a first failure, with strictly rising seeds and at most 1.5 MiB of bundles in all.
 - **Simulation sweeps are not confirmed.** A failing seed from a simulation (`sim`) target, in a sweep or a search, cannot be confirmed: `hairspring confirm` stops with ``error: no backend available for target kind ``confirm` is not supported by the sim backend` `` (the stray backticks are in the message) and nothing is stored. Only `process` targets can be confirmed.
 - **Not rated.** The rate is violations out of passes and violations. Timeouts, unusable trials and infrastructure
   failures (labelled "failed in the host") are listed apart, are never in a denominator and are never described as
@@ -281,8 +304,10 @@ and rows, so migrating rewrites no existing row). A failure with no row has neve
 The pipeline runs where the engine is: the CLI's own process, or the server's embedded engine. It is bounded (at most ten
 reruns, each limited by the target's trial timeout, and a wall budget of at most ten minutes) and cancellable: the engine
 stops between runs (the replay and each skid retry included) and records what did not run as skipped, for a caller that
-uses the progress callback; Ctrl-C on the CLI stops hairspring and may leave Hermit children running, as for
-`hairspring test`. A remote worker does not run confirmations yet.
+uses the progress callback. Ctrl-C on the CLI cancels it the same way and kills the processes still in the Hermit
+process group of the run in progress (a child that calls `setsid` escapes; see the Ctrl-C item under Job lifecycle,
+above). The confirmation stored is the partial one: the check that was running and the ones after it are recorded as
+skipped, so it never changes an earlier finding. A remote worker does not run confirmations yet.
 
 Opening a version 4 database adds the table and its index in the same transaction as the version bump. A version 4
 database that lost one of its own tables or indexes is refused rather than repaired, on both backends, and a current

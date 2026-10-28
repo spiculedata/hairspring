@@ -447,7 +447,7 @@ impl Store for PgStore {
             .and_then(RunState::parse)
             .is_some_and(|s| !s.is_terminal());
         if open {
-            if let Some(f) = &result.failure {
+            for f in result.failure.iter().chain(&result.more_failures) {
                 tx.execute(
                     "INSERT INTO failures(id,run_id,target,message,original_len,shrunk_len,bundle_hash,steps_json,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
                     &[&new_id("fail"), &run_id, &f.target, &f.message, &(f.original_len as i64), &(f.shrunk_len as i64), &f.bundle_hash, &f.steps_json, &now],
@@ -488,6 +488,15 @@ impl Store for PgStore {
             "UPDATE jobs SET last_error=$1, lease_until=NULL, status = CASE WHEN attempts >= $2 THEN 'failed' ELSE 'queued' END
              WHERE id=$3 AND status='running' AND lease_owner=$4",
             &[&error, &(MAX_JOB_ATTEMPTS as i32), &id, &worker_id],
+        )?;
+        Ok(n > 0)
+    }
+
+    fn release_job(&self, id: &str, worker_id: &str) -> Result<bool> {
+        let n = self.client()?.execute(
+            "UPDATE jobs SET status='queued', lease_owner=NULL, lease_until=NULL, attempts=attempts-1
+             WHERE id=$1 AND status='running' AND lease_owner=$2 AND attempts > 0",
+            &[&id, &worker_id],
         )?;
         Ok(n > 0)
     }

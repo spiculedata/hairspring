@@ -15,6 +15,7 @@ mod verify;
 
 use crate::backend::HermitBackend;
 use crate::exec::ProcessSpec;
+use crate::interrupt;
 use crate::replay_environment;
 use context::{seed_of, Ctx, EnvState};
 use hairspring_core::bundle::Bundle;
@@ -22,7 +23,7 @@ use hairspring_engine::backend::Progress;
 use hairspring_engine::config::TargetSpec;
 use hairspring_engine::confirm::{forbidden_logging, CheckKind, CheckResult, ConfirmRequest};
 use hairspring_engine::EngineError;
-use pace::Pace;
+use pace::{Pace, Stop};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -117,14 +118,27 @@ pub(crate) fn run(
 }
 
 /// Runs one check, or records it as skipped when the confirmation was cancelled or ran out of time.
+///
+/// An interrupt (Ctrl-C) kills the run in progress, so a check that was running when it came did not finish and says
+/// nothing about the program: it is recorded as skipped for cancellation, whatever it made of the killed run, so that
+/// the newest confirmation never lifts or withdraws what an earlier one found.
 fn step(
     ctx: &Ctx,
     pace: &mut Pace,
     kind: CheckKind,
     check: impl FnOnce(&mut Pace) -> CheckResult,
 ) -> CheckResult {
+    if interrupt::requested() {
+        return ctx.skipped(kind, Stop::Cancelled.text());
+    }
     match pace.stop() {
         Some(stop) => ctx.skipped(kind, stop.text()),
-        None => check(pace),
+        None => {
+            let result = check(pace);
+            if interrupt::requested() {
+                return ctx.skipped(kind, Stop::Cancelled.text());
+            }
+            result
+        }
     }
 }

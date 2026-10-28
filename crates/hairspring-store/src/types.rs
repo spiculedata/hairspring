@@ -178,6 +178,9 @@ pub struct JobResult {
     pub error: Option<String>,
     /// Attached to the job's own run; `NewFailure::run_id` is ignored.
     pub failure: Option<NewFailure>,
+    /// Further failures of the same run (a sweep's later first-failing seeds), stored after `failure` in this order.
+    /// Attached to the job's own run as well.
+    pub more_failures: Vec<NewFailure>,
     /// Payload of the `finished` event.
     pub event_payload_json: String,
     /// Run-level figures and property rows, written in the same transaction.

@@ -4,6 +4,7 @@
 use crate::{ServiceError, MAX_BUNDLE_BYTES};
 use hairspring_core::bundle::Bundle;
 use hairspring_engine::report::{FailureReport, ReplayOutcome, RunOutcome, RunStatus, Step};
+use hairspring_engine::sweep::MAX_FAILURE_ROWS;
 
 pub const MAX_STEPS: usize = 1000;
 pub const MAX_LABEL_CHARS: usize = 500;
@@ -133,6 +134,50 @@ fn clean_failure(f: &FailureReport, run_target: &str) -> Result<FailureReport, S
     })
 }
 
+fn seed_of(failure: &FailureReport) -> Result<u64, ServiceError> {
+    Bundle::decode(&failure.bundle)
+        .map(|b| crate::confirm_claims::seed_of(&b))
+        .map_err(|e| invalid(&format!("bundle is not valid: {e}")))
+}
+
+/// Checks the further failures of a result (see [`RunOutcome::more_failures`]): there are none unless the run is a
+/// sweep and has a first failure, their seeds rise strictly from the first failure's, and the bundles of all of them
+/// fit in one request. An outcome with none always fits.
+pub fn check_more_failures(outcome: &RunOutcome, is_sweep: bool) -> Result<(), ServiceError> {
+    if outcome.more_failures.is_empty() {
+        return Ok(());
+    }
+    let Some(first) = &outcome.failure else {
+        return Err(invalid("further failures need a first failure"));
+    };
+    if !is_sweep {
+        return Err(invalid("only a sweep reports further failures"));
+    }
+    let mut last = seed_of(first)?;
+    for f in &outcome.more_failures {
+        let seed = seed_of(f)?;
+        if seed <= last {
+            return Err(invalid(
+                "further failures must have distinct seeds, rising after the first failure's",
+            ));
+        }
+        last = seed;
+    }
+    let total: usize = outcome
+        .failure
+        .iter()
+        .chain(&outcome.more_failures)
+        .map(|f| f.bundle.len())
+        .sum();
+    if total > crate::MAX_RUN_BUNDLE_BYTES {
+        return Err(invalid(&format!(
+            "the bundles of one run's failures total more than {} bytes",
+            crate::MAX_RUN_BUNDLE_BYTES
+        )));
+    }
+    Ok(())
+}
+
 /// Returns a bounded, sanitised copy of `outcome`, or an error if it breaks the limits.
 pub fn outcome(outcome: &RunOutcome, run_target: &str) -> Result<RunOutcome, ServiceError> {
     if outcome.inconclusive > outcome.trials || outcome.distinct_schedules > outcome.trials {
@@ -158,9 +203,20 @@ pub fn outcome(outcome: &RunOutcome, run_target: &str) -> Result<RunOutcome, Ser
         .as_ref()
         .map(|f| clean_failure(f, run_target))
         .transpose()?;
+    if outcome.more_failures.len() >= MAX_FAILURE_ROWS {
+        return Err(invalid(&format!(
+            "a run may report at most {MAX_FAILURE_ROWS} failures"
+        )));
+    }
+    let more_failures = outcome
+        .more_failures
+        .iter()
+        .map(|f| clean_failure(f, run_target))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(RunOutcome {
         error: outcome.error.as_deref().map(single_line),
         failure,
+        more_failures,
         // Derived from the status, as the stored flag is: a worker's own claim is not read.
         stopped_at_first_failure: outcome.status == RunStatus::Failed,
         // A worker's own property statistics are never read: the server folds the per-trial digests it stored.

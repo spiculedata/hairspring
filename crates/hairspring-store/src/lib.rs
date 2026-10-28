@@ -34,6 +34,7 @@ mod sqlite;
 mod sqlite_checks;
 mod sqlite_downgrade;
 mod sqlite_explorer;
+mod sqlite_jobs;
 mod sqlite_lineage;
 mod sqlite_run_end;
 mod sqlite_schema;
@@ -178,6 +179,9 @@ pub trait Store: Send + Sync {
     fn queued_job_count(&self) -> Result<u64>;
     /// Records a failure; requeues the job until [`MAX_JOB_ATTEMPTS`] is reached.
     fn fail_job(&self, id: &str, worker_id: &str, error: &str, now: i64) -> Result<bool>;
+    /// Gives a leased job back untouched: it is queued again and the attempt its lease spent is not counted. Only the
+    /// lease holder may do this; `false` says it was not.
+    fn release_job(&self, id: &str, worker_id: &str) -> Result<bool>;
 
     // events
     fn add_event(&self, run_id: &str, kind: &str, payload_json: &str, now: i64) -> Result<i64>;
