@@ -2,6 +2,7 @@
 use crate::capture::{drain, Captured};
 use crate::events::{self, EventsFault};
 use crate::head_tail::Omitted;
+use crate::interrupt;
 use crate::line_scan::Findings;
 use crate::summary::{self, Summary};
 use crate::summary_dir::{PrivateDir, ScratchDir};
@@ -90,6 +91,8 @@ pub struct Dirs<'a> {
 pub enum SpawnError {
     NotFound(String),
     Other(String),
+    /// The run was interrupted (Ctrl-C): the guest, if one had started, was killed with its group.
+    Interrupted,
 }
 
 impl std::fmt::Display for SpawnError {
@@ -97,6 +100,7 @@ impl std::fmt::Display for SpawnError {
         match self {
             SpawnError::NotFound(p) => write!(f, "hermit executable not found at `{p}`. Hermit runs only on x86-64 Linux: install it there, or set HAIRSPRING_HERMIT to its path"),
             SpawnError::Other(m) => write!(f, "cannot start hermit: {m}"),
+            SpawnError::Interrupted => write!(f, "interrupted"),
         }
     }
 }
@@ -330,6 +334,9 @@ fn run_trial_with_summary(
     if let Some(dir) = spec.cwd {
         cmd.current_dir(dir);
     }
+    if interrupt::requested() {
+        return Err(SpawnError::Interrupted);
+    }
     let started = Instant::now();
     let mut child = spawn_with_retry(&mut cmd).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => SpawnError::NotFound(settings.bin.display().to_string()),
@@ -360,6 +367,12 @@ fn run_trial_with_summary(
                 // The guest is gone, but anything it left running (daemons, background jobs) is still in its group.
                 kill_group(child.id());
                 break (Some(status), false);
+            }
+            Ok(None) if interrupt::requested() => {
+                kill_group(child.id());
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(SpawnError::Interrupted);
             }
             Ok(None) if Instant::now() >= deadline => {
                 kill_group(child.id());

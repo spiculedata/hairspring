@@ -223,10 +223,17 @@ confirmation.
 
 **Known limitation: simulation targets.** A failing seed from a simulation (`sim`) target, in a sweep or a search, cannot be confirmed: `hairspring confirm` stops with ``error: no backend available for target kind ``confirm` is not supported by the sim backend` `` (the stray backticks are in the message) and nothing is stored. Only `process` targets can be confirmed.
 
-**Known limitation: sweep violations.** A sweep (the search over many seeds) stores a failure row only for the lowest
-failing seed. The claim gate needs every first-failure seed of the run to be confirmed, and a seed that failed in the
-sweep but has no row cannot be confirmed by this pipeline, so such a run can open no claim at all. Deferred, not
-implemented.
+**Sweep failures: one row for each property's first failing seed.** A sweep stores a failure row (with its trace and
+replayable bundle) for the lowest failing seed and for every later seed at which a property failed for the first time.
+Two properties that first fail at the same seed share one row, and a property that fails again at a later seed gets no
+further row, so a sweep in which only one property fails has one row, as before. The claim gate needs every
+first-failure seed of the run confirmed, and each of these rows can be confirmed: `hairspring confirm <run id>`
+confirms every failure of the run in turn and stores the checks for each (a sweep does not confirm its rows by itself
+when it ends; each row's message says how many of the sweep's own reruns matched). A sweep stores at most 16 rows; a
+property whose first failing seed comes after that has no row, and the run's claim stays withheld. A failure that
+does not name a property (a non-zero exit or a `HAIRSPRING_VIOLATION:` line) only ever has the row of the lowest failing
+seed. Rows are read in the order they were written, which is seed order. No stored data changes: the failures table
+already held any number of rows for a run, and a sweep stored before this change has the rows it had.
 
 **Other limits.** SQLite allows one writer at a time. A write takes the write lock when its transaction begins and waits
 up to 5 seconds for another process to finish; if the file is still locked after that it fails with

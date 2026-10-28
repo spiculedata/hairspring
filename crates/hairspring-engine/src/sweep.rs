@@ -18,6 +18,10 @@ pub const MAX_FIRST_FAILING_SEEDS: usize = 10;
 /// stored like the rest, with a note on their row that they were not confirmed: a sweep over a flaky target would
 /// otherwise spend most of its budget re-running failures.
 pub const MAX_CONFIRMED_VIOLATIONS: usize = 10;
+/// Most failure rows one sweep stores: the lowest failing seed's and one for each later seed at which a property failed
+/// for the first time. A property whose first failing seed comes after the bound has no row, and a claim for the run
+/// stays withheld.
+pub const MAX_FAILURE_ROWS: usize = 16;
 /// Consecutive infrastructure failures after which a sweep gives up: the host, not the target, is broken.
 pub const MAX_CONSECUTIVE_INFRA: u32 = 3;
 /// Most bytes of kept detail and output a sweep holds in memory before its remaining trials keep none.

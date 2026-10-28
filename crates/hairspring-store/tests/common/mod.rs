@@ -48,6 +48,7 @@ pub fn run_all(make: &dyn Fn() -> Arc<dyn Store>) {
     finish_run_is_guarded_against_terminal_overwrite(&*make());
     expired_exhausted_jobs_are_reported_for_finalisation(&*make());
     finish_job_is_atomic_and_idempotent(&*make());
+    finish_job_stores_every_failure_of_a_run_in_order(&*make());
     finish_job_leaves_cancelled_runs_alone(&*make());
     counts_for_admission_control(&*make());
     stale_workers_can_be_pruned(&*make());
@@ -361,6 +362,7 @@ fn result(state: RunState, failure: Option<NewFailure>) -> JobResult {
         trials: 3,
         error: None,
         failure,
+        more_failures: Vec::new(),
         event_payload_json: format!("{{\"state\":\"{}\"}}", state.as_str()),
         stats: RunStats::default(),
     }
@@ -435,6 +437,31 @@ pub fn finish_job_is_atomic_and_idempotent(s: &dyn Store) {
         1,
         "no duplicate event"
     );
+}
+
+pub fn finish_job_stores_every_failure_of_a_run_in_order(s: &dyn Store) {
+    let r = new_run(s, "t", 1);
+    s.enqueue_job(&r.id, "run", "{}", 2).unwrap();
+    let job = s.lease_job("w1", 60, 10).unwrap().unwrap();
+    s.mark_running(&r.id, 10).unwrap();
+    let named = |message: &str| NewFailure {
+        message: message.into(),
+        ..failure_for(&r.id)
+    };
+    let done = JobResult {
+        more_failures: vec![named("second"), named("third")],
+        ..result(RunState::Failed, Some(named("first")))
+    };
+    assert_eq!(
+        s.finish_job(&job.id, "w1", &done, 30).unwrap(),
+        FinishOutcome::Applied
+    );
+    let stored = s.list_failures(&r.id).unwrap();
+    let messages: Vec<_> = stored.iter().map(|f| f.message.as_str()).collect();
+    assert_eq!(messages, vec!["first", "second", "third"]);
+    assert!(stored.iter().all(|f| f.run_id == r.id));
+    let ids: std::collections::BTreeSet<_> = stored.iter().map(|f| &f.id).collect();
+    assert_eq!(ids.len(), 3, "each failure has an id of its own");
 }
 
 pub fn finish_job_leaves_cancelled_runs_alone(s: &dyn Store) {

@@ -8,7 +8,7 @@ use super::attempt::{self, Attempt};
 use super::context::{now_ms, Ctx, EnvState};
 use super::{command, pace::Pace};
 use crate::backend::{failure_kind_matches, output_matches, property_matches};
-use crate::exec::Trial;
+use crate::exec::{SpawnError, Trial};
 use crate::trace::{behaviour_hash, Verdict};
 use hairspring_engine::confirm::{CheckKind, CheckResult, CheckStatus};
 
@@ -163,6 +163,7 @@ pub(super) fn check(ctx: &Ctx, pace: &mut Pace) -> CheckResult {
         }
         let a = attempt::run(ctx.backend, ctx.p, ctx.seed, own_limit, pace);
         let outcome = match (&a.trial, skid_text(&a)) {
+            (Err(SpawnError::Interrupted), _) => Rerun::Inconclusive("interrupted"),
             (Err(_), _) => Rerun::Inconclusive("Hermit could not be started (host fault)"),
             (Ok(_), _) if a.clipped_by_budget(own_limit) => {
                 Rerun::Inconclusive("the wall budget ended the rerun before it finished")

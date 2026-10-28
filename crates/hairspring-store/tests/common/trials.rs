@@ -153,6 +153,7 @@ fn finish_with_stats(s: &dyn Store, job: &Job, worker: &str, stats: RunStats) ->
         trials: 10,
         error: None,
         failure: None,
+        more_failures: Vec::new(),
         event_payload_json: "{}".to_string(),
         stats,
     };
@@ -717,6 +718,7 @@ fn finishing_a_later_attempt_removes_the_earlier_attempts_rows(s: &dyn Store) {
         trials: 0,
         error: Some("could not start".to_string()),
         failure: None,
+        more_failures: Vec::new(),
         event_payload_json: "{}".to_string(),
         stats: RunStats::default(),
     };

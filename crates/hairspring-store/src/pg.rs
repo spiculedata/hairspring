@@ -447,7 +447,7 @@ impl Store for PgStore {
             .and_then(RunState::parse)
             .is_some_and(|s| !s.is_terminal());
         if open {
-            if let Some(f) = &result.failure {
+            for f in result.failure.iter().chain(&result.more_failures) {
                 tx.execute(
                     "INSERT INTO failures(id,run_id,target,message,original_len,shrunk_len,bundle_hash,steps_json,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
                     &[&new_id("fail"), &run_id, &f.target, &f.message, &(f.original_len as i64), &(f.shrunk_len as i64), &f.bundle_hash, &f.steps_json, &now],

@@ -6,6 +6,7 @@ use hairspring_engine::config::Budget;
 use hairspring_engine::format::{to_junit, to_sarif, to_text};
 use hairspring_engine::mode::RunMode;
 use hairspring_engine::report::{RunOutcome, RunStatus};
+use hairspring_hermit::interrupt;
 use hairspring_service::StartRun;
 use hairspring_store::{random_seed, sha256_hex};
 use serde_json::json;
@@ -35,6 +36,21 @@ fn write_bundle(dir: &Path, target: &str, text: &str) -> CmdResult<std::path::Pa
     Ok(path)
 }
 
+/// Writes a bundle file for each failure of the outcome (a sweep has one for each property's first failing seed), the
+/// lowest seed first, and returns their paths.
+fn write_failure_bundles(
+    dir: &Path,
+    target: &str,
+    outcome: &RunOutcome,
+) -> CmdResult<Vec<std::path::PathBuf>> {
+    outcome
+        .failure
+        .iter()
+        .chain(&outcome.more_failures)
+        .map(|f| write_bundle(dir, target, &f.bundle))
+        .collect()
+}
+
 pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write) -> CmdResult<i32> {
     let names: Vec<String> = if args.targets.is_empty() {
         ctx.engine.target_names()
@@ -45,6 +61,7 @@ pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write)
         host::write_warnings(err, &HostFacts::probe())?;
     }
     let svc = ctx.service()?;
+    interrupt::install_sigint_handler();
     let (seed, requested_trials) = match args.seeds {
         Some(range) => (range.start, Some(range.trials())),
         None => (args.seed.unwrap_or_else(random_seed), args.trials),
@@ -94,7 +111,7 @@ pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write)
                 )?,
             }
         }
-        let detail = svc.run_sync_with_mode(
+        let detail = svc.run_sync_until(
             &ctx.engine,
             &StartRun {
                 target: name.clone(),
@@ -102,23 +119,32 @@ pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write)
                 budget: Some(budget),
             },
             mode,
+            interrupt::flag(),
         )?;
+        if interrupt::requested() {
+            writeln!(
+                err,
+                "hairspring: interrupted; run {} is cancelled, the trials already judged are kept and its Hermit processes were stopped",
+                detail.run.id
+            )?;
+            return Ok(crate::EXIT_INTERRUPTED);
+        }
         let outcome = svc.outcome(&detail.run.id)?.ok_or("run vanished")?;
-        if let Some(f) = &outcome.failure {
-            let path = write_bundle(&args.bundle_dir, name, &f.bundle)?;
+        let bundles = write_failure_bundles(&args.bundle_dir, name, &outcome)?;
+        if text_mode {
+            write!(out, "{}", to_text(name, &outcome))?;
+        }
+        for path in &bundles {
             let note = format!(
                 "bundle written: {}  (replay with `hairspring replay {}`)",
                 path.display(),
                 path.display()
             );
             if text_mode {
-                write!(out, "{}", to_text(name, &outcome))?;
                 writeln!(out, "  {note}")?;
             } else {
                 writeln!(err, "{name}: {note}")?;
             }
-        } else if text_mode {
-            write!(out, "{}", to_text(name, &outcome))?;
         }
         if mode.is_sweep() && text_mode {
             let completion = svc.completion_for(&detail.run)?;
@@ -147,4 +173,56 @@ pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write)
         Format::Sarif => writeln!(out, "{}", to_sarif(&results))?,
     }
     Ok(code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hairspring_core::bundle::Bundle;
+    use hairspring_engine::report::FailureReport;
+
+    fn report(seed: u64) -> FailureReport {
+        FailureReport {
+            target: "svc".into(),
+            backend: "hermit".into(),
+            message: format!("seed {seed}"),
+            original_len: 0,
+            shrunk_len: 0,
+            steps: vec![],
+            bundle: Bundle::new(seed, "t", vec![]).with_target("svc").encode(),
+        }
+    }
+
+    fn dir(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "hairspring-cli-bundles-{name}-{}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn a_bundle_is_written_for_every_failure_of_the_outcome_lowest_seed_first() {
+        let out = RunOutcome::failed(1, 1, 1, report(3)).with_more_failures(vec![report(7)]);
+        let d = dir("many");
+        let paths = write_failure_bundles(&d, "svc", &out).unwrap();
+        assert_eq!(paths.len(), 2);
+        let seeds: Vec<u64> = paths
+            .iter()
+            .map(|p| {
+                Bundle::decode(&std::fs::read_to_string(p).unwrap())
+                    .unwrap()
+                    .seed
+            })
+            .collect();
+        assert_eq!(seeds, vec![3, 7]);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn a_passing_outcome_writes_no_bundle() {
+        let d = dir("none");
+        let paths = write_failure_bundles(&d, "svc", &RunOutcome::passed(1, 1, 1)).unwrap();
+        assert!(paths.is_empty());
+        assert!(!d.exists());
+    }
 }

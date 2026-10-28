@@ -7,7 +7,7 @@ use hairspring_engine::backend::Progress;
 use hairspring_engine::config::Budget;
 use hairspring_engine::engine::{Engine, RunRequest};
 use hairspring_engine::mode::RunMode;
-use hairspring_engine::report::{RunOutcome, RunStatus};
+use hairspring_engine::report::{FailureReport, RunOutcome, RunStatus};
 use hairspring_store::{
     now_ms, FinishOutcome, JobResult, JobStatus, NewEvent, NewFailure, RunState, RunStats,
 };
@@ -174,23 +174,16 @@ impl Service {
             RunStatus::Failed => RunState::Failed,
             RunStatus::Error => RunState::Error,
         };
-        let failure = match &clean.failure {
-            Some(f) => {
-                let bundle_hash = self.store.put_blob(f.bundle.as_bytes())?;
-                let steps_json = serde_json::to_string(&f.steps)
-                    .map_err(|e| ServiceError::Internal(e.to_string()))?;
-                Some(NewFailure {
-                    run_id: job.run_id.clone(),
-                    target: f.target.clone(),
-                    message: f.message.clone(),
-                    original_len: f.original_len,
-                    shrunk_len: f.shrunk_len,
-                    bundle_hash,
-                    steps_json,
-                })
-            }
-            None => None,
-        };
+        let failure = clean
+            .failure
+            .as_ref()
+            .map(|f| self.new_failure(&job.run_id, f))
+            .transpose()?;
+        let more_failures = clean
+            .more_failures
+            .iter()
+            .map(|f| self.new_failure(&job.run_id, f))
+            .collect::<Result<Vec<_>>>()?;
         let payload = serde_json::from_str::<JobPayload>(&job.payload_json).ok();
         let budget = payload.as_ref().and_then(|p| p.budget);
         let mode = payload.map_or(RunMode::Search, |p| p.mode);
@@ -202,6 +195,7 @@ impl Service {
             trials: clean.trials,
             error: clean.error,
             failure,
+            more_failures,
             event_payload_json,
             stats,
         };
@@ -217,6 +211,22 @@ impl Service {
                 Ok(())
             }
         }
+    }
+
+    /// A worker's failure report as the row to store: its bundle goes into the blob store.
+    fn new_failure(&self, run_id: &str, f: &FailureReport) -> Result<NewFailure> {
+        let bundle_hash = self.store.put_blob(f.bundle.as_bytes())?;
+        let steps_json =
+            serde_json::to_string(&f.steps).map_err(|e| ServiceError::Internal(e.to_string()))?;
+        Ok(NewFailure {
+            run_id: run_id.to_owned(),
+            target: f.target.clone(),
+            message: f.message.clone(),
+            original_len: f.original_len,
+            shrunk_len: f.shrunk_len,
+            bundle_hash,
+            steps_json,
+        })
     }
 
     /// Stores the trial records an in-process worker handed over inside its outcome, batch by batch, and returns how
@@ -457,13 +467,47 @@ impl Service {
         req: &StartRun,
         mode: RunMode,
     ) -> Result<RunDetail> {
+        self.run_sync_until(engine, req, mode, &AtomicBool::new(false))
+    }
+
+    /// Like [`Service::run_sync_with_mode`], but cancels the run as soon as `stop` becomes true (an interrupt from the
+    /// terminal). The cancel is the one a caller of `cancel_run` makes: the engine hears it through its progress
+    /// callback, the run ends `cancelled` with the trials stored so far, and whatever the engine returns afterwards is
+    /// not recorded. Whoever sets `stop` is also responsible for stopping any child process that is mid-trial.
+    pub fn run_sync_until(
+        &self,
+        engine: &Engine,
+        req: &StartRun,
+        mode: RunMode,
+        stop: &AtomicBool,
+    ) -> Result<RunDetail> {
         let run = self.start_run_with_mode(engine, req, mode)?;
+        let finished = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                while !finished.load(Ordering::SeqCst) {
+                    if stop.load(Ordering::SeqCst) {
+                        // Best effort: a run that already ended has nothing left to cancel.
+                        let _ = self.cancel_run(&run.id);
+                        return;
+                    }
+                    std::thread::sleep(HEARTBEAT_TICK);
+                }
+            });
+            let detail = self.drive_until_finished(engine, &run.id);
+            finished.store(true, Ordering::SeqCst);
+            detail
+        })
+    }
+
+    /// Runs queued jobs here until the run is over, waiting for another process that holds the job.
+    fn drive_until_finished(&self, engine: &Engine, run_id: &str) -> Result<RunDetail> {
         let worker = Service::local_worker_id();
         let deadline = Instant::now() + SYNC_MAX_WAIT;
         loop {
             let detail = self
-                .get_run(&run.id)?
-                .ok_or_else(|| ServiceError::NotFound(run.id.clone()))?;
+                .get_run(run_id)?
+                .ok_or_else(|| ServiceError::NotFound(run_id.to_string()))?;
             if detail.run.state.is_terminal() {
                 return Ok(detail);
             }

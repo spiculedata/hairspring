@@ -19,7 +19,7 @@ use std::ffi::OsString;
 use std::io::Write;
 use std::process::ExitCode;
 
-/// Exit codes: 0 success, 1 a property was violated, 2 usage or runtime error.
+/// Exit codes: 0 success, 1 a property was violated, 2 usage or runtime error, 130 interrupted by Ctrl-C.
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_VIOLATION: i32 = 1;
 pub const EXIT_ERROR: i32 = 2;
@@ -27,6 +27,8 @@ pub const EXIT_ERROR: i32 = 2;
 pub const EXIT_INCONCLUSIVE: i32 = 3;
 /// `doctor --process-backend`: this machine cannot run the process backend. Not a found bug and not a usage error.
 pub const EXIT_UNSUPPORTED_HOST: i32 = 4;
+/// Ctrl-C ended `test` or `confirm`: 128 plus the number of SIGINT, as shells report it.
+pub const EXIT_INTERRUPTED: i32 = 130;
 
 pub fn main_with(registry: Registry) -> ExitCode {
     let code = run(

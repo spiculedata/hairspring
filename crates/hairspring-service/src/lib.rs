@@ -298,6 +298,19 @@ impl Service {
             .map(|b| String::from_utf8_lossy(&b).into_owned()))
     }
 
+    /// A stored failure as the report a worker sent, or `None` when it cannot be read.
+    fn failure_report(&self, failure_id: &str, backend: &str) -> Result<Option<FailureReport>> {
+        Ok(self.get_failure(failure_id)?.map(|d| FailureReport {
+            target: d.record.target,
+            backend: backend.to_owned(),
+            message: d.record.message,
+            original_len: d.record.original_len,
+            shrunk_len: d.record.shrunk_len,
+            steps: d.steps,
+            bundle: d.bundle,
+        }))
+    }
+
     /// Rebuilds a [`RunOutcome`] from stored data so stored runs can be rendered like fresh ones.
     pub fn outcome(&self, run_id: &str) -> Result<Option<RunOutcome>> {
         let Some(detail) = self.get_run(run_id)? else {
@@ -321,18 +334,14 @@ impl Service {
             RunState::Failed => RunStatus::Failed,
             _ => RunStatus::Error,
         };
-        let failure = match detail.failures.first() {
-            Some(f) => self.get_failure(&f.id)?.map(|d| FailureReport {
-                target: d.record.target,
-                backend: run.backend.clone(),
-                message: d.record.message,
-                original_len: d.record.original_len,
-                shrunk_len: d.record.shrunk_len,
-                steps: d.steps,
-                bundle: d.bundle,
-            }),
-            None => None,
-        };
+        // The first failure row is the run's failure; a sweep's later first-failing seeds follow it.
+        let mut reports = Vec::new();
+        for f in &detail.failures {
+            reports.extend(self.failure_report(&f.id, &run.backend)?);
+        }
+        let mut reports = reports.into_iter();
+        let failure = reports.next();
+        let more_failures: Vec<FailureReport> = reports.collect();
         let elapsed_ms = match (run.started_at, run.finished_at) {
             (Some(s), Some(f)) if f >= s => (f - s) as u64,
             _ => 0,
@@ -355,6 +364,7 @@ impl Service {
             work: run.work,
             elapsed_ms,
             failure,
+            more_failures,
             error,
             stopped_at_first_failure: run.stopped_at_first_failure,
             properties,

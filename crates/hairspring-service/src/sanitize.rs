@@ -4,6 +4,7 @@
 use crate::{ServiceError, MAX_BUNDLE_BYTES};
 use hairspring_core::bundle::Bundle;
 use hairspring_engine::report::{FailureReport, ReplayOutcome, RunOutcome, RunStatus, Step};
+use hairspring_engine::sweep::MAX_FAILURE_ROWS;
 
 pub const MAX_STEPS: usize = 1000;
 pub const MAX_LABEL_CHARS: usize = 500;
@@ -158,9 +159,20 @@ pub fn outcome(outcome: &RunOutcome, run_target: &str) -> Result<RunOutcome, Ser
         .as_ref()
         .map(|f| clean_failure(f, run_target))
         .transpose()?;
+    if outcome.more_failures.len() >= MAX_FAILURE_ROWS {
+        return Err(invalid(&format!(
+            "a run may report at most {MAX_FAILURE_ROWS} failures"
+        )));
+    }
+    let more_failures = outcome
+        .more_failures
+        .iter()
+        .map(|f| clean_failure(f, run_target))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(RunOutcome {
         error: outcome.error.as_deref().map(single_line),
         failure,
+        more_failures,
         // Derived from the status, as the stored flag is: a worker's own claim is not read.
         stopped_at_first_failure: outcome.status == RunStatus::Failed,
         // A worker's own property statistics are never read: the server folds the per-trial digests it stored.
