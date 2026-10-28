@@ -409,6 +409,15 @@ impl Store for SqliteStore {
         Ok(n > 0)
     }
 
+    fn release_job(&self, id: &str, worker_id: &str) -> Result<bool> {
+        let n = self.conn().execute(
+            "UPDATE jobs SET status='queued', lease_owner=NULL, lease_until=NULL, attempts=attempts-1
+             WHERE id=? AND status='running' AND lease_owner=? AND attempts > 0",
+            params![id, worker_id],
+        )?;
+        Ok(n > 0)
+    }
+
     fn fail_expired_jobs(&self, now: i64) -> Result<Vec<ExpiredJob>> {
         let mut conn = self.conn();
         let tx = write_tx(&mut conn)?;

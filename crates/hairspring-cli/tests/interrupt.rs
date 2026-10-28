@@ -264,3 +264,66 @@ fn ctrl_c_during_a_sweep_keeps_the_trials_judged_before_it() {
         "the passing trial is kept"
     );
 }
+
+#[test]
+fn ctrl_c_while_running_another_runs_expired_job_gives_it_back_and_cancels_only_our_run() {
+    use hairspring_store::{now_ms, SqliteStore, Store};
+    let dir = scratch("foreign");
+    project(&dir, &hanging(&dir));
+    // Run A is killed hard mid-trial, leaving its job leased; its guests are cleaned up by hand.
+    let mut a = spawn(
+        &dir,
+        &["test", "svc", "--sweep", "--trials", "5", "--seed", "1"],
+    );
+    let (guest, child) = (
+        wait_for(&dir.join("guest.pid")),
+        wait_for(&dir.join("child.pid")),
+    );
+    a.kill().unwrap();
+    a.wait().unwrap();
+    for pid in [&guest, &child] {
+        let _ = Command::new("kill").args(["-9", pid]).status();
+    }
+    assert!(gone(&guest) && gone(&child));
+    std::fs::remove_file(dir.join("guest.pid")).unwrap();
+    std::fs::remove_file(dir.join("child.pid")).unwrap();
+    // Let its lease run out: take the job over and give the lease back as already expired.
+    let store = SqliteStore::open(&dir.join(".hairspring/hairspring.db")).unwrap();
+    let a_run = store.list_runs(1).unwrap().remove(0).id;
+    let taken = store
+        .lease_job("probe", 0, i64::MAX / 4)
+        .unwrap()
+        .expect("A's job");
+    assert_eq!(taken.run_id, a_run);
+    assert!(store.heartbeat_job(&taken.id, "probe", 0, 0).unwrap());
+    drop(store);
+
+    // Run B leases A's job first. Ctrl-C while A's trial runs.
+    let b = spawn(
+        &dir,
+        &["test", "svc", "--sweep", "--trials", "5", "--seed", "1"],
+    );
+    let (guest, child, out) = interrupt_once_running(&dir, b);
+    assert_eq!(out.status.code(), Some(EXIT_INTERRUPTED), "{}", text(&out));
+    assert!(gone(&guest) && gone(&child));
+
+    let store = SqliteStore::open(&dir.join(".hairspring/hairspring.db")).unwrap();
+    let a_after = store.get_run(&a_run).unwrap().unwrap();
+    assert!(
+        !a_after.state.is_terminal(),
+        "A is not finished or failed: {a_after:?}"
+    );
+    let b_run = store
+        .list_runs(10)
+        .unwrap()
+        .into_iter()
+        .find(|r| r.id != a_run)
+        .unwrap();
+    assert_eq!(b_run.state.as_str(), "cancelled");
+    let again = store.lease_job("probe-2", 30, now_ms()).unwrap();
+    assert_eq!(
+        again.map(|j| j.run_id),
+        Some(a_run),
+        "A's job is queued and can be leased again"
+    );
+}

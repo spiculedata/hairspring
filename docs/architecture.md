@@ -60,8 +60,12 @@ queued --lease--> running --finish_job--> done            (run: passed | failed 
   usual way). The foreground run is cancelled like any other cancel, so it ends `cancelled` and keeps the trials already
   stored, and every Hermit trial in progress is killed through its process group, the kill a trial timeout uses (a child
   that calls `setsid` leaves the group and survives). No further trial starts. Only the command's own run is cancelled:
-  an older queued job of another run that the command happens to lease is given back untouched, and a command that
-  cannot lease its own job because another process holds it cancels its run at once instead of waiting. The CLI says so
+  a command that is interrupted leases nothing and cancels its own run. If the Ctrl-C comes while the command is
+  running an older job of another run (one it leased first, for example after a hard kill left it with an expired
+  lease), that job is killed and given back: it is queued again with the attempt its lease spent not counted, and the
+  result of the interrupted trial is not recorded against that run. That run was marked `running` with a `started`
+  event when the command leased it, and stays so. A command that cannot lease its own job because another process
+  holds it cancels its run at once instead of waiting. The CLI says so
   and exits with status 130, also when Ctrl-C lands after the last run finished on its own (that run stands as stored).
   Each guest runs in a process group of its own, so the terminal's SIGINT never reaches it directly. `hairspring serve`
   and `hairspring worker` are unchanged. A confirmation that is interrupted stores the checks that finished and records

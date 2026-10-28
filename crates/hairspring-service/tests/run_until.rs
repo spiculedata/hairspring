@@ -60,7 +60,7 @@ fn queued_run(
 
 #[test]
 fn an_interrupt_never_cancels_a_run_that_belongs_to_someone_else() {
-    let (svc, _, engine) = setup();
+    let (svc, store, engine) = setup();
     // An older queued run, such as one left behind by an earlier command that was killed. It is leased first.
     let foreign = queued_run(&svc, &engine);
     let stop = AtomicBool::new(true);
@@ -71,6 +71,16 @@ fn an_interrupt_never_cancels_a_run_that_belongs_to_someone_else() {
     let other = svc.get_run(&foreign).unwrap().unwrap().run;
     assert_ne!(other.state, RunState::Cancelled, "{other:?}");
     assert!(!other.state.is_terminal(), "{other:?}");
+    let leased = svc
+        .lease("later")
+        .unwrap()
+        .expect("its job is still queued");
+    assert_eq!(leased.run_id, foreign);
+    assert_eq!(
+        store.get_job(&leased.job_id).unwrap().unwrap().attempts,
+        1,
+        "no attempt was spent"
+    );
 }
 
 #[test]

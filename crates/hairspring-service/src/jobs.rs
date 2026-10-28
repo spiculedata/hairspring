@@ -471,10 +471,11 @@ impl Service {
         };
         // The oldest queued job is leased, whoever's it is. One that is not the caller's own run is never cancelled
         // here: it is given back untouched when the caller has been interrupted, and otherwise run as a shutdown would.
+        let foreign = matches!(on_stop, OnStop::Cancel(own) if own != job.run_id);
         let on_stop = match on_stop {
-            OnStop::Cancel(own) if own != job.run_id => {
+            OnStop::Cancel(_) if foreign => {
                 if stop.load(Ordering::SeqCst) {
-                    self.fail(&job.job_id, worker_id, "interrupted by shutdown")?;
+                    self.store.release_job(&job.job_id, worker_id)?;
                     return Ok(true);
                 }
                 OnStop::Requeue
@@ -538,6 +539,12 @@ impl Service {
         // the result could end the run as an error first. A run that finished on its own stands.
         let ended_early = abort.get() == Abort::Cancelled
             || !matches!(&result, Ok(Ok(o)) if o.status != RunStatus::Error);
+        // Another run's job that was cut short is given back and its result is not recorded, whatever the engine made of
+        // being interrupted: it is not this command's run to cancel or to fail.
+        if foreign && stop.load(Ordering::SeqCst) && ended_early {
+            self.store.release_job(&job.job_id, worker_id)?;
+            return Ok(true);
+        }
         let result =
             if matches!(on_stop, OnStop::Cancel(_)) && stop.load(Ordering::SeqCst) && ended_early {
                 self.cancel_keeping_trials(&job, worker_id, result)?
@@ -616,8 +623,13 @@ impl Service {
             if detail.run.state.is_terminal() {
                 return Ok(detail);
             }
+            // Interrupted before leasing anything: the job first in line may be another run's. Cancel ours and be done.
+            if stop.load(Ordering::SeqCst) {
+                self.cancel_run(run_id)?;
+                continue;
+            }
             let ran = self.execute_next_cancelling(engine, &worker, stop, run_id)?;
-            // Interrupted with our run still open: it did not start here, or another process holds its job, or another
+            // Interrupted while a job ran, or with our run still open: it may be held by another process, or another
             // run's job came first. Cancel it now rather than wait for it.
             if stop.load(Ordering::SeqCst) {
                 self.cancel_run(run_id)?;

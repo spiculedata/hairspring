@@ -492,6 +492,15 @@ impl Store for PgStore {
         Ok(n > 0)
     }
 
+    fn release_job(&self, id: &str, worker_id: &str) -> Result<bool> {
+        let n = self.client()?.execute(
+            "UPDATE jobs SET status='queued', lease_owner=NULL, lease_until=NULL, attempts=attempts-1
+             WHERE id=$1 AND status='running' AND lease_owner=$2 AND attempts > 0",
+            &[&id, &worker_id],
+        )?;
+        Ok(n > 0)
+    }
+
     fn add_event(&self, run_id: &str, kind: &str, payload_json: &str, now: i64) -> Result<i64> {
         Ok(self
             .client()?
