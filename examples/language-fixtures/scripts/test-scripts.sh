@@ -1868,6 +1868,6 @@ expect "no record script hard-codes the pinned SDK as a default" 1 grep -nE 'SDK
 expect "the docker wrapper's .NET image is the pinned SDK" 0 grep -q "dotnet/sdk:$pin_version@" "$here/build-record-docker.sh"
 expect "the README names the pinned SDK" 0 grep -q "pinned $pin_version" "$here/../README.md"
 expect "ci.yml gives setup-dotnet no version of its own" 1 grep -nE '^ +dotnet-version:' "$ci_yml"
-expect "every setup-dotnet step in ci.yml installs the SDK from global.json" 0 sh -c "n=\$(grep -c 'uses: actions/setup-dotnet' '$ci_yml'); [ \"\$n\" -ge 3 ] && [ \"\$(grep -c 'global-json-file: global.json' '$ci_yml')\" = \"\$n\" ]"
+expect "every setup-dotnet step in ci.yml installs the SDK from global.json" 0 sh -c "n=\$(grep -c 'uses: actions/setup-dotnet' '$ci_yml'); [ \"\$n\" -ge 4 ] && [ \"\$(grep -c 'global-json-file: global.json' '$ci_yml')\" = \"\$n\" ]"
 
 exit $failures

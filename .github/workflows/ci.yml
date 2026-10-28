@@ -26,6 +26,11 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      # The workspace tests include the .NET SDK conformance tests, which use whatever .NET SDK they find. The repository's
+      # global.json pins the SDK exactly, so the pinned one must be installed (the image's own SDK may be another version).
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
