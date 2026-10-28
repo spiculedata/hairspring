@@ -70,7 +70,7 @@ pub(crate) fn add(
     now: i64,
 ) -> Result<ConfirmationOutcome> {
     validate(new)?;
-    let tx = conn.transaction()?;
+    let tx = crate::sqlite_tx::write_tx(conn)?;
     let stored = of_confirmation(&tx, &new.id)?;
     if !stored.is_empty() {
         return if same_confirmation(&stored, new) {

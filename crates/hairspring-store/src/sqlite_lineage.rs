@@ -5,7 +5,7 @@ use crate::lineage::*;
 use crate::trials::{to_db, TrialVerdict};
 use crate::types::{Result, StoreError};
 use rusqlite::types::Type;
-use rusqlite::{params, Connection, OptionalExtension, Row, Transaction, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 
 const NODE_COLUMNS: &str = node_columns!("");
 
@@ -87,9 +87,7 @@ fn identity_from_row(r: &Row<'_>) -> rusqlite::Result<RunIdentity> {
     })
 }
 
-fn write_tx(conn: &mut Connection) -> Result<Transaction<'_>> {
-    Ok(conn.transaction_with_behavior(TransactionBehavior::Immediate)?)
-}
+use crate::sqlite_tx::write_tx;
 
 fn run_exists(conn: &Connection, run_id: &str) -> Result<bool> {
     Ok(conn

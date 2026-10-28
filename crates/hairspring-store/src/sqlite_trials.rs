@@ -6,7 +6,7 @@ use crate::sqlite_explorer as explorer;
 use crate::sqlite_lineage as lineage;
 use crate::trials::{to_db, *};
 use crate::types::{Result, RunState, StoreError};
-use rusqlite::{params, Connection, OptionalExtension, Row, Transaction, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, Row, Transaction};
 
 const TRIAL_COLUMNS: &str = "run_id, seq, seed, verdict, reason, exit_code, signal, timed_out, degraded, perturbing, \
      report_missing, rated, claimable, behaviour_hash, schedule_fp, syscalls, work_ops, elapsed_ms, worker_id, \
@@ -389,7 +389,7 @@ pub(crate) fn ingest(
         return Ok(IngestOutcome::Rejected(why));
     }
     // The write lock is taken up front, so concurrent batches for one run are applied one after the other.
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let tx = crate::sqlite_tx::write_tx(conn)?;
     let Some(target) = lease_target(&tx, job_id, worker_id)? else {
         return Ok(IngestOutcome::NotLeased);
     };

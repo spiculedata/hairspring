@@ -8,6 +8,7 @@ use crate::sqlite_run_end as run_end;
 use crate::sqlite_schema;
 use crate::sqlite_tree_query as query;
 use crate::sqlite_trials as trials;
+use crate::sqlite_tx::write_tx;
 use crate::trials::*;
 use crate::types::*;
 use crate::{new_id, sha256_hex, Store, MAX_JOB_ATTEMPTS};
@@ -23,7 +24,7 @@ impl From<rusqlite::Error> for StoreError {
 }
 
 /// How long a connection waits for another writer before giving up with `SQLITE_BUSY`.
-const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+pub const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Pause between attempts to switch the journal mode while another connection holds the file.
 const WAL_RETRY_PAUSE: std::time::Duration = std::time::Duration::from_millis(5);
@@ -362,7 +363,7 @@ impl Store for SqliteStore {
 
     fn lease_job(&self, worker_id: &str, lease_secs: u64, now: i64) -> Result<Option<Job>> {
         let mut conn = self.conn();
-        let tx = conn.transaction()?;
+        let tx = write_tx(&mut conn)?;
         let id: Option<String> = tx
             .query_row(
                 "SELECT id FROM jobs WHERE (status='queued' OR (status='running' AND lease_until < ?)) AND attempts < ? ORDER BY created_at, rowid LIMIT 1",
@@ -410,7 +411,7 @@ impl Store for SqliteStore {
 
     fn fail_expired_jobs(&self, now: i64) -> Result<Vec<ExpiredJob>> {
         let mut conn = self.conn();
-        let tx = conn.transaction()?;
+        let tx = write_tx(&mut conn)?;
         let expired = {
             let mut stmt = tx.prepare("SELECT id, run_id FROM jobs WHERE status='running' AND lease_until < ? AND attempts >= ?")?;
             let rows = stmt
@@ -438,7 +439,7 @@ impl Store for SqliteStore {
         now: i64,
     ) -> Result<FinishOutcome> {
         let mut conn = self.conn();
-        let tx = conn.transaction()?;
+        let tx = write_tx(&mut conn)?;
         let job: Option<(String, String, Option<String>, i64)> = tx
             .query_row(
                 "SELECT run_id, status, lease_owner, attempts FROM jobs WHERE id=?",

@@ -221,13 +221,16 @@ would pass that drops the oldest whole confirmations to make room, so the newest
 bytes (after JSON escaping) to fit the 16 KiB column, so a long or wide-character value is shortened and never refuses a
 confirmation.
 
+**Known limitation: simulation targets.** A failing seed from a simulation (`sim`) target, in a sweep or a search, cannot be confirmed: `hairspring confirm` stops with ``error: no backend available for target kind ``confirm` is not supported by the sim backend` `` (the stray backticks are in the message) and nothing is stored. Only `process` targets can be confirmed.
+
 **Known limitation: sweep violations.** A sweep (the search over many seeds) stores a failure row only for the lowest
 failing seed. The claim gate needs every first-failure seed of the run to be confirmed, and a seed that failed in the
 sweep but has no row cannot be confirmed by this pipeline, so such a run can open no claim at all. Deferred, not
 implemented.
 
-**Other limits.** SQLite allows one writer at a time: two processes confirming at once can get `SQLITE_BUSY` and should
-retry. The local runner label comes from the process, so it is not the same worker identity in the CLI and in the embedded
+**Other limits.** SQLite allows one writer at a time. A write takes the write lock when its transaction begins and waits
+up to 5 seconds for another process to finish; if the file is still locked after that it fails with
+`storage error: database is locked` and should be retried. The local runner label comes from the process, so it is not the same worker identity in the CLI and in the embedded
 engine (or across restarts): a confirmation is attributed to the process that ran it, and the two are not treated as one
 runner.
 

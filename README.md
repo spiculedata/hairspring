@@ -121,7 +121,9 @@ max_trials = 100
 A failing seed can be confirmed in recorded steps with `hairspring confirm <run-or-failure-id>`: same-seed reruns
 compared on output, schedule and failing property, a bundle replay with its environment check, and optionally a
 fixed-version control (`--control <target>`) and Hermit's strict determinism verify (`--strict-verify`). See
-[docs/determinism.md](docs/determinism.md#confirming-a-failure).
+[docs/determinism.md](docs/determinism.md#confirming-a-failure). Only `process` targets can be confirmed: for a
+simulation target the command stops with ``error: no backend available for target kind ``confirm` is not supported by
+the sim backend` ``.
 
 A trial that times out is reported as inconclusive, not as a pass or a failure, unless you set
 `hang_is_violation = true`. Programs can also report assertions through the guest event protocol; see
