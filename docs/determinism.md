@@ -93,6 +93,8 @@ printable ASCII only, and the `.sha256` fields are lowercase hex (or `absent` fo
 that is not is malformed, is named in a warning, is not compared, and also counts as changed. The values are read when the run starts, before any trial or confirmation rerun, and they
 are the same fields for every failure the run reports.
 
+A bundle also does not record the program's command line or working directory: replay runs the command and directory from the current configuration. A program whose behaviour depends on the text of its own paths can follow a different schedule when the same files run from a differently named directory, and the replay then reads as a mismatch even though the recorded environment matches. This has been seen with a JVM, where the install path, the class path and the working directory are part of what the program reads. Replay from the same absolute paths as the recording.
+
 On replay, the recorded fields are compared with the current host. Each recorded field is checked on its own: a
 malformed one is named in a warning and skipped, and the others are still compared.
 
@@ -121,7 +123,7 @@ inconclusive: it does not show the bug is fixed. The API returns the same fact a
 result.
 
 Not recorded yet: the Hermit commit, Hermit's global seed, hashes of declared input files, the full Hermit command
-line beyond `hermit_args`, the `--tmp` pre-seed, and the Hairspring commit. The environment is compared by
+line beyond `hermit_args` (the program's own command line and working directory are covered above), the `--tmp` pre-seed, and the Hairspring commit. The environment is compared by
 `hairspring confirm` (see [Confirming a failure](#confirming-a-failure)), but not by the search's own three reruns or on
 bundle import. Each new field needs its name added to the fixed list in `hairspring-core`.
 

@@ -143,12 +143,15 @@ See [Recorded environment](determinism.md#recorded-environment) for the fields a
 | Go | [`sdks/go`](../sdks/go) | `examples/language-fixtures/go`, `examples/go-sql-cancel` | Supported on one tested configuration; see the [support matrix](support-matrix.md) |
 | Rust | [`sdks/rust`](../sdks/rust), [rust-sdk.md](rust-sdk.md) | `sdks/rust/fixtures` | Supported on one tested configuration; see the [support matrix](support-matrix.md) |
 | Python | [`sdks/python`](../sdks/python), [python-sdk.md](python-sdk.md) | `examples/language-fixtures/python` | Not supported on this build: the probe program did not complete under Hermit |
-| Java | [`sdks/java`](../sdks/java), [java-sdk.md](java-sdk.md) | `examples/language-fixtures/java` | SDK and fixture available. Not supported on this build: the probe program did not complete under Hermit |
+| Java | [`sdks/java`](../sdks/java), [java-sdk.md](java-sdk.md) | `examples/language-fixtures/java` | Supported on a Java-specific configuration; see the [support matrix](support-matrix.md) |
 | .NET | [`sdks/dotnet`](../sdks/dotnet), [dotnet-sdk.md](dotnet-sdk.md) | `examples/language-fixtures/dotnet` | SDK and fixture available. Not supported on this build: the probe program did not complete under Hermit |
 
 "Supported" means the language passed our acceptance test on one configuration (Ubuntu 24.04, one Xeon host, pinned
 Hermit build) and was not tested elsewhere. The [support matrix](support-matrix.md) has the details and the exact
-configuration; the results apply only to that configuration.
+configuration; the results apply only to that configuration. Java is supported only on its own configuration:
+`skid_margin = 35` (the other languages: 25), the JVM flags `-Xint -XX:+UseSerialGC -XX:ActiveProcessorCount=1
+-XX:-UsePerfData -Xshare:auto`, Temurin 21.0.12.1, and a reduced fixture (50 iterations per worker instead of 1,000). A
+Java replay matched only from the same paths as the recording (JDK install, program jar and working directory); see [Replay and paths](../sdks/java/README.md#replay-and-paths).
 
 A program does not need an SDK to be run: the backend runs any Linux command and treats a non-zero exit as a failure.
 An SDK adds named properties (`always`, `sometimes`, `reachable`) that are tracked across trials.

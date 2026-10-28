@@ -398,6 +398,17 @@ checklist is ticked from the evidence. The `java` variant of the manual `fixture
 `actions/setup-java`; the record fails if the JDK is not the pinned build); `scripts/build-record-docker.sh java` runs it in a
 container with the pinned Temurin tarball.
 
+### Replay and paths
+
+Under Hermit, Java is supported on a Java-specific configuration only (see the [support matrix](../../docs/support-matrix.md)):
+`skid_margin = 35` (the other languages use 25), the `a-prime` flags in `java/profiles-extra.tsv`
+(`-Xint -XX:+UseSerialGC -XX:ActiveProcessorCount=1 -XX:-UsePerfData -Xshare:auto`) and the fixture at `--k=50` instead of
+1,000 iterations per worker. Keep the JDK install, the jar and the working directory at the same absolute paths for
+recording and replay: a bundle records neither the command line nor the working directory, and replay matched only from the
+same paths as the recording (JDK install, program jar and working directory); a differently named directory changed the
+result. Trials take about 210 s as run (up to three at once; about 105 s alone). The Makefile targets here run natively and never
+start Hermit.
+
 ## Compilers
 
 C: gcc and clang. C++: clang++ is the supported compiler; g++ builds and reports too because every Hairspring call site
