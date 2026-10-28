@@ -240,8 +240,8 @@ make test-dotnet         # the same, from this directory (not part of `make test
 
 `scripts/build-record-probe-dotnet.sh` records `probe-dotnet`: B1 publishes it twice from two copies of the sources in
 different directories (with different file times) and requires equal sha256 for each of the three files and checks that
-the restore resolved no library; the SDK version is checked against the pinned 10.0.402 (the version in the repository's `global.json`, which is copied into the
-build directories, so a newer SDK on the machine is not used). The program is then run (B4, B5) on
+the restore resolved no library; the SDK version is checked against the pinned 10.0.402 (the version in `scripts/record-global.json`, which is copied as
+`global.json` into the build directories, so a newer SDK on the machine is not used). The program is then run (B4, B5) on
 the pinned runtime 10.0.13: its tarball is checked against the published sha512 (`scripts/extract-runtime.sh`) and
 extracted, and that directory is `DOTNET_ROOT` for every run, so the record cannot silently use a newer 10.0.x patch
 (`RUNTIME_SOURCE=installed` uses the installed runtime on a machine that is not x86-64 Linux; it still has to be 10.0.13).

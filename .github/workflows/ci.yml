@@ -26,11 +26,12 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      # The workspace tests include the .NET SDK conformance tests, which use whatever .NET SDK they find. The repository's
-      # global.json pins the SDK exactly, so the pinned one must be installed (the image's own SDK may be another version).
+      # The workspace tests include the .NET SDK conformance tests. CI installs the exact SDK of the build records
+      # (scripts/record-global.json) so it stays reproducible; a contributor only needs an SDK that satisfies the floor in the
+      # root global.json.
       - uses: actions/setup-dotnet@v4
         with:
-          global-json-file: global.json
+          global-json-file: scripts/record-global.json
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
@@ -193,11 +194,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      # The SDK pinned in global.json (the one place the version is written; "rollForward": "disable", so the runner image's
-      # own newer SDK cannot be picked instead).
+      # The exact SDK of the build records (scripts/record-global.json), as for the other .NET steps.
       - uses: actions/setup-dotnet@v4
         with:
-          global-json-file: global.json
+          global-json-file: scripts/record-global.json
       - name: Version
         run: dotnet --info
       # Base class library only, no framework: the self-test, and the sample programs run as real processes.
@@ -249,11 +249,11 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      # The SDK pinned in global.json, as for the manual record below.
+      # The exact SDK of the build records (scripts/record-global.json).
       - uses: actions/setup-dotnet@v4
         if: matrix.dir == 'dotnet'
         with:
-          global-json-file: global.json
+          global-json-file: scripts/record-global.json
       # The check scripts, against a fake program (once, not per compiler).
       - name: Script tests
         if: matrix.name == 'C gcc'
@@ -314,12 +314,13 @@ jobs:
         with:
           distribution: temurin
           java-version: "21.0.12+101.0.LTS"
-      # The .NET SDK pinned in global.json (10.0.402 ships runtime 10.0.13), so the record's version checks pass. The runner
-      # image may carry a newer SDK too; global.json, copied into the record's build directories, selects the pinned one.
+      # The .NET SDK pinned in scripts/record-global.json (10.0.402 ships runtime 10.0.13), so the record's version checks pass.
+      # The runner image may carry a newer SDK too; the record copies this file as global.json into the directories it builds
+      # in, and it does not roll forward, so the pinned one is used.
       - uses: actions/setup-dotnet@v4
         if: matrix.variant == 'dotnet-probe' || matrix.variant == 'dotnet'
         with:
-          global-json-file: global.json
+          global-json-file: scripts/record-global.json
       - name: Install the toolchains
         if: matrix.variant != 'go' && matrix.variant != 'python' && matrix.variant != 'rust' && matrix.variant != 'rust-probe' && matrix.variant != 'java-probe' && matrix.variant != 'java' && matrix.variant != 'dotnet-probe' && matrix.variant != 'dotnet'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-13 g++-13 clang-18 strace binutils

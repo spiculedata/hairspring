@@ -26,6 +26,9 @@ here=$(cd "$(dirname "$0")" && pwd)
 fixtures=$(dirname "$here")
 repo=$(cd "$fixtures/../.." && pwd)
 platform=${PLATFORM:-linux/amd64}
+# The SDK pin (scripts/record-global.json), resolved before anything runs: a pin that cannot be read stops the wrapper here.
+sdk_pinned=${SDK_PINNED:-$(sh "$here/sdk-pin.sh")} || exit 1
+[ -n "$sdk_pinned" ] || { echo "build-record-docker.sh: no SDK pin" >&2; exit 1; }
 # Pinned by digest (the multi-platform index digests, resolved with `docker buildx imagetools inspect`).
 UBUNTU_IMAGE=ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
 GO_IMAGE=${GO_IMAGE:-golang:1.27.3@sha256:957861185dbf29d93668ace41e011d091c6e779953d47f0316ef2cc58e28fe2b}
@@ -51,7 +54,7 @@ case "$platform" in
   linux/arm64) default_runtime_source=installed ;;
   *) default_runtime_source=pinned ;;
 esac
-mounts="-v $repo/global.json:/repo/global.json:ro -v $repo/sdks:/repo/sdks:ro -v $repo/docs:/repo/docs:ro -v $fixtures:/repo/examples/language-fixtures"
+mounts="-v $repo/scripts/record-global.json:/repo/scripts/record-global.json:ro -v $repo/sdks:/repo/sdks:ro -v $repo/docs:/repo/docs:ro -v $fixtures:/repo/examples/language-fixtures"
 script="build-record.sh $variant"
 inside_out=/repo/examples/language-fixtures/build/record-$variant.md
 artifact_dir=/repo/examples/language-fixtures/build/artifacts
@@ -104,7 +107,7 @@ docker run --rm --platform "$platform" --cap-add SYS_PTRACE --security-opt secco
   $mounts $extra_env \
   -e IMAGE_DIGEST="$digest" -e PRODUCER="docker $platform, image $image" -e SOURCE_COMMIT="$SOURCE_COMMIT" -e RUNS="${RUNS:-50}" \
   -e TARGET="$target" -e RUST_PINNED="${RUST_PINNED:-1.99.1}" -e ARTIFACT_DIR="$artifact_dir" \
-  -e SDK_PINNED="${SDK_PINNED:-$(sh "$here/sdk-pin.sh")}" -e RUNTIME_PINNED="${RUNTIME_PINNED:-10.0.13}" \
+  -e SDK_PINNED="$sdk_pinned" -e RUNTIME_PINNED="${RUNTIME_PINNED:-10.0.13}" \
   -e RUNTIME_SOURCE="${RUNTIME_SOURCE:-$default_runtime_source}" \
   "$image" sh -c "$setup && sh /repo/examples/language-fixtures/scripts/$script $inside_out"
 rc=$?

@@ -29,10 +29,9 @@ make test       # self-test, then the sample programs as real processes
 make samples    # build samples/Sample
 ```
 
-Needs the .NET 10 SDK (`DOTNET=/path/to/dotnet` selects it). Inside this repository the SDK version is pinned by
-[`global.json`](../../global.json) (10.0.402, no roll forward), so CI and the build records use the same SDK whatever else the
-machine has installed. With another SDK, `dotnet` stops with "A compatible .NET SDK was not found" and names the requested
-version; install that version, or build from a copy of the sources outside the repository. `cargo test -p hairspring-props --test dotnet_sdk` runs the
+Needs the .NET 10 SDK (`DOTNET=/path/to/dotnet` selects it). Inside this repository the root [`global.json`](../../global.json)
+asks for 10.0.100 or later in the same major and minor version, so any 10.0 SDK works for development. The Linux build records
+and CI use exactly 10.0.402, written in [`scripts/record-global.json`](../../scripts/record-global.json). `cargo test -p hairspring-props --test dotnet_sdk` runs the
 conformance tests against the reference parser, including a byte-for-byte comparison with the C SDK (`HS_REQUIRE_DOTNET=1` makes
 a missing SDK an error).
 

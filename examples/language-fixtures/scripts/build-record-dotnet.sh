@@ -21,7 +21,7 @@
 # instead (for a machine that is not x86-64 Linux); the record says which was used, and still requires the version to be pinned.
 #
 # Environment: DOTNET is the dotnet executable (default dotnet), SDK_PINNED and RUNTIME_PINNED the pinned versions (defaults
-# the version in the repository's global.json, 10.0.402, and 10.0.13), IMAGE_DIGEST is copied into B1, RUNS is the native run count (default 50), ARTIFACT_DIR receives a
+# the version in scripts/record-global.json, 10.0.402, and 10.0.13), IMAGE_DIGEST is copied into B1, RUNS is the native run count (default 50), ARTIFACT_DIR receives a
 # copy of the pinned files and a SHA256SUMS file. The producer fields come from the GitHub Actions environment (record-lib.sh).
 
 # The check functions below are run through step, which shellcheck cannot see. The record_*, artifact_*, evidence_* and
@@ -36,6 +36,10 @@ dnroot=$root/dotnet
 sdkdir=$repo/sdks/dotnet
 runs=${RUNS:-50}
 dotnet=${DOTNET:-dotnet}
+# The exact SDK pin of the records (the root global.json is only a floor for contributors). It is copied as global.json into
+# every directory the record builds in, and the SDK version is asked there, so an SDK that the machine has installed beside
+# the pinned one is not used.
+record_pin=$repo/scripts/record-global.json
 sdk_pinned=${SDK_PINNED:-$(sh "$here/sdk-pin.sh")} || exit 1
 runtime_pinned=${RUNTIME_PINNED:-10.0.13}
 out=${1:-$root/build/record-dotnet.md}
@@ -49,6 +53,8 @@ lang=dotnet
 work=$(mktemp -d "${TMPDIR:-/tmp}/record-work.XXXXXX") || exit 1
 trap 'rm -rf "$work"' EXIT
 record_init
+pin_dir=$work/pin
+mkdir -p "$pin_dir" && cp "$record_pin" "$pin_dir/global.json" || exit 1
 one=$work/build-one-for-the-first-publish
 two=$work/second/build-two-for-the-second-publish
 pub_one=$work/publish-one
@@ -80,7 +86,7 @@ tree_hash() {
 
 versions() {
   uname -srm
-  got=$("$dotnet" --version) || return 1
+  got=$(cd "$pin_dir" && "$dotnet" --version) || return 1
   echo "dotnet SDK $got"
   "$dotnet" --list-runtimes
   echo "image digest: ${IMAGE_DIGEST:-<TO BE FILLED: not given>}"
@@ -141,8 +147,8 @@ publish_copy() {
   cp "$dnroot"/at/LangAt.csproj "$fx/" || return 1
   cp "$dnroot"/at/src/*.cs "$fx/src/" || return 1
   cp "$sdkdir"/src/*.cs "$sdkdir"/src/*.csproj "$sdk/" || return 1
-  # The pin travels with the copy: the SDK that builds it is the one in global.json, whatever else the machine has installed.
-  cp "$repo/global.json" "$1/" || return 1
+  # The pin travels with the copy: the SDK that builds it is the one in its global.json (the record pin), whatever else the machine has installed.
+  cp "$record_pin" "$1/global.json" || return 1
   in_copy=$(cd "$fx" && "$dotnet" --version) || { echo "FAIL dotnet cannot run in the copy of the sources (is the pinned SDK $sdk_pinned installed?)"; return 1; }
   [ "$in_copy" = "$sdk_pinned" ] || { echo "FAIL the SDK that builds the copy is $in_copy, not the pinned $sdk_pinned"; return 1; }
   if [ "${3:-}" = old ]; then
