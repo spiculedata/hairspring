@@ -9,8 +9,8 @@ measured.
 |---|---|---|
 | C | Supported: passed our acceptance test on one configuration (Ubuntu 24.04, one Xeon host, pinned Hermit build); not tested elsewhere. | |
 | C++ (clang++ and g++) | Supported: passed our acceptance test on one configuration (Ubuntu 24.04, one Xeon host, pinned Hermit build); not tested elsewhere. | Passed separately with clang++ and with g++. |
-| Go | Supported: passed our acceptance test on one configuration (Ubuntu 24.04, one Xeon host, pinned Hermit build); not tested elsewhere. | Acceptance result AT-PASS with some trials unrated: 3 of the 400 trials (1 in the failing arm, 2 in the passing arm) gave no verdict and are not counted. |
-| Rust | Supported: passed our acceptance test on one configuration (Ubuntu 24.04, one Xeon host, pinned Hermit build); not tested elsewhere. | The probe program (P-RS1) passed, and the acceptance test (AT-RS~2) passed. |
+| Go | Supported: passed our acceptance test on one configuration (Ubuntu 24.04, one Xeon host, pinned Hermit build); not tested elsewhere. | Passed the acceptance test, with some trials unrated: 3 of the 400 trials (1 in the failing arm, 2 in the passing arm) gave no verdict and are not counted. |
+| Rust | Supported: passed our acceptance test on one configuration (Ubuntu 24.04, one Xeon host, pinned Hermit build); not tested elsewhere. | The probe program passed, and the acceptance test passed. |
 | Python | Not supported on this build: the probe program did not complete under Hermit. | |
 | Java | SDK and fixture available. Not supported on this build: the probe program did not complete under Hermit. | |
 | .NET | SDK and fixture available. Not supported on this build: the probe program did not complete under Hermit. | |
