@@ -50,7 +50,8 @@ export HAIRSPRING_HERMIT="$HOME/.local/share/hairspring/hermit/bin/hermit"
 hairspring doctor --process-backend
 ```
 
-What the Hermit installer pins and verifies:
+What the Hermit installer pins and verifies (the pins are in one file, `scripts/hermit.pin`, which the installer reads and
+refuses to run without):
 
 - the fork (`github.com/spiculedata/hermit`, a fork of `rrnewton/hermit`) at one commit, checked after checkout;
 - the replay patch (`examples/glibc-condlock/experiment/patches/hermit-25781c5-replay-backport.diff`) by sha256 before

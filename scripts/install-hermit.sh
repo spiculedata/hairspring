@@ -16,17 +16,15 @@
 #
 # Test hooks (used by scripts/test-scripts.sh; not for normal use): HAIRSPRING_PROC_ROOT, HAIRSPRING_SYS_ROOT and
 # HAIRSPRING_ROOT_DIR replace /proc, /sys and / for the read-only checks; HAIRSPRING_HERMIT_REPO replaces the clone URL;
-# HAIRSPRING_HERMIT_PATCH replaces the patch path (its sha256 is still checked).
+# HAIRSPRING_HERMIT_PATCH replaces the patch path (its sha256 is still checked); HAIRSPRING_HERMIT_PIN replaces the
+# pin file (scripts/hermit.pin).
 set -euo pipefail
 
 # ---- pins -------------------------------------------------------------------------------------------------------
-# The fork and the commit are documented in examples/go-sql-cancel/experiment/README.md and
-# examples/glibc-condlock/experiment/README.md ("Building the pinned Hermit").
-readonly HERMIT_REPO_DEFAULT="https://github.com/spiculedata/hermit"
-readonly HERMIT_BASE_COMMIT="25781c5c48d47c316324fd912b7dcafa394c339a"
-readonly HERMIT_PATCH_SHA256="1f5d06401ccd8ed7adfa3f0dccd4426640a64c97def169bbec82db1c16a8e957"
-readonly HERMIT_PATCH_REL="examples/glibc-condlock/experiment/patches/hermit-25781c5-replay-backport.diff"
-readonly RUST_TOOLCHAIN="nightly-2026-07-12"
+# The fork, commit, patch hash, patch path and Rust toolchain are read from scripts/hermit.pin (the one canonical copy;
+# scripts/test-scripts.sh checks that the experiment READMEs and the quickstart agree with it). The file is parsed, never
+# sourced, and the script refuses to go on if it is missing, has a missing, repeated or unknown key, or has a value of
+# the wrong shape.
 readonly PROVENANCE_FILE="hermit.provenance"
 # Flags the Hairspring backend passes to `hermit run` (crates/hairspring-hermit/src/exec.rs).
 readonly REQUIRED_RUN_FLAGS="--epoch --sched-seed --summary-json --chaos --sched-heuristic --max-timeslice --skid-margin"
@@ -41,9 +39,8 @@ readonly MIN_FREE_KB=$((8 * 1024 * 1024))
 PROC_ROOT="${HAIRSPRING_PROC_ROOT:-/proc}"
 SYS_ROOT="${HAIRSPRING_SYS_ROOT:-/sys}"
 ROOT_DIR="${HAIRSPRING_ROOT_DIR:-}"
-HERMIT_REPO="${HAIRSPRING_HERMIT_REPO:-$HERMIT_REPO_DEFAULT}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HERMIT_PATCH="${HAIRSPRING_HERMIT_PATCH:-$SCRIPT_DIR/../$HERMIT_PATCH_REL}"
+PIN_FILE="${HAIRSPRING_HERMIT_PIN:-$SCRIPT_DIR/hermit.pin}"
 
 say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -57,6 +54,7 @@ usage_error() {
 }
 
 usage() {
+  load_pins
   cat <<EOF
 Usage:
   install-hermit.sh check
@@ -85,6 +83,73 @@ Pins: fork $HERMIT_REPO_DEFAULT, commit $HERMIT_BASE_COMMIT,
       patch sha256 $HERMIT_PATCH_SHA256, Rust toolchain $RUST_TOOLCHAIN.
 Exit codes: 0 success, 1 a prerequisite or verification failed, 2 usage error.
 EOF
+}
+
+# ---- the pin file -----------------------------------------------------------------------------------------------
+HERMIT_REPO_DEFAULT=""
+HERMIT_BASE_COMMIT=""
+HERMIT_PATCH_SHA256=""
+HERMIT_PATCH_REL=""
+RUST_TOOLCHAIN=""
+HERMIT_REPO=""
+HERMIT_PATCH=""
+PINS_LOADED="no"
+
+pin_shape_ok() {
+  # $1 key, $2 value
+  case "$1" in
+    HERMIT_REPO) [[ "$2" =~ ^https://[A-Za-z0-9._/-]+$ ]] ;;
+    HERMIT_BASE_COMMIT) [[ "$2" =~ ^[0-9a-f]{40}$ ]] ;;
+    HERMIT_PATCH_SHA256) [[ "$2" =~ ^[0-9a-f]{64}$ ]] ;;
+    HERMIT_PATCH_REL) [[ "$2" =~ ^[A-Za-z0-9._/-]+$ ]] && [[ "$2" != /* ]] && [[ "$2" != *..* ]] ;;
+    RUST_TOOLCHAIN) [[ "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+set_pin() {
+  case "$1" in
+    HERMIT_REPO) HERMIT_REPO_DEFAULT="$2" ;;
+    HERMIT_BASE_COMMIT) HERMIT_BASE_COMMIT="$2" ;;
+    HERMIT_PATCH_SHA256) HERMIT_PATCH_SHA256="$2" ;;
+    HERMIT_PATCH_REL) HERMIT_PATCH_REL="$2" ;;
+    RUST_TOOLCHAIN) RUST_TOOLCHAIN="$2" ;;
+  esac
+}
+
+load_pins() {
+  [ "$PINS_LOADED" = "no" ] || return 0
+  if [ -n "${HAIRSPRING_HERMIT_PIN:-}" ]; then
+    warn "HAIRSPRING_HERMIT_PIN overrides the pin file; using $PIN_FILE"
+  fi
+  [ -f "$PIN_FILE" ] && [ -r "$PIN_FILE" ] || die "the pin file $PIN_FILE is missing or unreadable; refusing to continue without the pins"
+  local line key value seen=" "
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in '' | '#'*) continue ;; esac
+    case "$line" in
+      *=*) ;;
+      *) die "pin file $PIN_FILE: '$line' is not a KEY=VALUE line" ;;
+    esac
+    key="${line%%=*}"
+    value="${line#*=}"
+    case "$key" in
+      HERMIT_REPO | HERMIT_BASE_COMMIT | HERMIT_PATCH_SHA256 | HERMIT_PATCH_REL | RUST_TOOLCHAIN) ;;
+      *) die "pin file $PIN_FILE: $key is not a known pin" ;;
+    esac
+    case "$seen" in *" $key "*) die "pin file $PIN_FILE: $key is given more than once" ;; esac
+    pin_shape_ok "$key" "$value" || die "pin file $PIN_FILE: $key has a malformed value '$value'"
+    seen="$seen$key "
+    set_pin "$key" "$value"
+  done <"$PIN_FILE"
+  for key in HERMIT_REPO HERMIT_BASE_COMMIT HERMIT_PATCH_SHA256 HERMIT_PATCH_REL RUST_TOOLCHAIN; do
+    case "$seen" in *" $key "*) ;; *) die "pin file $PIN_FILE: $key is missing" ;; esac
+  done
+  HERMIT_REPO="${HAIRSPRING_HERMIT_REPO:-$HERMIT_REPO_DEFAULT}"
+  if [ -n "${HAIRSPRING_HERMIT_REPO:-}" ]; then
+    warn "HAIRSPRING_HERMIT_REPO overrides the pinned fork; using $HERMIT_REPO"
+  fi
+  HERMIT_PATCH="${HAIRSPRING_HERMIT_PATCH:-$SCRIPT_DIR/../$HERMIT_PATCH_REL}"
+  PINS_LOADED="yes"
 }
 
 # ---- small helpers ----------------------------------------------------------------------------------------------
@@ -435,6 +500,7 @@ install_binary() {
 
 print_plan() {
   say "plan:"
+  say "  pin file    $PIN_FILE"
   say "  fork        $HERMIT_REPO"
   say "  commit      $HERMIT_BASE_COMMIT"
   say "  patch       $HERMIT_PATCH (sha256 $HERMIT_PATCH_SHA256)"
@@ -443,6 +509,7 @@ print_plan() {
 }
 
 run_install() {
+  load_pins
   print_plan
   verify_patch_pin
   if ! check_build_prereqs; then

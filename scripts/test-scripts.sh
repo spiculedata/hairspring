@@ -15,9 +15,15 @@ set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 SCRIPTS_DIR="${HS_SCRIPTS_DIR:-$HERE}"
-REAL_PATCH="$REPO/examples/glibc-condlock/experiment/patches/hermit-25781c5-replay-backport.diff"
-readonly PINNED_COMMIT="25781c5c48d47c316324fd912b7dcafa394c339a"
-readonly PINNED_TOOLCHAIN="nightly-2026-07-12"
+# The canonical pins live in scripts/hermit.pin. The tests read them from the repository copy, so changing a pin there
+# does not mean editing the tests; the mutation run still catches a script that stops checking them.
+PIN_FILE="$HERE/hermit.pin"
+pin_value() { grep -E "^$1=" "$PIN_FILE" | head -n 1 | cut -d= -f2-; }
+PINNED_COMMIT="$(pin_value HERMIT_BASE_COMMIT)"
+PINNED_PATCH_SHA256="$(pin_value HERMIT_PATCH_SHA256)"
+PINNED_TOOLCHAIN="$(pin_value RUST_TOOLCHAIN)"
+REAL_PATCH="$REPO/$(pin_value HERMIT_PATCH_REL)"
+readonly PINNED_COMMIT PINNED_PATCH_SHA256 PINNED_TOOLCHAIN REAL_PATCH
 # Real tools the scripts under test may use. Anything else (git, cargo, uname, id, ...) is faked or absent.
 readonly REAL_TOOLS="bash sh env cat grep head tail cut tr sed awk sort uniq wc mkdir rm cp mv ln chmod ls dirname basename
 mktemp install date df getconf touch sleep find cmp tee xargs sha256sum shasum curl cksum rmdir readlink seq"
@@ -45,6 +51,7 @@ assert_out_lacks() { ! grep -qF -- "$1" "$SB/out" || fail_now "stdout has: $1" "
 assert_err_has() { grep -qF -- "$1" "$SB/err" || fail_now "stderr lacks: $1" "$(cat "$SB/err")"; }
 assert_log_has() { grep -qF -- "$1" "$SB/calls.log" || fail_now "no call matching: $1" "$(cat "$SB/calls.log")"; }
 assert_log_lacks() { ! grep -qF -- "$1" "$SB/calls.log" || fail_now "unexpected call: $1" "$(cat "$SB/calls.log")"; }
+assert_log_matches() { grep -qE -- "$1" "$SB/calls.log" || fail_now "no call matching the pattern: $1" "$(cat "$SB/calls.log")"; }
 assert_exists() { [ -e "$1" ] || fail_now "missing: $1"; }
 assert_absent() { [ ! -e "$1" ] || fail_now "should not exist: $1"; }
 assert_count() {
@@ -152,7 +159,7 @@ esac'
   mk_fake git 'if [ "$1" = "-C" ]; then shift 2; fi
 case "$1" in
   clone) for a in "$@"; do last="$a"; done; mkdir -p "$last"; [ -z "${FAKE_TAMPER_PATCH:-}" ] || echo tamper >>"$HAIRSPRING_HERMIT_PATCH"; printf "[toolchain]\nchannel = \"nightly-2026-07-12\"\n" >"$last/rust-toolchain.toml" ;;
-  rev-parse) echo "${FAKE_GIT_HEAD:-25781c5c48d47c316324fd912b7dcafa394c339a}" ;;
+  rev-parse) echo "${FAKE_GIT_HEAD:-$FAKE_PINNED_COMMIT}" ;;
   apply) if [ "$2" = "--check" ]; then exit "${FAKE_APPLY_CHECK_RC:-0}"; fi ;;
 esac'
   mk_fake cargo 'echo "toolchain=${RUSTUP_TOOLCHAIN:-}" >>"$FAKE_LOG"
@@ -173,11 +180,15 @@ runx() {
   done
   shift
   RC=0
+  local pin_env=()
+  [ -z "${PIN_UNDER_TEST:-}" ] || pin_env=("HAIRSPRING_HERMIT_PIN=$PIN_UNDER_TEST")
   env -i \
     PATH="$BIN:$TMP/real" HOME="$SB/home" TMPDIR="$SB/tmp" \
     FAKE_LOG="$SB/calls.log" FAKE_FORBIDDEN="$SB/forbidden.log" FAKE_STATE="$SB/state" \
     FAKE_HERMIT_SRC="$SB/fake-hermit" FAKE_HAIRSPRING_SRC="$SB/fake-hairspring" \
     HAIRSPRING_PROC_ROOT="$SB/proc" HAIRSPRING_SYS_ROOT="$SB/sys" HAIRSPRING_ROOT_DIR="$SB/root" \
+    FAKE_PINNED_COMMIT="$PINNED_COMMIT" \
+    ${pin_env[@]+"${pin_env[@]}"} \
     HAIRSPRING_HERMIT_PATCH="${PATCH_UNDER_TEST:-$REAL_PATCH}" CARGO_TARGET_DIR="$SB/target" \
     ${extra[@]+"${extra[@]}"} \
     "$@" >"$SB/out" 2>"$SB/err" || RC=$?
@@ -519,6 +530,15 @@ t_a_verified_install_does_not_claim_unverified_in_its_summary() {
   grep -E '^installed: ' "$SB/out" | grep -qv UNVERIFIED || fail_now "a verified install said UNVERIFIED" "$(cat "$SB/out")"
 }
 
+t_install_applies_the_verified_private_copy_not_the_original_patch() {
+  new_sandbox "$1"
+  hermit_run -- install --prefix "$SB/prefix"
+  assert_rc 0
+  assert_log_matches ' apply --check [^ ]*/replay\.patch$'
+  assert_log_matches ' apply [^ -][^ ]*/replay\.patch$'
+  assert_log_lacks "$REAL_PATCH"
+}
+
 t_patch_changed_after_the_first_check_is_refused_before_it_is_applied() {
   new_sandbox "$1"
   cp "$REAL_PATCH" "$SB/swap.diff"
@@ -527,6 +547,137 @@ t_patch_changed_after_the_first_check_is_refused_before_it_is_applied() {
   assert_err_has "changed after it was verified"
   assert_log_lacks " apply "
   assert_absent "$SB/prefix/bin/hermit"
+}
+
+# ---- install-hermit.sh: the pin file ----------------------------------------------------------------------------
+# Runs an install with PIN_UNDER_TEST pointing at $1; it must stop before any git, cargo or write, naming the problem.
+expect_pin_refused() {
+  PIN_UNDER_TEST="$1" hermit_run -- install --prefix "$SB/prefix"
+  assert_rc 1
+  assert_err_has "$2"
+  assert_log_lacks "git "
+  assert_log_lacks "cargo "
+  assert_absent "$SB/prefix"
+}
+
+# Writes a copy of the real pin file with one line replaced (or removed when $3 is empty) to $SB/pin.
+write_pin_with() {
+  local key="$1" line="$2"
+  grep -v "^$key=" "$PIN_FILE" >"$SB/pin"
+  [ -z "$line" ] || printf '%s\n' "$line" >>"$SB/pin"
+}
+
+t_install_refuses_a_missing_pin_file() {
+  new_sandbox "$1"
+  expect_pin_refused "$SB/no-such.pin" "is missing or unreadable"
+}
+
+t_install_refuses_an_empty_pin_file() {
+  new_sandbox "$1"
+  : >"$SB/pin"
+  expect_pin_refused "$SB/pin" "missing"
+}
+
+t_install_refuses_a_pin_file_missing_a_key() {
+  new_sandbox "$1"
+  local key
+  for key in HERMIT_REPO HERMIT_BASE_COMMIT HERMIT_PATCH_SHA256 HERMIT_PATCH_REL RUST_TOOLCHAIN; do
+    write_pin_with "$key" ""
+    expect_pin_refused "$SB/pin" "$key"
+  done
+}
+
+t_install_refuses_a_malformed_commit_pin() {
+  new_sandbox "$1"
+  write_pin_with HERMIT_BASE_COMMIT "HERMIT_BASE_COMMIT=25781c5"
+  expect_pin_refused "$SB/pin" "HERMIT_BASE_COMMIT"
+  write_pin_with HERMIT_BASE_COMMIT "HERMIT_BASE_COMMIT=${PINNED_COMMIT%?}Z"
+  expect_pin_refused "$SB/pin" "HERMIT_BASE_COMMIT"
+}
+
+t_install_refuses_a_malformed_patch_hash_pin() {
+  new_sandbox "$1"
+  write_pin_with HERMIT_PATCH_SHA256 "HERMIT_PATCH_SHA256=1f5d0640"
+  expect_pin_refused "$SB/pin" "HERMIT_PATCH_SHA256"
+  write_pin_with HERMIT_PATCH_SHA256 "HERMIT_PATCH_SHA256=$(printf '%s' "$PINNED_PATCH_SHA256" | tr a-f A-F)"
+  expect_pin_refused "$SB/pin" "HERMIT_PATCH_SHA256"
+}
+
+t_install_refuses_a_pin_file_with_an_unknown_duplicate_or_unparsable_line() {
+  new_sandbox "$1"
+  cp "$PIN_FILE" "$SB/pin"
+  printf 'EXTRA=1\n' >>"$SB/pin"
+  expect_pin_refused "$SB/pin" "EXTRA"
+  cp "$PIN_FILE" "$SB/pin"
+  printf 'HERMIT_BASE_COMMIT=%s\n' "$PINNED_COMMIT" >>"$SB/pin"
+  expect_pin_refused "$SB/pin" "more than once"
+  cp "$PIN_FILE" "$SB/pin"
+  printf 'this is not a pin\n' >>"$SB/pin"
+  expect_pin_refused "$SB/pin" "not a KEY=VALUE"
+}
+
+t_install_refuses_a_toolchain_pin_that_looks_like_an_option() {
+  new_sandbox "$1"
+  write_pin_with RUST_TOOLCHAIN "RUST_TOOLCHAIN=--foo"
+  expect_pin_refused "$SB/pin" "RUST_TOOLCHAIN"
+  write_pin_with RUST_TOOLCHAIN "RUST_TOOLCHAIN=-nightly"
+  expect_pin_refused "$SB/pin" "RUST_TOOLCHAIN"
+}
+
+t_overriding_the_pin_file_or_repo_is_warned_about_and_shown_in_the_plan() {
+  new_sandbox "$1"
+  hermit_run -- install --dry-run --prefix "$SB/prefix"
+  assert_rc 0
+  grep -qE '^  pin file    .*/hermit\.pin$' "$SB/out" || fail_now "the plan does not show the default pin file" "$(cat "$SB/out")"
+  ! grep -qF "overrid" "$SB/err" || fail_now "a warning about an override appeared with no override set" "$(cat "$SB/err")"
+  cp "$PIN_FILE" "$SB/pin"
+  PIN_UNDER_TEST="$SB/pin" hermit_run -- install --dry-run --prefix "$SB/prefix"
+  assert_rc 0
+  assert_err_has "warning: HAIRSPRING_HERMIT_PIN overrides the pin file; using $SB/pin"
+  assert_out_has "pin file    $SB/pin"
+  hermit_run HAIRSPRING_HERMIT_REPO=https://example.invalid/hermit -- install --dry-run --prefix "$SB/prefix"
+  assert_err_has "warning: HAIRSPRING_HERMIT_REPO overrides the pinned fork; using https://example.invalid/hermit"
+}
+
+t_install_does_not_execute_the_pin_file() {
+  new_sandbox "$1"
+  cp "$PIN_FILE" "$SB/pin"
+  printf 'RUST_TOOLCHAIN=$(touch %s/executed)\n' "$SB" >>"$SB/pin"
+  grep -v '^RUST_TOOLCHAIN=nightly' "$SB/pin" >"$SB/pin2"
+  PIN_UNDER_TEST="$SB/pin2" hermit_run -- install --prefix "$SB/prefix"
+  assert_rc 1
+  assert_absent "$SB/executed"
+}
+
+t_install_pin_file_values_reach_the_plan_and_the_help() {
+  new_sandbox "$1"
+  hermit_run -- install --dry-run --prefix "$SB/prefix"
+  assert_out_has "$PINNED_COMMIT"
+  assert_out_has "$PINNED_PATCH_SHA256"
+  assert_out_has "$PINNED_TOOLCHAIN"
+  hermit_run -- --help
+  assert_rc 0
+  assert_out_has "$PINNED_COMMIT"
+  assert_out_has "$PINNED_PATCH_SHA256"
+}
+
+# The values copied into prose must not drift from the pin file.
+t_pinned_values_in_the_docs_match_the_pin_file() {
+  new_sandbox "$1"
+  local doc
+  [ "$(sha256_of "$REAL_PATCH")" = "$PINNED_PATCH_SHA256" ] || fail_now "the patch file does not hash to the pin in scripts/hermit.pin"
+  for doc in experiments/sqlite-wal/README.md examples/go-sql-cancel/experiment/README.md examples/glibc-condlock/experiment/README.md; do
+    grep -qF "$PINNED_COMMIT" "$REPO/$doc" || fail_now "$doc does not name the pinned commit $PINNED_COMMIT"
+  done
+  for doc in examples/go-sql-cancel/experiment/README.md examples/glibc-condlock/experiment/README.md; do
+    grep -qF "$PINNED_PATCH_SHA256" "$REPO/$doc" || fail_now "$doc does not name the pinned patch sha256 $PINNED_PATCH_SHA256"
+  done
+  grep -qF "$(pin_value HERMIT_PATCH_REL)" "$REPO/docs/quickstart.md" || fail_now "docs/quickstart.md does not name the pinned patch path"
+  grep -qF "$PINNED_TOOLCHAIN" "$REPO/docs/quickstart.md" || fail_now "docs/quickstart.md does not name the pinned toolchain"
+  # Every 40-hex commit the docs give for the checkout must be the pinned one.
+  for doc in examples/go-sql-cancel/experiment/README.md examples/glibc-condlock/experiment/README.md; do
+    grep -E 'checkout -b replay-backport [0-9a-f]{40}' "$REPO/$doc" | grep -qF "$PINNED_COMMIT" || fail_now "$doc checks out a commit other than the pin"
+  done
 }
 
 t_check_rejects_install_only_options() {
@@ -887,7 +1038,7 @@ mutate() {
   dir="$TMP/mut/$name"
   mkdir -p "$dir/scripts" "$dir/crates/hairspring-cli"
   : >"$dir/Cargo.toml"
-  cp "$HERE"/install-hermit.sh "$HERE"/install.sh "$HERE"/test-install-*.sh "$dir/scripts/"
+  cp "$HERE"/install-hermit.sh "$HERE"/hermit.pin "$HERE"/install.sh "$HERE"/test-install-*.sh "$dir/scripts/"
   content="$(cat "$HERE/$file")"
   mutated="${content/"$old"/"$new"}"
   if [ "$mutated" = "$content" ]; then
@@ -910,7 +1061,7 @@ run_control() {
   local dir="$TMP/mut/control"
   mkdir -p "$dir/scripts" "$dir/crates/hairspring-cli"
   : >"$dir/Cargo.toml"
-  cp "$HERE"/install-hermit.sh "$HERE"/install.sh "$HERE"/test-install-*.sh "$dir/scripts/"
+  cp "$HERE"/install-hermit.sh "$HERE"/hermit.pin "$HERE"/install.sh "$HERE"/test-install-*.sh "$dir/scripts/"
   if ! HS_SCRIPTS_DIR="$dir/scripts" bash "$HERE/test-scripts.sh" >"$dir/log" 2>&1; then
     printf 'CONTROL FAILED: an unmutated copy does not pass the suite, so no mutant result can be trusted.\n' >&2
     tail -n 30 "$dir/log" >&2
@@ -947,6 +1098,19 @@ run_mutations() {
   mutate hermit-patch-not-rechecked-before-apply install-hermit.sh 'if [ "$actual" != "$HERMIT_PATCH_SHA256" ]; then
     die "the replay patch changed after' 'if false; then
     die "the replay patch changed after'
+  mutate hermit-applies-the-original-patch install-hermit.sh '  git -C "$src" apply "$copy"' '  git -C "$src" apply "$HERMIT_PATCH"'
+  mutate hermit-checks-the-original-patch install-hermit.sh 'apply --check "$copy"' 'apply --check "$HERMIT_PATCH"'
+  mutate hermit-pin-file-missing-ignored install-hermit.sh '[ -f "$PIN_FILE" ] && [ -r "$PIN_FILE" ] ||' 'true ||'
+  mutate hermit-pin-key-missing-ignored install-hermit.sh '*) die "pin file $PIN_FILE: $key is missing" ;; esac' '*) ;; esac'
+  mutate hermit-pin-duplicate-allowed install-hermit.sh 'case "$seen" in *" $key "*) die "pin file $PIN_FILE: $key is given more than once" ;; esac' ':'
+  mutate hermit-pin-junk-line-allowed install-hermit.sh '*) die "pin file $PIN_FILE: '"'"'$line'"'"' is not a KEY=VALUE line" ;;' '*) continue ;;'
+  mutate hermit-pin-commit-shape-unchecked install-hermit.sh '[[ "$2" =~ ^[0-9a-f]{40}$ ]]' 'true'
+  mutate hermit-pin-patch-hash-shape-unchecked install-hermit.sh '[[ "$2" =~ ^[0-9a-f]{64}$ ]]' 'true'
+  mutate hermit-pin-value-shape-unchecked install-hermit.sh '    pin_shape_ok "$key" "$value" ||' '    true ||'
+  mutate hermit-pin-toolchain-may-start-with-dash install-hermit.sh '[[ "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]' '[[ "$2" =~ ^[A-Za-z0-9._-]+$ ]]'
+  mutate hermit-pin-file-override-silent install-hermit.sh 'warn "HAIRSPRING_HERMIT_PIN overrides the pin file; using $PIN_FILE"' 'true'
+  mutate hermit-repo-override-silent install-hermit.sh 'warn "HAIRSPRING_HERMIT_REPO overrides the pinned fork; using $HERMIT_REPO"' 'true'
+  mutate hermit-plan-hides-pin-file install-hermit.sh '  say "  pin file    $PIN_FILE"' '  true'
   mutate hermit-summary-hides-unverified install-hermit.sh '    say "installed: $PREFIX/bin/hermit (UNVERIFIED' '    say "installed: $PREFIX/bin/hermit (checked'
   mutate hermit-check-accepts-install-options install-hermit.sh '  if [ "$COMMAND" = "check" ]; then' '  if false; then'
   mutate cli-redirects-not-restricted install.sh ' --proto-redir =https' ''
