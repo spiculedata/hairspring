@@ -34,6 +34,7 @@ mod sqlite;
 mod sqlite_checks;
 mod sqlite_downgrade;
 mod sqlite_explorer;
+mod sqlite_jobs;
 mod sqlite_lineage;
 mod sqlite_run_end;
 mod sqlite_schema;

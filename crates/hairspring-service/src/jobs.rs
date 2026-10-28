@@ -228,6 +228,15 @@ impl Service {
         }
     }
 
+    /// Gives a job back untouched (see [`Store::release_job`](hairspring_store::Store::release_job)). `false` means the
+    /// lease was already gone, which is reported on stderr, the way this crate reports what it cannot act on.
+    fn release(&self, job_id: &str, worker_id: &str) -> Result<()> {
+        if !self.store.release_job(job_id, worker_id)? {
+            eprintln!("hairspring: job {job_id} was not released: its lease was already gone");
+        }
+        Ok(())
+    }
+
     /// Cancels the run of `job`, after storing the trials the engine judged before it stopped (a cancelled run accepts
     /// no more), and hands back the engine's result without them so that recording it does not store them twice.
     fn cancel_keeping_trials(
@@ -475,7 +484,7 @@ impl Service {
         let on_stop = match on_stop {
             OnStop::Cancel(_) if foreign => {
                 if stop.load(Ordering::SeqCst) {
-                    self.store.release_job(&job.job_id, worker_id)?;
+                    self.release(&job.job_id, worker_id)?;
                     return Ok(true);
                 }
                 OnStop::Requeue
@@ -542,7 +551,7 @@ impl Service {
         // Another run's job that was cut short is given back and its result is not recorded, whatever the engine made of
         // being interrupted: it is not this command's run to cancel or to fail.
         if foreign && stop.load(Ordering::SeqCst) && ended_early {
-            self.store.release_job(&job.job_id, worker_id)?;
+            self.release(&job.job_id, worker_id)?;
             return Ok(true);
         }
         let result =
