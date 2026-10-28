@@ -57,6 +57,33 @@ Cause (verified from Hermit's debug log): Hermit virtualises file timestamps, so
 Hermit backend therefore starts guests from a minimal pinned environment and freezes bytecode caches. Idle
 time, CPU load and drop-caches did not matter (110/110 runs identical across gaps up to 90 s).
 
+### The guest's /tmp and Hermit's temporary files
+
+Hermit mounts a private directory over the guest's `/tmp`. Left to itself it makes that directory, and a private copy
+of the host `/etc/group`, in the host temporary directory (`$TMPDIR`, else `/tmp`), and removes both when it exits. A
+trial that runs past `trial_timeout_secs` is stopped with `SIGKILL`, which skips that, so both stayed behind.
+
+The Hermit backend now makes a private directory for each trial (mode 0700, below `events_dir`, or `summary_dir` when
+that is not set, which is `/dev/shm` by default) and removes it itself after the trial, however it ended:
+
+- Hermit is always given `--tmp=<directory>/tmp`. The guest still sees an empty, writable `/tmp` at the same path, and
+  never sees the host path. In the Hermit source we read, the mount's root in `/proc/self/mountinfo` is rewritten to a
+  fixed name. The guest's events file already worked this way when `events_file` was on; the change is that it is now
+  the case for every trial. The `--tmp` argument is rebuilt by every path that runs a trial (search, rerun, replay,
+  confirmation), so replay has the same `/tmp` semantics as the run it replays, and a bundle records no host path. A
+  target whose own `hermit_args` already choose the guest's `/tmp` keeps its choice.
+- When the target's `--base-env` is `minimal` or `empty`, the Hermit process is also started with `TMPDIR=<directory>/hermit`,
+  so the `/etc/group` copy lands there. `TMPDIR` is not set otherwise: Hermit's default base environment (`host`) passes
+  its own environment to the guest, so the guest would see a host path that changes from trial to trial. Under the default
+  base environment a timed-out trial can therefore still leave the `/etc/group` copy (a small file named `.tmpXXXXXX`) in
+  the host temporary directory; the guest's own `/tmp` is no longer left there.
+- Writes to the guest's `/tmp` now go to `/dev/shm` by default (memory), where they went to the host temporary directory
+  before. A guest that writes a lot there can fill `/dev/shm` (small in some containers). The directory is the `events_dir` setting of the Rust library; it is not a key in `hairspring.toml`.
+- With no `events_dir` or `summary_dir`, trials get no private directory and run as before.
+
+The guest's environment, the Hermit scheduler flags, the schedules and the hashes are not changed by this. It is a change
+in how the engine runs Hermit, so a result pinned to an engine version is tied to the version that made it.
+
 ### Recorded environment
 
 The measurements above mean a recorded schedule depends on more than the seed and the Hermit flags. Two cases

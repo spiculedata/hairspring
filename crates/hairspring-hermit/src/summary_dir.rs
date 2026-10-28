@@ -41,12 +41,17 @@ impl PrivateDir {
         self.path.join(format!("{seed}-{:016x}.json", random_u64()))
     }
 
-    /// A fresh private directory (mode 0700) for one trial's scratch files, removed on drop. The name is a fixed-width
-    /// random number and nothing else, so the path's length never depends on the seed.
+    /// A fresh private directory (mode 0700) for one trial, removed on drop, holding two more: [`ScratchDir::guest_tmp`]
+    /// and [`ScratchDir::hermit_tmp`]. The name is a fixed-width random number and nothing else, so the path's length
+    /// never depends on the seed.
     pub fn scratch_for(&self) -> io::Result<ScratchDir> {
         let path = self.path.join(format!("{:016x}.d", random_u64()));
         DirBuilder::new().mode(0o700).create(&path)?;
-        Ok(ScratchDir { path })
+        let dir = ScratchDir { path };
+        // On any failure `dir` is dropped here, which removes what was made.
+        DirBuilder::new().mode(0o700).create(dir.guest_tmp())?;
+        DirBuilder::new().mode(0o700).create(dir.hermit_tmp())?;
+        Ok(dir)
     }
 
     #[cfg(test)]
@@ -87,15 +92,28 @@ fn remove_tree(path: &Path) -> io::Result<()> {
     }
 }
 
-/// One trial's scratch directory inside a [`PrivateDir`].
+/// One trial's scratch directory inside a [`PrivateDir`]. The engine removes it after the trial, so it survives a
+/// `SIGKILL` of Hermit, which a temporary file Hermit removes itself does not.
 #[derive(Debug)]
 pub struct ScratchDir {
     path: PathBuf,
 }
 
 impl ScratchDir {
+    #[cfg(test)]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The directory Hermit mounts as the guest's `/tmp` (`--tmp`). Empty when the trial starts, and only the guest
+    /// writes to it; Hermit's own temporary files go to [`ScratchDir::hermit_tmp`].
+    pub fn guest_tmp(&self) -> PathBuf {
+        self.path.join("tmp")
+    }
+
+    /// The directory for Hermit's own temporary files (`TMPDIR` of the Hermit process), kept apart from the guest's.
+    pub fn hermit_tmp(&self) -> PathBuf {
+        self.path.join("hermit")
     }
 
     /// Removes the directory and says why if it could not be removed. Dropping does the same but cannot report.
@@ -225,6 +243,19 @@ mod tests {
         let gone = a.path().to_path_buf();
         drop(a);
         assert!(!gone.exists());
+    }
+
+    #[test]
+    fn a_scratch_directory_holds_separate_private_guest_and_hermit_directories() {
+        let b = base("layout");
+        let d = PrivateDir::create(&b).unwrap();
+        let s = d.scratch_for().unwrap();
+        assert_ne!(s.guest_tmp(), s.hermit_tmp());
+        for sub in [s.guest_tmp(), s.hermit_tmp()] {
+            assert!(sub.starts_with(s.path()));
+            assert_eq!(std::fs::metadata(&sub).unwrap().mode() & 0o777, 0o700);
+            assert!(std::fs::read_dir(&sub).unwrap().next().is_none(), "empty");
+        }
     }
 
     #[test]

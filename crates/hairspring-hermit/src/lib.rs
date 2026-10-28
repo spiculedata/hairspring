@@ -35,6 +35,7 @@ mod tally;
 mod tally_log_tests;
 mod trace;
 mod trial_log;
+mod trial_tmp;
 #[cfg(test)]
 mod verdict_tests;
 
@@ -72,11 +73,13 @@ pub struct HermitSettings {
     /// Where Hermit writes each trial's `--summary-json`. It must be outside `/tmp` (Hermit gives the guest its own).
     /// `None` turns schedule fingerprints off; defaults to `/dev/shm` when that exists.
     pub summary_dir: Option<PathBuf>,
-    /// Offer the guest an events file (`HAIRSPRING_EVENTS_FILE`) in addition to stdout and stderr. Needs `summary_dir`,
-    /// and uses Hermit's `--tmp` for the guest's `/tmp`. Off by default: it changes what the guest's `/tmp` is.
+    /// Offer the guest an events file (`HAIRSPRING_EVENTS_FILE`) in addition to stdout and stderr. Needs `summary_dir`
+    /// (or `events_dir`), and puts the file in the guest's `/tmp`. Off by default.
     pub events_file: bool,
-    /// Where the events file's per-trial directories go. `None` uses `summary_dir`; set this to a disk-backed
-    /// directory when guests may write more than `/dev/shm` can hold.
+    /// Where each trial's private directories go: the directory Hermit mounts as the guest's `/tmp`, and Hermit's own
+    /// temporary files (see `trial_tmp`). `None` uses `summary_dir`; set this to a disk-backed directory when guests
+    /// may write more than `/dev/shm` can hold. Without either, trials get no private directories and Hermit chooses
+    /// the guest's `/tmp` itself.
     pub events_dir: Option<PathBuf>,
     /// Most event-line bytes accepted from one trial, shared by stdout, stderr and the events file. Defaults to
     /// 4 MiB (about 4,900 ids at roughly 850 bytes each). The buffer grows as events arrive, so only trials that emit

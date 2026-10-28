@@ -107,9 +107,9 @@ pub fn config_problem(
     None
 }
 
-/// The Hermit argument that mounts `dir` as the guest's `/tmp`.
+/// The Hermit argument that mounts the trial's directory as the guest's `/tmp`.
 pub fn tmp_arg(dir: &ScratchDir) -> String {
-    format!("{TMP_FLAG}={}", dir.path().display())
+    format!("{TMP_FLAG}={}", dir.guest_tmp().display())
 }
 
 /// What was read back from the events file.

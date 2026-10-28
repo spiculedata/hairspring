@@ -10,9 +10,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Passes through to the guest. Logs what hermit itself was given. When asked to mount a `/tmp` (`--tmp=DIR`), it
-/// stands in for Hermit's bind mount by pointing the guest's events variable at `DIR`. Marker files in `$EV_LOG`
-/// make it misbehave: `plant` (a symlink where the events file goes), `lockparent` (makes `DIR`'s parent read-only).
+/// Passes through to the guest. Logs what hermit itself was given. When asked to mount a `/tmp` (`--tmp=DIR`) and
+/// given an events variable, it stands in for Hermit's bind mount by pointing that variable at `DIR`. Marker files in
+/// `$EV_LOG` make it misbehave: `plant` (a symlink where the events file goes), `lockparent` (makes the trial's
+/// private directory, the parent of `DIR`, read-only).
 pub const FAKE: &str = r#"#!/bin/sh
 shift
 seed=0
@@ -31,10 +32,10 @@ if [ -n "$EV_LOG" ]; then
   echo "${HAIRSPRING_EVENTS_FILE-unset}" > "$EV_LOG/env-$seed"
   echo "$args" > "$EV_LOG/args-$seed"
 fi
-if [ -n "$tmp" ]; then
+if [ -n "$tmp" ] && [ -n "${HAIRSPRING_EVENTS_FILE+set}" ]; then
   export HAIRSPRING_EVENTS_FILE="$tmp/hairspring-events"
   if [ -e "$EV_LOG/plant" ]; then ln -s /etc/hosts "$tmp/hairspring-events"; fi
-  if [ -e "$EV_LOG/lockparent" ]; then chmod 500 "$(dirname "$tmp")"; fi
+  if [ -e "$EV_LOG/lockparent" ]; then chmod 500 "$(dirname "$(dirname "$tmp")")"; fi
 fi
 exec "$@"
 "#;
@@ -125,6 +126,11 @@ impl Rig {
             .unwrap()
             .trim()
             .to_string()
+    }
+
+    /// The engine's private directory that holds the trial's directories for `seed`: the parent of the guest's `/tmp`.
+    pub fn trial_dir(&self, seed: u64) -> PathBuf {
+        self.tmp_dir(seed).parent().expect("a parent").to_path_buf()
     }
 
     /// The host directory hermit was told to mount as the guest's `/tmp` for `seed`.
