@@ -159,7 +159,7 @@ fn write_interrupted(err: &mut dyn Write, stored: bool) -> CmdResult<i32> {
     };
     writeln!(
         err,
-        "hairspring: interrupted; the confirmation was stopped and its Hermit processes were killed ({kept})"
+        "hairspring: interrupted; any check still running was stopped and its Hermit processes were killed ({kept})"
     )?;
     Ok(crate::EXIT_INTERRUPTED)
 }

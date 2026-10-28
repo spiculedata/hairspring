@@ -155,11 +155,14 @@ fn a_further_failure_for_another_target_is_refused() {
 }
 
 #[test]
-fn more_failures_than_a_sweep_may_store_are_refused() {
+fn more_failures_than_a_sweep_may_store_are_refused_and_one_fewer_is_not() {
+    let rising =
+        |n: usize| -> Vec<FailureReport> { (0..n as u64).map(|i| report_at(5 + i)).collect() };
+    // The first failure plus MAX_FAILURE_ROWS - 1 further ones is the most a sweep may report.
+    refused(&rig(), &outcome(rising(MAX_FAILURE_ROWS)));
     let rig = rig();
-    let too_many = vec![report_at(5); MAX_FAILURE_ROWS];
-    let err = complete(&rig, &outcome(too_many)).unwrap_err();
-    assert!(matches!(err, ServiceError::InvalidRequest(_)), "{err:?}");
+    complete(&rig, &outcome(rising(MAX_FAILURE_ROWS - 1))).unwrap();
+    assert_eq!(failure_ids(&rig).len(), MAX_FAILURE_ROWS);
 }
 
 #[test]
@@ -226,4 +229,19 @@ fn the_bundles_of_one_run_may_not_total_more_than_the_request_can_carry() {
         ..outcome(vec![big(5), big(6)])
     };
     refused(&rig, &oversized);
+}
+
+#[test]
+fn a_result_the_server_refuses_ends_the_run_as_an_error_and_releases_the_job() {
+    let rig = rig();
+    let worker = rig.svc.list_workers().unwrap()[0].id.clone();
+    let bad = outcome(vec![report_at(2)]);
+    rig.svc
+        .complete_or_error(&rig.job_id, &worker, &bad)
+        .expect("the refusal is recorded, not returned");
+    let run = rig.svc.get_run(&rig.run_id).unwrap().unwrap().run;
+    assert_eq!(run.state, hairspring_store::RunState::Error, "{run:?}");
+    assert!(run.error.unwrap_or_default().contains("refused"));
+    // The job is closed: nothing is left to lease for this run.
+    assert!(rig.svc.lease(&worker).unwrap().is_none());
 }

@@ -185,7 +185,15 @@ pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write)
         Format::Junit => write!(out, "{}", to_junit(&results))?,
         Format::Sarif => writeln!(out, "{}", to_sarif(&results))?,
     }
-    Ok(code)
+    if interrupt::requested() {
+        // Ctrl-C landed after the last run finished on its own. That run stands as stored; the command still says it
+        // was told to stop.
+        writeln!(
+            err,
+            "hairspring: interrupted after the last run had finished; its result stands"
+        )?;
+    }
+    Ok(crate::status_after_interrupt(code, interrupt::requested()))
 }
 
 #[cfg(test)]

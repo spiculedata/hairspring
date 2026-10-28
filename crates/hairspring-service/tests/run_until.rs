@@ -48,3 +48,45 @@ fn a_run_whose_stop_flag_stays_clear_runs_to_its_end() {
         .unwrap();
     assert_eq!(detail.run.state, RunState::Passed, "{:?}", detail.run);
 }
+
+fn queued_run(
+    svc: &hairspring_service::Service,
+    engine: &hairspring_engine::engine::Engine,
+) -> String {
+    svc.start_run_with_mode(engine, &long_sweep(), RunMode::Sweep)
+        .unwrap()
+        .id
+}
+
+#[test]
+fn an_interrupt_never_cancels_a_run_that_belongs_to_someone_else() {
+    let (svc, _, engine) = setup();
+    // An older queued run, such as one left behind by an earlier command that was killed. It is leased first.
+    let foreign = queued_run(&svc, &engine);
+    let stop = AtomicBool::new(true);
+    let detail = svc
+        .run_sync_until(&engine, &long_sweep(), RunMode::Sweep, &stop)
+        .unwrap();
+    assert_eq!(detail.run.state, RunState::Cancelled);
+    let other = svc.get_run(&foreign).unwrap().unwrap().run;
+    assert_ne!(other.state, RunState::Cancelled, "{other:?}");
+    assert!(!other.state.is_terminal(), "{other:?}");
+}
+
+#[test]
+fn an_interrupt_cancels_our_run_at_once_when_another_process_holds_its_job() {
+    let (svc, _, engine) = setup();
+    let run = queued_run(&svc, &engine);
+    svc.lease("another-process").unwrap().expect("its job");
+    // The job is leased elsewhere, so nothing here can run it: without an interrupt this would wait for it.
+    let stop = AtomicBool::new(false);
+    let started = std::time::Instant::now();
+    let detail = std::thread::scope(|scope| {
+        let waiting = scope.spawn(|| svc.finish_run_until(&engine, &run, &stop));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        waiting.join().unwrap().unwrap()
+    });
+    assert_eq!(detail.run.state, RunState::Cancelled);
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+}

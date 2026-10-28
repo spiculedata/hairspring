@@ -30,6 +30,16 @@ pub const EXIT_UNSUPPORTED_HOST: i32 = 4;
 /// Ctrl-C ended `test` or `confirm`: 128 plus the number of SIGINT, as shells report it.
 pub const EXIT_INTERRUPTED: i32 = 130;
 
+/// The status a command ends with: 130 whenever Ctrl-C was pressed while it ran, even if the work it was doing had
+/// finished by then (the user asked it to stop), and `code` otherwise. What was stored stays as it was.
+pub(crate) fn status_after_interrupt(code: i32, interrupted: bool) -> i32 {
+    if interrupted {
+        EXIT_INTERRUPTED
+    } else {
+        code
+    }
+}
+
 pub fn main_with(registry: Registry) -> ExitCode {
     let code = run(
         registry,
@@ -62,6 +72,19 @@ where
         Err(e) => {
             let _ = writeln!(err, "error: {e}");
             EXIT_ERROR
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_command_that_was_interrupted_exits_130_whatever_its_own_status() {
+        for code in [EXIT_OK, EXIT_VIOLATION, EXIT_ERROR, EXIT_INCONCLUSIVE] {
+            assert_eq!(status_after_interrupt(code, true), EXIT_INTERRUPTED);
+            assert_eq!(status_after_interrupt(code, false), code);
         }
     }
 }

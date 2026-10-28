@@ -30,11 +30,12 @@ type EngineResult =
 
 /// What a job does when its caller's stop flag is set.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum OnStop {
+enum OnStop<'a> {
     /// Give the job up for another attempt (a server shutting down).
     Requeue,
-    /// Cancel the run (a foreground command interrupted from the terminal).
-    Cancel,
+    /// Cancel the run named (a foreground command interrupted from the terminal). A job of any other run is never
+    /// cancelled.
+    Cancel(&'a str),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -265,6 +266,24 @@ impl Service {
         })
     }
 
+    /// Like [`Service::complete`], but a result the server refuses (over a size limit, seeds out of order and the like)
+    /// ends the run as an error with the reason, and closes the job, instead of leaving the job leased until its lease
+    /// runs out. For a worker that runs in this process; a remote worker is told of the refusal and decides itself.
+    pub fn complete_or_error(
+        &self,
+        job_id: &str,
+        worker_id: &str,
+        outcome: &RunOutcome,
+    ) -> Result<()> {
+        match self.complete(job_id, worker_id, outcome) {
+            Err(ServiceError::InvalidRequest(why)) => {
+                let refused = format!("the result was refused: {}", sanitize::public_text(&why));
+                self.complete(job_id, worker_id, &RunOutcome::error(refused))
+            }
+            other => other,
+        }
+    }
+
     /// Stores the trial records an in-process worker handed over inside its outcome, batch by batch, and returns how
     /// many it handed over. A remote worker sends its records through the ingest endpoint instead.
     fn ingest_local_log(
@@ -427,15 +446,17 @@ impl Service {
         self.execute_next_on_stop(engine, worker_id, stop, OnStop::Requeue)
     }
 
-    /// Leases and executes one job, and cancels its run, instead of requeuing the job, when `stop` becomes true. The
+    /// Leases and executes one job, and cancels its run, instead of requeuing the job, when `stop` becomes true and the
+    /// job belongs to `own_run`: a job of another run is requeued untouched, and not started at all once `stop` is set. The
     /// cancel is made before the engine's result is recorded, so the run ends `cancelled` however the engine ended.
     fn execute_next_cancelling(
         &self,
         engine: &Engine,
         worker_id: &str,
         stop: &AtomicBool,
+        own_run: &str,
     ) -> Result<bool> {
-        self.execute_next_on_stop(engine, worker_id, stop, OnStop::Cancel)
+        self.execute_next_on_stop(engine, worker_id, stop, OnStop::Cancel(own_run))
     }
 
     fn execute_next_on_stop(
@@ -447,6 +468,18 @@ impl Service {
     ) -> Result<bool> {
         let Some(job) = self.lease(worker_id)? else {
             return Ok(false);
+        };
+        // The oldest queued job is leased, whoever's it is. One that is not the caller's own run is never cancelled
+        // here: it is given back untouched when the caller has been interrupted, and otherwise run as a shutdown would.
+        let on_stop = match on_stop {
+            OnStop::Cancel(own) if own != job.run_id => {
+                if stop.load(Ordering::SeqCst) {
+                    self.fail(&job.job_id, worker_id, "interrupted by shutdown")?;
+                    return Ok(true);
+                }
+                OnStop::Requeue
+            }
+            other => other,
         };
         let req = RunRequest {
             target: job.target.clone(),
@@ -479,7 +512,7 @@ impl Service {
                     if stop.load(Ordering::SeqCst) {
                         abort.set(match on_stop {
                             OnStop::Requeue => Abort::Stop,
-                            OnStop::Cancel => Abort::Cancelled,
+                            OnStop::Cancel(_) => Abort::Cancelled,
                         });
                         return false;
                     }
@@ -505,14 +538,15 @@ impl Service {
         // the result could end the run as an error first. A run that finished on its own stands.
         let ended_early = abort.get() == Abort::Cancelled
             || !matches!(&result, Ok(Ok(o)) if o.status != RunStatus::Error);
-        let result = if on_stop == OnStop::Cancel && stop.load(Ordering::SeqCst) && ended_early {
-            self.cancel_keeping_trials(&job, worker_id, result)?
-        } else {
-            result
-        };
+        let result =
+            if matches!(on_stop, OnStop::Cancel(_)) && stop.load(Ordering::SeqCst) && ended_early {
+                self.cancel_keeping_trials(&job, worker_id, result)?
+            } else {
+                result
+            };
         match (result, abort.get()) {
             (Ok(_), Abort::Stop) => self.fail(&job.job_id, worker_id, "interrupted by shutdown")?,
-            (Ok(Ok(outcome)), _) => self.complete(&job.job_id, worker_id, &outcome)?,
+            (Ok(Ok(outcome)), _) => self.complete_or_error(&job.job_id, worker_id, &outcome)?,
             (Ok(Err(e)), _) => {
                 self.complete(&job.job_id, worker_id, &RunOutcome::error(e.to_string()))?
             }
@@ -555,6 +589,17 @@ impl Service {
         self.drive_until_finished(engine, &run.id, stop)
     }
 
+    /// Runs queued jobs here until the existing run `run_id` is over (see [`Service::run_sync_until`] for `stop`), or
+    /// waits for another process that holds its job.
+    pub fn finish_run_until(
+        &self,
+        engine: &Engine,
+        run_id: &str,
+        stop: &AtomicBool,
+    ) -> Result<RunDetail> {
+        self.drive_until_finished(engine, run_id, stop)
+    }
+
     /// Runs queued jobs here until the run is over, waiting for another process that holds the job.
     fn drive_until_finished(
         &self,
@@ -571,8 +616,15 @@ impl Service {
             if detail.run.state.is_terminal() {
                 return Ok(detail);
             }
+            let ran = self.execute_next_cancelling(engine, &worker, stop, run_id)?;
+            // Interrupted with our run still open: it did not start here, or another process holds its job, or another
+            // run's job came first. Cancel it now rather than wait for it.
+            if stop.load(Ordering::SeqCst) {
+                self.cancel_run(run_id)?;
+                continue;
+            }
             // If nothing is left to execute here, another process may hold our job; wait for it.
-            if !self.execute_next_cancelling(engine, &worker, stop)? {
+            if !ran {
                 if Instant::now() >= deadline {
                     return Err(ServiceError::Internal(
                         "timed out waiting for the run to finish".to_string(),
