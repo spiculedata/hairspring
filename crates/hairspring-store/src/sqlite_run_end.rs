@@ -10,7 +10,7 @@ pub(crate) fn cancel(
     event: Option<&NewEvent<'_>>,
     now: i64,
 ) -> Result<bool> {
-    let tx = conn.transaction()?;
+    let tx = crate::sqlite_tx::write_tx(conn)?;
     let n = tx.execute(
         "UPDATE runs SET state='cancelled', finished_at=? WHERE id=? AND state IN ('queued','running')",
         params![now, id],
@@ -36,7 +36,7 @@ pub(crate) fn finish_as_error(
     event: &NewEvent<'_>,
     now: i64,
 ) -> Result<bool> {
-    let tx = conn.transaction()?;
+    let tx = crate::sqlite_tx::write_tx(conn)?;
     let n = tx.execute(
         "UPDATE runs SET state='error', steps=0, trials=0, error=?, finished_at=? WHERE id=? AND state IN ('queued','running')",
         params![reason, now, id],

@@ -39,6 +39,7 @@ mod sqlite_run_end;
 mod sqlite_schema;
 mod sqlite_tree_query;
 mod sqlite_trials;
+mod sqlite_tx;
 mod trials;
 
 pub use checks::*;
@@ -49,7 +50,7 @@ pub use lineage::*;
 pub use pg::PgStore;
 #[cfg(feature = "postgres")]
 pub use pg_downgrade::downgrade_postgres;
-pub use sqlite::SqliteStore;
+pub use sqlite::{SqliteStore, BUSY_TIMEOUT};
 pub use sqlite_downgrade::downgrade_sqlite;
 pub use trials::*;
 pub use types::*;
