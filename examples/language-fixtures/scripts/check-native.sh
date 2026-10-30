@@ -14,7 +14,8 @@
 #     written;
 #   - the protocol report on stderr has one evaluation each of <id>.counter_exact (witness values
 #     [final, 4K, 4, K], 4000 and 1000 by default) and <id>.all_started, and no incomplete-catalog notice from the SDK's audit;
-#   - the detector and the program agree: the property is false exactly when final != 4K, and final never exceeds it.
+#   - the detector and the program agree: the property is false exactly when final != 4K, and final never exceeds it
+#     (LANG_AT_DIRECTION=up, for a fixture whose bug applies an update twice: final never falls below it);
 # Then, across the runs:
 #   - fixed never fires and always ends at 4 x K (4000 by default);
 #   - buggy fires at least once. On a host where this process may use only one CPU (nproc respects affinity and
@@ -43,6 +44,12 @@ if [ "$K" -gt "$MAX_K" ]; then
   exit 64
 fi
 EXPECTED=$((4 * K))
+# The direction a firing run moves the final value: down (the default, a lost update) or up (an update applied twice).
+DIRECTION=${LANG_AT_DIRECTION-down}
+case "$DIRECTION" in
+  down | up) ;;
+  *) echo "usage: LANG_AT_DIRECTION must be down or up, got \"$DIRECTION\"" >&2; exit 64 ;;
+esac
 EXPECT_FIELD=$(printf "%020d" "$EXPECTED")
 
 if [ $# -lt 2 ]; then
@@ -154,8 +161,12 @@ one_run() {
     echo "FAIL $mode run $i: final=$final but the property did not fire" >&2
     return 1
   fi
-  if [ "$final" -gt "$EXPECTED" ]; then
+  if [ "$DIRECTION" = down ] && [ "$final" -gt "$EXPECTED" ]; then
     echo "FAIL $mode run $i: final=$final is above $EXPECTED: the counter cannot gain updates" >&2
+    return 1
+  fi
+  if [ "$DIRECTION" = up ] && [ "$final" -lt "$EXPECTED" ]; then
+    echo "FAIL $mode run $i: final=$final is below $EXPECTED: no update can be lost" >&2
     return 1
   fi
   fired=0

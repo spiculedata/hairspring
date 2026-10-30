@@ -261,7 +261,7 @@ jobs:
       # Native checks only: one program per language. Its buggy mode must lose an update at least once in 50 runs,
       # its fixed mode never, and its wide mode must follow the same output contract.
       - name: Build and self-check
-        run: make -C examples/language-fixtures/${{ matrix.dir }} test ${{ (matrix.dir == 'java' && 'flags at-test') || (matrix.dir == 'dotnet' && 'at-test') || '' }} ${{ matrix.args }}
+        run: make -C examples/language-fixtures/${{ matrix.dir }} test ${{ (matrix.dir == 'java' && 'flags at-test svc-test') || (matrix.dir == 'dotnet' && 'at-test') || '' }} ${{ matrix.args }}
       # Go only: the race detector (needs cgo) finds no data race in the fixture.
       - name: Race detector
         if: matrix.dir == 'go'

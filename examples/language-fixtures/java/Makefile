@@ -24,6 +24,21 @@
 #   make at-arms      each JVM flag profile of profiles.tsv and profiles-extra.tsv: valid flags, a clean run of fixed, how
 #                     often buggy fires
 #
+# The service fixture (class langsvc.Main, the Java SDK shaded in; sources in svc/): a small in-process payments service whose
+# idempotency check is racy in the buggy build, so a transfer delivered twice can be applied twice (final above 4 x K):
+#
+#   make svc-jar           build/svc/svc.jar (the SDK and the service, one reproducible jar)
+#   make svc-test          the self-test, the source checks, then the native self-checks with the default flags and under
+#                          profile a-prime (profiles-extra.tsv)
+#   make svc-selftest      only the self-test of the service's classes
+#   make svc-sources       no seed, /proc, CPU count, environment or clock read, except the two monotonic clock reads in
+#                          Deadline.java (request deadlines)
+#   make svc-window        the order of the check, the validation, the apply and the record in Store.handle
+#   make svc-native        the native self-checks (LANG_AT_DIRECTION=up) and the negative control, with the default flags
+#   make svc-profile-native / svc-extra-native   the same under each profile of profiles.tsv / profiles-extra.tsv
+#
+# The svc native targets take AT_K as the at- targets do (make svc-native AT_K=50).
+#
 # Needs a JDK 21: JAVA_HOME selects it (the acceptance run pins Temurin 21.0.12.1+1; `java -version` shows which one this is).
 # SOURCE_DATE is the fixed timestamp of every jar entry. Nothing here runs Hermit.
 
@@ -40,7 +55,7 @@ JAVAC_FLAGS = --release 21 -Xlint:all -Werror -encoding UTF-8 -proc:none
 SOURCES := $(sort $(wildcard src/langat/*.java))
 TEST_SOURCES := $(sort $(wildcard test/langat/*.java))
 
-.PHONY: jar test selftest native flags clean FORCE at-jar at-test at-selftest at-sources at-k at-native at-profile-native at-max-k-check at-compiled at-arms at-extra-native
+.PHONY: jar test selftest native flags clean FORCE at-jar at-test at-selftest at-sources at-k at-native at-profile-native at-max-k-check at-compiled at-arms at-extra-native svc-jar svc-test svc-selftest svc-sources svc-window svc-native svc-profile-native svc-extra-native
 
 jar: $(BUILD)/lang-at.jar
 
@@ -195,6 +210,66 @@ at-compiled: at-max-k-check $(AT_BUILD)/lang-at.jar
 at-arms: $(AT_BUILD)/lang-at.jar
 	JAVA="$(JAVA)" ARM_RUNS=$(ARM_RUNS) sh ../scripts/check-java-arms.sh profiles.tsv $(AT_BUILD)/lang-at.jar
 	JAVA="$(JAVA)" ARM_RUNS=$(ARM_RUNS) sh ../scripts/check-java-arms.sh profiles-extra.tsv $(AT_BUILD)/lang-at.jar
+
+# ---- the service fixture: svc.jar with langsvc.Main ------------------------------------------------------------------
+#
+# The Java SDK is shaded in, as for lang-at.jar: one javac run, one directory, no module descriptor, run on the class path.
+
+SVC_BUILD ?= $(BUILD)/svc
+SVC_SOURCES := $(sort $(wildcard $(SDK_DIR)/src/hairspring/*.java)) $(sort $(wildcard svc/src/langsvc/*.java))
+SVC_TEST_SOURCES := $(sort $(wildcard svc/test/langsvc/*.java))
+
+svc-jar: $(SVC_BUILD)/svc.jar
+
+$(SVC_BUILD)/build-id: FORCE
+	@mkdir -p $(SVC_BUILD)
+	@echo '$(BUILD_ID)' | cmp -s - $@ || echo '$(BUILD_ID)' >$@
+
+$(SVC_BUILD)/classes/.built: $(SVC_SOURCES) $(SVC_BUILD)/build-id
+	rm -rf $(SVC_BUILD)/classes
+	mkdir -p $(SVC_BUILD)/classes
+	$(JAVAC) $(JAVAC_FLAGS) -d $(SVC_BUILD)/classes $(SVC_SOURCES)
+	touch $@
+
+# The entries are listed one by one in sorted order, as for the other jars.
+$(SVC_BUILD)/svc.jar: $(SVC_BUILD)/classes/.built svc/manifest.mf
+	(cd $(SVC_BUILD)/classes && find hairspring langsvc -type f -name '*.class' | LC_ALL=C sort | sed 's|^|-C classes |') >$(SVC_BUILD)/jar.args
+	cd $(SVC_BUILD) && $(JAR) --create --file svc.jar --date=$(SOURCE_DATE) --manifest $(CURDIR)/svc/manifest.mf @jar.args
+
+# The program as the self-checks run it, as the at-java wrapper: JAVA_FLAGS are read when it runs; AT_K adds --k=AT_K.
+SVC_JAVA := $(SVC_BUILD)/svc-java$(if $(AT_K),-k$(AT_K))
+
+$(SVC_JAVA): $(SVC_BUILD)/svc.jar
+	printf '#!/bin/sh\nexec "%s" $$JAVA_FLAGS -cp "%s" langsvc.Main "$$@"$(AT_K_ARG)\n' "$(JAVA)" "$(abspath $(SVC_BUILD)/svc.jar)" >$@
+	chmod +x $@
+
+$(SVC_BUILD)/test-classes/.built: $(SVC_BUILD)/classes/.built $(SVC_BUILD)/build-id $(SVC_TEST_SOURCES)
+	rm -rf $(SVC_BUILD)/test-classes
+	mkdir -p $(SVC_BUILD)/test-classes
+	$(JAVAC) $(JAVAC_FLAGS) -cp $(SVC_BUILD)/classes -d $(SVC_BUILD)/test-classes $(SVC_TEST_SOURCES)
+	touch $@
+
+svc-test: svc-selftest svc-sources svc-window svc-native svc-extra-native
+
+svc-selftest: $(SVC_BUILD)/test-classes/.built
+	HAIRSPRING_EVENTS=off $(JAVA) -cp $(SVC_BUILD)/classes:$(SVC_BUILD)/test-classes langsvc.SvcSelfTest
+
+# Every source but Deadline.java with no clock read at all; Deadline.java with exactly its two monotonic clock reads.
+svc-sources:
+	sh ../scripts/check-sources-java.sh $(filter-out %/Deadline.java,$(sort $(wildcard svc/src/langsvc/*.java)))
+	sh ../scripts/check-sources-java.sh --allow-nano-time svc/src/langsvc/Deadline.java
+
+svc-window:
+	sh ../scripts/check-svc-window.sh svc/src/langsvc/Store.java
+
+svc-native: $(SVC_JAVA)
+	LANG_AT_DIRECTION=up $(AT_K_ENV)sh ../scripts/run-checks.sh java $(SVC_JAVA) $(RUNS)
+
+svc-profile-native: $(SVC_JAVA)
+	LANG_AT_DIRECTION=up $(AT_K_ENV)sh ../scripts/run-java-profile-checks.sh profiles.tsv $(SVC_JAVA) $(RUNS)
+
+svc-extra-native: $(SVC_JAVA)
+	LANG_AT_DIRECTION=up $(AT_K_ENV)sh ../scripts/run-java-profile-checks.sh profiles-extra.tsv $(SVC_JAVA) $(RUNS)
 
 clean:
 	rm -rf $(BUILD)
