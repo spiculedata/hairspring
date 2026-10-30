@@ -98,6 +98,8 @@ A failed strict verify used to leave Hermit's two run logs in `/tmp`, and Hermit
 inside the trial's directory, which the engine removes after the trial, so those printed paths no longer exist. The
 verify's verdict is read from its result file, which is unaffected.
 
+A strict verify (Hermit's `--verify`, which `hairspring confirm --strict-verify` runs) also stages a file named `.hermit-verify-summary-XXXXXX` (a random suffix) in the directory Hermit runs in. That is the target's working directory: its `cwd` setting, or the directory `hairspring` was started from when none is set. When that directory is inside a git work tree whose `.gitignore` lists `ignored/`, the file goes into that tree's `ignored/` directory instead. Hermit removes the file when it exits normally. If Hermit is killed, for example because the verify ran past its time limit, the file is left behind; it is safe to delete once no `hermit` is running. Run `hairspring confirm` from a working directory that is not shared and does not hold evidence, and look for `.hermit-verify-summary-*` after a verify that was killed. The failed-verify logs are separate: they now live in the engine's per-trial directory and are deleted with it.
+
 A directory the trial could not be cleaned of (for example on a filesystem that refuses the mode change) is reported on
 the engine's standard error and never changes the trial's verdict.
 
