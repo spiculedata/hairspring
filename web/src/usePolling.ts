@@ -8,6 +8,8 @@ export interface Polled<T> {
   error: string | undefined;
   /** The last request was a 404: the thing polled no longer exists, and polling has stopped. */
   notFound: boolean;
+  /** When data last arrived (ms since the epoch); kept through later errors. Undefined until the first load. */
+  updatedAt: number | undefined;
   reload: () => void;
 }
 
@@ -19,6 +21,7 @@ export function usePolling<T>(load: () => Promise<T>, intervalMs: number, stop?:
   const [data, setData] = useState<T>();
   const [error, setError] = useState<string>();
   const [notFound, setNotFound] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<number>();
   const loadRef = useRef(load);
   const stopRef = useRef(stop);
   loadRef.current = load;
@@ -35,6 +38,7 @@ export function usePolling<T>(load: () => Promise<T>, intervalMs: number, stop?:
         stop: (next) => stopRef.current?.(next) ?? false,
         onData: (next) => {
           setData(next);
+          setUpdatedAt(Date.now());
           setError(undefined);
           setNotFound(false);
         },
@@ -46,5 +50,5 @@ export function usePolling<T>(load: () => Promise<T>, intervalMs: number, stop?:
     [intervalMs, tick, tokenVersion],
   );
 
-  return { data, error, notFound, reload };
+  return { data, error, notFound, updatedAt, reload };
 }

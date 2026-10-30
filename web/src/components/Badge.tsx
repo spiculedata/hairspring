@@ -10,7 +10,12 @@ export function StateBadge({ state, trials, completion }: { state: string; trial
       <span className={`badge badge-${outcome.tone}`} title={outcome.title}>
         {outcome.label}
       </span>
-      {scope !== undefined && <span className="muted badge-scope"> {scope}</span>}
+      {scope !== undefined && (
+        <>
+          {' '}
+          <span className="muted badge-scope">{scope}</span>
+        </>
+      )}
     </>
   );
 }

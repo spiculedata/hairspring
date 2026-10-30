@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatDuration, formatSeedInput, relativeTime, stateTone } from './format';
+import { absoluteTime, timeOfDay, formatDuration, formatSeedInput, relativeTime, stateTone } from './format';
 
 describe('relativeTime', () => {
   const now = 1_000_000_000_000;
@@ -44,5 +44,19 @@ describe('formatSeedInput', () => {
     expect(formatSeedInput('-1').ok).toBe(false);
     expect(formatSeedInput('1.5').ok).toBe(false);
     expect(formatSeedInput('abc').ok).toBe(false);
+  });
+});
+
+describe('absoluteTime', () => {
+  const at = Date.UTC(2026, 9, 30, 15, 44, 50);
+  it('shows the date, the time to the second and the zone, in UK order', () => {
+    expect(absoluteTime(at, 'UTC')).toBe('30 Oct 2026, 15:44:50 UTC');
+  });
+  it('follows the zone it is given, so summer time is named', () => {
+    expect(absoluteTime(Date.UTC(2026, 6, 1, 12, 0, 0), 'Europe/London')).toBe('1 Jul 2026, 13:00:00 BST');
+    expect(absoluteTime(at, 'Europe/London')).toBe('30 Oct 2026, 15:44:50 GMT');
+  });
+  it('shows just the time of day for an updated-at line', () => {
+    expect(timeOfDay(at, 'UTC')).toBe('15:44:50 UTC');
   });
 });

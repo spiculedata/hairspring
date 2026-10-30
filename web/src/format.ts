@@ -9,6 +9,21 @@ export function relativeTime(ms: number, now: number = Date.now()): string {
   return `${Math.floor(secs / 86_400)}d ago`;
 }
 
+const ABSOLUTE: Intl.DateTimeFormatOptions = {
+  day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZoneName: 'short',
+};
+const TIME_ONLY: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZoneName: 'short' };
+
+/** A moment as date, time to the second and zone, in UK order ("30 Oct 2026, 15:44:50 GMT"). `timeZone` defaults to the reader's. */
+export function absoluteTime(ms: number, timeZone?: string): string {
+  return new Intl.DateTimeFormat('en-GB', { ...ABSOLUTE, timeZone }).format(ms);
+}
+
+/** Just the time of day and zone ("15:44:50 GMT"), for a line that says when the data was loaded. */
+export function timeOfDay(ms: number, timeZone?: string): string {
+  return new Intl.DateTimeFormat('en-GB', { ...TIME_ONLY, timeZone }).format(ms);
+}
+
 export function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms} ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;

@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { api } from '../api';
+import { LoadFailed } from '../components/Notices';
 import { RunsTable } from '../components/RunsTable';
+import { UpdatedAt } from '../components/UpdatedAt';
 import { formatSeedInput } from '../format';
 import { navigate } from '../router';
 import { usePolling } from '../usePolling';
@@ -54,7 +56,8 @@ export function Runs() {
     <>
       <h1>Runs</h1>
       <NewRun />
-      {runs.error && <p className="error" role="alert">{runs.error}</p>}
+      {runs.error && <LoadFailed what="runs" message={runs.error} />}
+      <UpdatedAt at={runs.updatedAt} />
       <RunsTable runs={runs.data ?? []} />
     </>
   );

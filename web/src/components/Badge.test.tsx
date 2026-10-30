@@ -23,6 +23,10 @@ describe('StateBadge', () => {
     expect(html).not.toContain('badge-good');
     expect(html).not.toContain('No failure seen');
   });
+  it('has a space in the text between the label and its scope, so it reads right without the stylesheet', () => {
+    const html = renderToString(<StateBadge state="passed" trials={30} completion={{ kind: 'complete' }} />);
+    expect(html.replace(/<[^>]+>/g, '')).toBe('No failure seen 30 trials');
+  });
   it('puts the scope in its own small element, so it does not take the heading size', () => {
     expect(renderToString(<StateBadge state="passed" trials={30} completion={{ kind: 'complete' }} />)).toContain('badge-scope');
   });

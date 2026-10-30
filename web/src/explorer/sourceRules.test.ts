@@ -1,11 +1,22 @@
+/// <reference types="node" />
+import { readdirSync } from 'node:fs';
+import { sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { readSource } from '../readSource';
 
-/** Every non-test source file under src, as raw text (resolved by Vite at test time, so no Node typings are needed). */
-const RAW = import.meta.glob<string>('../**/*.{ts,tsx}', { query: '?raw', import: 'default', eager: true });
+/**
+ * Every non-test source file under src, as raw text. The directory is read when the test runs, not when it is
+ * transformed: a module glob is cached with this file, so a file added later would not be scanned until this file changed.
+ */
+function listSources(): ReadonlyArray<readonly [string, string]> {
+  const names = (readdirSync(new URL('../', import.meta.url), { recursive: true }) as string[]).map((n) => n.split(sep).join('/'));
+  return names
+    .filter((n) => /\.tsx?$/.test(n) && !/\.test\.tsx?$/.test(n) && !/fixtures\.ts$/.test(n))
+    .sort()
+    .map((n) => [`../${n}`, readSource(n)] as const);
+}
 
-const ALL: ReadonlyArray<readonly [string, string]> = Object.entries(RAW).filter(
-  ([path]) => !/\.test\.tsx?$/.test(path) && !/fixtures\.ts$/.test(path),
-);
+const ALL = listSources();
 
 /** Source with comments removed, so a rule is about code and strings, not prose. */
 function code(source: string): string {
@@ -18,6 +29,12 @@ describe('source rules (plan 7.2 item 1 and 5.7 rule 5)', () => {
     expect(ALL.some(([p]) => p.endsWith('components/GuestText.tsx'))).toBe(true);
   });
 
+  it('scans every source file: the list is a fresh listing of src, including files added since this file was transformed', () => {
+    expect(ALL.some(([p]) => p === '../pageTitle.ts')).toBe(true);
+    expect(ALL.some(([p]) => p === '../components/Notices.tsx')).toBe(true);
+    expect(ALL.every(([p]) => !/\.test\./.test(p))).toBe(true);
+  });
+
   it('never uses dangerouslySetInnerHTML, innerHTML or document.write', () => {
     for (const [path, src] of ALL) {
       expect(code(src), path).not.toMatch(/dangerouslySetInnerHTML|\.innerHTML|outerHTML|insertAdjacentHTML|document\.write|\beval\(|new Function\(/);
@@ -28,13 +45,12 @@ describe('source rules (plan 7.2 item 1 and 5.7 rule 5)', () => {
     for (const [path, src] of ALL) expect(code(src), path).not.toMatch(/(href|src|style)=\{[^}]*\bguest\b/);
   });
 
-  // "not found" is allowed: it is the wording of a missing page, not a claim about a result.
   it('never generates the words found, discovered, unassisted or flaky anywhere in the UI source', () => {
     const checked = ALL.filter(([p]) => !p.endsWith('/types.ts'));
     expect(checked.length).toBeGreaterThan(15);
     expect(checked.some(([p]) => p.includes('/seeds/'))).toBe(true);
     expect(checked.some(([p]) => p.includes('/pages/'))).toBe(true);
-    for (const [path, src] of checked) expect(code(src).replace(/Page not found/g, ''), path).not.toMatch(/\bfound\b|\b(discovered|unassisted|flaky)\b/i);
+    for (const [path, src] of checked) expect(code(src), path).not.toMatch(/\bfound\b|\b(discovered|unassisted|flaky)\b/i);
   });
 
   it('never generates "reproduced", as a replay verdict or for counts, anywhere in the UI source', () => {
@@ -57,6 +73,13 @@ describe('source rules (plan 7.2 item 1 and 5.7 rule 5)', () => {
   it('never maps a status or class key to its own engine word as a label, in any case ("pass: \'pass\'", "violation: \'violation\'")', () => {
     for (const [path, src] of ALL.filter(([p]) => !p.endsWith('/types.ts'))) {
       expect(code(src), path).not.toMatch(/\b(pass|violation|unmet)\s*:\s*['"`](pass|passed|violation|unmet)\b/i);
+    }
+  });
+
+  it('never shows a bare "Loading…" or a bare "not found": say what is loading, or what is missing and what to do', () => {
+    for (const [path, src] of ALL) {
+      expect(code(src), path).not.toMatch(/['">`]Loading(…|\.\.\.)?\s*['"<`]/);
+      expect(code(src), path).not.toMatch(/['">`]Page not found\.?\s*['"<`]/);
     }
   });
 

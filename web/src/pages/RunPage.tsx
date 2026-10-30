@@ -6,7 +6,11 @@ import { ErrorBoundary } from '../components/ErrorBoundary';
 import { FirstFailingSeed } from '../explorer/FirstFailingSeed';
 import { PropertyOverviewPanel } from '../explorer/PropertyOverviewPanel';
 import { usePropertyOverview } from '../explorer/usePropertyOverview';
-import { formatDuration, relativeTime } from '../format';
+import { Loading, NotFound } from '../components/Notices';
+import { TimeStamp } from '../components/TimeStamp';
+import { useReportMissing } from '../PageStatus';
+import { UpdatedAt } from '../components/UpdatedAt';
+import { formatDuration } from '../format';
 import { seedsPath } from '../seeds/filters';
 import { BROWSE_SEEDS, noFailuresText } from '../wording';
 import type { SseEvent } from '../sse';
@@ -40,10 +44,11 @@ export function RunPage({ id }: { id: string }) {
   const run = detail.data?.run;
   const live = run === undefined || !TERMINAL.has(run.state);
   const properties = usePropertyOverview(id, live);
+  useReportMissing(detail.notFound);
 
-  if (detail.notFound) return <p className="error" role="alert">This run does not exist (it may have been removed).</p>;
+  if (detail.notFound) return <NotFound what="run" />;
   if (detail.error && !run) return <p className="error" role="alert">{detail.error}</p>;
-  if (!run) return <p className="muted">Loading…</p>;
+  if (!run) return <Loading what="run" />;
 
   const duration = run.started_at && run.finished_at ? formatDuration(run.finished_at - run.started_at) : undefined;
   return (
@@ -64,8 +69,11 @@ export function RunPage({ id }: { id: string }) {
         <dt>Progress</dt>
         <dd>{run.steps.toLocaleString()} steps, {run.trials} trials{duration ? `, ${duration}` : ''}</dd>
         <dt>Created</dt>
-        <dd>{relativeTime(run.created_at)}</dd>
+        <dd>
+          <TimeStamp ms={run.created_at} />
+        </dd>
       </dl>
+      <UpdatedAt at={detail.updatedAt} />
       {run.error && <p className="error" role="alert">{run.error}</p>}
       {live && (
         <button

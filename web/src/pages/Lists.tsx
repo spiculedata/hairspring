@@ -1,5 +1,7 @@
 import { api } from '../api';
-import { relativeTime } from '../format';
+import { LoadFailed } from '../components/Notices';
+import { TimeStamp } from '../components/TimeStamp';
+import { UpdatedAt } from '../components/UpdatedAt';
 import { usePolling } from '../usePolling';
 
 export function Targets() {
@@ -7,7 +9,8 @@ export function Targets() {
   return (
     <>
       <h1>Targets</h1>
-      {t.error && <p className="error" role="alert">{t.error}</p>}
+      {t.error && <LoadFailed what="targets" message={t.error} />}
+      <UpdatedAt at={t.updatedAt} />
       <table>
         <thead>
           <tr><th>Name</th><th>Kind</th><th>Budget</th><th>Description</th></tr>
@@ -32,7 +35,8 @@ export function Workers() {
   return (
     <>
       <h1>Workers</h1>
-      {w.error && <p className="error" role="alert">{w.error}</p>}
+      {w.error && <LoadFailed what="workers" message={w.error} />}
+      <UpdatedAt at={w.updatedAt} />
       <table>
         <thead>
           <tr><th>Name</th><th>Id</th><th>Last seen</th></tr>
@@ -42,7 +46,9 @@ export function Workers() {
             <tr key={x.id ?? `${x.name}-${i}`}>
               <td>{x.name}</td>
               <td>{x.id ? <code>{x.id}</code> : <span className="muted">hidden</span>}</td>
-              <td>{relativeTime(x.last_seen)}</td>
+              <td>
+                <TimeStamp ms={x.last_seen} />
+              </td>
             </tr>
           ))}
           {w.data?.length === 0 && <tr><td colSpan={3} className="muted">No workers registered.</td></tr>}
