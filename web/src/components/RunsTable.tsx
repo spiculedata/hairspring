@@ -21,6 +21,7 @@ export function RunsTable({ runs }: { runs: readonly Run[] }) {
           <tr key={r.id}>
             <td>
               <Link to={`/runs/${r.id}`}>{r.id}</Link>
+              <span className="muted steps-note">{`${r.steps.toLocaleString()} steps`}</span>
             </td>
             <td>{r.target}</td>
             <td>

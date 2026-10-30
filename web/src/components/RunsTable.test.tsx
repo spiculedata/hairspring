@@ -26,6 +26,11 @@ describe('RunsTable', () => {
     expect(html).toContain('class="runs"');
   });
 
+  it('keeps the step count reachable on a phone, as a small note under the id', () => {
+    const html = renderToString(<RunsTable runs={[run({ steps: 5111 })]} />);
+    expect(html).toMatch(/<span class="muted steps-note">5,111 steps<\/span>/);
+  });
+
   it('says what an empty list means and what to do', () => {
     const html = renderToString(<RunsTable runs={[]} />);
     expect(html).toContain('No runs yet');
@@ -39,6 +44,20 @@ describe('the Runs table on a phone, from the stylesheet', () => {
 
   it('hides the optional column and lets long ids and badges wrap, so the page never scrolls sideways', () => {
     expect(phone).toMatch(/table\.runs \.opt\s*\{\s*display:\s*none/);
-    expect(phone).toMatch(/table\.runs td[^{]*\{[^}]*overflow-wrap:\s*anywhere/);
+    expect(phone).toMatch(/table\.runs td:first-child\s*\{[^}]*overflow-wrap:\s*anywhere/);
+  });
+
+  it('never breaks a word inside a badge or any other cell but the id: only the id column may break anywhere', () => {
+    expect(phone).not.toMatch(/table\.runs td\s*\{[^}]*overflow-wrap:\s*anywhere/);
+    expect(css).toMatch(/\.badge \{[^}]*white-space:\s*nowrap/);
+  });
+
+  it('shows the relative time only on a phone, so a wide absolute time does not squeeze the State column', () => {
+    expect(phone).toMatch(/table\.runs time\s*\{\s*display:\s*none/);
+  });
+
+  it('shows the step note only on a phone', () => {
+    expect(css).toMatch(/\.steps-note\s*\{\s*display:\s*none/);
+    expect(phone).toMatch(/\.steps-note\s*\{[^}]*display:\s*block/);
   });
 });

@@ -151,6 +151,9 @@ describe('stylesheet use of the tokens', () => {
 describe('every stylesheet and the canvas code use the tokens', () => {
   const dir = new URL('./', import.meta.url);
   const cssFiles = (readdirSync(dir, { recursive: true }) as string[]).filter((f) => f.endsWith('.css')).sort();
+  const NAMED = 'red|white|black|blue|green|gray|grey|orange|yellow|purple|pink|brown|cyan|magenta|silver|gold|navy|teal|maroon|olive|lime|aqua|fuchsia|indigo|violet|crimson|salmon|tomato|coral|khaki|beige|ivory|tan|lightgray|lightgrey|darkgray|darkgrey|dimgray|dimgrey|slategray|whitesmoke|gainsboro';
+  const NAMED_IN_CSS = new RegExp(`(?:color|background(?:-color)?|border(?:-[a-z]+)?|outline(?:-color)?|fill|stroke)\\s*:[^;{}]*\\b(?:${NAMED})\\b`, 'i');
+  const NAMED_IN_CODE = new RegExp(`['"\`](?:${NAMED})['"\`]`, 'i');
   const LITERAL = /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/;
 
   it('finds all four stylesheets', () => {
@@ -162,6 +165,7 @@ describe('every stylesheet and the canvas code use the tokens', () => {
       const text = readSource(file);
       const body = file === 'styles.css' ? text.slice(text.indexOf('* { box-sizing')) : text;
       expect(body, file).not.toMatch(LITERAL);
+      expect(body, file).not.toMatch(NAMED_IN_CSS);
     }
   });
 
@@ -175,6 +179,16 @@ describe('every stylesheet and the canvas code use the tokens', () => {
 
   it('writes no colour literal in the seed strip canvas code', () => {
     expect(readSource('seeds/StripCanvas.tsx')).not.toMatch(LITERAL);
+    expect(readSource('seeds/StripCanvas.tsx')).not.toMatch(NAMED_IN_CODE);
+  });
+
+  it('catches a named colour in a stylesheet or in canvas code (the check itself)', () => {
+    for (const bad of ['a { color: red; }', 'a { border: 1px solid White; }', 'a { background: var(--x) black; }']) expect(bad).toMatch(NAMED_IN_CSS);
+    for (const ok of ['a { color: var(--text); }', 'a { background: transparent; }', 'a { color: currentColor; }', '.green-thing { margin: 0; }']) {
+      expect(ok).not.toMatch(NAMED_IN_CSS);
+    }
+    expect("ctx.fillStyle = 'red';").toMatch(NAMED_IN_CODE);
+    expect("const FALLBACK_COLOUR = 'currentColor';").not.toMatch(NAMED_IN_CODE);
   });
 
   it('gives the scope text beside a badge a left margin, so it does not sit against the badge', () => {
