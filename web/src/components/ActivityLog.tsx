@@ -2,11 +2,13 @@ import { describeEvent } from '../activity';
 import type { SseEvent } from '../sse';
 import { GuestText } from './GuestText';
 
+const LABEL_CHARS = 80;
 const VALUE_CHARS = 400;
 const RAW_CHARS = 2000;
 
 /**
- * A run's events as readable lines. Values can carry text from a worker, so they are shown through `GuestText`. The raw
+ * A run's events as readable lines. The event name, the keys and the values can all carry text from a worker, so every
+ * one is shown through `GuestText`. The raw
  * event stays available behind a disclosure.
  */
 export function ActivityLog({ lines }: { lines: readonly SseEvent[] }) {
@@ -19,10 +21,15 @@ export function ActivityLog({ lines }: { lines: readonly SseEvent[] }) {
         const { title, facts } = describeEvent(line);
         return (
           <li key={`${line.id}-${i}`}>
-            <strong>{title}</strong>
-            {facts.map(([label, value]) => (
-              <span key={label} className="activity-fact">
-                <span className="muted">{label}</span> <GuestText text={value} max={VALUE_CHARS} expandable={false} />
+            <strong>
+              <GuestText text={title} max={LABEL_CHARS} expandable={false} />
+            </strong>
+            {facts.map(([label, value], n) => (
+              <span key={n} className="activity-fact">
+                <span className="muted">
+                  <GuestText text={label} max={LABEL_CHARS} expandable={false} />
+                </span>{' '}
+                <GuestText text={value} max={VALUE_CHARS} expandable={false} />
               </span>
             ))}
             <details>

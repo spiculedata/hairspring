@@ -1,5 +1,6 @@
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { readSource } from '../readSource';
 import { ActivityLog } from './ActivityLog';
 
 const events = [
@@ -32,5 +33,32 @@ describe('ActivityLog', () => {
     const html = renderToString(<ActivityLog lines={[{ id: '1', event: 'started', data: '{"worker":"<img src=x onerror=alert(1)>"}' }]} />);
     expect(html).not.toContain('<img');
     expect(html).toContain('&lt;img');
+  });
+
+  it('shows an event name, a JSON key and a value from a worker as escaped text only', () => {
+    const data = JSON.stringify({ '<b>key</b>': 'a\u202eb\u0007c', worker: '<i>w</i>' });
+    const html = renderToString(<ActivityLog lines={[{ id: '1', event: '<img src=x onerror=alert(1)>', data }]} />);
+    for (const raw of ['<img', '<b>', '<i>', '\u202e', '\u0007']) expect(html, raw).not.toContain(raw);
+    expect(html).toContain('&lt;img');
+    expect(html).toContain('&lt;b&gt;key');
+  });
+
+  it('keeps two keys that differ only by underscore or space apart', () => {
+    const html = renderToString(<ActivityLog lines={[{ id: '1', event: 'x', data: '{"a_b":1,"a b":2}' }]} />);
+    expect(html.match(/activity-fact/g)).toHaveLength(2);
+  });
+
+  it('cuts a very long value once, with one marker', () => {
+    const html = renderToString(<ActivityLog lines={[{ id: '1', event: 'progress', data: JSON.stringify({ message: 'x'.repeat(5000) }) }]} />);
+    const facts = html.slice(0, html.indexOf('<details'));
+    expect(facts.match(/more characters/g)).toHaveLength(1);
+    expect(facts).not.toMatch(/…\s*…/);
+  });
+
+  it('renders no title, label or value except through the escaping text component (the source cannot regress)', () => {
+    const src = readSource('components/ActivityLog.tsx').replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(src).not.toMatch(/dangerouslySetInnerHTML|innerHTML/);
+    expect(src).not.toMatch(/(?<![=\w$])\{\s*(title|label|value|line\.event|line\.data)\s*\}/);
+    expect(src.match(/<GuestText/g)?.length).toBeGreaterThanOrEqual(4);
   });
 });

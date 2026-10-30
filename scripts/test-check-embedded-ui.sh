@@ -10,16 +10,27 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/hairspring-ui-check-tests.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 FAILED=0
 
-# A fake binary: `fake --db X serve --addr HOST:PORT --workers N` serves $FAKE_UI_DIR on that address.
+# A fake binary, as a python script run through a shell wrapper so it can be called by a relative path.
+# `fake --db X serve --addr 127.0.0.1:0 --workers 0` binds a free port, prints the line the real server prints, and then
+# acts as FAKE_MODE says: serve $FAKE_UI_DIR (default), accept connections and never answer (hang), or exit (die).
 cat >"$TMP/fake-hairspring" <<'FAKE'
-#!/usr/bin/env bash
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --addr) ADDR="$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-exec python3 -m http.server "${ADDR##*:}" --bind "${ADDR%%:*}" --directory "$FAKE_UI_DIR"
+#!/usr/bin/env python3
+import http.server, os, socket, sys, functools, time
+mode = os.environ.get("FAKE_MODE", "serve")
+if mode == "die":
+    sys.exit(1)
+if mode == "hang":
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(5)
+    print("hairspring: listening on http://127.0.0.1:%d" % sock.getsockname()[1], flush=True)
+    while True:
+        conn, _ = sock.accept()  # accepted and never answered
+        time.sleep(3600)
+handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=os.environ["FAKE_UI_DIR"])
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+print("hairspring: listening on http://127.0.0.1:%d" % server.server_address[1], flush=True)
+server.serve_forever()
 FAKE
 chmod +x "$TMP/fake-hairspring"
 
@@ -44,6 +55,7 @@ expect() { # NAME EXPECTED_RC ACTUAL_RC [OUTPUT_PATTERN]
 }
 
 run() { FAKE_UI_DIR="$1" bash "$SCRIPT" "$TMP/fake-hairspring" "$2" >"$TMP/out" 2>&1; }
+run_mode() { FAKE_MODE="$1" FAKE_UI_DIR="$TMP/same" bash "$SCRIPT" "$TMP/fake-hairspring" "$TMP/built" >"$TMP/out" 2>&1; }
 
 make_ui "$TMP/built" "Hairspring" "console.log('new')"
 make_ui "$TMP/same" "Hairspring" "console.log('new')"
@@ -60,5 +72,24 @@ FAKE_UI_DIR="$TMP/same" bash "$SCRIPT" "$TMP/fake-hairspring" "$TMP/nowhere" >"$
 expect "a missing build directory is a usage error" 2 $? "npm run build"
 bash "$SCRIPT" "$TMP/missing-binary" "$TMP/built" >"$TMP/out" 2>&1
 expect "a missing binary is a usage error" 2 $? "usage:"
+
+# A relative path to the binary, from another directory (the way the release workflow and make call it).
+(cd "$TMP" && FAKE_UI_DIR="$TMP/same" bash "$SCRIPT" ./fake-hairspring "$TMP/built") >"$TMP/out" 2>&1
+expect "a relative path to the binary works from another directory" 0 $? "OK:"
+
+# A server that accepts and never answers must fail within the request timeout, not hang.
+start=$SECONDS
+run_mode hang
+rc=$?
+took=$((SECONDS - start))
+expect "a server that never answers fails" 1 "$rc" "did not serve"
+if [ "$took" -gt 20 ]; then echo "FAIL the hanging server took ${took}s to fail"; FAILED=1; else echo "ok   the hanging server failed in ${took}s"; fi
+
+# A server that dies without saying where it listens must fail, even if something else is listening somewhere.
+run_mode die
+expect "a server that exits at once fails" 1 $? "did not say where it is listening"
+
+# Nothing is left running afterwards.
+if pgrep -f "$TMP/fake-hairspring" >/dev/null 2>&1; then echo "FAIL a fake server is still running"; FAILED=1; else echo "ok   no server left running"; fi
 
 exit "$FAILED"

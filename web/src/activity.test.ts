@@ -38,8 +38,8 @@ describe('describeEvent', () => {
     expect(describeEvent(ev('message', ''))).toEqual({ title: 'Message', facts: [] });
   });
 
-  it('cuts a very long value', () => {
+  it('leaves a long value whole, for the text component to cut once with its own marker', () => {
     const d = describeEvent(ev('progress', JSON.stringify({ message: 'x'.repeat(5000) })));
-    expect(d.facts[0][1].length).toBeLessThan(600);
+    expect(d.facts[0][1]).toBe('x'.repeat(5000));
   });
 });

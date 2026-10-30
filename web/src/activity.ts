@@ -8,8 +8,6 @@ export interface EventDescription {
   readonly facts: readonly Fact[];
 }
 
-const MAX_VALUE_CHARS = 400;
-
 /** Plain labels for the keys the server sends today. A key not listed here is shown as it is, with spaces for underscores. */
 const LABELS: Readonly<Record<string, string>> = {
   worker: 'Worker',
@@ -26,8 +24,7 @@ const capitalise = (s: string): string => (s === '' ? s : s[0].toUpperCase() + s
 function valueText(v: unknown): string {
   if (typeof v === 'number') return Number.isInteger(v) ? formatCount(v) : String(v);
   if (typeof v === 'boolean') return v ? 'yes' : 'no';
-  const text = typeof v === 'string' ? v : JSON.stringify(v);
-  return text.length > MAX_VALUE_CHARS ? `${text.slice(0, MAX_VALUE_CHARS)}…` : text;
+  return typeof v === 'string' ? v : JSON.stringify(v);
 }
 
 function parseObject(data: string): Record<string, unknown> | undefined {
