@@ -74,7 +74,7 @@ export function Runs() {
               </td>
               <td>{r.target}</td>
               <td>
-                <StateBadge state={r.state} />
+                <StateBadge state={r.state} trials={r.trials} />
               </td>
               <td className="num">{r.steps.toLocaleString()}</td>
               <td>{relativeTime(r.created_at)}</td>

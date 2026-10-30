@@ -52,7 +52,7 @@ export function RunPage({ id }: { id: string }) {
         <Link to="/">← Runs</Link>
       </p>
       <h1>
-        {run.target} <StateBadge state={run.state} />
+        {run.target} <StateBadge state={run.state} trials={run.trials} completion={properties.page?.header.completion} />
       </h1>
       <dl className="facts">
         <dt>Run</dt>

@@ -22,7 +22,7 @@ describe('PropertyTable', () => {
 
   it('shows a violation row with status text, kind, id, rate with interval, first failing seed and evals', () => {
     const html = renderToString(<PropertyTable properties={[row()]} />);
-    expect(html).toContain('VIOLATION');
+    expect(html).toContain('Failed');
     expect(html).toContain('always');
     expect(html).toContain('wal.no-lost-commit');
     expect(html).toContain('3/4,790');
@@ -69,7 +69,7 @@ describe('PropertyTable', () => {
       guest: { id: 'ckpt.passive', msg: '', loc: null },
     });
     const html = renderToString(<PropertyTable properties={[unmet]} />);
-    expect(html).toContain('UNMET (coverage gap)');
+    expect(html).toContain('Never reached');
     expect(html).toContain('status-unmet');
     expect(html).not.toContain('status-violation');
     const body = html.slice(html.indexOf('<tbody'));

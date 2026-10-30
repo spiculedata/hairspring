@@ -100,10 +100,10 @@ export function rateParts(cell: RateCellData): RateParts {
 }
 
 const STATUS_LABELS: Record<PropertyStatus, string> = {
-  violation: 'VIOLATION',
-  unmet: 'UNMET (coverage gap)',
-  unrated: 'UNRATED',
-  pass: 'PASS',
+  violation: 'Failed',
+  unmet: 'Never reached',
+  unrated: 'Unrated',
+  pass: 'Held',
 };
 
 export function statusLabel(status: PropertyStatus): string {
@@ -135,15 +135,15 @@ export const SHOW_ALL = 'show all';
 export const SHOW_LESS = 'show less';
 
 export const NO_PROPERTIES = 'No properties match.';
-export const COVERAGE_GAPS_TITLE = 'Coverage gaps (UNMET)';
+export const COVERAGE_GAPS_TITLE = 'Coverage gaps (never reached)';
 export const COVERAGE_GAPS_NOTE = 'These are coverage gaps, not findings.';
 
 export function unmetNotStated(reason: string): string {
-  return `UNMET is not stated: ${reason}.`;
+  return `A "never reached" result is not stated: ${reason}.`;
 }
 
 export function moreUnmet(n: number): string {
-  return `${formatCount(n)} more UNMET ${n === 1 ? 'property' : 'properties'} not loaded`;
+  return `${formatCount(n)} more never-reached ${n === 1 ? 'property' : 'properties'} not loaded`;
 }
 
 export function noClaimSentence(reasons: readonly string[]): string {
@@ -180,7 +180,7 @@ export function noFailuresText(args: { live: boolean; headline: string | undefin
   return 'No failure records for this run, and its property counts are not available.';
 }
 
-/** Why an UNMET result is not stated for a run. */
+/** Why a "never reached" result is not stated for a run. */
 export function unmetSuppressedReason(
   completion: RunCompletion,
   ingestIncomplete: boolean,
@@ -205,6 +205,16 @@ export function excludedText(e: { degraded: number; perturbing: number; inconclu
   ].filter((p): p is string => p !== undefined);
   return parts.length === 0 ? undefined : `Excluded from every rate: ${parts.join(', ')}.`;
 }
+
+// ---- Replay of a bundle ----
+
+/** What one replay of a stored bundle says. It is one more run of the same steps, so it never says "confirmed". */
+export function replayVerdict(failedAgain: boolean): string {
+  return failedAgain ? 'Failed again on replay.' : 'Did not fail on replay.';
+}
+
+export const REPLAY_CAVEAT =
+  'A replay runs the stored steps once more on this server. It shows whether this bundle fails here, now. One replay is not a confirmation, and it does not show how often the failure occurs or that it is fixed.';
 
 // ---- Failure page (one trial) ----
 

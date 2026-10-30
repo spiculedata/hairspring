@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api } from '../api';
 import { Link } from '../components/Layout';
+import { ReplayVerdict } from '../components/ReplayVerdict';
 import type { ReplayResult } from '../types';
 import { usePolling } from '../usePolling';
 
@@ -29,7 +30,7 @@ export function FailurePage({ id }: { id: string }) {
       <p>
         <Link to={`/runs/${record.run_id}`}>← Run</Link>
       </p>
-      <h1>{record.target}: minimal reproduction</h1>
+      <h1>{record.target}: shortest failing steps</h1>
       <p>{record.message}</p>
       <div className="row">
         <button
@@ -48,11 +49,7 @@ export function FailurePage({ id }: { id: string }) {
         <button onClick={() => void navigator.clipboard?.writeText(bundle)}>Copy bundle</button>
       </div>
       {replayError && <p className="error" role="alert">{replayError}</p>}
-      {replay && (
-        <p role="status" className={replay.reproduced ? 'error' : 'ok'}>
-          {replay.reproduced ? 'Reproduced: the property is still violated.' : 'Not reproduced: this bundle no longer fails.'}
-        </p>
-      )}
+      {replay && <ReplayVerdict failedAgain={replay.reproduced} />}
       <ol className="timeline">
         {stepsToShow.map((s) => (
           <li key={s.index}>
