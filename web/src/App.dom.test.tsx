@@ -47,4 +47,15 @@ describe('App: the document title follows the route', () => {
     render(<App />);
     await waitFor(() => expect(document.title).toBe('No such page · Hairspring'));
   });
+
+  it('gives a failure that does not exist the not-found title', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => (String(url).includes('/api/failures/f_zzzz') ? new Response('{"error":"not found"}', { status: 404 }) : pending())),
+    );
+    window.history.pushState({}, '', '/failures/f_zzzz');
+    render(<App />);
+    expect(document.title).toBe('Failure f_zzzz · Hairspring');
+    await waitFor(() => expect(document.title).toBe('No such page · Hairspring'));
+  });
 });
