@@ -295,11 +295,12 @@ and rows, so migrating rewrites no existing row). A failure with no row has neve
   nothing twice and the same id with different content is refused. A failure holds at most 200 checks (a confirmation
   that would pass that drops the oldest whole confirmations), and each text column at most 16 KiB. Rows list by creation
   time and then by write order (`rowid` on SQLite, a `seq` column on PostgreSQL), never by id.
-- The strict verify runs Hermit's `--verify` with `--verify-allow=both`: Hermit's flag is the exit status the guest is
-  required to have, so `both` lets a guest that exits 0 and one that exits non-zero be verified, and the engine judges
-  the finding. A verify that Hermit could not run (`no_result` or `infrastructure_error`) or that timed out is
-  `inconclusive` with its own detail text, which carries Hermit's reason and first `Error:` line; see
-  `docs/determinism.md`.
+- The strict verify runs Hermit's `--verify` with `--verify-allow=both`. Hermit's flag is the exit status the guest is
+  required to have, so `both` lets a guest that exits 0 and one that exits non-zero be verified; Hermit still compares
+  the two runs' exit statuses, but its result does not say the guest failed. The check therefore also requires that the
+  verify run failed the way the recording did (same kind, and the same property where one is recorded). A verify that
+  Hermit could not run (`no_result`, or `infrastructure_error`) or that timed out is `inconclusive` with its own detail
+  text, which carries Hermit's reason and first `Error:` line; see `docs/determinism.md`.
 - A check keeps its kind (`same_seed_rerun`, `bundle_replay`, `fixed_control`, `strict_verify`), status (`pass`, `fail`,
   `inconclusive`, `skipped`), counts of passed, failed and inconclusive runs, a record of the Hermit command (not a paste-and-run line), bounded JSON for
   its detail, the hashes it saw, the environment identity it ran in, when it started and finished, and the runner and

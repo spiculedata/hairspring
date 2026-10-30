@@ -3,14 +3,18 @@
 //! `hermit run --verify --verify-allow=both --verify-strict --verify-json=F` runs the guest twice and compares the
 //! two runs bit for bit. Hermit's `--verify-allow` is the exit status the guest is *required* to have in both runs
 //! (`success`, `failure` or `both`), not an allowance: `failure` would reject a guest that exits 0, which is how a
-//! target that signals its finding through output behaves, and Hermit would then skip the second run. `both` leaves
-//! the finding to the engine; Hermit still compares the exit status of the two runs. The check passes only if the
-//! result file says `verified`, `bitwise_parity` and a `matched` verdict. It costs two runs, so it is asked for.
+//! target that signals its finding through output behaves, and Hermit would then skip the second run. `both` accepts
+//! either status; Hermit still compares the exit status of the two runs (a difference is a divergence), but nothing in
+//! Hermit's result says the guest failed. So the check passes only if the result file says `verified`,
+//! `bitwise_parity` and a `matched` verdict, and the verify run itself failed the way the recording did: the same
+//! kind of failure and, where the recording names one, the same property. A match in which the guest did not fail is a
+//! miss, handled as the rerun check handles one. It costs two runs, so it is asked for.
 use super::command;
 use super::context::{now_ms, Ctx};
 use super::pace::Pace;
 use super::verify_report as report;
-use crate::exec::{run_trial_with, Dirs};
+use crate::backend::{failure_kind_matches, property_matches};
+use crate::exec::{run_trial_with, Dirs, Trial};
 use crate::trace::Verdict;
 use hairspring_engine::confirm::{CheckKind, CheckResult, CheckStatus};
 use serde_json::Value;
@@ -92,42 +96,91 @@ pub(super) fn check(ctx: &Ctx, pace: &mut Pace) -> CheckResult {
     };
     let verdict = ctx.backend.verdict(ctx.p, &trial, timeout);
     if trial.timed_out || matches!(verdict, Verdict::Hang(_)) {
-        return inconclusive(&report::timed_out(timeout.as_secs()));
+        return inconclusive(&report::timed_out(timeout));
     }
     let error_line = trial.stderr_findings().error_line;
     let hermit_failed = match (&verdict, &read) {
-        (_, Ok(v)) if report::is_no_comparison(v) => Some(report::reason_text(v)),
-        (Verdict::Infra(why), _) => Some(why.clone()),
+        (_, Ok(v)) if report::is_no_comparison(v) => Some(report::no_comparison_text(v)),
+        (Verdict::Infra(why), _) => Some(report::hermit_failure(why, None)),
         _ => None,
     };
-    if let Some(why) = hermit_failed {
-        return inconclusive(&report::hermit_failure(&why, error_line.as_deref()));
+    if let Some(text) = hermit_failed {
+        return inconclusive(&report::with_error_line(&text, error_line.as_deref()));
     }
-    match read {
-        Err(why) => inconclusive(&report::with_error_line(why, error_line.as_deref())),
-        Ok(v) => {
-            let ok = passes(&v);
-            let verdict = v
-                .get("verdict")
+    let v = match read {
+        Ok(v) => v,
+        Err(why) => return inconclusive(&report::with_error_line(why, error_line.as_deref())),
+    };
+    let parity = passes(&v);
+    let shown = if parity {
+        finding_shown(ctx, &trial, &verdict)
+    } else {
+        Shown::Yes
+    };
+    let reported = ctx
+        .result(kind, status_of(parity, &shown, ctx), started)
+        .with_command(command.clone())
+        .with_detail(
+            "verdict",
+            v.get("verdict")
                 .and_then(Value::as_str)
                 .unwrap_or("none")
-                .to_string();
-            ctx.result(
-                kind,
-                if ok {
-                    CheckStatus::Pass
-                } else {
-                    CheckStatus::Fail
-                },
-                started,
-            )
-            .with_counts(u32::from(ok), u32::from(!ok), 0)
-            .with_command(command.clone())
-            .with_detail("verdict", verdict)
-            .with_detail(
-                "bitwise_parity",
-                (v.get("bitwise_parity").and_then(Value::as_bool) == Some(true)).to_string(),
-            )
+                .to_string(),
+        )
+        .with_detail(
+            "bitwise_parity",
+            (v.get("bitwise_parity").and_then(Value::as_bool) == Some(true)).to_string(),
+        );
+    match (parity, shown) {
+        (false, _) | (true, Shown::Yes) => {
+            let ok = parity;
+            reported.with_counts(u32::from(ok), u32::from(!ok), 0)
         }
+        (true, Shown::Missed(why)) if !ctx.env.differs() => {
+            reported.with_counts(0, 1, 0).with_detail("mismatch", why)
+        }
+        (true, Shown::Missed(_)) => reported
+            .with_counts(0, 0, 1)
+            .with_detail("inconclusive", ctx.environment_note()),
+        (true, Shown::Unjudged(why)) => reported
+            .with_counts(0, 0, 1)
+            .with_detail("inconclusive", why),
+    }
+}
+
+/// Whether the guest failed in the verify the way the recording says it failed. Hermit's `--verify-allow=both` accepts
+/// any exit status, so matching runs say nothing about the finding: a guest that does not fail in the verify (a
+/// failure that depends on how many runs came before, say) would otherwise pass.
+enum Shown {
+    Yes,
+    /// The guest ran and was judged, and did not fail the recorded way.
+    Missed(&'static str),
+    /// The verify's run could not be judged.
+    Unjudged(&'static str),
+}
+
+fn finding_shown(ctx: &Ctx, trial: &Trial, verdict: &Verdict) -> Shown {
+    match verdict {
+        Verdict::Violation(_) | Verdict::Deadlock(_) => {}
+        Verdict::Pass => return Shown::Missed("the guest did not fail in the verify"),
+        _ => return Shown::Unjudged("the guest's verify run could not be judged"),
+    }
+    if failure_kind_matches(ctx.bundle, verdict) == Some(false) {
+        return Shown::Missed("the guest failed in a different kind of way in the verify");
+    }
+    if property_matches(ctx.bundle, trial) == Some(false) {
+        return Shown::Missed("a different property failed in the verify");
+    }
+    Shown::Yes
+}
+
+/// A result follows the rerun check: a miss is a failure of the check on an unchanged environment and inconclusive on
+/// a changed one; a run that could not be judged is inconclusive.
+fn status_of(parity: bool, shown: &Shown, ctx: &Ctx) -> CheckStatus {
+    match (parity, shown) {
+        (false, _) => CheckStatus::Fail,
+        (true, Shown::Yes) => CheckStatus::Pass,
+        (true, Shown::Missed(_)) if !ctx.env.differs() => CheckStatus::Fail,
+        (true, _) => CheckStatus::Inconclusive,
     }
 }

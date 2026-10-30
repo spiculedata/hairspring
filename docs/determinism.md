@@ -197,26 +197,47 @@ For a run or failure id every check is stored; for a bundle file, `-` or a bundl
 | `same_seed_rerun` | the seed run again `--reruns` times (default 3, at most 10), each with a fresh private directory, the pinned environment and stdin from `/dev/null` | every rerun fails the same way: the same kind of failure, the same property, the same behaviour hash and the same schedule fingerprint as the recording |
 | `bundle_replay` | the bundle replayed, with the environment check | the failure repeats; a miss is a failure of the check only on an environment that matches the recording |
 | `fixed_control` (`--control <target>`) | the same seed, scheduler flags, Hermit flags and guest environment on a second target that runs the fixed build | the fixed build is clean at the seed. A control whose flags differ is not a control and nothing is run. The working directory, the `--tmp` pre-seed and the events transport are not compared. It says "the fixed build does not fail at this seed", never "the same interleaving": a different build is a different schedule |
-| `strict_verify` (`--strict-verify`) | `hermit run --verify --verify-allow=both --verify-strict --verify-json=F` (two runs) | the result file says `verified`, `bitwise_parity` and a `matched` verdict |
+| `strict_verify` (`--strict-verify`) | `hermit run --verify --verify-allow=both --verify-strict --verify-json=F` (two runs) | the result file says `verified`, `bitwise_parity` and a `matched` verdict, and the verify run failed the way the recording did |
 
 **What the strict verify requires.** Hermit's `--verify-allow` is the exit status the guest is *required* to have in both
 runs: `success` (Hermit's default) requires 0, `failure` requires non-zero, `both` accepts either. The strict verify
 passes `both`, so a guest that exits 0 (a target that signals its finding through output) and one that exits non-zero
-can both be verified. Hermit still compares the exit status between the two runs, and the engine judges the finding
-itself. Earlier versions passed `failure`, which made Hermit reject a guest that exits 0 after its first run and skip the
-second. (This is from reading Hermit's source for the pinned version; it has not been run on this machine.)
+can both be verified. Earlier versions passed `failure`, which made Hermit reject a guest that exits 0 after its first
+run and skip the second (issue 119). With `both`, Hermit still compares the exit status of the two runs and reports a
+difference as a divergence, but nothing in its result says the guest failed. So the check passes only when both of these
+hold:
+
+- Hermit's result file says `verified`, `bitwise_parity` and a `matched` verdict;
+- the verify's own run failed the way the recording did: a violation or a deadlock, of the same kind as the recording
+  and, where the recording names a property, the same property. (The output hash is not compared; Hermit prints the
+  guest's output once, after a match.)
+
+If the runs matched but the guest did not fail the recorded way (for example it did not fail at all, because the
+failure depends on how many runs came before), that is a miss and is handled as the rerun check handles one: `fail` on
+an unchanged environment, `inconclusive` on a changed one, with the reason under `mismatch`. A verify run that could
+not be judged is `inconclusive`. A divergence is `fail`.
 
 **What the check's detail shows when no verdict was reached.** The check is `inconclusive`, never a pass or a fail, and
 the `inconclusive` detail says which of these happened:
 
-- the verify timed out: `the verify run timed out after N s, so it says nothing` (N is the limit the run had, twice a
-  single run's time or what is left of the wall budget when that is less);
-- Hermit could not run the verify (its result file has verdict `no_result` or `infrastructure_error`, or the run was an
-  infrastructure failure): `Hermit could not run the verify: <reason>`, where the reason is Hermit's `no_result_reason`
-  written as `kind(field=value)`, for example `first_run_rejected(exit_code=0)`, followed by `Hermit said:` and the
-  first `Error:` line of Hermit's standard error when there is one;
-- Hermit left no result file, or one that is too large, unreadable or not JSON: a message saying so, with the same
-  `Hermit said:` line when there is one.
+- the verify timed out: `the verify run timed out after N s, so it says nothing`. N is the limit the run had, rounded
+  up to a whole second: twice a single run's time, or what is left of the wall budget when that is less (a run is never
+  given less than 1 s);
+- Hermit could not run the verify (its result file has verdict `no_result`, or `infrastructure_error` with a skid
+  overshoot, or the run was an infrastructure failure): `Hermit could not run the verify: <reason>`. The reason is
+  Hermit's `no_result_reason` (or, for `infrastructure_error`, its `infrastructure_error`), an object tagged by `kind`,
+  written as `kind(field=value, ..)` with the fields in alphabetical order and null fields left out. A rejected first run
+  reads `first_run_rejected(exit_code=0, stderr_bytes=3003, stdout_bytes=128)`; others are `run_failed(detail=.., failure=..,
+  run=run1)`, `container_failed(disposition=exited(code=125), run=run1)` and `skid_overshoot(count=2)`;
+- the two runs differed but a host file the guest opened changed during one of them (`infrastructure_error` of kind
+  `host_input_changed`): `the two runs differed, but a host file the guest opened changed during run N: <path>, so the
+  difference is not counted against the guest`. Hermit found this after comparing the runs, so it is not worded as a
+  verify that could not run;
+- Hermit left no result file, or one that is too large, unreadable or not JSON: a message saying so.
+
+Where Hermit printed an `Error:` line, the detail ends `; Hermit said: <line>`. That line is the first line of Hermit's
+standard error that contains `Error:` (the guest's standard error is on the same stream), cut to 300 characters, and it
+is left out when the detail already contains it.
 
 Each check ends as `pass`, `fail`, `inconclusive` or `skipped`, with counts of the runs that passed, failed or could
 not be judged. A rerun that cannot be judged (a timeout, a Hermit fault, an events fault) is counted apart and is never a

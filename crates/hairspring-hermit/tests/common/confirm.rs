@@ -5,7 +5,8 @@
 //! every call its own schedule summary), `skid_left` (how many base-margin calls report a skid overshoot),
 //! `skid_double_fails` (the doubled margin overshoots too), `skid_base` (the margin that counts as the base one),
 //! `skid_for` (only guests whose command contains this text overshoot), `verify` (`good`, `diverged`, `missing`,
-//! `malformed`, `rejected`, `infra` or `hang`; a verify behaves as Hermit does, so a guest whose exit status does not
+//! `malformed`, `rejected`, `skid`, `host_input`, `run_failed`, `missing_fail`, `heal` (the guest exits 0 and does not fail
+//! in the verify) or `hang`; a verify behaves as Hermit does, so a guest whose exit status does not
 //! meet `--verify-allow` is rejected whatever `verify` says),
 //! `sleep` (seconds each call takes), `sleep_from` (the number of the first call that sleeps, counting every call the
 //! fake has seen; `count` holds that number and a test may reset it).
@@ -78,22 +79,41 @@ echo "hermit: virtual-time epoch=fake" >&2
 if [ -n "$vjson" ]; then
   vmode=$(cat "$dir/verify" 2>/dev/null || echo good)
   [ "$vmode" = hang ] && sleep 30
-  FAKE_SCHED_SEED=$seed "$@"
-  rc=$?
+  if [ "$vmode" = heal ]; then
+    echo fine
+    rc=0
+  else
+    FAKE_SCHED_SEED=$seed "$@"
+    rc=$?
+  fi
+  tail='"infrastructure_error":null,"comparison":null'
   reject=""
   case "$allow:$rc" in failure:0|success:[1-9]*) reject=1;; esac
   if [ -n "$reject" ] || [ "$vmode" = rejected ]; then
-    printf '{"verified": false, "bitwise_parity": false, "verdict": "no_result", "no_result_reason": {"kind": "first_run_rejected", "exit_code": %s}}' "$rc" > "$vjson"
+    printf '{"verified":false,"bitwise_parity":false,"verdict":"no_result","no_result_reason":{"kind":"first_run_rejected","exit_code":%s,"signal":null,"stdout_bytes":128,"stderr_bytes":3003},%s}' "$rc" "$tail" > "$vjson"
+    echo "HERMIT_INTERNAL_FAILURE class=cli-error" >&2
     echo "Error: First run during --verify exited with code $rc" >&2
     exit 125
   fi
+  head='"verified":false,"bitwise_parity":false'
   case "$vmode" in
-    good|hang) printf '{"verified": true, "bitwise_parity": true, "verdict": "matched"}' > "$vjson";;
+    good|hang|heal) printf '{"verified": true, "bitwise_parity": true, "verdict": "matched"}' > "$vjson";;
     diverged) printf '{"verified": true, "bitwise_parity": false, "verdict": "diverged"}' > "$vjson";;
     malformed) printf 'not json at all' > "$vjson";;
-    infra)
-      printf '{"verified": false, "verdict": "infrastructure_error", "no_result_reason": {"kind": "run_failed", "detail": "could not start the guest"}}' > "$vjson"
-      echo "Error: could not start the guest" >&2
+    skid)
+      printf '{%s,"verdict":"infrastructure_error","no_result_reason":null,"infrastructure_error":{"kind":"skid_overshoot","count":2},"comparison":null}' "$head" > "$vjson"
+      echo "Error: precise timer skid overshoot" >&2
+      exit 125;;
+    host_input)
+      printf '{%s,"verdict":"infrastructure_error","no_result_reason":null,"infrastructure_error":{"kind":"host_input_changed","run":"run2","path":"/etc/hosts","before":{"dev":1,"ino":2},"after":{"dev":1,"ino":3}},"comparison":null}' "$head" > "$vjson"
+      exit 1;;
+    run_failed)
+      printf '{%s,"verdict":"no_result","no_result_reason":{"kind":"run_failed","run":"run1","failure":"backend_failure","detail":"the backend failed to start"},%s}' "$head" "$tail" > "$vjson"
+      echo "Error: the backend failed to start" >&2
+      exit 125;;
+    missing_fail)
+      echo "HERMIT_INTERNAL_FAILURE class=cli-error" >&2
+      echo "Error: Hermit fell over" >&2
       exit 125;;
     missing) ;;
   esac

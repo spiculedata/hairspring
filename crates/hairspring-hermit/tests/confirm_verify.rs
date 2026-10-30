@@ -158,7 +158,10 @@ fn a_verify_hermit_rejected_shows_its_reason_and_error_line() {
         text.starts_with("Hermit could not run the verify"),
         "{text}"
     );
-    assert!(text.contains("first_run_rejected(exit_code=1)"), "{text}");
+    assert!(
+        text.contains("first_run_rejected(exit_code=1, stderr_bytes=3003, stdout_bytes=128)"),
+        "{text}"
+    );
     assert!(
         text.contains("Error: First run during --verify exited with code 1"),
         "{text}"
@@ -167,18 +170,113 @@ fn a_verify_hermit_rejected_shows_its_reason_and_error_line() {
 }
 
 #[test]
-fn a_verify_that_hit_an_infrastructure_error_shows_the_reason() {
-    let rig = rig("verify-infra", RigOptions::default());
-    rig.set("verify", "infra");
+fn a_skid_overshoot_reads_the_infrastructure_error_not_a_null_reason() {
+    let rig = rig("verify-skid", RigOptions::default());
+    rig.set("verify", "skid");
+    let checks = run(&rig);
+    let verify = verify_of(&checks);
+    assert_eq!(verify.status, CheckStatus::Inconclusive, "{verify:?}");
+    let text = detail(verify, "inconclusive");
+    assert!(text.contains("skid_overshoot(count=2)"), "{text}");
+    assert!(!text.contains("null"), "{text}");
+}
+
+#[test]
+fn a_changed_host_file_is_worded_as_a_comparison_that_cannot_be_trusted() {
+    let rig = rig("verify-host-input", RigOptions::default());
+    rig.set("verify", "host_input");
     let checks = run(&rig);
     let verify = verify_of(&checks);
     assert_eq!(verify.status, CheckStatus::Inconclusive, "{verify:?}");
     let text = detail(verify, "inconclusive");
     assert!(
-        text.contains("run_failed(detail=could not start the guest)"),
+        text.contains("host file the guest opened changed during run 2: /etc/hosts"),
         "{text}"
     );
-    assert!(text.contains("Error: could not start the guest"), "{text}");
+    assert!(!text.contains("could not run the verify"), "{text}");
+}
+
+#[test]
+fn a_run_that_failed_in_hermit_shows_which_run_and_why() {
+    let rig = rig("verify-run-failed", RigOptions::default());
+    rig.set("verify", "run_failed");
+    let checks = run(&rig);
+    let verify = verify_of(&checks);
+    assert_eq!(verify.status, CheckStatus::Inconclusive, "{verify:?}");
+    let text = detail(verify, "inconclusive");
+    assert!(
+        text.contains(
+            "run_failed(detail=the backend failed to start, failure=backend_failure, run=run1)"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("Hermit said: Error: the backend failed to start"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_verify_in_which_the_guest_did_not_fail_does_not_verify_the_finding() {
+    let rig = rig("verify-healed", RigOptions::default());
+    rig.set("verify", "heal");
+    let checks = run(&rig);
+    let verify = verify_of(&checks);
+    assert_eq!(verify.status, CheckStatus::Fail, "{verify:?}");
+    assert!(
+        detail(verify, "mismatch").contains("did not fail"),
+        "{:?}",
+        verify.detail
+    );
+    assert_ne!(finding_status(&checks), FindingStatus::Verified);
+}
+
+#[test]
+fn a_verify_miss_on_a_changed_environment_is_inconclusive() {
+    let rig = rig("verify-healed-env", RigOptions::default());
+    rig.set("verify", "heal");
+    let bundle = rig
+        .bundle()
+        .with_param("host.kernel_release", "0.0.0-recorded-elsewhere");
+    let checks = rig
+        .engine
+        .confirm(&bundle, &strict(), &mut |_| true)
+        .unwrap();
+    let verify = verify_of(&checks);
+    assert_eq!(verify.status, CheckStatus::Inconclusive, "{verify:?}");
+    assert!(detail(verify, "inconclusive").contains("environment differs"));
+}
+
+#[test]
+fn a_verify_that_fails_a_different_kind_of_way_does_not_verify() {
+    let o = RigOptions {
+        svc_script: Some(EXITS_ZERO.to_string()),
+        ..RigOptions::default()
+    };
+    let rig = rig("verify-other-kind", o);
+    let bundle = rig.bundle().with_param("failure_kind", "deadlock");
+    let checks = rig
+        .engine
+        .confirm(&bundle, &strict(), &mut |_| true)
+        .unwrap();
+    let verify = verify_of(&checks);
+    assert_eq!(verify.status, CheckStatus::Fail, "{verify:?}");
+    assert!(
+        detail(verify, "mismatch").contains("different kind"),
+        "{:?}",
+        verify.detail
+    );
+}
+
+#[test]
+fn a_result_file_missing_after_a_hermit_failure_names_the_error_line_once() {
+    let rig = rig("verify-missing-fail", RigOptions::default());
+    rig.set("verify", "missing_fail");
+    let checks = run(&rig);
+    let verify = verify_of(&checks);
+    assert_eq!(verify.status, CheckStatus::Inconclusive, "{verify:?}");
+    let text = detail(verify, "inconclusive");
+    assert_eq!(text.matches("Error: Hermit fell over").count(), 1, "{text}");
 }
 
 #[test]
@@ -212,4 +310,23 @@ fn a_malformed_result_is_inconclusive_with_a_clear_message() {
     let verify = verify_of(&checks);
     assert_eq!(verify.status, CheckStatus::Inconclusive, "{verify:?}");
     assert!(detail(verify, "inconclusive").contains("not JSON"));
+}
+
+#[test]
+fn a_timeout_is_a_timeout_even_when_the_target_treats_a_hang_as_the_bug() {
+    let o = RigOptions {
+        trial_timeout: Duration::from_secs(1),
+        hang_is_violation: true,
+        ..RigOptions::default()
+    };
+    let rig = rig("verify-hang-violation", o);
+    rig.set("verify", "hang");
+    let checks = run(&rig);
+    let verify = verify_of(&checks);
+    assert_eq!(verify.status, CheckStatus::Inconclusive, "{verify:?}");
+    assert!(
+        detail(verify, "inconclusive").contains("timed out after 2 s"),
+        "{:?}",
+        verify.detail
+    );
 }
