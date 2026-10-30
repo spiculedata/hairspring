@@ -11,6 +11,7 @@
   --live: #175cd3; --live-bg: #eff8ff; --live-line: #84caff;
   --neutral: #475467; --neutral-bg: #f2f4f7; --neutral-line: #d0d5dd;
   --confirm: #6927da; --confirm-bg: #f4f3ff; --confirm-line: #c3b5fd;
+  --scroll-shadow: rgba(28, 25, 23, .25);
   /* Names the components already use, kept as aliases of the tokens above. */
   --fg: var(--text); --muted: var(--text-muted); --line: var(--border); --card: var(--surface);
   --good: var(--pass); --bad: var(--fail);
@@ -28,6 +29,7 @@
     --live: #84caff; --live-bg: #0c2340; --live-line: #175cd3;
     --neutral: #cfd4dc; --neutral-bg: #262a33; --neutral-line: #475467;
     --confirm: #c3b5fd; --confirm-bg: #241a45; --confirm-line: #6927da;
+    --scroll-shadow: rgba(0, 0, 0, .6);
   }
 }
 * { box-sizing: border-box; }
@@ -51,12 +53,12 @@ input, select, button { font: inherit; padding: .4rem .6rem; border-radius: 6px;
 button { cursor: pointer; background: var(--accent); color: var(--accent-ink); border-color: transparent; } button:disabled { opacity: .5; cursor: default; }
 button.linklike { background: none; color: var(--fg); border: 0; padding: .15rem 0; text-align: left; }
 .row { display: flex; gap: .5rem; flex-wrap: wrap; margin: .75rem 0; }
-.badge { font-size: .75rem; padding: .1rem .5rem; border-radius: 999px; border: 1px solid currentColor; vertical-align: middle; }
+.badge { white-space: nowrap; font-size: .75rem; padding: .1rem .5rem; border-radius: 999px; border: 1px solid currentColor; vertical-align: middle; }
 .badge-good { color: var(--pass); background: var(--pass-bg); border-color: var(--pass-line); }
 .badge-bad { color: var(--fail); background: var(--fail-bg); border-color: var(--fail-line); }
 .badge-busy { color: var(--live); background: var(--live-bg); border-color: var(--live-line); }
 .badge-idle { color: var(--neutral); background: var(--neutral-bg); border-color: var(--neutral-line); }
-.badge-scope { font-size: .75rem; font-weight: 400; line-height: 1.4; display: inline-block; vertical-align: middle; }
+.badge-scope { margin-left: .35rem; font-size: .75rem; font-weight: 400; line-height: 1.4; display: inline-block; vertical-align: middle; }
 .badge::before { margin-right: .3em; }
 .badge-good::before { content: '✓' / ''; } .badge-bad::before { content: '✕' / ''; } .badge-busy::before { content: '●' / ''; } .badge-idle::before { content: '◌' / ''; }
 .muted { color: var(--muted); } .error { color: var(--bad); } .ok { color: var(--good); }
@@ -65,3 +67,13 @@ pre { overflow: auto; background: var(--card); border: 1px solid var(--line); bo
 .log { max-height: 18rem; } .state { margin: .25rem 0 .5rem 1.5rem; white-space: pre-wrap; }
 .timeline { list-style: none; padding: 0; counter-reset: s; } .timeline li { border-left: 2px solid var(--line); padding: .15rem 0 .15rem .75rem; margin-left: .5rem; }
 .step-n { display: inline-block; min-width: 1.6rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* The step count is a note under the run id, shown only where the Steps column is hidden. */
+.steps-note { display: none; }
+/* Phones: the Runs table drops its optional column and wraps long ids, so the page never scrolls sideways. */
+@media (max-width: 40rem) {
+  table.runs .opt { display: none; }
+  table.runs th, table.runs td { padding: .45rem .35rem; }
+  table.runs td:first-child { overflow-wrap: anywhere; }
+  table.runs time { display: none; }
+  .steps-note { display: block; font-size: .8rem; }
+}

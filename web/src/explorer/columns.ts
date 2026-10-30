@@ -25,9 +25,9 @@ export const FLEXIBLE_MIN_PX = 200;
 export const COLUMN_WIDTHS_PX: Readonly<Partial<Record<ColumnKey, number>>> = {
   status: 160,
   kind: 92,
-  rate: 300,
+  rate: 272,
   seed: 112,
-  evals: 80,
+  evals: 112,
 };
 
 /** The width at which nothing is squeezed: the fixed columns plus the flexible one at its minimum. */

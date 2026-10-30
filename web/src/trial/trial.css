@@ -16,7 +16,7 @@ table.lanes td, table.procs td { overflow-wrap: anywhere; vertical-align: top; }
 
 .output-stream h3 { margin-bottom: .25rem; }
 pre.output-tail { max-height: 22rem; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-all; }
-pre.output-tail:focus-visible, pre.slices:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+pre.output-tail:focus-visible, pre.slices:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 pre.slices { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 14rem; }
 
 @media (max-width: 40rem) {
