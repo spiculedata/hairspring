@@ -6,9 +6,9 @@ import { layoutBars, STRIP_HEIGHT } from './stripLayout';
 /** CSS variable that colours each class. Colour only adds emphasis: height, the table and the words say the same. */
 const COLOUR_VARS: Readonly<Record<StripCode, string>> = {
   v: '--bad',
-  x: '--busy',
+  x: '--gap',
   u: '--muted',
-  i: '--busy',
+  i: '--gap',
   e: '--muted',
   '-': '--line',
   p: '--good',

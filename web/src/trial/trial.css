@@ -1,6 +1,6 @@
 /* Results explorer: failure page. Every fact is also in words or a table cell; marks and bars only add emphasis. */
 .trial-header h1 { margin-bottom: .25rem; }
-.note { border-left: 4px solid var(--busy); padding-left: .75rem; margin: .5rem 0; }
+.note { border-left: 4px solid var(--gap); padding-left: .75rem; margin: .5rem 0; }
 .failing { list-style: none; padding: 0; }
 .failing > li { border-left: 3px solid var(--bad); padding-left: .75rem; margin: .75rem 0; }
 .failing p { margin: .2rem 0; }

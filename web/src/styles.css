@@ -1,10 +1,34 @@
 :root {
-  --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --card: #fff;
-  --accent: #b45309; --good: #15803d; --bad: #b91c1c; --busy: #b45309;
+  /* Design tokens. Text pairs are at least 4.5:1 and control edges and the focus ring at least 3:1, in both themes;
+     src/contrast.test.ts reads this file and checks them. Indigo is the clickable colour. Amber means caution only. */
+  --bg: #fafaf9; --surface: #ffffff; --surface-2: #f5f5f4;
+  --text: #1c1917; --text-muted: #57534e; --text-subtle: #6b6560;
+  --border: #e7e5e4; --border-strong: #78716c;
+  --accent: #3538cd; --accent-ink: #ffffff; --accent-soft: #eef0ff; --focus: #3538cd;
+  --fail: #b42318; --fail-bg: #fef3f2; --fail-line: #fda29b;
+  --gap: #93370d; --gap-bg: #fffaeb; --gap-line: #fec84b;
+  --pass: #067647; --pass-bg: #ecfdf3; --pass-line: #75e0a7;
+  --live: #175cd3; --live-bg: #eff8ff; --live-line: #84caff;
+  --neutral: #475467; --neutral-bg: #f2f4f7; --neutral-line: #d0d5dd;
+  --confirm: #6927da; --confirm-bg: #f4f3ff; --confirm-line: #c3b5fd;
+  /* Names the components already use, kept as aliases of the tokens above. */
+  --fg: var(--text); --muted: var(--text-muted); --line: var(--border); --card: var(--surface);
+  --good: var(--pass); --bad: var(--fail);
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #1c1917; --fg: #fafaf9; --muted: #a8a29e; --line: #44403c; --card: #292524; --accent: #f59e0b; --good: #4ade80; --bad: #f87171; --busy: #fbbf24; }
+  :root {
+    --bg: #151312; --surface: #1f1c1a; --surface-2: #292524;
+    --text: #f5f5f4; --text-muted: #b7b1ab; --text-subtle: #a8a29e;
+    --border: #36312e; --border-strong: #78716c;
+    --accent: #a4bcfd; --accent-ink: #101323; --accent-soft: #1d2346; --focus: #a4bcfd;
+    --fail: #fda29b; --fail-bg: #3a1410; --fail-line: #b42318;
+    --gap: #fec84b; --gap-bg: #33240a; --gap-line: #b54708;
+    --pass: #75e0a7; --pass-bg: #0b2a1c; --pass-line: #067647;
+    --live: #84caff; --live-bg: #0c2340; --live-line: #175cd3;
+    --neutral: #cfd4dc; --neutral-bg: #262a33; --neutral-line: #475467;
+    --confirm: #c3b5fd; --confirm-bg: #241a45; --confirm-line: #6927da;
+  }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif; }
@@ -22,12 +46,18 @@ th { color: var(--muted); font-weight: 500; font-size: .85rem; } .num { text-ali
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: .75rem 1rem; margin: .75rem 0; }
 .card.inline { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; } .card.narrow { max-width: 28rem; margin: 3rem auto; }
 label { display: flex; flex-direction: column; gap: .25rem; font-size: .85rem; color: var(--muted); }
-input, select, button { font: inherit; padding: .4rem .6rem; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
-button { cursor: pointer; background: var(--accent); color: #fff; border-color: transparent; } button:disabled { opacity: .5; cursor: default; }
+input, select, button { font: inherit; padding: .4rem .6rem; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--bg); color: var(--fg); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+button { cursor: pointer; background: var(--accent); color: var(--accent-ink); border-color: transparent; } button:disabled { opacity: .5; cursor: default; }
 button.linklike { background: none; color: var(--fg); border: 0; padding: .15rem 0; text-align: left; }
 .row { display: flex; gap: .5rem; flex-wrap: wrap; margin: .75rem 0; }
 .badge { font-size: .75rem; padding: .1rem .5rem; border-radius: 999px; border: 1px solid currentColor; vertical-align: middle; }
-.badge-good { color: var(--good); } .badge-bad { color: var(--bad); } .badge-busy { color: var(--busy); } .badge-idle { color: var(--muted); }
+.badge-good { color: var(--pass); background: var(--pass-bg); border-color: var(--pass-line); }
+.badge-bad { color: var(--fail); background: var(--fail-bg); border-color: var(--fail-line); }
+.badge-busy { color: var(--live); background: var(--live-bg); border-color: var(--live-line); }
+.badge-idle { color: var(--neutral); background: var(--neutral-bg); border-color: var(--neutral-line); }
+.badge::before { margin-right: .3em; }
+.badge-good::before { content: '✓' / ''; } .badge-bad::before { content: '✕' / ''; } .badge-busy::before { content: '●' / ''; } .badge-idle::before { content: '◌' / ''; }
 .muted { color: var(--muted); } .error { color: var(--bad); } .ok { color: var(--good); }
 .facts { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; } .facts dt { color: var(--muted); } .facts dd { margin: 0; }
 pre { overflow: auto; background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: .6rem; font-size: .8rem; }

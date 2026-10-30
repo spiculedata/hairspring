@@ -8,7 +8,7 @@
 .chips { display: flex; flex-wrap: wrap; gap: .4rem; list-style: none; padding: 0; margin: .5rem 0; }
 .chip { font-size: .78rem; padding: .1rem .55rem; border-radius: 999px; border: 1px solid currentColor; }
 .chip-muted { color: var(--muted); border-style: dashed; }
-.chip-warn { color: var(--busy); }
+.chip-warn { color: var(--gap); }
 .chip-info { color: var(--fg); }
 
 .filters label { min-width: 9rem; }
@@ -62,7 +62,7 @@ table.props tbody td, table.props tbody th { padding: 8px .5rem; border-bottom: 
 
 .status { font-weight: 600; white-space: nowrap; }
 .status-violation { color: var(--bad); }
-.status-unmet { color: var(--busy); }
+.status-unmet { color: var(--gap); }
 .status-pass { color: var(--good); }
 .status-unrated { color: var(--muted); }
 
@@ -71,6 +71,6 @@ table.props tbody td, table.props tbody th { padding: 8px .5rem; border-bottom: 
 .rate-bar-fill { position: absolute; top: 0; bottom: 0; min-width: 3px; background: var(--fg); border-radius: 3px; }
 .unmet-note, .inconclusive-note { display: block; color: var(--muted); font-size: .8rem; }
 
-.unmet { border-left: 4px solid var(--busy); padding-left: .75rem; margin-top: 1.5rem; }
+.unmet { border-left: 4px solid var(--gap); padding-left: .75rem; margin-top: 1.5rem; }
 .unmet ul { padding-left: 1.2rem; }
 .unmet .kind { color: var(--muted); }
