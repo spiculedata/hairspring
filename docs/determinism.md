@@ -211,14 +211,14 @@ hold:
 - the verify's own run failed the way the recording did: a violation of the same kind as the recording and, where the
   recording names a property, the same property. (The output hash is not compared; Hermit prints the guest's output
   once, after a match.) A recorded deadlock cannot be verified this way: in the Hermit this is pinned to, a deadlock
-  during a verify is written as `no_result` with a `run_failed` reason of `deadlock`, so the check is `inconclusive`.
+  during a verify is not a result: Hermit records the verify as `no_result`: `container_failed` on a backend whose scheduler runs in a container child, such as ptrace, or `run_failed` with `deadlock` on DBT. The check is `inconclusive`.
   The same holds for a target whose bug is a hang (`hang_is_violation`): the verify always reaches its time limit, so
   the check is `inconclusive`. Both are safe: neither can verify a finding.
 
 If the runs matched but the guest did not fail the recorded way (for example it did not fail at all, because the
 failure depends on how many runs came before), that is a miss and is handled as the rerun check handles one: `fail` on
 an unchanged environment, `inconclusive` on a changed one, with the reason under `mismatch`. A verify run that could
-not be judged is `inconclusive`. A divergence is `fail`. A strict verify that is `fail` or `inconclusive` never moves a finding below `confirmed`;
+not be judged is `inconclusive`. A divergence is `fail`. A strict verify that is `fail` or `inconclusive` never moves a finding below where the other checks put it;
 only a `pass` lifts it to `verified`.
 
 **What the check's detail shows when no verdict was reached.** The check is `inconclusive`, never a pass or a fail, and
