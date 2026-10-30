@@ -71,6 +71,9 @@ jobs:
         run: cargo test --locked -p hairspring-cli
       - name: Build
         run: cargo build --release --locked -p hairspring-cli
+      # The UI inside the binary must be the one built from this commit's web/ source, not an older build.
+      - name: Check the embedded UI
+        run: bash scripts/check-embedded-ui.sh target/release/hairspring web/dist
       - name: Smoke test
         run: |
           target/release/hairspring --version
@@ -119,6 +122,9 @@ jobs:
         run: cargo test --locked -p hairspring-cli
       - name: Build
         run: cargo build --release --locked -p hairspring-cli
+      # The UI inside the binary must be the one built from this commit's web/ source, not an older build.
+      - name: Check the embedded UI
+        run: bash scripts/check-embedded-ui.sh target/release/hairspring web/dist
       - name: Smoke test
         run: |
           target/release/hairspring --version

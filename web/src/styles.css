@@ -77,3 +77,8 @@ pre { overflow: auto; background: var(--card); border: 1px solid var(--line); bo
   table.runs time { display: none; }
   .steps-note { display: block; font-size: .8rem; }
 }
+/* Activity log: one titled line per event, with the raw event behind a disclosure. */
+ol.activity { list-style: none; padding: 0; margin: 0; max-height: 22rem; overflow: auto; }
+ol.activity li { padding: .35rem 0; border-bottom: 1px solid var(--line); }
+.activity-fact { margin-left: .75rem; font-size: .9rem; }
+.activity details { margin-top: .15rem; font-size: .8rem; }

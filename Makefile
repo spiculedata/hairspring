@@ -1,4 +1,4 @@
-.PHONY: build test lint fmt ui release audit docker clean test-scripts
+.PHONY: build test lint fmt ui check-ui release audit docker clean test-scripts
 
 build:
 	cargo build --workspace
@@ -21,8 +21,13 @@ fmt:
 ui:
 	cd web && npm ci && npm run build
 
+# After a release build: the binary must serve the UI built in web/dist, not an older one.
+check-ui:
+	bash scripts/check-embedded-ui.sh target/release/hairspring web/dist
+
 release: ui
 	cargo build --release -p hairspring-cli -p hairspring-dapr
+	$(MAKE) check-ui
 
 audit:
 	cargo audit
