@@ -2,6 +2,7 @@
 //! accepted; the engine judges the finding.
 mod common;
 use common::confirm::*;
+use common::props::{emit, report};
 use hairspring_engine::confirm::*;
 use std::time::Duration;
 
@@ -329,4 +330,59 @@ fn a_timeout_is_a_timeout_even_when_the_target_treats_a_hang_as_the_bug() {
         "{:?}",
         verify.detail
     );
+}
+
+/// A guest that reports property `during_search` as false everywhere except in a verify, where it reports the given
+/// text instead.
+fn reports_in_verify(in_search: &str, in_verify: &str) -> RigOptions {
+    RigOptions {
+        svc_script: Some(format!(
+            "if [ -n \"$FAKE_VERIFY\" ]; then\n{}\nelse\n{}\nfi\n",
+            emit(in_verify),
+            emit(in_search)
+        )),
+        ..RigOptions::default()
+    }
+}
+
+#[test]
+fn a_verify_run_that_fails_a_different_property_does_not_verify() {
+    let search = report("balance_never_negative", "always", 3, 1, true);
+    let verify = report("ledger_balanced", "always", 3, 1, true);
+    let rig = rig("verify-other-property", reports_in_verify(&search, &verify));
+    let checks = run(&rig);
+    let check = verify_of(&checks);
+    assert_eq!(check.status, CheckStatus::Fail, "{check:?}");
+    assert!(
+        detail(check, "mismatch").contains("different property"),
+        "{:?}",
+        check.detail
+    );
+    assert_ne!(finding_status(&checks), FindingStatus::Verified);
+}
+
+#[test]
+fn a_verify_run_that_fails_the_recorded_property_still_verifies() {
+    let search = report("balance_never_negative", "always", 3, 1, true);
+    let rig = rig("verify-same-property", reports_in_verify(&search, &search));
+    let checks = run(&rig);
+    let check = verify_of(&checks);
+    assert_eq!(check.status, CheckStatus::Pass, "{check:?}");
+    assert_eq!(finding_status(&checks), FindingStatus::Verified);
+}
+
+#[test]
+fn a_verify_run_whose_events_are_unusable_is_inconclusive() {
+    let search = report("balance_never_negative", "always", 3, 1, true);
+    let cut_off = report("balance_never_negative", "always", 4, 0, false);
+    let rig = rig("verify-unusable", reports_in_verify(&search, &cut_off));
+    let checks = run(&rig);
+    let check = verify_of(&checks);
+    assert_eq!(check.status, CheckStatus::Inconclusive, "{check:?}");
+    assert!(
+        detail(check, "inconclusive").contains("could not be judged"),
+        "{:?}",
+        check.detail
+    );
+    assert_ne!(finding_status(&checks), FindingStatus::Verified);
 }

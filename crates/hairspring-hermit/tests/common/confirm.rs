@@ -9,7 +9,7 @@
 //! in the verify) or `hang`; a verify behaves as Hermit does, so a guest whose exit status does not
 //! meet `--verify-allow` is rejected whatever `verify` says),
 //! `sleep` (seconds each call takes), `sleep_from` (the number of the first call that sleeps, counting every call the
-//! fake has seen; `count` holds that number and a test may reset it).
+//! fake has seen; `count` holds that number and a test may reset it). A guest run by a verify sees `FAKE_VERIFY=1`.
 use super::scratch;
 use hairspring_core::bundle::Bundle;
 use hairspring_engine::config::{Budget, Config, TargetKind, TargetSpec};
@@ -83,7 +83,7 @@ if [ -n "$vjson" ]; then
     echo fine
     rc=0
   else
-    FAKE_SCHED_SEED=$seed "$@"
+    FAKE_VERIFY=1 FAKE_SCHED_SEED=$seed "$@"
     rc=$?
   fi
   tail='"infrastructure_error":null,"comparison":null'
