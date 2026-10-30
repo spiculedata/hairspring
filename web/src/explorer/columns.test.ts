@@ -83,6 +83,20 @@ describe('the status column shows every status label whole', () => {
   });
 });
 
+describe('numbers are never clipped in the property table', () => {
+  // A conservative width: 0.6em per digit and 0.3em per comma at the 15px body size, plus the cell's 8px padding each side.
+  const widthOf = (n: number): number => {
+    const text = n.toLocaleString('en-US');
+    const digits = text.replace(/,/g, '').length;
+    return Math.ceil((digits * 0.6 + (text.length - digits) * 0.3) * 15) + 16;
+  };
+
+  it('gives the evaluations column room for a nine-digit count, so 1,200,000 is shown whole', () => {
+    expect(widthOf(1_200_000)).toBeLessThanOrEqual(COLUMN_WIDTHS_PX.evals ?? 0);
+    expect(widthOf(999_999_999)).toBeLessThanOrEqual(COLUMN_WIDTHS_PX.evals ?? 0);
+  });
+});
+
 describe('trial table column budget', () => {
   it('has one column that takes the width that is left, and fits inside the box with a classic scrollbar', () => {
     expect(TRIAL_WIDTHS[TRIAL_FLEXIBLE]).toBeUndefined();

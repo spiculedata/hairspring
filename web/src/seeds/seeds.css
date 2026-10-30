@@ -1,6 +1,6 @@
 /* Results explorer: seed explorer. Meaning is always in the text; colour, height and marks only add emphasis. */
 .strip { position: relative; border: 1px solid var(--line); border-radius: 6px; background: var(--card); overflow: hidden; cursor: crosshair; }
-.strip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.strip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .strip canvas { display: block; }
 .strip-status { min-height: 1.5em; margin: .35rem 0; }
 .strip-keys { font-size: .8rem; margin: .25rem 0 .75rem; }

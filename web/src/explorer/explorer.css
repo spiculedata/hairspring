@@ -13,7 +13,7 @@
 
 .filters label { min-width: 9rem; }
 .table-scroll { overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
-.table-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.table-scroll:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 table.props { margin-top: 0; table-layout: fixed; width: 100%; }
 table.props caption { text-align: left; padding: .4rem .5rem; color: var(--muted); font-size: .8rem; }
 table.props thead th { position: sticky; top: 0; background: var(--card); z-index: 1; }
@@ -34,8 +34,8 @@ table.props tbody td, table.props tbody th { padding: 8px .5rem; border-bottom: 
   background:
     linear-gradient(to right, var(--card) 30%, transparent) left / 24px 100% no-repeat local,
     linear-gradient(to left, var(--card) 30%, transparent) right / 24px 100% no-repeat local,
-    linear-gradient(to right, rgba(0, 0, 0, .25), transparent) left / 10px 100% no-repeat scroll,
-    linear-gradient(to left, rgba(0, 0, 0, .25), transparent) right / 10px 100% no-repeat scroll,
+    linear-gradient(to right, var(--scroll-shadow), transparent) left / 10px 100% no-repeat scroll,
+    linear-gradient(to left, var(--scroll-shadow), transparent) right / 10px 100% no-repeat scroll,
     var(--card);
 }
 /* Phones: drop kind, seed and evals so the rate column is on screen; they return at the wider width. */
@@ -56,7 +56,7 @@ table.props tbody td, table.props tbody th { padding: 8px .5rem; border-bottom: 
 .guest-trunc { color: var(--muted); font-style: italic; }
 .guest-more { text-decoration: underline; color: var(--accent); }
 
-.boundary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.boundary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .error-notice { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
 .error-notice .error { margin: .5rem 0; }
 

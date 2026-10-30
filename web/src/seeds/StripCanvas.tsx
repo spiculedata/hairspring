@@ -14,7 +14,8 @@ const COLOUR_VARS: Readonly<Record<StripCode, string>> = {
   p: '--good',
 };
 const ACTIVE_VAR = '--fg';
-const FALLBACK_COLOUR = '#78716c';
+/** Used only when a token is missing; the canvas resolves it against its own text colour. */
+const FALLBACK_COLOUR = 'currentColor';
 
 function useWidth(ref: RefObject<HTMLDivElement | null>): number {
   const [width, setWidth] = useState(0);

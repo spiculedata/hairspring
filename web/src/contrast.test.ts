@@ -1,3 +1,5 @@
+/// <reference types="node" />
+import { readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { contrastRatio, parseHex } from './contrast';
 import { readSource } from './readSource';
@@ -143,5 +145,44 @@ describe('stylesheet use of the tokens', () => {
       marks.add(m![1]);
     }
     expect(marks.size).toBe(4);
+  });
+});
+
+describe('every stylesheet and the canvas code use the tokens', () => {
+  const dir = new URL('./', import.meta.url);
+  const cssFiles = (readdirSync(dir, { recursive: true }) as string[]).filter((f) => f.endsWith('.css')).sort();
+  const LITERAL = /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/;
+
+  it('finds all four stylesheets', () => {
+    expect(cssFiles).toEqual(['explorer/explorer.css', 'seeds/seeds.css', 'styles.css', 'trial/trial.css']);
+  });
+
+  it('writes no colour literal in any stylesheet outside the token blocks of styles.css', () => {
+    for (const file of cssFiles) {
+      const text = readSource(file);
+      const body = file === 'styles.css' ? text.slice(text.indexOf('* { box-sizing')) : text;
+      expect(body, file).not.toMatch(LITERAL);
+    }
+  });
+
+  it('draws every focus ring in the focus token, not the accent', () => {
+    for (const file of cssFiles) {
+      for (const rule of readSource(file).matchAll(/:focus-visible[^{]*\{([^}]*)\}/g)) {
+        expect(rule[1], file).toMatch(/outline:\s*2px solid var\(--focus\)/);
+      }
+    }
+  });
+
+  it('writes no colour literal in the seed strip canvas code', () => {
+    expect(readSource('seeds/StripCanvas.tsx')).not.toMatch(LITERAL);
+  });
+
+  it('gives the scope text beside a badge a left margin, so it does not sit against the badge', () => {
+    expect(css).toMatch(/\.badge-scope \{[^}]*margin-left:\s*[\d.]+rem/);
+  });
+
+  it('defines the scroll-edge shadow as a token in both themes', () => {
+    expect(light['--scroll-shadow']).toBeDefined();
+    expect(THEMES.dark['--scroll-shadow']).not.toBe(light['--scroll-shadow']);
   });
 });
