@@ -31,6 +31,6 @@ describe('pageTitle', () => {
   });
 
   it('says so when the page does not exist', () => {
-    expect(title('/nowhere')).toBe('Page not found · Hairspring');
+    expect(title('/nowhere')).toBe('No such page · Hairspring');
   });
 });

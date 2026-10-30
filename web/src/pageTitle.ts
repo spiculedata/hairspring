@@ -21,7 +21,7 @@ function heading(route: Route): string {
     case 'workers':
       return 'Workers';
     case 'notfound':
-      return 'Page not found';
+      return 'No such page';
   }
 }
 
