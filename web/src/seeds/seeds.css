@@ -8,7 +8,7 @@ table.strip-counts { width: auto; margin-top: .5rem; }
 table.strip-counts caption { text-align: left; color: var(--muted); font-size: .8rem; padding: .25rem 0; }
 table.strip-counts th, table.strip-counts td { padding: .2rem .75rem .2rem 0; }
 .class-v, .class-violation { color: var(--bad); }
-.class-x, .class-infra, .class-i, .class-inconclusive { color: var(--busy); }
+.class-x, .class-infra, .class-i, .class-inconclusive { color: var(--gap); }
 .class-u, .class-unusable, .class-e, .class-excluded { color: var(--muted); }
 .class-p, .class-pass { color: var(--good); }
 
