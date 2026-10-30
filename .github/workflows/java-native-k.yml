@@ -1,7 +1,9 @@
 name: Java native K
 
-# Manual only: the Java fixture's native runs at a chosen K (iterations per worker) and JVM flag profile, so a recorded
-# run shows how often the planted race fires. Profile a-prime runs make at-extra-native (profiles-extra.tsv); profile a runs
+# Manual only: a Java fixture's native runs at a chosen K (iterations per worker) and JVM flag profile, so a recorded
+# run shows how often the planted race fires. The fixture input picks the lost-update fixture (at, lang-at.jar) or the
+# service fixture (svc, svc.jar); for svc the job also builds the jar twice on the pinned JDK and uploads it with a short
+# build record (scripts/build-record-java-svc.sh). Profile a-prime runs make at-extra-native (profiles-extra.tsv); profile a runs
 # make at-profile-native (profiles.tsv: arms a and b), and the summary reports arm a alone. The JDK is the same pinned Temurin as the java build record in ci.yml (a script test keeps them equal).
 # No secrets. It can be dispatched once this file is on the default branch.
 on:
@@ -17,6 +19,14 @@ on:
         default: "50"
         required: false
         type: string
+      fixture:
+        description: Which fixture (at is lang-at.jar, svc is the service fixture svc.jar)
+        default: at
+        required: false
+        type: choice
+        options:
+          - at
+          - svc
       profile:
         description: JVM flag profile (a-prime is profiles-extra.tsv; a runs profiles.tsv, and the log also holds b)
         default: a-prime
@@ -43,6 +53,7 @@ jobs:
           AT_K: ${{ inputs.at_k }}
           RUNS: ${{ inputs.runs }}
           PROFILE: ${{ inputs.profile }}
+          FIXTURE: ${{ inputs.fixture }}
         run: |
           check() { # check <name> <value> <max>
             case "$2" in
@@ -53,25 +64,37 @@ jobs:
           check at_k "$AT_K" 5000
           check runs "$RUNS" 200
           case "$PROFILE" in a-prime | a) ;; *) echo "profile='$PROFILE' is not a-prime or a" >&2; exit 1 ;; esac
-          printf 'at_k=%s\nruns=%s\nprofile=%s\n' "$AT_K" "$RUNS" "$PROFILE" >> "$GITHUB_OUTPUT"
+          case "$FIXTURE" in at | svc | "") ;; *) echo "fixture='$FIXTURE' is not at or svc" >&2; exit 1 ;; esac
+          printf 'at_k=%s\nruns=%s\nprofile=%s\nfixture=%s\n' "$AT_K" "$RUNS" "$PROFILE" "${FIXTURE:-at}" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21.0.12+101.0.LTS"
       - name: Build the fixture
-        run: make -C examples/language-fixtures/java at-jar
+        env:
+          FIXTURE: ${{ steps.inputs.outputs.fixture }}
+        run: make -C examples/language-fixtures/java "$FIXTURE-jar"
+      # The service fixture only: the jar built twice on the pinned JDK, equal sha256, uploaded with its record.
+      - name: Build record (service fixture)
+        if: steps.inputs.outputs.fixture == 'svc'
+        env:
+          PRODUCER: GitHub Actions ubuntu-24.04 (native x86-64)
+          SOURCE_COMMIT: ${{ github.sha }}
+          ARTIFACT_DIR: ${{ runner.temp }}/svc-artifact
+        run: sh examples/language-fixtures/scripts/build-record-java-svc.sh "$RUNNER_TEMP/svc-artifact-record.md" && cat "$RUNNER_TEMP/svc-artifact-record.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Native runs
         id: native
         env:
           AT_K: ${{ steps.inputs.outputs.at_k }}
           RUNS: ${{ steps.inputs.outputs.runs }}
           PROFILE: ${{ steps.inputs.outputs.profile }}
+          FIXTURE: ${{ steps.inputs.outputs.fixture }}
         run: |
           set -o pipefail
           case "$PROFILE" in
-            a-prime) target=at-extra-native ;;
-            a) target=at-profile-native ;;
+            a-prime) target=$FIXTURE-extra-native ;;
+            a) target=$FIXTURE-profile-native ;;
             *) echo "unknown profile $PROFILE" >&2; exit 1 ;;
           esac
           java -version 2>&1 | tee "$RUNNER_TEMP/java-native-k.log"
@@ -82,6 +105,7 @@ jobs:
           AT_K: ${{ steps.inputs.outputs.at_k }}
           PROFILE: ${{ steps.inputs.outputs.profile }}
           NATIVE_OUTCOME: ${{ steps.native.outcome }}
+          FIXTURE: ${{ steps.inputs.outputs.fixture }}
         run: |
           case "$NATIVE_OUTCOME" in
             success | failure) ;;
@@ -91,7 +115,7 @@ jobs:
           line="$summary (make self-check: $NATIVE_OUTCOME)"
           echo "$line"
           {
-            echo "### Java fixture, native buggy runs"
+            echo "### Java fixture ($FIXTURE), native buggy runs"
             echo '```'
             echo "$line"
             grep "^FAIL" "$RUNNER_TEMP/java-native-k.log" || true
@@ -104,7 +128,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: java-native-k-${{ steps.inputs.outputs.profile }}-${{ steps.inputs.outputs.at_k }}
-          path: ${{ runner.temp }}/java-native-k.log
+          name: java-native-k-${{ steps.inputs.outputs.fixture }}-${{ steps.inputs.outputs.profile }}-${{ steps.inputs.outputs.at_k }}
+          path: |
+            ${{ runner.temp }}/java-native-k.log
+            ${{ runner.temp }}/svc-artifact-record.md
+            ${{ runner.temp }}/svc-artifact
           if-no-files-found: warn
           retention-days: 90

@@ -93,11 +93,13 @@ c/                     src/lost_update.c, Makefile
 cpp/                   src/lost_update.cc, Makefile (clang++ by default; CXX=g++ works)
 go/                    main.go, internal/race (the program and its unit tests), Makefile
 java/                  the Java probe (no SDK): src/langat, test/, profiles.tsv, manifest.mf, Makefile;
-                       the Java fixture (langat.Main, with the Java SDK shaded in): at/src, at/test, at/manifest.mf
+                       the Java fixture (langat.Main, with the Java SDK shaded in): at/src, at/test, at/manifest.mf;
+                       the Java service fixture (langsvc.Main, with the Java SDK shaded in): svc/src, svc/test, svc/manifest.mf
 dotnet/                the BCL-only .NET probe: src, selftest, test_probe.sh, profiles.manifest, Makefile;
                        the .NET fixture (LangAt.dll, with the .NET SDK beside it as Hairspring.dll): at/src, at/test
 tests/seccomp_window.c test-only: the window makes no system call (used by the build record, Linux only)
-scripts/check-native.sh  the native self-check of one artifact (LANG_AT_K=<k> for an artifact run at --k=<k>); run-checks.sh adds the negative control;
+scripts/check-native.sh  the native self-check of one artifact (LANG_AT_K=<k> for an artifact run at --k=<k>;
+                       LANG_AT_DIRECTION=up for a fixture whose bug applies an update twice); run-checks.sh adds the negative control;
                        check-sources.sh, check-disasm.sh; check-java-compiled.sh (PrintCompilation) and
                        run-java-profile-checks.sh (the Java self-check under each profile's flags);
                        test-scripts.sh tests all of them with a fake program
@@ -409,6 +411,38 @@ recording and replay: a bundle records neither the command line nor the working 
 same paths as the recording (JDK install, program jar and working directory); a differently named directory changed the
 result. Trials take about 210 s as run (up to three at once; about 105 s alone). The Makefile targets here run natively and never
 start Hermit.
+
+## Java service fixture
+
+[`java/svc`](java/svc) holds a second Java fixture, `svc.jar` (class `langsvc.Main`, the Java SDK shaded in), shaped like a
+small service rather than a bare race. It takes the same arguments as the Java fixture (`buggy`, `fixed`, `wide`, and
+`--k=N`, 1 to 5,000, default 1,000) and prints the same stdout line.
+
+Four client threads each send K transfers. Every transfer is delivered twice (a copy and an immediate retransmit); a client
+then waits for a reply with a timeout and sends another copy, with a doubled time to live, after a timeout or an expired
+deadline (at most 20 copies, then the program exits 3). A pool of three worker threads (`ThreadPoolExecutor`) takes the
+copies, drops the expired ones, parses the text payload and hands it to a small in-memory ledger: eight balances and an
+applied count behind one `ReentrantLock`, and an idempotency table (`ConcurrentHashMap`). A scheduled thread samples the
+queue depth every 20 ms. Request deadlines read the monotonic clock in `Deadline.java` only.
+
+- `buggy`: the idempotency check is `containsKey`, then a validation busy loop, the apply and the `put` of the key, so two
+  copies handled at once can both be applied: `final` ends above 4 x K.
+- `fixed`: the key is claimed first with one `putIfAbsent`; a transfer is applied exactly once.
+- `wide`: `buggy` with a busy loop ten times longer.
+
+It reports `java.counter_exact` (`always`: the ledger applied exactly 4 x K transfers, witness `[final, 4K, 4, K]`),
+`java.all_started` and three more `sometimes` sites (a reply timed out, a copy expired, the ticker ran), each evaluated
+once in the main thread after the service has drained. Money is conserved in every mode; a transfer is never lost, so the
+native self-check runs with `LANG_AT_DIRECTION=up`.
+
+```sh
+make -C java svc-test        # self-test, source checks, window check, native self-checks (default flags and a-prime)
+make -C java svc-native AT_K=50
+sh scripts/build-record-docker.sh java-svc   # the jar built twice in a container on the pinned JDK, with a short record
+```
+
+What it is not: there is no network, file or database I/O (the transport is in-process queues); the bug is planted and
+known in advance; the property is still a count equality.
 
 ## Compilers
 

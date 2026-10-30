@@ -62,6 +62,8 @@ case "${FAKE:-}:$mode" in
   *:fixed) [ "$FAKE" = fixedfires ] && final=$((full - lost)) ;;
   *) [ $((n % 2)) -eq 1 ] && final=$((full - lost)) ;;
 esac
+# FAKE_UP=1: a firing run applies updates twice instead of losing them (final above the full count)
+[ "${FAKE_UP:-}" = 1 ] && [ "$final" -ne "$full" ] && final=$((full + lost))
 falses=0
 [ "$final" -ne "$full" ] && falses=1
 [ "${FAKE:-}" = disagree ] && falses=0
@@ -194,6 +196,15 @@ kcheck "K=50: a detector that disagrees with the program is rejected" 1 disagree
 kcheck "K=50: witness values other than [final, 200, 4, 50] are rejected" 1 twovals 50 50
 for badk in 0 abc -1 1.5 "" 050 "5 0" 5001 99999999999999999999 " " "50 "; do
   expect "LANG_AT_K='$badk' is a usage error" 64 env LANG_AT_K="$badk" FAKE=racy FAKE_STATE="$(newstate)" LANG_AT_CPUS=4 WIDE_RUNS=2 sh "$here/check-native.sh" t "$fake" 6
+done
+# LANG_AT_DIRECTION: up is for a fixture whose bug applies an update twice (final above 4 x K); down (the default) a lost update.
+expect "direction up: a program whose racy modes apply updates twice passes" 0 env FAKE=racy FAKE_UP=1 LANG_AT_DIRECTION=up FAKE_STATE="$(newstate)" LANG_AT_CPUS=4 WIDE_RUNS=2 sh "$here/check-native.sh" t "$fake" 6
+expect "direction up: a program that loses updates is rejected" 1 env FAKE=racy LANG_AT_DIRECTION=up FAKE_STATE="$(newstate)" LANG_AT_CPUS=4 WIDE_RUNS=2 sh "$here/check-native.sh" t "$fake" 6
+expect "direction down (the default): a program that applies updates twice is rejected" 1 env FAKE=racy FAKE_UP=1 FAKE_STATE="$(newstate)" LANG_AT_CPUS=4 WIDE_RUNS=2 sh "$here/check-native.sh" t "$fake" 6
+expect "direction up: a fixed mode that applies an update twice is rejected" 1 env FAKE=fixedfires FAKE_UP=1 LANG_AT_DIRECTION=up FAKE_STATE="$(newstate)" LANG_AT_CPUS=4 WIDE_RUNS=2 sh "$here/check-native.sh" t "$fake" 6
+expect "direction up: run-checks passes with its control" 0 env FAKE=racy FAKE_UP=1 LANG_AT_DIRECTION=up FAKE_STATE="$(newstate)" LANG_AT_CPUS=4 WIDE_RUNS=2 sh "$here/run-checks.sh" t "$fake" 6
+for baddir in "" Up sideways "up "; do
+  expect "LANG_AT_DIRECTION='$baddir' is a usage error" 64 env LANG_AT_DIRECTION="$baddir" FAKE=racy FAKE_STATE="$(newstate)" LANG_AT_CPUS=4 WIDE_RUNS=2 sh "$here/check-native.sh" t "$fake" 6
 done
 # The default is unchanged: with LANG_AT_K unset or 1000 the script prints the same bytes and ends the same way.
 env -u LANG_AT_K FAKE=racy FAKE_STATE="$(newstate)" LANG_AT_CPUS=4 WIDE_RUNS=2 sh "$here/check-native.sh" t "$fake" 6 >"$tmp/native.unset" 2>&1
@@ -1502,6 +1513,33 @@ expect "check-window rejects an empty file" 1 sh "$here/check-window-java.sh" "$
 expect "check-window rejects a missing file" 1 sh "$here/check-window-java.sh" "$tmp/none.txt"
 expect "check-window without a file is a usage error" 64 sh "$here/check-window-java.sh"
 
+# check-svc-window.sh: the order of the steps in the service fixture's Store.handle (a text check of the source).
+sw_good="$here/../java/svc/src/langsvc/Store.java"
+expect "check-svc-window accepts the service fixture's Store.java" 0 sh "$here/check-svc-window.sh" "$sw_good"
+awk '/\} else \{/ {r = 1} r && /acc = validate/ {v = $0; next} r && /^            apply\(t\);/ {a = $0; next} r && /applied\.put/ {print; print v; print a; r = 0; next} {print}' "$sw_good" >"$tmp/sw_reordered.java"
+expect "check-svc-window rejects a racy branch that records the key before validating" 1 sh "$here/check-svc-window.sh" "$tmp/sw_reordered.java"
+awk '/\} else \{/ {r = 1} r && /^            apply\(t\);/ {a = $0; next} r && /applied\.put/ {print; print a; r = 0; next} {print}' "$sw_good" >"$tmp/sw_put_before_apply.java"
+expect "check-svc-window rejects a racy branch that records the key before applying" 1 sh "$here/check-svc-window.sh" "$tmp/sw_put_before_apply.java"
+sed 's/if (applied.putIfAbsent(t.key(), CLAIMED) != null) {/if (applied.containsKey(t.key())) {/' "$sw_good" >"$tmp/sw_fixed_racy.java"
+expect "check-svc-window rejects a fixed branch that checks with containsKey (not atomic)" 1 sh "$here/check-svc-window.sh" "$tmp/sw_fixed_racy.java"
+grep -v 'applied.containsKey(t.key())' "$sw_good" >"$tmp/sw_nocheck.java"
+expect "check-svc-window rejects a racy branch with no check" 1 sh "$here/check-svc-window.sh" "$tmp/sw_nocheck.java"
+grep -v 'mode.atomicClaim()' "$sw_good" >"$tmp/sw_nobranch.java"
+expect "check-svc-window rejects a handle() without the two branches" 1 sh "$here/check-svc-window.sh" "$tmp/sw_nobranch.java"
+expect "check-svc-window rejects an empty file" 1 sh "$here/check-svc-window.sh" "$clean"
+expect "check-svc-window rejects a missing file" 1 sh "$here/check-svc-window.sh" "$tmp/none.java"
+expect "check-svc-window without a file is a usage error" 64 sh "$here/check-svc-window.sh"
+
+# build-record-java-svc.sh: a JDK that is not the pinned build fails the record and stages no artifact (no real JDK needed:
+# the fake java reports another build and there is no javac, so the builds fail too).
+mkdir -p "$tmp/svcjdk/bin"
+printf '#!/bin/sh\necho "openjdk version \\"21.0.13\\" 2026-10-20 LTS" >&2\necho "OpenJDK Runtime Environment Temurin-21.0.13+11 (build 21.0.13+11-LTS)" >&2\n' >"$tmp/svcjdk/bin/java"
+chmod +x "$tmp/svcjdk/bin/java"
+expect "build-record-java-svc fails with a JDK that is not the pin" 1 env JAVA_HOME="$tmp/svcjdk" ARTIFACT_DIR="$tmp/svc-artifact" sh "$here/build-record-java-svc.sh" "$tmp/svc-record.md"
+expect "build-record-java-svc's record says the JDK check failed and RESULT FAIL" 0 sh -c "grep -qx 'FAIL the JDK is the pinned build' '$tmp/svc-record.md' && grep -qx 'RESULT FAIL' '$tmp/svc-record.md'"
+expect "build-record-java-svc stages no artifact when a check failed" 1 test -e "$tmp/svc-artifact"
+expect "build-record-java-svc without an output file is a usage error" 64 sh "$here/build-record-java-svc.sh"
+
 # The .NET fixture: its constants and start barrier are read from its source, its sources read nothing forbidden, and
 # run-dotnet-profile-checks.sh runs the self-check once per environment profile arm (here with a stub checker).
 dotnet_fixture="$fixtures_dir/dotnet"
@@ -1754,7 +1792,7 @@ wfexpect "runs is bounded at 200" '          check runs "$RUNS" 200'
 wfexpect "the check step has the id the later steps read" "        id: inputs"
 wfsh "the input check is the first step" '[ "$(awk "/^    steps:/ {s=1; next} s && /^      - / {print; exit}" "$1")" = "      - name: Check the inputs" ]'
 wfsh "no expression in any run: block or one-line run:" '! awk "/^ +run: *[|>]/ {r=1; next} /^ +[a-z-]+:|^ +- / {r=0} r" "$1" | grep -q "\${{" && ! grep -Eq "^ +run: .*\\$\{\{" "$1"'
-wfsh "the raw inputs are read only by the check step's env (three uses)" '[ "$(grep -c "\${{ inputs\." "$1")" = 3 ]'
+wfsh "the raw inputs are read only by the check step's env (four uses)" '[ "$(grep -c "\${{ inputs\." "$1")" = 4 ]'
 wfsh "the later steps read the checked outputs" '[ "$(grep -c "\${{ steps.inputs.outputs.at_k }}" "$1")" = 3 ] && [ "$(grep -c "\${{ steps.inputs.outputs.runs }}" "$1")" = 1 ] && [ "$(grep -c "\${{ steps.inputs.outputs.profile }}" "$1")" = 3 ]'
 wfexpect "profile is a choice input" "        type: choice"
 wfexpect "the choice offers a-prime" "          - a-prime"
@@ -1762,16 +1800,21 @@ wfexpect "the choice offers a" "          - a"
 wfsh "the choice offers only a-prime and a, and defaults to a-prime" '[ "$(awk "/^      profile:/ {p=1; next} p && /^      [a-z_]+:/ {exit} p && /^          - / {print}" "$1" | tr "\n" ";")" = "          - a-prime;          - a;" ] && awk "/^      profile:/ {p=1; next} p && /^      [a-z_]+:/ {exit} p" "$1" | grep -qx "        default: a-prime"'
 wfexpect "the check step reads the profile input" '          PROFILE: ${{ inputs.profile }}'
 wfexpect "the profile is checked against the two names" '          case "$PROFILE" in a-prime | a) ;; *) echo "profile='"'"'$PROFILE'"'"' is not a-prime or a" >&2; exit 1 ;; esac'
-wfexpect "the checked values are the outputs" "          printf 'at_k=%s\\nruns=%s\\nprofile=%s\\n' \"\$AT_K\" \"\$RUNS\" \"\$PROFILE\" >> \"\$GITHUB_OUTPUT\""
+wfexpect "the checked values are the outputs" "          printf 'at_k=%s\\nruns=%s\\nprofile=%s\\nfixture=%s\\n' \"\$AT_K\" \"\$RUNS\" \"\$PROFILE\" \"\${FIXTURE:-at}\" >> \"\$GITHUB_OUTPUT\""
 wfsh "the profile is checked before the outputs are written" '[ "$(grep -n "case \"\$PROFILE\" in a-prime | a)" "$1" | cut -d: -f1)" -lt "$(grep -n "GITHUB_OUTPUT" "$1" | cut -d: -f1)" ]'
-wfexpect "profile a-prime runs at-extra-native" "            a-prime) target=at-extra-native ;;"
-wfexpect "profile a runs at-profile-native" "            a) target=at-profile-native ;;"
+wfexpect "profile a-prime runs the fixture's extra-native target" "            a-prime) target=\$FIXTURE-extra-native ;;"
+wfexpect "profile a runs the fixture's profile-native target" "            a) target=\$FIXTURE-profile-native ;;"
 wfexpect "any other profile is refused in the run step" '            *) echo "unknown profile $PROFILE" >&2; exit 1 ;;'
 wfexpect "the make line: CPUs 1-3, low priority, the profile's target, AT_K and RUNS" '          taskset -c 1-3 nice -n 10 make -C examples/language-fixtures/java "$target" AT_K="$AT_K" RUNS="$RUNS" 2>&1 | tee -a "$RUNNER_TEMP/java-native-k.log"'
 wfexpect "the summary names the profile" '          summary=$(sh examples/language-fixtures/scripts/summarize-at-native.sh "$RUNNER_TEMP/java-native-k.log" "$AT_K" "$PROFILE") || { echo "RUN FAILED: the log has no valid summary line. This is not a result." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }'
 wfsh "the run and summary steps get the profile from the step output" '[ "$(grep -c "PROFILE: \${{ steps.inputs.outputs.profile }}" "$1")" = 2 ]'
 wfexpect "a failed make fails the step (pipefail)" "          set -o pipefail"
-wfexpect "builds the fixture first" "        run: make -C examples/language-fixtures/java at-jar"
+wfexpect "builds the chosen fixture first" '        run: make -C examples/language-fixtures/java "$FIXTURE-jar"'
+wfexpect "fixture is a choice input defaulting to at" "        default: at"
+wfsh "the fixture choice offers only at and svc" '[ "$(awk "/^      fixture:/ {p=1; next} p && /^      [a-z_]+:/ {exit} p && /^          - / {print}" "$1" | tr "\n" ";")" = "          - at;          - svc;" ]'
+wfexpect "the fixture is checked against the two names" '          case "$FIXTURE" in at | svc | "") ;; *) echo "fixture='"'"'$FIXTURE'"'"' is not at or svc" >&2; exit 1 ;; esac'
+wfsh "the later steps read the checked fixture (build, record dir name, native, summary, artifact name)" '[ "$(grep -c "\${{ steps.inputs.outputs.fixture }}" "$1")" = 4 ] && [ "$(grep -c "if: steps.inputs.outputs.fixture == .svc." "$1")" = 1 ]'
+wfexpect "the service fixture's record script runs only for svc" '        run: sh examples/language-fixtures/scripts/build-record-java-svc.sh "$RUNNER_TEMP/svc-artifact-record.md" && cat "$RUNNER_TEMP/svc-artifact-record.md" >> "$GITHUB_STEP_SUMMARY"'
 wfsh "exactly the Summary and Upload steps run if always()" '[ "$(awk "/^      - /{name=\$0} /^        if: always\(\)$/ {print name}" "$1" | tr "\n" ";")" = "      - name: Summary;      - name: Upload the log;" ]'
 wfexpect "the native step has an id" "        id: native"
 wfexpect "the summary reads the outcome of the native step" '          NATIVE_OUTCOME: ${{ steps.native.outcome }}'
@@ -1783,7 +1826,7 @@ wfexpect "a log with no valid summary line is not a result and fails the step" '
 wfexpect "the summary line carries the make outcome" '          line="$summary (make self-check: $NATIVE_OUTCOME)"'
 wfexpect "the summary lists the FAIL lines of the log" '            grep "^FAIL" "$RUNNER_TEMP/java-native-k.log" || true'
 wfexpect "the summary says fired=0 is a result and the make failure is the self-check's rule" '              echo "fired=0 is a result. The make failure is the self-check'"'"'s own rule (for example the buggy mode never fired); the FAIL lines above say which."'
-wfexpect "the artifact name is a fixed prefix, the checked profile and the checked K" "          name: java-native-k-\${{ steps.inputs.outputs.profile }}-\${{ steps.inputs.outputs.at_k }}"
+wfexpect "the artifact name is a fixed prefix, the checked fixture, profile and K" "          name: java-native-k-\${{ steps.inputs.outputs.fixture }}-\${{ steps.inputs.outputs.profile }}-\${{ steps.inputs.outputs.at_k }}"
 wfexpect "a missing log only warns" "          if-no-files-found: warn"
 wfsh "uses no secrets" '! grep -Eq "[$][{][{] *secrets|^ *secrets:" "$1"'
 wfsh "ci.yml has no java-native-k job and no dispatch inputs" '! grep -Eq "java-native-k|^    inputs:" "$2"'
