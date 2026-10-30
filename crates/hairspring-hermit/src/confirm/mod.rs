@@ -12,6 +12,7 @@ mod pace;
 mod replay;
 mod rerun;
 mod verify;
+mod verify_report;
 
 use crate::backend::HermitBackend;
 use crate::exec::ProcessSpec;
