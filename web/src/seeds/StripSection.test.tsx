@@ -23,18 +23,18 @@ describe('StripSection', () => {
     expect(html).toContain('<table');
     expect(html).toContain('<caption');
     const text = textOf(html);
-    expect(text).toContain('100 judged: 3 violation, 4 inconclusive, 3 excluded, 90 pass');
-    expect(text).toMatch(/✕ violation\s+3/);
+    expect(text).toContain('100 judged: 3 failed, 4 inconclusive, 3 excluded, 90 held');
+    expect(text).toMatch(/✕ failed\s+3/);
     expect(text).toMatch(/◌ excluded\s+3/);
     expect(text).toMatch(/\? inconclusive\s+4/);
-    expect(text).toMatch(/✓ pass\s+90/);
+    expect(text).toMatch(/✓ held\s+90/);
   });
 
   it('lists only classes that occur in the table, and never shows an excluded or inconclusive trial under pass', () => {
     const text = textOf(render('ppe'));
     expect(text).toMatch(/◌ excluded\s+1/);
-    expect(text).toMatch(/✓ pass\s+2/);
-    expect(text).not.toContain('violation');
+    expect(text).toMatch(/✓ held\s+2/);
+    expect(text).not.toContain('failed');
   });
 
   it('explains the keys and how a group of trials is drawn', () => {

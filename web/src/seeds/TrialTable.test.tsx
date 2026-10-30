@@ -26,7 +26,7 @@ describe('TrialTable', () => {
     const text = textOf(render([failingRow()]));
     expect(text).toContain('16');
     expect(text).toContain('1016');
-    expect(text).toContain('✕ violation');
+    expect(text).toContain('✕ failed');
     expect(text).toContain('wal.no-lost-commit');
     expect(text).toContain('4c16f00d');
     expect(text).toContain('3,000');
@@ -58,7 +58,7 @@ describe('TrialTable', () => {
   });
 
   it('shows a clean pass with a mark and words', () => {
-    expect(textOf(render([seedRow()]))).toContain('✓ pass');
+    expect(textOf(render([seedRow()]))).toContain('✓ held');
   });
 
   it('names the first failing ids and counts the rest', () => {

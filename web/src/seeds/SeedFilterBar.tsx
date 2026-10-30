@@ -3,7 +3,7 @@ import { GuestText } from '../components/GuestText';
 import type { PropertyRow } from '../types';
 import {
   BACK_TO_START,
-  classLabel,
+  verdictFilterLabel,
   FILTER_ALL,
   FILTERS_CLEAR,
   FP_FILTER_HINT,
@@ -54,7 +54,7 @@ function VerdictSelect({ filters, onChange }: Pick<Props, 'filters' | 'onChange'
         <option value="">{FILTER_ALL}</option>
         {VERDICT_FILTERS.map((v) => (
           <option key={v} value={v}>
-            {v === 'infra' ? classLabel('infra') : v}
+            {verdictFilterLabel(v)}
           </option>
         ))}
       </select>

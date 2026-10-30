@@ -61,14 +61,14 @@ describe('keptText', () => {
 
 describe('strip text', () => {
   it('describes one trial and a group of trials with their counts, worst first', () => {
-    expect(stripBinText(15, 16, countCodes('v'))).toBe('Trial 15: 1 violation');
-    expect(stripBinText(1200, 1300, countCodes('p'.repeat(98) + 'ee'))).toBe('Trials 1,200 to 1,299: 2 excluded, 98 pass');
-    expect(stripBinText(0, 4, countCodes('pvip'))).toBe('Trials 0 to 3: 1 violation, 1 inconclusive, 2 pass');
+    expect(stripBinText(15, 16, countCodes('v'))).toBe('Trial 15: 1 failed');
+    expect(stripBinText(1200, 1300, countCodes('p'.repeat(98) + 'ee'))).toBe('Trials 1,200 to 1,299: 2 excluded, 98 held');
+    expect(stripBinText(0, 4, countCodes('pvip'))).toBe('Trials 0 to 3: 1 failed, 1 inconclusive, 2 held');
   });
 
   it('summarises a whole run by class, naming only the classes that occur', () => {
     expect(stripSummary(countCodes('p'.repeat(90) + 'vvv' + 'i'.repeat(4) + 'e'.repeat(3)))).toBe(
-      '100 judged: 3 violation, 4 inconclusive, 3 excluded, 90 pass',
+      '100 judged: 3 failed, 4 inconclusive, 3 excluded, 90 held',
     );
     expect(stripSummary(countCodes(''))).toBe('0 judged');
   });

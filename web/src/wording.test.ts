@@ -2,14 +2,20 @@ import { describe, expect, it } from 'vitest';
 import type { RateBasis, RateCellData } from './types';
 import {
   caveatLabel,
+  classLabel,
+  COVERAGE_GAPS_TITLE,
   formatCount,
   formatPct,
+  moreUnmet,
   noFailuresText,
   rateParts,
   rateText,
   statusLabel,
+  trialTitle,
   truncationMarker,
+  unmetNotStated,
   unmetSuppressedReason,
+  verdictFilterLabel,
 } from './wording';
 
 describe('formatCount / formatPct', () => {
@@ -86,17 +92,24 @@ describe('rateText truth table', () => {
 });
 
 describe('fixed phrases', () => {
-  it('labels every status, and UNMET names itself as a gap', () => {
-    expect(statusLabel('violation')).toBe('VIOLATION');
-    expect(statusLabel('pass')).toBe('PASS');
-    expect(statusLabel('unrated')).toBe('UNRATED');
-    expect(statusLabel('unmet')).toBe('UNMET (coverage gap)');
+  it('labels every status in plain words: Failed, Held, Never reached, Unrated', () => {
+    expect(statusLabel('violation')).toBe('Failed');
+    expect(statusLabel('pass')).toBe('Held');
+    expect(statusLabel('unrated')).toBe('Unrated');
+    expect(statusLabel('unmet')).toBe('Never reached');
+  });
+  it('words the coverage-gap section without the engine term UNMET', () => {
+    expect(COVERAGE_GAPS_TITLE).toBe('Coverage gaps (never reached)');
+    expect(unmetNotStated('the run has not finished')).toBe('A "never reached" result is not stated: the run has not finished.');
+    expect(moreUnmet(1)).toBe('1 more never-reached property not loaded');
+    expect(moreUnmet(2)).toBe('2 more never-reached properties not loaded');
+    for (const text of [COVERAGE_GAPS_TITLE, unmetNotStated('x'), moreUnmet(2), statusLabel('unmet')]) expect(text).not.toMatch(/UNMET/);
   });
   it('turns a caveat code into words and never drops an unknown one', () => {
     expect(caveatLabel('single_run')).toBe('single run');
     expect(caveatLabel('some_new_code')).toBe('some new code');
   });
-  it('states why UNMET is suppressed', () => {
+  it('states why a never-reached result is suppressed', () => {
     expect(unmetSuppressedReason({ kind: 'stopped_at_first_failure' }, false)).toMatch(/stopped at its first failure/);
     expect(unmetSuppressedReason({ kind: 'complete' }, true)).toMatch(/incomplete/);
     expect(unmetSuppressedReason({ kind: 'digest_allowance_used_up' }, false)).toMatch(/incomplete/);
@@ -109,6 +122,27 @@ describe('fixed phrases', () => {
   it('marks truncation visibly with the count', () => {
     expect(truncationMarker(88)).toBe('… (88 more characters)');
     expect(truncationMarker(1)).toBe('… (1 more character)');
+  });
+});
+
+describe('trial-level words use the same vocabulary as the property table', () => {
+  it('words a trial class as failed or held, never with the engine terms violation or pass', () => {
+    expect(classLabel('violation')).toBe('failed');
+    expect(classLabel('pass')).toBe('held');
+    for (const c of ['pass', 'violation', 'inconclusive', 'unusable', 'infra', 'excluded'] as const) {
+      expect(classLabel(c)).not.toMatch(/violation|\bpass(ed)?\b/i);
+    }
+  });
+  it('words the one-seed sentence factually, without "violation" or "passed"', () => {
+    expect(trialTitle('violation', '5')).toBe('Seed 5 failed');
+    expect(trialTitle('pass', '5')).toBe('Seed 5 had no failing property');
+    expect(trialTitle('pass', '5')).not.toMatch(/passed/);
+  });
+  it('words the verdict filter options in the same vocabulary and keeps the server value', () => {
+    expect(verdictFilterLabel('violation')).toBe('failed');
+    expect(verdictFilterLabel('pass')).toBe('held');
+    expect(verdictFilterLabel('infra')).toBe('infrastructure error');
+    expect(verdictFilterLabel('inconclusive')).toBe('inconclusive');
   });
 });
 

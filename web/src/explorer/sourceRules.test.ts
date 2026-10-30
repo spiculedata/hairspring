@@ -28,17 +28,36 @@ describe('source rules (plan 7.2 item 1 and 5.7 rule 5)', () => {
     for (const [path, src] of ALL) expect(code(src), path).not.toMatch(/(href|src|style)=\{[^}]*\bguest\b/);
   });
 
-  it('never generates the words found, discovered, unassisted or flaky in the explorer or the run page', () => {
-    const checked = ALL.filter(([p]) => /\/(explorer|guest|trial|seeds)\/|\/wording\.ts$|GuestText|RateCell|TierChips|RunPage/.test(p));
-    expect(checked.length).toBeGreaterThan(6);
+  // "not found" is allowed: it is the wording of a missing page, not a claim about a result.
+  it('never generates the words found, discovered, unassisted or flaky anywhere in the UI source', () => {
+    const checked = ALL.filter(([p]) => !p.endsWith('/types.ts'));
+    expect(checked.length).toBeGreaterThan(15);
     expect(checked.some(([p]) => p.includes('/seeds/'))).toBe(true);
-    for (const [path, src] of checked) expect(code(src), path).not.toMatch(/\b(found|discovered|unassisted|flaky)\b/i);
+    expect(checked.some(([p]) => p.includes('/pages/'))).toBe(true);
+    for (const [path, src] of checked) expect(code(src).replace(/Page not found/g, ''), path).not.toMatch(/\bfound\b|\b(discovered|unassisted|flaky)\b/i);
   });
 
-  it('never generates "reproduced" on the failure page: nothing there re-runs a trial or reads a confirmation', () => {
-    const trialFiles = ALL.filter(([p]) => /\/trial\//.test(p));
-    expect(trialFiles.length).toBeGreaterThan(8);
-    for (const [path, src] of trialFiles) expect(code(src), path).not.toMatch(/reproduc/i);
+  it('never generates "reproduced", as a replay verdict or for counts, anywhere in the UI source', () => {
+    // `types.ts` mirrors the server's own field and status names (`reproduced`, `not_reproducible`); reading the
+    // server's `.reproduced` field is allowed, writing the word for a person to read is not.
+    const checked = ALL.filter(([p]) => !p.endsWith('/types.ts'));
+    expect(checked.some(([p]) => p.includes('/pages/'))).toBe(true);
+    expect(checked.some(([p]) => p.includes('/trial/'))).toBe(true);
+    for (const [path, src] of checked) expect(code(src).replace(/\.reproduced\b/g, ''), path).not.toMatch(/reproduc/i);
+  });
+
+  it('never says a replay "still violated" the property: a replay is one more run, not a confirmation', () => {
+    for (const [path, src] of ALL) expect(code(src), path).not.toMatch(/still violated|is still violated/i);
+  });
+
+  it('never shows the engine terms PASS, VIOLATION or UNMET as a label in the UI source', () => {
+    for (const [path, src] of ALL.filter(([p]) => !p.endsWith('/types.ts'))) expect(code(src), path).not.toMatch(/['"`](PASS|VIOLATION|UNMET)\b/);
+  });
+
+  it('never maps a status or class key to its own engine word as a label, in any case ("pass: \'pass\'", "violation: \'violation\'")', () => {
+    for (const [path, src] of ALL.filter(([p]) => !p.endsWith('/types.ts'))) {
+      expect(code(src), path).not.toMatch(/\b(pass|violation|unmet)\s*:\s*['"`](pass|passed|violation|unmet)\b/i);
+    }
   });
 
   it('renders the failure page guest fields only through GuestText: none is a bare JSX expression', () => {

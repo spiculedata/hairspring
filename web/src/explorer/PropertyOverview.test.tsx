@@ -70,7 +70,7 @@ describe('PropertyOverviewView UNMET section', () => {
   it('lists UNMET as a coverage gap in its own section, not among failures', () => {
     const p = page({ properties: [row(), unmetRow()], counts_by_status: { violation: 1, unmet: 1 } });
     const html = render(p);
-    expect(html).toContain('Coverage gaps (UNMET)');
+    expect(html).toContain('Coverage gaps (never reached)');
     expect(textOf(html)).toContain('coverage gaps, not findings');
     expect(textOf(html)).toContain('coverage gap, not a finding: never satisfied in 4,790 claimable trials');
   });
@@ -83,18 +83,18 @@ describe('PropertyOverviewView UNMET section', () => {
       counts_by_status: { unmet: 1 },
     });
     const text = textOf(render(p));
-    expect(text).toContain('Coverage gaps (UNMET)');
+    expect(text).toContain('Coverage gaps (never reached)');
     expect(text).toContain('not stated: the run stopped at its first failure');
     expect(text).not.toContain('never satisfied');
   });
 
   it('is absent when no property is UNMET', () => {
-    expect(render(page())).not.toContain('Coverage gaps (UNMET)');
+    expect(render(page())).not.toContain('Coverage gaps (never reached)');
   });
 
   it('says how many more UNMET properties there are than are loaded', () => {
     const p = page({ properties: [unmetRow()], counts_by_status: { unmet: 3 } });
-    expect(textOf(render(p))).toContain('2 more UNMET properties not loaded');
+    expect(textOf(render(p))).toContain('2 more never-reached properties not loaded');
   });
 });
 
