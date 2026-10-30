@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { RateBasis, RateCellData } from './types';
 import {
   caveatLabel,
+  classLabel,
   COVERAGE_GAPS_TITLE,
   formatCount,
   formatPct,
@@ -10,9 +11,11 @@ import {
   rateParts,
   rateText,
   statusLabel,
+  trialTitle,
   truncationMarker,
   unmetNotStated,
   unmetSuppressedReason,
+  verdictFilterLabel,
 } from './wording';
 
 describe('formatCount / formatPct', () => {
@@ -119,6 +122,27 @@ describe('fixed phrases', () => {
   it('marks truncation visibly with the count', () => {
     expect(truncationMarker(88)).toBe('… (88 more characters)');
     expect(truncationMarker(1)).toBe('… (1 more character)');
+  });
+});
+
+describe('trial-level words use the same vocabulary as the property table', () => {
+  it('words a trial class as failed or held, never with the engine terms violation or pass', () => {
+    expect(classLabel('violation')).toBe('failed');
+    expect(classLabel('pass')).toBe('held');
+    for (const c of ['pass', 'violation', 'inconclusive', 'unusable', 'infra', 'excluded'] as const) {
+      expect(classLabel(c)).not.toMatch(/violation|\bpass(ed)?\b/i);
+    }
+  });
+  it('words the one-seed sentence factually, without "violation" or "passed"', () => {
+    expect(trialTitle('violation', '5')).toBe('Seed 5 failed');
+    expect(trialTitle('pass', '5')).toBe('Seed 5 had no failing property');
+    expect(trialTitle('pass', '5')).not.toMatch(/passed/);
+  });
+  it('words the verdict filter options in the same vocabulary and keeps the server value', () => {
+    expect(verdictFilterLabel('violation')).toBe('failed');
+    expect(verdictFilterLabel('pass')).toBe('held');
+    expect(verdictFilterLabel('infra')).toBe('infrastructure error');
+    expect(verdictFilterLabel('inconclusive')).toBe('inconclusive');
   });
 });
 

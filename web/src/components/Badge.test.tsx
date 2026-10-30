@@ -3,10 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { StateBadge } from './Badge';
 
 describe('StateBadge', () => {
-  it('shows a passed run as "No failure seen" with its scope', () => {
+  it('shows a passed run as "No failure seen" with its scope and the server word in the tooltip', () => {
     const html = renderToString(<StateBadge state="passed" trials={30} completion={{ kind: 'complete' }} />);
     expect(html).toContain('No failure seen');
-    expect(html).toContain('30 of 30 planned trials');
+    expect(html).toContain('30 trials');
+    expect(html).toContain('title="Server state: passed"');
     expect(html).not.toMatch(/>passed</);
   });
   it('shows "Stopped early" with trials run of planned', () => {
@@ -15,6 +16,15 @@ describe('StateBadge', () => {
     );
     expect(html).toContain('Stopped early');
     expect(html).toContain('2 of 30 planned trials');
+  });
+  it('is neutral, with no pass tone, while the completion is not known', () => {
+    const html = renderToString(<StateBadge state="passed" trials={30} />);
+    expect(html).toContain('badge-idle');
+    expect(html).not.toContain('badge-good');
+    expect(html).not.toContain('No failure seen');
+  });
+  it('puts the scope in its own small element, so it does not take the heading size', () => {
+    expect(renderToString(<StateBadge state="passed" trials={30} completion={{ kind: 'complete' }} />)).toContain('badge-scope');
   });
   it('shows other states as sent, without a scope', () => {
     const html = renderToString(<StateBadge state="failed" trials={3} />);

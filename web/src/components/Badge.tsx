@@ -7,7 +7,9 @@ export function StateBadge({ state, trials, completion }: { state: string; trial
   const scope = trials === undefined ? undefined : outcome.scope;
   return (
     <>
-      <span className={`badge badge-${outcome.tone}`}>{outcome.label}</span>
+      <span className={`badge badge-${outcome.tone}`} title={outcome.title}>
+        {outcome.label}
+      </span>
       {scope !== undefined && <span className="muted badge-scope"> {scope}</span>}
     </>
   );

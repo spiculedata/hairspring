@@ -21,7 +21,8 @@ const textOf = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, '
 describe('SeedFilterBar', () => {
   it('offers every verdict the server filters on, and all', () => {
     const html = render();
-    for (const v of ['All', 'violation', 'inconclusive', 'unusable', 'infrastructure error', 'pass']) expect(textOf(html)).toContain(v);
+    for (const v of ['All', 'failed', 'inconclusive', 'unusable', 'infrastructure error', 'held']) expect(textOf(html)).toContain(v);
+    expect(textOf(html)).not.toMatch(/violation|\bpass\b/i);
     expect(html).toContain('<select');
   });
 

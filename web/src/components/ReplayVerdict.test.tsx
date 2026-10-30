@@ -18,6 +18,12 @@ describe('ReplayVerdict', () => {
     expect(html).toContain('class="ok"');
   });
 
+  it('keeps the caveat out of the verdict colour', () => {
+    const html = renderToString(<ReplayVerdict failedAgain />);
+    expect(html).toMatch(/<p class="error">Failed again on replay\.<\/p>/);
+    expect(html).toMatch(/<p class="muted">[^<]*One replay is not a confirmation/);
+  });
+
   it('never says "reproduced" or "still violated"', () => {
     for (const failedAgain of [true, false]) {
       expect(renderToString(<ReplayVerdict failedAgain={failedAgain} />)).not.toMatch(/reproduc|still violated/i);

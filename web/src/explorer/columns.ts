@@ -23,7 +23,7 @@ export const FLEXIBLE_MIN_PX = 200;
 
 /** Fixed widths; the flexible column has none. */
 export const COLUMN_WIDTHS_PX: Readonly<Partial<Record<ColumnKey, number>>> = {
-  status: 128,
+  status: 160,
   kind: 92,
   rate: 300,
   seed: 112,

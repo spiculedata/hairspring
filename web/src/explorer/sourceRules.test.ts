@@ -34,7 +34,7 @@ describe('source rules (plan 7.2 item 1 and 5.7 rule 5)', () => {
     expect(checked.length).toBeGreaterThan(15);
     expect(checked.some(([p]) => p.includes('/seeds/'))).toBe(true);
     expect(checked.some(([p]) => p.includes('/pages/'))).toBe(true);
-    for (const [path, src] of checked) expect(code(src), path).not.toMatch(/(?<!\bnot\s)\bfound\b|\b(discovered|unassisted|flaky)\b/i);
+    for (const [path, src] of checked) expect(code(src).replace(/Page not found/g, ''), path).not.toMatch(/\bfound\b|\b(discovered|unassisted|flaky)\b/i);
   });
 
   it('never generates "reproduced", as a replay verdict or for counts, anywhere in the UI source', () => {
@@ -51,7 +51,13 @@ describe('source rules (plan 7.2 item 1 and 5.7 rule 5)', () => {
   });
 
   it('never shows the engine terms PASS, VIOLATION or UNMET as a label in the UI source', () => {
-    for (const [path, src] of ALL.filter(([p]) => !p.endsWith('/types.ts'))) expect(code(src), path).not.toMatch(/'(PASS|VIOLATION|UNMET)\b|"(PASS|VIOLATION|UNMET)\b/);
+    for (const [path, src] of ALL.filter(([p]) => !p.endsWith('/types.ts'))) expect(code(src), path).not.toMatch(/['"`](PASS|VIOLATION|UNMET)\b/);
+  });
+
+  it('never maps a status or class key to its own engine word as a label, in any case ("pass: \'pass\'", "violation: \'violation\'")', () => {
+    for (const [path, src] of ALL.filter(([p]) => !p.endsWith('/types.ts'))) {
+      expect(code(src), path).not.toMatch(/\b(pass|violation|unmet)\s*:\s*['"`](pass|passed|violation|unmet)\b/i);
+    }
   });
 
   it('renders the failure page guest fields only through GuestText: none is a bare JSX expression', () => {

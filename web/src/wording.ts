@@ -219,7 +219,7 @@ export const REPLAY_CAVEAT =
 // ---- Failure page (one trial) ----
 
 const VERDICT_LABELS: Record<string, string> = {
-  pass: 'passed',
+  pass: 'had no failing property',
   violation: 'failed',
   inconclusive: 'was inconclusive',
   unusable: 'was unusable',
@@ -277,8 +277,8 @@ export function seenInInconclusive(n: number): string {
 // ---- Seed explorer (plan 5.3) ----
 
 const CLASS_LABELS: Record<TrialClass, string> = {
-  pass: 'pass',
-  violation: 'violation',
+  pass: 'held',
+  violation: 'failed',
   inconclusive: 'inconclusive',
   unusable: 'unusable',
   infra: 'infrastructure error',
@@ -289,6 +289,13 @@ const CLASS_LABELS: Record<TrialClass, string> = {
 const CLASS_MARKS: Record<TrialClass, string> = { pass: '✓', violation: '✕', inconclusive: '?', unusable: '⊘', infra: '!', excluded: '◌' };
 
 export const classLabel = (c: TrialClass): string => CLASS_LABELS[c];
+
+/** A verdict filter option in the table's vocabulary. The option's value stays the server's word. */
+export function verdictFilterLabel(verdict: string): string {
+  if (verdict === 'violation') return CLASS_LABELS.violation;
+  if (verdict === 'pass') return CLASS_LABELS.pass;
+  return verdict === 'infra' ? CLASS_LABELS.infra : verdict;
+}
 export const classMark = (c: TrialClass): string => CLASS_MARKS[c];
 
 const CODE_CLASSES: Record<StripCode, TrialClass | undefined> = {
