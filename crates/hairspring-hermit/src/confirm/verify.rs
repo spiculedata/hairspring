@@ -1,11 +1,15 @@
 //! Check 4: Hermit's strict determinism verify.
 //!
-//! `hermit run --verify --verify-allow=failure --verify-strict --verify-json=F` runs the guest twice and compares the
-//! two runs bit for bit; the guest's own failure is allowed, since that is the finding. The check passes only if the
+//! `hermit run --verify --verify-allow=both --verify-strict --verify-json=F` runs the guest twice and compares the
+//! two runs bit for bit. Hermit's `--verify-allow` is the exit status the guest is *required* to have in both runs
+//! (`success`, `failure` or `both`), not an allowance: `failure` would reject a guest that exits 0, which is how a
+//! target that signals its finding through output behaves, and Hermit would then skip the second run. `both` leaves
+//! the finding to the engine; Hermit still compares the exit status of the two runs. The check passes only if the
 //! result file says `verified`, `bitwise_parity` and a `matched` verdict. It costs two runs, so it is asked for.
 use super::command;
 use super::context::{now_ms, Ctx};
 use super::pace::Pace;
+use super::verify_report as report;
 use crate::exec::{run_trial_with, Dirs};
 use crate::trace::Verdict;
 use hairspring_engine::confirm::{CheckKind, CheckResult, CheckStatus};
@@ -17,7 +21,7 @@ use std::path::Path;
 const MAX_RESULT_BYTES: u64 = 64 * 1024;
 /// The name the stored command gives the result file, which really is a private file chosen per run.
 const DISPLAY_FILE: &str = "verify.json";
-const VERIFY_FLAGS: [&str; 3] = ["--verify", "--verify-allow=failure", "--verify-strict"];
+const VERIFY_FLAGS: [&str; 3] = ["--verify", "--verify-allow=both", "--verify-strict"];
 
 fn flags(json: &str) -> Vec<String> {
     VERIFY_FLAGS
@@ -79,20 +83,28 @@ pub(super) fn check(ctx: &Ctx, pace: &mut Pace) -> CheckResult {
         &extra,
     );
     pace.ran("strict verify".to_string());
+    // Read before the file is removed: its verdict and reason are what the detail has to show.
     let read = read_result(&result_path);
     let _ = std::fs::remove_file(&result_path);
     let trial = match run {
         Ok(t) => t,
         Err(_) => return inconclusive("Hermit could not be started (host fault)"),
     };
-    if matches!(
-        ctx.backend.verdict(ctx.p, &trial, timeout),
-        Verdict::Infra(_) | Verdict::Hang(_)
-    ) {
-        return inconclusive("the verify run failed in Hermit or timed out, so it says nothing");
+    let verdict = ctx.backend.verdict(ctx.p, &trial, timeout);
+    if trial.timed_out || matches!(verdict, Verdict::Hang(_)) {
+        return inconclusive(&report::timed_out(timeout.as_secs()));
+    }
+    let error_line = trial.stderr_findings().error_line;
+    let hermit_failed = match (&verdict, &read) {
+        (_, Ok(v)) if report::is_no_comparison(v) => Some(report::reason_text(v)),
+        (Verdict::Infra(why), _) => Some(why.clone()),
+        _ => None,
+    };
+    if let Some(why) = hermit_failed {
+        return inconclusive(&report::hermit_failure(&why, error_line.as_deref()));
     }
     match read {
-        Err(why) => inconclusive(why),
+        Err(why) => inconclusive(&report::with_error_line(why, error_line.as_deref())),
         Ok(v) => {
             let ok = passes(&v);
             let verdict = v

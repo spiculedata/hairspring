@@ -4,7 +4,9 @@
 //! Files in the fake's directory: `calls.log` (every invocation's arguments), `mode` (`plain` or `fpvary`, which gives
 //! every call its own schedule summary), `skid_left` (how many base-margin calls report a skid overshoot),
 //! `skid_double_fails` (the doubled margin overshoots too), `skid_base` (the margin that counts as the base one),
-//! `skid_for` (only guests whose command contains this text overshoot), `verify` (`good`, `diverged` or `missing`),
+//! `skid_for` (only guests whose command contains this text overshoot), `verify` (`good`, `diverged`, `missing`,
+//! `malformed`, `rejected`, `infra` or `hang`; a verify behaves as Hermit does, so a guest whose exit status does not
+//! meet `--verify-allow` is rejected whatever `verify` says),
 //! `sleep` (seconds each call takes), `sleep_from` (the number of the first call that sleeps, counting every call the
 //! fake has seen; `count` holds that number and a test may reset it).
 use super::scratch;
@@ -32,12 +34,14 @@ seed=0
 summary=""
 vjson=""
 skid=""
+allow=success
 while [ "$1" != "--" ]; do
   case "$1" in
     --sched-seed=*) seed=${1#--sched-seed=};;
     --summary-json=*) summary=${1#--summary-json=};;
     --verify-json=*) vjson=${1#--verify-json=};;
     --skid-margin=*) skid=${1#--skid-margin=};;
+    --verify-allow=*) allow=${1#--verify-allow=};;
   esac
   shift
 done
@@ -70,14 +74,31 @@ if [ -n "$summary" ]; then
   [ "$mode" = fpvary ] && turns=$((10 + n))
   printf '{"sched_turns": %s, "syscalls": 100, "virttime_elapsed": 5, "timeslice_stats": {"count": 1}, "per_thread_timeslice": []}' "$turns" > "$summary"
 fi
+echo "hermit: virtual-time epoch=fake" >&2
 if [ -n "$vjson" ]; then
-  case "$(cat "$dir/verify" 2>/dev/null || echo good)" in
-    good) printf '{"verified": true, "bitwise_parity": true, "verdict": "matched"}' > "$vjson";;
+  vmode=$(cat "$dir/verify" 2>/dev/null || echo good)
+  [ "$vmode" = hang ] && sleep 30
+  FAKE_SCHED_SEED=$seed "$@"
+  rc=$?
+  reject=""
+  case "$allow:$rc" in failure:0|success:[1-9]*) reject=1;; esac
+  if [ -n "$reject" ] || [ "$vmode" = rejected ]; then
+    printf '{"verified": false, "bitwise_parity": false, "verdict": "no_result", "no_result_reason": {"kind": "first_run_rejected", "exit_code": %s}}' "$rc" > "$vjson"
+    echo "Error: First run during --verify exited with code $rc" >&2
+    exit 125
+  fi
+  case "$vmode" in
+    good|hang) printf '{"verified": true, "bitwise_parity": true, "verdict": "matched"}' > "$vjson";;
     diverged) printf '{"verified": true, "bitwise_parity": false, "verdict": "diverged"}' > "$vjson";;
+    malformed) printf 'not json at all' > "$vjson";;
+    infra)
+      printf '{"verified": false, "verdict": "infrastructure_error", "no_result_reason": {"kind": "run_failed", "detail": "could not start the guest"}}' > "$vjson"
+      echo "Error: could not start the guest" >&2
+      exit 125;;
     missing) ;;
   esac
+  exit $rc
 fi
-echo "hermit: virtual-time epoch=fake" >&2
 FAKE_SCHED_SEED=$seed exec "$@"
 "#;
 
@@ -99,6 +120,10 @@ pub struct RigOptions {
     pub hangs_once: bool,
     /// Both targets treat a timeout as the bug.
     pub hang_is_violation: bool,
+    /// The failing target's guest script, in place of [`SEEDED_BUG`].
+    pub svc_script: Option<String>,
+    /// What the backend gives one run; a strict verify gets twice this.
+    pub trial_timeout: Duration,
 }
 
 impl Default for RigOptions {
@@ -113,6 +138,8 @@ impl Default for RigOptions {
             guest_env: vec![],
             hangs_once: false,
             hang_is_violation: false,
+            svc_script: None,
+            trial_timeout: Duration::from_secs(10),
         }
     }
 }
@@ -165,9 +192,10 @@ pub fn rig(name: &str, o: RigOptions) -> Rig {
         "[ -f {d}/hang_once ] && {{ rm {d}/hang_once; sleep 30; }}; {SEEDED_BUG}",
         d = dir.display()
     );
+    let svc_script = o.svc_script.as_deref().unwrap_or(SEEDED_BUG);
     let svc = process(
         "svc",
-        if o.hangs_once { &hang } else { SEEDED_BUG },
+        if o.hangs_once { &hang } else { svc_script },
         o.hermit_args.clone(),
         o.scheduler.clone(),
         guest_env.clone(),
@@ -185,7 +213,7 @@ pub fn rig(name: &str, o: RigOptions) -> Rig {
     );
     let settings = HermitSettings {
         bin,
-        trial_timeout: Duration::from_secs(10),
+        trial_timeout: o.trial_timeout,
         summary_dir: o.with_summaries.then_some(summaries),
         extra_env: o.extra_env,
         ..HermitSettings::default()
