@@ -1513,6 +1513,33 @@ expect "check-window rejects an empty file" 1 sh "$here/check-window-java.sh" "$
 expect "check-window rejects a missing file" 1 sh "$here/check-window-java.sh" "$tmp/none.txt"
 expect "check-window without a file is a usage error" 64 sh "$here/check-window-java.sh"
 
+# check-svc-window.sh: the order of the steps in the service fixture's Store.handle (a text check of the source).
+sw_good="$here/../java/svc/src/langsvc/Store.java"
+expect "check-svc-window accepts the service fixture's Store.java" 0 sh "$here/check-svc-window.sh" "$sw_good"
+awk '/\} else \{/ {r = 1} r && /acc = validate/ {v = $0; next} r && /^            apply\(t\);/ {a = $0; next} r && /applied\.put/ {print; print v; print a; r = 0; next} {print}' "$sw_good" >"$tmp/sw_reordered.java"
+expect "check-svc-window rejects a racy branch that records the key before validating" 1 sh "$here/check-svc-window.sh" "$tmp/sw_reordered.java"
+awk '/\} else \{/ {r = 1} r && /^            apply\(t\);/ {a = $0; next} r && /applied\.put/ {print; print a; r = 0; next} {print}' "$sw_good" >"$tmp/sw_put_before_apply.java"
+expect "check-svc-window rejects a racy branch that records the key before applying" 1 sh "$here/check-svc-window.sh" "$tmp/sw_put_before_apply.java"
+sed 's/if (applied.putIfAbsent(t.key(), CLAIMED) != null) {/if (applied.containsKey(t.key())) {/' "$sw_good" >"$tmp/sw_fixed_racy.java"
+expect "check-svc-window rejects a fixed branch that checks with containsKey (not atomic)" 1 sh "$here/check-svc-window.sh" "$tmp/sw_fixed_racy.java"
+grep -v 'applied.containsKey(t.key())' "$sw_good" >"$tmp/sw_nocheck.java"
+expect "check-svc-window rejects a racy branch with no check" 1 sh "$here/check-svc-window.sh" "$tmp/sw_nocheck.java"
+grep -v 'mode.atomicClaim()' "$sw_good" >"$tmp/sw_nobranch.java"
+expect "check-svc-window rejects a handle() without the two branches" 1 sh "$here/check-svc-window.sh" "$tmp/sw_nobranch.java"
+expect "check-svc-window rejects an empty file" 1 sh "$here/check-svc-window.sh" "$clean"
+expect "check-svc-window rejects a missing file" 1 sh "$here/check-svc-window.sh" "$tmp/none.java"
+expect "check-svc-window without a file is a usage error" 64 sh "$here/check-svc-window.sh"
+
+# build-record-java-svc.sh: a JDK that is not the pinned build fails the record and stages no artifact (no real JDK needed:
+# the fake java reports another build and there is no javac, so the builds fail too).
+mkdir -p "$tmp/svcjdk/bin"
+printf '#!/bin/sh\necho "openjdk version \\"21.0.13\\" 2026-10-20 LTS" >&2\necho "OpenJDK Runtime Environment Temurin-21.0.13+11 (build 21.0.13+11-LTS)" >&2\n' >"$tmp/svcjdk/bin/java"
+chmod +x "$tmp/svcjdk/bin/java"
+expect "build-record-java-svc fails with a JDK that is not the pin" 1 env JAVA_HOME="$tmp/svcjdk" ARTIFACT_DIR="$tmp/svc-artifact" sh "$here/build-record-java-svc.sh" "$tmp/svc-record.md"
+expect "build-record-java-svc's record says the JDK check failed and RESULT FAIL" 0 sh -c "grep -qx 'FAIL the JDK is the pinned build' '$tmp/svc-record.md' && grep -qx 'RESULT FAIL' '$tmp/svc-record.md'"
+expect "build-record-java-svc stages no artifact when a check failed" 1 test -e "$tmp/svc-artifact"
+expect "build-record-java-svc without an output file is a usage error" 64 sh "$here/build-record-java-svc.sh"
+
 # The .NET fixture: its constants and start barrier are read from its source, its sources read nothing forbidden, and
 # run-dotnet-profile-checks.sh runs the self-check once per environment profile arm (here with a stub checker).
 dotnet_fixture="$fixtures_dir/dotnet"
