@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { api } from '../api';
+import { useReportMissing } from '../PageStatus';
 import { Link } from '../components/Layout';
 import { Loading, LoadFailed, NotFound } from '../components/Notices';
 import { ReplayVerdict } from '../components/ReplayVerdict';
@@ -20,9 +21,10 @@ export function FailurePage({ id }: { id: string }) {
   const [replay, setReplay] = useState<ReplayResult>();
   const [replayError, setReplayError] = useState<string>();
   const [open, setOpen] = useState<number>();
+  useReportMissing(detail.notFound);
 
   if (detail.notFound) return <NotFound what="failure" />;
-  if (detail.error) return <LoadFailed what="this failure" message={detail.error} />;
+  if (detail.error) return <LoadFailed what="this failure" message={detail.error} retries={false} />;
   if (!detail.data) return <Loading what="failure" />;
   const { record, steps, bundle } = detail.data;
   const stepsToShow = replay?.steps ?? steps;

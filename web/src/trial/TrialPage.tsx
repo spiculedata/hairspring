@@ -3,6 +3,7 @@ import { ErrorBoundary } from '../components/ErrorBoundary';
 import { ErrorLine } from '../components/ErrorLine';
 import { Loading, LoadFailed, NotFound } from '../components/Notices';
 import { Link } from '../components/Layout';
+import { useReportMissing } from '../PageStatus';
 import { runPath } from '../router';
 import { usePolling } from '../usePolling';
 import { trialApi } from './api';
@@ -17,6 +18,7 @@ function Loaded({ runId, seq }: { runId: string; seq: number }) {
   const context = useRunContext(runId);
   const tails = useOutputTails(runId, seq, detail.data?.output_streams ?? []);
   const [downloadError, setDownloadError] = useState<string>();
+  useReportMissing(detail.notFound);
 
   if (detail.notFound) return <NotFound what="trial" />;
   if (detail.error && !detail.data) return <LoadFailed what="this trial" message={detail.error} />;
@@ -45,6 +47,7 @@ export function TrialPage({ runId, seq }: { runId: string; seq: number }) {
 /** The failure page for the trial that ran a seed: the seed is looked up once, then the trial page is shown. */
 export function SeedPage({ runId, seed }: { runId: string; seed: string }) {
   const lookup = usePolling(() => trialApi.seqOfSeed(runId, seed).then((seq) => ({ seq })), LOOKUP_RETRY_MS, () => true);
+  useReportMissing(lookup.notFound);
   if (lookup.notFound) return <NotFound what="run" />;
   if (lookup.error && !lookup.data) return <LoadFailed what="this seed" message={lookup.error} />;
   if (!lookup.data) return <Loading what="seed" />;

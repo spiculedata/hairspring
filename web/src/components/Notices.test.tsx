@@ -25,11 +25,15 @@ describe('NotFound', () => {
 });
 
 describe('LoadFailed', () => {
-  it('names what could not be loaded, shows the reason and says what to do', () => {
-    const html = renderToString(<LoadFailed what="runs" message="HTTP 500" />);
-    expect(html).toContain('Could not load runs');
-    expect(html).toContain('HTTP 500');
-    expect(html).toContain('Reload the page to try again');
-    expect(html).toContain('role="alert"');
+  it('names what could not be loaded, shows the reason and says what to do, all inside the one announced alert', () => {
+    const html = renderToString(<LoadFailed what="runs" message="HTTP 500" retries={false} />);
+    expect(html.match(/role="alert"/g)).toHaveLength(1);
+    const alert = html.slice(html.indexOf('role="alert"'));
+    for (const part of ['Could not load runs', 'HTTP 500', 'Reload the page to try again']) expect(alert).toContain(part);
+  });
+  it('does not tell the reader to reload a page that tries again by itself', () => {
+    const html = renderToString(<LoadFailed what="runs" message="HTTP 500" retries />);
+    expect(html).toContain('This page tries again by itself');
+    expect(html).not.toContain('Reload');
   });
 });

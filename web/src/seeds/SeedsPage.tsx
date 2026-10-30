@@ -3,6 +3,7 @@ import { api } from '../api';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { Loading, LoadFailed, NotFound } from '../components/Notices';
 import { filtersFromSearch, filtersToSearch, propertyOf, type SeedFilters } from './filters';
+import { useReportMissing } from '../PageStatus';
 import { replaceAddress } from '../router';
 import { usePolling } from '../usePolling';
 import { SeedExplorerView, type SeedContext } from './SeedExplorerView';
@@ -39,6 +40,7 @@ function Loaded({ id }: { id: string }) {
     replaceAddress(`${window.location.pathname}${filtersToSearch(filters)}`);
   }, [filters]);
 
+  useReportMissing(detail.notFound);
   const onOpen = useCallback((trial: number) => setFilters((f) => ({ ...f, from: trial })), []);
 
   if (detail.notFound) return <NotFound what="run" />;

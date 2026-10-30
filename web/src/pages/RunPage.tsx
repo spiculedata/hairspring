@@ -8,6 +8,7 @@ import { PropertyOverviewPanel } from '../explorer/PropertyOverviewPanel';
 import { usePropertyOverview } from '../explorer/usePropertyOverview';
 import { Loading, NotFound } from '../components/Notices';
 import { TimeStamp } from '../components/TimeStamp';
+import { useReportMissing } from '../PageStatus';
 import { UpdatedAt } from '../components/UpdatedAt';
 import { formatDuration } from '../format';
 import { seedsPath } from '../seeds/filters';
@@ -43,6 +44,7 @@ export function RunPage({ id }: { id: string }) {
   const run = detail.data?.run;
   const live = run === undefined || !TERMINAL.has(run.state);
   const properties = usePropertyOverview(id, live);
+  useReportMissing(detail.notFound);
 
   if (detail.notFound) return <NotFound what="run" />;
   if (detail.error && !run) return <p className="error" role="alert">{detail.error}</p>;

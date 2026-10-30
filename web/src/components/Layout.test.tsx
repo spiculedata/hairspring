@@ -29,5 +29,9 @@ describe('Layout', () => {
     expect(isNavActive('/targets', '/targets')).toBe(true);
     expect(isNavActive('/', '/targets')).toBe(false);
     expect(isNavActive('/', '/nowhere')).toBe(false);
+    // Whole path segments only: /runsx is not a run page.
+    expect(isNavActive('/', '/runsx')).toBe(false);
+    expect(isNavActive('/', '/failuresx/1')).toBe(false);
+    expect(isNavActive('/targets', '/targetsx')).toBe(false);
   });
 });

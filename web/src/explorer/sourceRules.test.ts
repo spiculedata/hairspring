@@ -1,11 +1,22 @@
+/// <reference types="node" />
+import { readdirSync } from 'node:fs';
+import { sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { readSource } from '../readSource';
 
-/** Every non-test source file under src, as raw text (resolved by Vite at test time, so no Node typings are needed). */
-const RAW = import.meta.glob<string>('../**/*.{ts,tsx}', { query: '?raw', import: 'default', eager: true });
+/**
+ * Every non-test source file under src, as raw text. The directory is read when the test runs, not when it is
+ * transformed: a module glob is cached with this file, so a file added later would not be scanned until this file changed.
+ */
+function listSources(): ReadonlyArray<readonly [string, string]> {
+  const names = (readdirSync(new URL('../', import.meta.url), { recursive: true }) as string[]).map((n) => n.split(sep).join('/'));
+  return names
+    .filter((n) => /\.tsx?$/.test(n) && !/\.test\.tsx?$/.test(n) && !/fixtures\.ts$/.test(n))
+    .sort()
+    .map((n) => [`../${n}`, readSource(n)] as const);
+}
 
-const ALL: ReadonlyArray<readonly [string, string]> = Object.entries(RAW).filter(
-  ([path]) => !/\.test\.tsx?$/.test(path) && !/fixtures\.ts$/.test(path),
-);
+const ALL = listSources();
 
 /** Source with comments removed, so a rule is about code and strings, not prose. */
 function code(source: string): string {
@@ -16,6 +27,12 @@ describe('source rules (plan 7.2 item 1 and 5.7 rule 5)', () => {
   it('finds the sources it is meant to check', () => {
     expect(ALL.length).toBeGreaterThan(15);
     expect(ALL.some(([p]) => p.endsWith('components/GuestText.tsx'))).toBe(true);
+  });
+
+  it('scans every source file: the list is a fresh listing of src, including files added since this file was transformed', () => {
+    expect(ALL.some(([p]) => p === '../pageTitle.ts')).toBe(true);
+    expect(ALL.some(([p]) => p === '../components/Notices.tsx')).toBe(true);
+    expect(ALL.every(([p]) => !/\.test\./.test(p))).toBe(true);
   });
 
   it('never uses dangerouslySetInnerHTML, innerHTML or document.write', () => {
@@ -61,7 +78,7 @@ describe('source rules (plan 7.2 item 1 and 5.7 rule 5)', () => {
 
   it('never shows a bare "Loading…" or a bare "not found": say what is loading, or what is missing and what to do', () => {
     for (const [path, src] of ALL) {
-      expect(code(src), path).not.toMatch(/['">`]Loading…\s*['"<`]/);
+      expect(code(src), path).not.toMatch(/['">`]Loading(…|\.\.\.)?\s*['"<`]/);
       expect(code(src), path).not.toMatch(/['">`]Page not found\.?\s*['"<`]/);
     }
   });

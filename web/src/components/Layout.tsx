@@ -25,11 +25,12 @@ export function Link({ to, children, current }: { to: string; children: ReactNod
 
 /** Whether the navigation link `to` is the section the current path belongs to. Runs covers a run, its seeds, trials and failures. */
 export function isNavActive(to: string, path: string): boolean {
-  if (to === '/') return path === '/' || path.startsWith('/runs') || path.startsWith('/failures');
-  return path === to || path.startsWith(`${to}/`);
+  const within = (base: string): boolean => path === base || path.startsWith(`${base}/`);
+  if (to === '/') return path === '/' || within('/runs') || within('/failures');
+  return within(to);
 }
 
-export function Layout({ path, children }: { path: string; children: ReactNode }) {
+export function Layout({ path, children, announcement }: { path: string; children: ReactNode; announcement?: string }) {
   return (
     <>
       <a className="skip-link" href="#main">
@@ -45,6 +46,9 @@ export function Layout({ path, children }: { path: string; children: ReactNode }
           ))}
         </nav>
       </header>
+      <div className="sr-only" role="status" aria-live="polite">
+        {announcement}
+      </div>
       <main id="main" tabIndex={-1}>
         {children}
       </main>

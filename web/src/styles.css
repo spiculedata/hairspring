@@ -46,6 +46,7 @@ a { color: var(--accent); }
 main:focus { outline: none; }
 nav a[aria-current] span { text-decoration: none; }
 .time-relative { display: block; font-size: .8rem; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .updated-at { margin: .25rem 0; font-size: .8rem; }
 h1 { font-size: 1.5rem; margin: 1rem 0 .5rem; } h2 { font-size: 1.1rem; margin: 1.5rem 0 .5rem; }
 table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
