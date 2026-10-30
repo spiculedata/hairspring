@@ -28,13 +28,12 @@ describe('source rules (plan 7.2 item 1 and 5.7 rule 5)', () => {
     for (const [path, src] of ALL) expect(code(src), path).not.toMatch(/(href|src|style)=\{[^}]*\bguest\b/);
   });
 
-  // "not found" is allowed: it is the wording of a missing page, not a claim about a result.
   it('never generates the words found, discovered, unassisted or flaky anywhere in the UI source', () => {
     const checked = ALL.filter(([p]) => !p.endsWith('/types.ts'));
     expect(checked.length).toBeGreaterThan(15);
     expect(checked.some(([p]) => p.includes('/seeds/'))).toBe(true);
     expect(checked.some(([p]) => p.includes('/pages/'))).toBe(true);
-    for (const [path, src] of checked) expect(code(src).replace(/Page not found/g, ''), path).not.toMatch(/\bfound\b|\b(discovered|unassisted|flaky)\b/i);
+    for (const [path, src] of checked) expect(code(src), path).not.toMatch(/\bfound\b|\b(discovered|unassisted|flaky)\b/i);
   });
 
   it('never generates "reproduced", as a replay verdict or for counts, anywhere in the UI source', () => {
@@ -57,6 +56,13 @@ describe('source rules (plan 7.2 item 1 and 5.7 rule 5)', () => {
   it('never maps a status or class key to its own engine word as a label, in any case ("pass: \'pass\'", "violation: \'violation\'")', () => {
     for (const [path, src] of ALL.filter(([p]) => !p.endsWith('/types.ts'))) {
       expect(code(src), path).not.toMatch(/\b(pass|violation|unmet)\s*:\s*['"`](pass|passed|violation|unmet)\b/i);
+    }
+  });
+
+  it('never shows a bare "Loading…" or a bare "not found": say what is loading, or what is missing and what to do', () => {
+    for (const [path, src] of ALL) {
+      expect(code(src), path).not.toMatch(/['">`]Loading…\s*['"<`]/);
+      expect(code(src), path).not.toMatch(/['">`]Page not found\.?\s*['"<`]/);
     }
   });
 

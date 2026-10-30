@@ -48,4 +48,16 @@ describe('usePolling in a DOM', () => {
     act(() => result.current.reload());
     await waitFor(() => expect(result.current.data).toBe('second'));
   });
+
+  it('records when data last arrived, and keeps the time of the last good load through an error', async () => {
+    const before = Date.now();
+    const load = vi.fn().mockResolvedValueOnce('first').mockRejectedValue(new Error('down'));
+    const { result } = renderHook(() => usePolling(load, FAST_MS));
+    expect(result.current.updatedAt).toBeUndefined();
+    await waitFor(() => expect(result.current.data).toBe('first'));
+    const first = result.current.updatedAt;
+    expect(first).toBeGreaterThanOrEqual(before);
+    await waitFor(() => expect(result.current.error).toBe('down'));
+    expect(result.current.updatedAt).toBe(first);
+  });
 });

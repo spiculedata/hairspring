@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import { ErrorBoundary } from '../components/ErrorBoundary';
+import { Loading, LoadFailed, NotFound } from '../components/Notices';
 import { filtersFromSearch, filtersToSearch, propertyOf, type SeedFilters } from './filters';
 import { replaceAddress } from '../router';
 import { usePolling } from '../usePolling';
@@ -40,9 +41,9 @@ function Loaded({ id }: { id: string }) {
 
   const onOpen = useCallback((trial: number) => setFilters((f) => ({ ...f, from: trial })), []);
 
-  if (detail.notFound) return <p className="error" role="alert">This run does not exist (it may have been removed).</p>;
-  if (detail.error && !run) return <p className="error" role="alert">{detail.error}</p>;
-  if (!run) return <p className="muted">Loading…</p>;
+  if (detail.notFound) return <NotFound what="run" />;
+  if (detail.error && !run) return <LoadFailed what="this run" message={detail.error} />;
+  if (!run) return <Loading what="seeds" />;
   return (
     <SeedExplorerView
       runId={id}

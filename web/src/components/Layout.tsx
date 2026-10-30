@@ -7,10 +7,11 @@ const LINKS: Array<[string, string]> = [
   ['/workers', 'Workers'],
 ];
 
-export function Link({ to, children }: { to: string; children: ReactNode }) {
+export function Link({ to, children, current }: { to: string; children: ReactNode; current?: boolean }) {
   return (
     <a
       href={to}
+      aria-current={current ? 'page' : undefined}
       onClick={(e) => {
         if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
         e.preventDefault();
@@ -22,20 +23,31 @@ export function Link({ to, children }: { to: string; children: ReactNode }) {
   );
 }
 
+/** Whether the navigation link `to` is the section the current path belongs to. Runs covers a run, its seeds, trials and failures. */
+export function isNavActive(to: string, path: string): boolean {
+  if (to === '/') return path === '/' || path.startsWith('/runs') || path.startsWith('/failures');
+  return path === to || path.startsWith(`${to}/`);
+}
+
 export function Layout({ path, children }: { path: string; children: ReactNode }) {
   return (
     <>
+      <a className="skip-link" href="#main">
+        Skip to content
+      </a>
       <header className="topbar">
         <span className="brand">Hairspring</span>
         <nav aria-label="Main">
           {LINKS.map(([to, label]) => (
-            <Link key={to} to={to}>
-              <span className={(to === '/' ? path === '/' || path.startsWith('/runs') : path.startsWith(to)) ? 'active' : ''}>{label}</span>
+            <Link key={to} to={to} current={isNavActive(to, path)}>
+              <span className={isNavActive(to, path) ? 'active' : ''}>{label}</span>
             </Link>
           ))}
         </nav>
       </header>
-      <main>{children}</main>
+      <main id="main" tabIndex={-1}>
+        {children}
+      </main>
     </>
   );
 }

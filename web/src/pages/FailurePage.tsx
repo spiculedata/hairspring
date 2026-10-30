@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api } from '../api';
 import { Link } from '../components/Layout';
+import { Loading, LoadFailed, NotFound } from '../components/Notices';
 import { ReplayVerdict } from '../components/ReplayVerdict';
 import type { ReplayResult } from '../types';
 import { usePolling } from '../usePolling';
@@ -20,8 +21,9 @@ export function FailurePage({ id }: { id: string }) {
   const [replayError, setReplayError] = useState<string>();
   const [open, setOpen] = useState<number>();
 
-  if (detail.error) return <p className="error" role="alert">{detail.error}</p>;
-  if (!detail.data) return <p className="muted">Loading…</p>;
+  if (detail.notFound) return <NotFound what="failure" />;
+  if (detail.error) return <LoadFailed what="this failure" message={detail.error} />;
+  if (!detail.data) return <Loading what="failure" />;
   const { record, steps, bundle } = detail.data;
   const stepsToShow = replay?.steps ?? steps;
 

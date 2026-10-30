@@ -1,7 +1,7 @@
 import type { Run } from '../types';
-import { relativeTime } from '../format';
 import { StateBadge } from './Badge';
 import { Link } from './Layout';
+import { TimeStamp } from './TimeStamp';
 
 /** The runs list. The Steps column is optional: the stylesheet drops it on a phone. */
 export function RunsTable({ runs }: { runs: readonly Run[] }) {
@@ -28,7 +28,9 @@ export function RunsTable({ runs }: { runs: readonly Run[] }) {
               <StateBadge state={r.state} trials={r.trials} />
             </td>
             <td className="num opt">{r.steps.toLocaleString()}</td>
-            <td>{relativeTime(r.created_at)}</td>
+            <td>
+              <TimeStamp ms={r.created_at} />
+            </td>
           </tr>
         ))}
         {runs.length === 0 && (
