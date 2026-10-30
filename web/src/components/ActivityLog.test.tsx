@@ -36,8 +36,8 @@ describe('ActivityLog', () => {
   });
 
   it('shows an event name, a JSON key and a value from a worker as escaped text only', () => {
-    const data = JSON.stringify({ '<b>key</b>': 'a\u202eb\u0007c', worker: '<i>w</i>' });
-    const html = renderToString(<ActivityLog lines={[{ id: '1', event: '<img src=x onerror=alert(1)>', data }]} />);
+    const data = JSON.stringify({ '<b>key\u202e</b>': 'a\u202eb\u0007c', worker: '<i>w</i>' });
+    const html = renderToString(<ActivityLog lines={[{ id: '1', event: '<img src=x onerror=alert(1)>\u202e', data }]} />);
     for (const raw of ['<img', '<b>', '<i>', '\u202e', '\u0007']) expect(html, raw).not.toContain(raw);
     expect(html).toContain('&lt;img');
     expect(html).toContain('&lt;b&gt;key');

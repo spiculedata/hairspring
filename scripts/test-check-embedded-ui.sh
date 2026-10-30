@@ -10,7 +10,7 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/hairspring-ui-check-tests.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 FAILED=0
 
-# A fake binary, as a python script run through a shell wrapper so it can be called by a relative path.
+# A fake binary: a plain python3 script, so it can be called by a relative path like the real one.
 # `fake --db X serve --addr 127.0.0.1:0 --workers 0` binds a free port, prints the line the real server prints, and then
 # acts as FAKE_MODE says: serve $FAKE_UI_DIR (default), accept connections and never answer (hang), or exit (die).
 cat >"$TMP/fake-hairspring" <<'FAKE'
@@ -79,8 +79,19 @@ expect "a relative path to the binary works from another directory" 0 $? "OK:"
 
 # A server that accepts and never answers must fail within the request timeout, not hang.
 start=$SECONDS
-run_mode hang
-rc=$?
+# The script is run under a watchdog of its own: if the request timeouts were removed it would hang, and the watchdog
+# turns that into a failure instead of a stuck test run.
+FAKE_MODE=hang FAKE_UI_DIR="$TMP/same" bash "$SCRIPT" "$TMP/fake-hairspring" "$TMP/built" >"$TMP/out" 2>&1 &
+checked=$!
+while kill -0 "$checked" 2>/dev/null && [ $((SECONDS - start)) -le 30 ]; do sleep 1; done
+if kill -0 "$checked" 2>/dev/null; then
+  kill "$checked" 2>/dev/null
+  wait "$checked" 2>/dev/null
+  rc=124
+else
+  wait "$checked"
+  rc=$?
+fi
 took=$((SECONDS - start))
 expect "a server that never answers fails" 1 "$rc" "did not serve"
 if [ "$took" -gt 20 ]; then echo "FAIL the hanging server took ${took}s to fail"; FAILED=1; else echo "ok   the hanging server failed in ${took}s"; fi

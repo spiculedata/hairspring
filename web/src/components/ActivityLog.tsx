@@ -8,8 +8,7 @@ const RAW_CHARS = 2000;
 
 /**
  * A run's events as readable lines. The event name, the keys and the values can all carry text from a worker, so every
- * one is shown through `GuestText`. The raw
- * event stays available behind a disclosure.
+ * one is shown through `GuestText`. The raw event stays available behind a disclosure.
  */
 export function ActivityLog({ lines }: { lines: readonly SseEvent[] }) {
   if (lines.length === 0) {
