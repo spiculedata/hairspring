@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, streamRunEvents } from '../api';
+import { ActivityLog } from '../components/ActivityLog';
 import { Link } from '../components/Layout';
 import { StateBadge } from '../components/Badge';
 import { ErrorBoundary } from '../components/ErrorBoundary';
@@ -31,9 +32,7 @@ function Activity({ runId, active }: { runId: string; active: boolean }) {
   return (
     <section>
       <h2>Activity</h2>
-      <pre className="log" aria-live="polite">
-        {lines.length === 0 ? 'Waiting for events…' : lines.map((l) => `${l.event.padEnd(9)} ${l.data}`).join('\n')}
-      </pre>
+      <ActivityLog lines={lines} />
     </section>
   );
 }

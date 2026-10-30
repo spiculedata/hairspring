@@ -20,6 +20,9 @@ Web UI tests (Node 22+):
 cd web && npm ci && npm run typecheck && npm test
 ```
 
+After a release build (`make release`, which runs it for you), `make check-ui` checks that the binary serves the UI built
+in `web/dist` and not an older one. It is for release builds only: a debug build reads `web/dist` from disk.
+
 C SDK tests (a C11 compiler and POSIX threads; some tests need Linux, see `sdks/c/Makefile`):
 
 ```bash

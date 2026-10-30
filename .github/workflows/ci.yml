@@ -436,6 +436,8 @@ jobs:
         run: shellcheck -S warning scripts/*.sh
       - name: Script tests
         run: bash scripts/test-scripts.sh
+      - name: Embedded-UI check script tests
+        run: bash scripts/test-check-embedded-ui.sh
       - name: Install the build libraries the Hermit installer looks for
         run: sudo apt-get update -qq && sudo apt-get install -y -qq pkg-config libunwind-dev liblzma-dev
       # Verifies the replay patch's sha256 and the build prerequisites, then stops before cloning or building.
