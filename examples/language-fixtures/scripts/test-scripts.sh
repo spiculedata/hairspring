@@ -1814,7 +1814,9 @@ wfexpect "fixture is a choice input defaulting to at" "        default: at"
 wfsh "the fixture choice offers only at and svc" '[ "$(awk "/^      fixture:/ {p=1; next} p && /^      [a-z_]+:/ {exit} p && /^          - / {print}" "$1" | tr "\n" ";")" = "          - at;          - svc;" ]'
 wfexpect "the fixture is checked against the two names" '          case "$FIXTURE" in at | svc | "") ;; *) echo "fixture='"'"'$FIXTURE'"'"' is not at or svc" >&2; exit 1 ;; esac'
 wfsh "the later steps read the checked fixture (build, record dir name, native, summary, artifact name)" '[ "$(grep -c "\${{ steps.inputs.outputs.fixture }}" "$1")" = 4 ] && [ "$(grep -c "if: steps.inputs.outputs.fixture == .svc." "$1")" = 1 ]'
-wfexpect "the service fixture's record script runs only for svc" '        run: sh examples/language-fixtures/scripts/build-record-java-svc.sh "$RUNNER_TEMP/svc-artifact-record.md" && cat "$RUNNER_TEMP/svc-artifact-record.md" >> "$GITHUB_STEP_SUMMARY"'
+wfexpect "the service fixture's record script runs only for svc" '          sh examples/language-fixtures/scripts/build-record-java-svc.sh "$RUNNER_TEMP/svc-artifact-record.md" || status=$?'
+wfexpect "the record reaches the step summary even when the record script fails" '          if [ -f "$RUNNER_TEMP/svc-artifact-record.md" ]; then cat "$RUNNER_TEMP/svc-artifact-record.md" >> "$GITHUB_STEP_SUMMARY"; fi'
+wfexpect "a failed record script still fails the step" '          exit "$status"'
 wfsh "exactly the Summary and Upload steps run if always()" '[ "$(awk "/^      - /{name=\$0} /^        if: always\(\)$/ {print name}" "$1" | tr "\n" ";")" = "      - name: Summary;      - name: Upload the log;" ]'
 wfexpect "the native step has an id" "        id: native"
 wfexpect "the summary reads the outcome of the native step" '          NATIVE_OUTCOME: ${{ steps.native.outcome }}'
