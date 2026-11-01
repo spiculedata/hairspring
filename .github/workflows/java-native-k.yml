@@ -82,7 +82,11 @@ jobs:
           PRODUCER: GitHub Actions ubuntu-24.04 (native x86-64)
           SOURCE_COMMIT: ${{ github.sha }}
           ARTIFACT_DIR: ${{ runner.temp }}/svc-artifact
-        run: sh examples/language-fixtures/scripts/build-record-java-svc.sh "$RUNNER_TEMP/svc-artifact-record.md" && cat "$RUNNER_TEMP/svc-artifact-record.md" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          status=0
+          sh examples/language-fixtures/scripts/build-record-java-svc.sh "$RUNNER_TEMP/svc-artifact-record.md" || status=$?
+          if [ -f "$RUNNER_TEMP/svc-artifact-record.md" ]; then cat "$RUNNER_TEMP/svc-artifact-record.md" >> "$GITHUB_STEP_SUMMARY"; fi
+          exit "$status"
       - name: Native runs
         id: native
         env:
