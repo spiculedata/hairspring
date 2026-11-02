@@ -53,12 +53,13 @@ export function runOutcome({ state, trials, completion }: RunOutcomeInput): RunO
       if (budget > 0 && run < budget) return stopped(`${formatCount(run)} of ${formatCount(budget)} planned trials`);
       break;
     }
-    case undefined:
+    case 'complete':
+      break;
+    default:
+      // Not known yet (no completion loaded) or not a kind this browser knows: neutral, never "No failure seen".
       return trials === 0
         ? { label: NO_TRIALS_RUN, tone: 'idle', title }
         : { label: FINISHED, scope: trialsPhrase(trials), tone: 'idle', title };
-    default:
-      break;
   }
   if (trials === 0) return { label: NO_TRIALS_RUN, tone: 'idle', title };
   return { label: NO_FAILURE_SEEN, scope: trialsPhrase(trials), tone: 'good', title };

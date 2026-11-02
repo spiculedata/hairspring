@@ -85,6 +85,7 @@ pre { overflow: auto; background: var(--card); border: 1px solid var(--line); bo
   table.runs time { display: none; }
   .steps-note { display: block; font-size: .8rem; }
 }
+table.failures td { overflow-wrap: anywhere; vertical-align: top; }
 /* Activity log: one titled line per event, with the raw event behind a disclosure. */
 ol.activity { list-style: none; padding: 0; margin: 0; max-height: 22rem; overflow: auto; }
 ol.activity li { padding: .35rem 0; border-bottom: 1px solid var(--line); }

@@ -169,9 +169,11 @@ export function workersText(contributing: number, untrusted: number): string {
   return untrusted > 0 ? `${base}, ${formatCount(untrusted)} not trusted` : base;
 }
 
+export const NO_FAILURES_YET = 'No failures reported yet.';
+
 /** F16: what the Failures section says when a run has no failure records. Built from the server's headline. */
 export function noFailuresText(args: { live: boolean; headline: string | undefined }): string {
-  if (args.live) return 'No failures reported yet.';
+  if (args.live) return NO_FAILURES_YET;
   if (args.headline) return args.headline;
   return 'No failure records for this run, and its property counts are not available.';
 }
@@ -202,15 +204,14 @@ export function excludedText(e: { degraded: number; perturbing: number; inconclu
   return parts.length === 0 ? undefined : `Excluded from every rate: ${parts.join(', ')}.`;
 }
 
+/** The failures list is cut at its limit, and says so, so a full page is not read as the whole history. */
+export const failuresListCutOff = (shown: number): string => `Showing the newest ${formatCount(shown)} failures. There may be older ones.`;
+
 // ---- Replay of a bundle ----
 
 /** What one replay of a stored bundle says. It is one more run of the same steps, so it never says "confirmed". */
 export const REPLAY_FAILED_AGAIN = 'Failed again on replay';
 export const REPLAY_DID_NOT_FAIL = 'Did not fail on replay';
-
-export function replayVerdict(failedAgain: boolean): string {
-  return `${failedAgain ? REPLAY_FAILED_AGAIN : REPLAY_DID_NOT_FAIL}.`;
-}
 
 export const REPLAY_CAVEAT =
   'A replay runs the stored steps once more on this server. It shows whether this bundle fails here, now. One replay is not a confirmation, and it does not show how often the failure occurs or that it is fixed.';

@@ -47,6 +47,11 @@ export function runPath(runId: string): string {
   return RUN_ID.test(runId) ? `/runs/${runId}` : '/';
 }
 
+/** A failure's page, or undefined if the id is not plain (letters, digits, underscore, hyphen), so no other path can be reached. */
+export function failurePath(failureId: string): string | undefined {
+  return RUN_ID.test(failureId) ? `/failures/${failureId}` : undefined;
+}
+
 /** The failure page of a run's trial that ran a seed (a decimal string). Undefined if either piece is not valid. */
 export function seedPath(runId: string, seed: string): string | undefined {
   return RUN_ID.test(runId) && isDigits(seed, MAX_SEED_DIGITS) ? `/runs/${runId}/seeds/${seed}` : undefined;
@@ -63,6 +68,7 @@ export type Route =
   | { name: 'seeds'; id: string }
   | { name: 'trial'; id: string; seq: string }
   | { name: 'seed'; id: string; seed: string }
+  | { name: 'failures' }
   | { name: 'failure'; id: string }
   | { name: 'targets' }
   | { name: 'workers' }
@@ -80,6 +86,7 @@ export function matchRoute(path: string): Route {
   if (parts.length === 4 && parts[0] === 'runs' && parts[2] === 'seeds' && isDigits(parts[3], MAX_SEED_DIGITS)) {
     return { name: 'seed', id: parts[1], seed: parts[3] };
   }
+  if (parts.length === 1 && parts[0] === 'failures') return { name: 'failures' };
   if (parts.length === 2 && parts[0] === 'failures') return { name: 'failure', id: parts[1] };
   if (parts.length === 1 && parts[0] === 'targets') return { name: 'targets' };
   if (parts.length === 1 && parts[0] === 'workers') return { name: 'workers' };
