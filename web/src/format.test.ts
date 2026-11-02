@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { absoluteTime, timeOfDay, formatDuration, formatSeedInput, relativeTime, stateTone } from './format';
+import { absoluteTime, timeOfDay, formatDuration, formatSeedInput, relativeTime } from './format';
 
 describe('relativeTime', () => {
   const now = 1_000_000_000_000;
@@ -20,17 +20,6 @@ describe('formatDuration', () => {
     expect(formatDuration(850)).toBe('850 ms');
     expect(formatDuration(12_340)).toBe('12.3 s');
     expect(formatDuration(125_000)).toBe('2m 5s');
-  });
-});
-
-describe('stateTone', () => {
-  it('maps run states to display tones', () => {
-    expect(stateTone('passed')).toBe('good');
-    expect(stateTone('failed')).toBe('bad');
-    expect(stateTone('error')).toBe('bad');
-    expect(stateTone('running')).toBe('busy');
-    expect(stateTone('queued')).toBe('idle');
-    expect(stateTone('cancelled')).toBe('idle');
   });
 });
 

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, streamRunEvents } from '../api';
 import { ActivityLog } from '../components/ActivityLog';
 import { Link } from '../components/Layout';
-import { StateBadge } from '../components/Badge';
+import { StatusBadge } from '../components/StatusBadge';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { FirstFailingSeed } from '../explorer/FirstFailingSeed';
 import { PropertyOverviewPanel } from '../explorer/PropertyOverviewPanel';
@@ -56,7 +56,7 @@ export function RunPage({ id }: { id: string }) {
         <Link to="/">← Runs</Link>
       </p>
       <h1>
-        {run.target} <StateBadge state={run.state} trials={run.trials} completion={properties.page?.header.completion} />
+        {run.target} <StatusBadge kind="run" state={run.state} trials={run.trials} completion={properties.page?.header.completion} />
       </h1>
       <dl className="facts">
         <dt>Run</dt>

@@ -60,11 +60,7 @@ table.props tbody td, table.props tbody th { padding: 8px .5rem; border-bottom: 
 .error-notice { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
 .error-notice .error { margin: .5rem 0; }
 
-.status { font-weight: 600; white-space: nowrap; }
-.status-violation { color: var(--bad); }
-.status-unmet { color: var(--gap); }
-.status-pass { color: var(--good); }
-.status-unrated { color: var(--muted); }
+.status { white-space: nowrap; }
 
 .rate-cell { display: block; }
 .rate-bar { display: block; position: relative; height: 6px; margin-top: 4px; background: var(--line); border-radius: 3px; }

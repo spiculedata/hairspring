@@ -2,10 +2,11 @@ import type { ReactNode } from 'react';
 import { GuestText } from '../components/GuestText';
 import { Link } from '../components/Layout';
 import { RateCell } from '../components/RateCell';
+import { StatusBadge } from '../components/StatusBadge';
 import { seedPath } from '../router';
 import { seedsPath, type SeedFilters } from '../seeds/filters';
 import type { PropertyRow } from '../types';
-import { formatCount, seedListLabel, seenInInconclusive, statusLabel, statusMark } from '../wording';
+import { formatCount, seedListLabel, seenInInconclusive } from '../wording';
 import { DEFAULT_ROOT_FONT_PX, ROW_CHROME_PX, rowHeightPx } from './rowHeight';
 
 /** Height of every row at the default root font size; the table uses `rowHeightPx(root)` for the reader's own. */
@@ -87,9 +88,9 @@ export function PropertyRowView({
   const clip = clipHeightPx(rowHeight);
   return (
     <tr aria-rowindex={rowIndex} style={{ height: rowHeight }}>
-      <td className={`status status-${row.status}`}>
+      <td className="status">
         <Clip height={clip}>
-          <span aria-hidden="true">{statusMark(row.status)}</span> {statusLabel(row.status)}
+          <StatusBadge kind="property" status={row.status} />
         </Clip>
       </td>
       <td>

@@ -139,12 +139,12 @@ describe('stylesheet use of the tokens', () => {
 
   it('gives every status badge a mark as well as a word and a colour, as generated content with no spoken text', () => {
     const marks = new Set<string>();
-    for (const tone of ['good', 'bad', 'busy', 'idle']) {
+    for (const tone of ['good', 'bad', 'busy', 'idle', 'gap']) {
       const m = new RegExp(`\\.badge-${tone}::before \\{[^}]*content: '([^']+)' / ''`).exec(rules);
       expect(m, `badge-${tone}`).not.toBeNull();
       marks.add(m![1]);
     }
-    expect(marks.size).toBe(4);
+    expect(marks.size).toBe(5);
   });
 });
 

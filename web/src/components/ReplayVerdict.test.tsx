@@ -7,7 +7,7 @@ describe('ReplayVerdict', () => {
     const html = renderToString(<ReplayVerdict failedAgain />);
     expect(html).toContain('Failed again on replay');
     expect(html).toContain('One replay is not a confirmation');
-    expect(html).toContain('class="error"');
+    expect(html).toContain('badge-bad');
   });
 
   it('says "Did not fail on replay" and does not claim the bug is fixed', () => {
@@ -15,12 +15,13 @@ describe('ReplayVerdict', () => {
     expect(html).toContain('Did not fail on replay');
     expect(html).toContain('One replay is not a confirmation');
     expect(html).not.toMatch(/no longer fails|has been fixed|now passes/i);
-    expect(html).toContain('class="ok"');
+    expect(html).toContain('badge-idle');
+    expect(html).not.toContain('badge-good');
   });
 
-  it('keeps the caveat out of the verdict colour', () => {
+  it('keeps the caveat out of the verdict badge', () => {
     const html = renderToString(<ReplayVerdict failedAgain />);
-    expect(html).toMatch(/<p class="error">Failed again on replay\.<\/p>/);
+    expect(html).toMatch(/<p><span class="badge badge-bad">Failed again on replay<\/span><\/p>/);
     expect(html).toMatch(/<p class="muted">[^<]*One replay is not a confirmation/);
   });
 

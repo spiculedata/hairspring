@@ -110,12 +110,8 @@ export function statusLabel(status: PropertyStatus): string {
   return STATUS_LABELS[status];
 }
 
-/** A non-colour cue repeated beside the status text, so meaning never rests on colour alone. */
-const STATUS_MARKS: Record<PropertyStatus, string> = { violation: '✕', unmet: '△', unrated: '?', pass: '✓' };
-
-export function statusMark(status: PropertyStatus): string {
-  return STATUS_MARKS[status];
-}
+/** The label for any server status or state word this browser does not know. It is neutral, never a pass. */
+export const UNKNOWN_LABEL = 'Unknown';
 
 /** A caveat code from the server as words; an unknown code is shown, never dropped. */
 export function caveatLabel(code: string): string {
@@ -209,8 +205,11 @@ export function excludedText(e: { degraded: number; perturbing: number; inconclu
 // ---- Replay of a bundle ----
 
 /** What one replay of a stored bundle says. It is one more run of the same steps, so it never says "confirmed". */
+export const REPLAY_FAILED_AGAIN = 'Failed again on replay';
+export const REPLAY_DID_NOT_FAIL = 'Did not fail on replay';
+
 export function replayVerdict(failedAgain: boolean): string {
-  return failedAgain ? 'Failed again on replay.' : 'Did not fail on replay.';
+  return `${failedAgain ? REPLAY_FAILED_AGAIN : REPLAY_DID_NOT_FAIL}.`;
 }
 
 export const REPLAY_CAVEAT =

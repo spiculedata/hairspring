@@ -52,7 +52,7 @@ describe('runOutcome for a passed run whose completion is known', () => {
   });
 
   it('shows a run still going as running, not as an outcome', () => {
-    expect(passed(3, { kind: 'running' })).toMatchObject({ label: 'running', tone: 'busy' });
+    expect(passed(3, { kind: 'running' })).toMatchObject({ label: 'Running', tone: 'busy' });
   });
 });
 
@@ -68,14 +68,22 @@ describe('runOutcome for a passed run whose completion is not known', () => {
 });
 
 describe('runOutcome for the other states', () => {
-  it('leaves them as the server sent them, without a scope', () => {
+  it('takes their words from the status table, without a scope', () => {
     for (const state of ['queued', 'running', 'failed', 'error', 'cancelled']) {
       const o = runOutcome({ state, trials: 3, completion: { kind: 'complete' } });
-      expect(o.label).toBe(state);
+      expect(o.label).toBe(state[0].toUpperCase() + state.slice(1));
       expect(o.scope).toBeUndefined();
     }
     expect(runOutcome({ state: 'failed', trials: 3 }).tone).toBe('bad');
     expect(runOutcome({ state: 'running', trials: 3 }).tone).toBe('busy');
+  });
+
+  it('shows a state it does not know as a neutral "Unknown" and keeps the server word in the title', () => {
+    expect(runOutcome({ state: 'succeeded', trials: 3, completion: { kind: 'complete' } })).toEqual({
+      label: 'Unknown',
+      tone: 'idle',
+      title: 'Server state: succeeded',
+    });
   });
 
   it('keeps the server word for a tooltip', () => {
