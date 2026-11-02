@@ -20,6 +20,10 @@ describe('App: the document title follows the route', () => {
     window.history.pushState({}, '', '/targets');
     render(<App />);
     expect(document.title).toBe('Targets · Hairspring');
+    act(() => navigate('/'));
+    expect(document.title).toBe('Overview · Hairspring');
+    act(() => navigate('/runs'));
+    expect(document.title).toBe('Runs · Hairspring');
     act(() => navigate('/workers'));
     expect(document.title).toBe('Workers · Hairspring');
     act(() => navigate('/failures'));

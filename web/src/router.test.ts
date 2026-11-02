@@ -23,7 +23,9 @@ describe('trial routes', () => {
   it('keeps the existing routes', () => {
     expect(matchRoute('/runs/run_0123')).toEqual({ name: 'run', id: 'run_0123' });
     expect(matchRoute('/failures/f1')).toEqual({ name: 'failure', id: 'f1' });
-    expect(matchRoute('/')).toEqual({ name: 'runs' });
+    expect(matchRoute('/')).toEqual({ name: 'overview' });
+    expect(matchRoute('/runs')).toEqual({ name: 'runs' });
+    expect(matchRoute('/runs/')).toEqual({ name: 'runs' });
   });
 
   it('is not found for a number that is not plain digits, or one that is too long to be a seed', () => {

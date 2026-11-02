@@ -6,6 +6,7 @@ import { TokenPrompt } from './components/TokenPrompt';
 import { FailurePage } from './pages/FailurePage';
 import { FailuresPage } from './pages/FailuresPage';
 import { Targets, Workers } from './pages/Lists';
+import { OverviewPage } from './pages/OverviewPage';
 import { RunPage } from './pages/RunPage';
 import { Runs } from './pages/Runs';
 import { MissingPageContext } from './PageStatus';
@@ -47,6 +48,7 @@ export function App() {
     <Layout path={path} announcement={title}>
       <MissingPageContext.Provider value={reportMissing}>
       <div key={`${path}${route.name === 'seeds' ? search : ''}:${epoch}`}>
+        {route.name === 'overview' && <OverviewPage />}
         {route.name === 'runs' && <Runs />}
         {route.name === 'run' && <RunPage id={route.id} />}
         {route.name === 'seeds' && <SeedsPage id={route.id} />}
