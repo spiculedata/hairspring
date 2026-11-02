@@ -121,6 +121,24 @@ that does not finish within `trial_timeout_secs` is reported as inconclusive, ne
   small budget says only that those seeds did not fail. Raise `max_trials`, or run the `fixed` mode for comparison
   (the same program with a mutex).
 
+## Start a run or a sweep from the web UI
+
+With `hairspring serve` running, the Runs page of the web UI has a form that starts a run through `POST /api/runs`. Pick
+a target and a run type. A search (`Find a failure`) ends at its first confirmed failure, so it has no rate. A sweep
+(`Measure how often`) runs every trial of its budget, continues after a failure and stores every trial, so a rate can
+be stated for the trials it ran; a sweep with no failure says only that those trials did not fail.
+
+- The form shows the budget the server will enforce before you start: the target's trial and wall-clock budgets, and,
+  for a simulation (`sim`) target only, its step budget. A sweep can take a long time. It is bounded by those budgets,
+  and a cancel, or three host failures in a row, ends it early.
+- A sweep takes an optional number of trials, from 1 to 10,000 (the server clamps larger values to 10,000). The form
+  sends it inside the target's whole budget, so the target's steps and seconds are unchanged. It cannot change the
+  step or wall-clock budget.
+- The seed is optional, as on the command line.
+- Starting a run needs a token with the `run` role. Without one the server answers 403 ("this endpoint requires the
+  run role") and the form says the token cannot start runs.
+- Once the server accepts the run, the browser opens its page. Confirming a failure is not started from the browser.
+
 ## Replay a bundle
 
 ```bash

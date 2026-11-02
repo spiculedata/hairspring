@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { failureChecksUrl, getTokenVersion, isPropertyPage, onTokenChange, parseRetryAfter, propertiesUrl, setToken } from './api';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { api, failureChecksUrl, getTokenVersion, isPropertyPage, onTokenChange, parseRetryAfter, propertiesUrl, setToken } from './api';
 import { page } from './explorer/fixtures';
 import type { FailureChecks, FindingStatus } from './types';
 
@@ -101,5 +101,19 @@ describe('propertiesUrl', () => {
 
   it('leaves out an empty prefix', () => {
     expect(propertiesUrl('run_1', { q: '' })).toBe('/api/runs/run_1/properties');
+  });
+});
+
+describe('startRun', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('posts the body it is given to /api/runs, exactly, as JSON', async () => {
+    const fetchMock = vi.fn(async () => new Response('{"run":{"id":"run_1"}}', { status: 201 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await api.startRun({ target: 'pubsub-buggy', seed: 5, mode: 'sweep', budget: { max_steps: 200_000, max_trials: 40, wall_secs: 60 } });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('/api/runs');
+    expect(init.method).toBe('POST');
+    expect(init.body).toBe('{"target":"pubsub-buggy","seed":5,"mode":"sweep","budget":{"max_steps":200000,"max_trials":40,"wall_secs":60}}');
   });
 });

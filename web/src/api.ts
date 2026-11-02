@@ -1,4 +1,5 @@
 import { parseSse, type SseEvent } from './sse';
+import type { StartRunBody } from './startRun';
 import type { FailureChecks, FailureDetail, FailureSummary, PropertyPage, PropertyQuery, ReplayResult, Run, RunDetail, Target, Worker } from './types';
 
 const TOKEN_KEY = 'hairspring.token';
@@ -140,8 +141,7 @@ export const api = {
   targets: async () => (await request<{ targets: Target[] }>('/api/targets')).targets,
   runs: async (limit = 50) => (await request<{ runs: Run[] }>(`/api/runs?limit=${limit}`)).runs,
   run: (id: string) => request<RunDetail>(`/api/runs/${encodeURIComponent(id)}`),
-  startRun: (target: string, seed?: number) =>
-    request<{ run: Run }>('/api/runs', { method: 'POST', body: JSON.stringify({ target, seed }) }),
+  startRun: (body: StartRunBody) => request<{ run: Run }>('/api/runs', { method: 'POST', body: JSON.stringify(body) }),
   cancel: (id: string) => request<{ cancelled: boolean }>(`/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: '{}' }),
   failures: async (limit = 50) => (await request<{ failures: FailureSummary[] }>(`/api/failures?limit=${limit}`)).failures,
   failure: (id: string) => request<FailureDetail>(`/api/failures/${encodeURIComponent(id)}`),
