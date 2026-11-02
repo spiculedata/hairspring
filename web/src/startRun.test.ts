@@ -47,7 +47,7 @@ describe('buildStartRun for a sweep', () => {
     const r = buildStartRun(input({ mode: 'sweep', trialsText: t }));
     expect(r).toEqual({ ok: false, errors: { trials: 'Trials must be between 1 and 10,000' } });
   });
-  it.each([['abc'], ['1.5'], ['-3'], ['1e3'], ['+5'], ['4 0']])('refuses %s as not a whole number', (t) => {
+  it.each([['abc'], ['1.5'], ['-3'], ['1e3'], ['+5'], ['4 0'], ['007'], ['00'], ['010']])('refuses %s as not a whole number', (t) => {
     expect(buildStartRun(input({ mode: 'sweep', trialsText: t }))).toEqual({ ok: false, errors: { trials: 'Trials must be a whole number' } });
   });
   it('reports a bad seed and bad trials together, each by field', () => {
@@ -62,6 +62,16 @@ describe('buildStartRun for a sweep', () => {
     const copy = structuredClone(t);
     buildStartRun(input({ target: t, mode: 'sweep', trialsText: '5' }));
     expect(t).toEqual(copy);
+  });
+});
+
+describe('a target without a budget (an older server)', () => {
+  const bare = { name: 'old', kind: 'sim', description: 'd' } as unknown as Target;
+  it('sends no budget for a sweep, even with trials typed, and does not throw', () => {
+    expect(buildStartRun(input({ target: bare, mode: 'sweep', trialsText: '40' }))).toEqual({ ok: true, body: { target: 'old', mode: 'sweep' } });
+  });
+  it('has no enforced budget to show', () => {
+    expect(enforcedBudget(undefined, 'sweep', 40)).toBeUndefined();
   });
 });
 

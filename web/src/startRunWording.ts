@@ -12,11 +12,14 @@ export const SEARCH_EXPLAINED =
   'A search ends at its first confirmed failure, so its trial count was decided by its outcome and it has no rate.';
 
 export const SWEEP_EXPLAINED = [
-  'A sweep runs the same target many times and can take a long time. It ends at its trial, step or wall-clock budget, whichever comes first.',
+  'A sweep runs the same target many times and can take a long time.',
+  'It is bounded by the trial budget, the wall-clock budget and, for simulation targets, the step budget. A cancel, or three host failures in a row, ends it early.',
   'It runs every trial of its budget, continues after a failure and stores every trial, so a rate can be stated for the trials it ran.',
   'A sweep with no failure says only that those trials did not fail.',
 ] as const;
 
+/** The `kind` the server gives a simulation target; only such targets are bounded by the step budget (docs/architecture.md). */
+export const SIMULATION_KIND = 'sim';
 export const BUDGET_HEADING = 'Budget the server will enforce';
 export const TRIALS_LABEL = 'Trials (1 to 10,000)';
 export const TRIALS_PLACEHOLDER = "the target's own";

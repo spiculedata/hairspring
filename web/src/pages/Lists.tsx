@@ -20,7 +20,7 @@ export function Targets() {
             <tr key={x.name}>
               <td>{x.name}</td>
               <td>{x.kind}</td>
-              <td className="muted">{x.budget.max_steps.toLocaleString()} steps / {x.budget.wall_secs}s</td>
+              <td className="muted">{x.budget === undefined ? '' : `${x.budget.max_steps.toLocaleString()} steps / ${x.budget.wall_secs}s`}</td>
               <td>{x.description}</td>
             </tr>
           ))}

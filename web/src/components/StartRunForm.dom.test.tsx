@@ -41,9 +41,31 @@ describe('StartRunForm', () => {
     expect(budget()).toContain('60 seconds');
     fireEvent.change(q('select'), { target: { value: 'lock-lease' } });
     expect(budget()).toContain('50 trials');
-    expect(budget()).toContain('1,000,000 steps');
     expect(budget()).toContain('120 seconds');
     expect(container.textContent).not.toMatch(/proves?\b|guarantee|safe\b|no bugs/i);
+  });
+
+  it('shows the step budget only for a simulation target, since only simulations are bounded by it', () => {
+    const { q } = setup();
+    expect(q('.start-budget').textContent).toContain('Step budget');
+    fireEvent.change(q('select'), { target: { value: 'lock-lease' } });
+    expect(q('.start-budget').textContent).not.toContain('Step budget');
+    expect(q('.start-budget').textContent).not.toContain('steps');
+    expect(q('.start-budget').textContent).toContain('Trial budget');
+    expect(q('.start-budget').textContent).toContain('Wall-clock budget');
+  });
+
+  it('does not throw for a target with no budget: no budget rows, no trials field, and no budget sent', async () => {
+    const bare = [{ name: 'old', kind: 'sim', description: 'd' }] as unknown as Target[];
+    const start = vi.fn((_: StartRunBody) => ok());
+    const onStarted = vi.fn();
+    const { container } = render(<StartRunForm targets={bare} start={start} onStarted={onStarted} />);
+    expect(container.querySelector('.start-budget')).toBeNull();
+    pick(container, 'Measure how often');
+    expect(container.querySelector('input[name="trials"]')).toBeNull();
+    submit(container);
+    await waitFor(() => expect(onStarted).toHaveBeenCalled());
+    expect(JSON.stringify(start.mock.calls[0][0])).toBe('{"target":"old","mode":"sweep"}');
   });
 
   it('explains a search from the docs, and shows no trials field', () => {
@@ -59,7 +81,9 @@ describe('StartRunForm', () => {
     const t = q('.start-explain').textContent ?? '';
     expect(t).toContain('runs the same target many times');
     expect(t).toContain('can take a long time');
-    expect(t).toContain('trial, step or wall-clock budget');
+    expect(t).toContain('bounded by the trial budget, the wall-clock budget and, for simulation targets, the step budget');
+    expect(t).toContain('A cancel, or three host failures in a row, ends it early');
+    expect(t).not.toContain('whichever comes first');
     expect(t).toContain('says only that those trials did not fail');
     expect(container.querySelector('input[name="trials"]')).not.toBeNull();
   });
@@ -103,6 +127,32 @@ describe('StartRunForm', () => {
     expect(q('#seed-error').textContent).toBe('Seed must be a non-negative whole number');
     expect(q('input[name="trials"]').getAttribute('aria-invalid')).toBe('true');
     expect(q('input[name="trials"]').getAttribute('aria-describedby')).toContain('trials-error');
+  });
+
+  it('announces each field error, keeps it out of the input label, and ties it to the input', () => {
+    const { container, q } = setup();
+    pick(container, 'Measure how often');
+    fireEvent.change(q('input[name="trials"]'), { target: { value: '007' } });
+    fireEvent.change(q('input[name="seed"]'), { target: { value: 'x' } });
+    submit(container);
+    for (const id of ['trials-error', 'seed-error']) {
+      const err = q(`#${id}`);
+      expect(err.getAttribute('role')).toBe('alert');
+      expect(err.closest('label')).toBeNull();
+    }
+    expect(q('input[name="trials"]').closest('label')?.textContent).not.toContain('must be');
+    expect(q('#trials-error').textContent).toBe('Trials must be a whole number');
+  });
+
+  it('moves focus to the first invalid field on a failed submit: the seed before the trials', () => {
+    const { container, q } = setup();
+    pick(container, 'Measure how often');
+    fireEvent.change(q('input[name="trials"]'), { target: { value: '0' } });
+    submit(container);
+    expect(document.activeElement).toBe(q('input[name="trials"]'));
+    fireEvent.change(q('input[name="seed"]'), { target: { value: 'x' } });
+    submit(container);
+    expect(document.activeElement).toBe(q('input[name="seed"]'));
   });
 
   it('disables the button while the request is pending, so a second click cannot start a second run', async () => {

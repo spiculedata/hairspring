@@ -10,7 +10,8 @@ export interface Target {
   name: string;
   kind: string;
   description: string;
-  budget: Budget;
+  /** Absent from a server too old to send it. */
+  budget?: Budget;
 }
 
 export interface Run {

@@ -60,6 +60,7 @@ input, select, button { font: inherit; padding: .4rem .6rem; border-radius: 6px;
 button { cursor: pointer; background: var(--accent); color: var(--accent-ink); border-color: transparent; } button:disabled { opacity: .5; cursor: default; }
 button.linklike { background: none; color: var(--fg); border: 0; padding: .15rem 0; text-align: left; }
 .start-run { display: grid; gap: .75rem; max-width: 40rem; }
+.start-run .field { display: grid; gap: .25rem; }
 .start-run fieldset { border: 1px solid var(--line); border-radius: 6px; margin: 0; }
 .start-run .choice { flex-direction: row; align-items: center; gap: .5rem; font-size: 1rem; color: var(--fg); }
 .start-run .start-explain p { margin: .25rem 0; }

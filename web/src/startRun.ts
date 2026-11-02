@@ -40,13 +40,14 @@ type TrialsParse = { readonly ok: true; readonly value: number | undefined } | {
 function parseTrials(text: string): TrialsParse {
   const t = text.trim();
   if (t === '') return { ok: true, value: undefined };
-  if (!/^\d+$/.test(t)) return { ok: false, message: TRIALS_NOT_WHOLE };
+  if (!/^(0|[1-9]\d*)$/.test(t)) return { ok: false, message: TRIALS_NOT_WHOLE };
   const n = Number(t);
   return n >= 1 && n <= MAX_TRIALS ? { ok: true, value: n } : { ok: false, message: TRIALS_OUT_OF_RANGE };
 }
 
-/** The budget the server will hold a run to: the target's, with the chosen trials for a sweep, within the server's caps. */
-export function enforcedBudget(budget: Budget, mode: RunMode, trials?: number): Budget {
+/** The budget the server will hold a run to (none when the server did not send the target's): the target's, with the chosen trials for a sweep, within the server's caps. */
+export function enforcedBudget(budget: Budget | undefined, mode: RunMode, trials?: number): Budget | undefined {
+  if (budget === undefined) return undefined;
   return {
     max_steps: Math.min(budget.max_steps, MAX_STEPS),
     max_trials: Math.min(mode === 'sweep' && trials !== undefined ? trials : budget.max_trials, MAX_TRIALS),
@@ -57,7 +58,8 @@ export function enforcedBudget(budget: Budget, mode: RunMode, trials?: number): 
 /**
  * The request for the form as filled in, or the error of each field that is wrong. A budget is sent only for a sweep
  * with trials given, and then as a whole: the server replaces the target's budget with what it is sent, filling any
- * missing field with its default, so sending trials alone would change the steps and seconds too.
+ * missing field with its default, so sending trials alone would change the steps and seconds too. A target the server
+ * sent without a budget gets none from the form either.
  */
 export function buildStartRun({ target, mode, seedText, trialsText }: StartFormInput): StartFormResult {
   const seed = formatSeedInput(seedText);
@@ -71,7 +73,7 @@ export function buildStartRun({ target, mode, seedText, trialsText }: StartFormI
       target: target.name,
       ...(seed.value === undefined ? {} : { seed: seed.value }),
       mode,
-      ...(trials.value === undefined ? {} : { budget: { ...target.budget, max_trials: trials.value } }),
+      ...(trials.value === undefined || target.budget === undefined ? {} : { budget: { ...target.budget, max_trials: trials.value } }),
     },
   };
 }
