@@ -73,7 +73,7 @@ describe('a sweep', () => {
   });
   it('with several failed properties points to the table instead of choosing one rate', () => {
     const m = runPanelModel(input({ ...base, state: 'failed', sweep: sweepSummary(), failureCount: 2, failedPropertyCount: 2 }));
-    expect(m.shows).toContain('2 failed properties have a rate; each rate and its interval is in the property table.');
+    expect(m.shows).toContain('2 properties failed; any rate is in the property table.');
     expect(all(m)).not.toMatch(/Rate for the trials run: /);
   });
   it('with no failure says only that those trials did not fail', () => {

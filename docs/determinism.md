@@ -305,8 +305,10 @@ The web UI's failure page shows the same facts under "Confirmation" and "Checks"
 table lists every stored check with its result, its counts as recorded, what the runner said about the environment
 ("Environment differs from the recording" for an `environment differs` note or `environment_changed` of `true`), whether
 the runner was trusted, and whether the check belongs to the confirmation the finding comes from. A finding word the page
-does not know is shown as sent with a neutral "Unknown" badge. Above the table it says what Pass means (for the rerun,
-replay and strict verify, that the failure repeated; for the fixed control, that the fixed build is clean), and below it
+does not know is shown as sent with a neutral "Unknown" badge. Above the table it says what Pass and Fail mean (for the
+rerun and replay, Pass is that the failure repeated; for the strict verify, Pass is that the result file says verified
+with bitwise parity and a matched verdict and the verify run failed the way the recording did, and Fail is that the verify
+did not agree with the recording; for the fixed control, Pass is that the fixed build is clean), and below it
 says so when a check counted towards the finding came from a runner that is not trusted. A failure with no stored checks
 shows "No checks recorded. This failure has not been confirmed." with the `hairspring confirm <failure id>` command to
 run, and says it needs Hermit, which runs on Linux on x86-64.

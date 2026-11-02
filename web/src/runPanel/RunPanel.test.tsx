@@ -78,7 +78,7 @@ describe('RunPanel', () => {
     const filtered = renderToString(<RunPanel detail={d} page={page({ counts_by_status: { pass: 3 }, properties: [row({ status: 'pass' })] })} />);
     expect(text(filtered)).not.toContain('Rate for the trials run');
     const two = renderToString(<RunPanel detail={d} page={page({ counts_by_status: { violation: 2 }, properties: [row(), row({ idx: 1 })] })} />);
-    expect(text(two)).toContain('2 failed properties have a rate');
+    expect(text(two)).toContain('2 properties failed; any rate is in the property table.');
   });
 
   it('renders zero trials as nothing run, with a neutral badge', () => {

@@ -58,7 +58,7 @@ export const CHECK_STATUS_LABELS: Readonly<Record<string, string>> = Object.free
 
 export const CHECKS_HEADING = 'Checks';
 export const CHECKS_NOTE =
-  'For the same-seed rerun, the bundle replay and the strict verify, Pass means the failure repeated, and Fail means it did not. For the fixed control, Pass means the fixed build is clean at the seed. Inconclusive and Skipped show nothing either way. A claim uses only checks from trusted runners.';
+  'For the same-seed rerun and the bundle replay, Pass means the failure repeated, and Fail means it did not. For the strict verify, Pass means the result file says verified with bitwise parity and a matched verdict, and the verify run failed the way the recording did; Fail means the verify did not agree with the recording. For the fixed control, Pass means the fixed build is clean at the seed. Inconclusive and Skipped show nothing either way. A claim uses only checks from trusted runners.';
 export const UNTRUSTED_COUNTED_NOTE = 'Some checks counted here came from runners that are not trusted.';
 export const TABLE_CAPTION = 'Stored checks for this failure';
 export const OTHER_CONFIRMATION_NOTE =
