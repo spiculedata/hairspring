@@ -26,6 +26,8 @@ export interface Run {
   steps: number;
   trials: number;
   error: string | null;
+  /** `search` or `sweep` (docs/architecture.md, "Sweep mode"). Absent from a server too old to send it. */
+  mode?: string;
 }
 
 /** Where a failure stands, derived by the server from its stored confirmation checks. */
@@ -94,10 +96,29 @@ export interface RunPropertySummary {
   stopped_at_first_failure: boolean;
 }
 
+/** The server's own count of how every trial of a finished sweep ended (`sweep` of `GET /api/runs/{id}`). */
+export interface SweepSummary {
+  trials: number;
+  passes: number;
+  violations: number;
+  /** Timed out, or cut short by the wall-clock budget. */
+  inconclusive: number;
+  /** Finished, but their events could not be used. */
+  unusable: number;
+  /** The host failed ("failed in the host"). */
+  infra: number;
+  /** Decimal strings, lowest first, at most ten. */
+  first_failing_seeds: string[];
+}
+
 export interface RunDetail {
   run: Run;
   failures: FailureSummary[];
   properties?: RunPropertySummary;
+  /** Absent for a search, a run still going, and a sweep that ended short of its budget without reaching a limit. */
+  sweep?: SweepSummary;
+  /** The sweep ended in an error or was cancelled, so its counts are not offered as a rate. */
+  sweep_partial?: boolean;
 }
 
 export interface FailureDetail {
