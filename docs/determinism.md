@@ -299,6 +299,18 @@ them. `hairspring show` summarises the findings of a run. `hairspring confirm --
 object for a failure id or a bundle, an array with an entry per failure for a run id. The lines `hairspring confirm`
 prints are those of the confirmation the finding comes from, and it says when the one just stored did not finish.
 
+The web UI's failure page shows the same facts under "Confirmation" and "Checks". It starts nothing: it reads
+`GET /api/failures/{id}/checks` and shows the finding with its four rungs (`candidate`, `rerun_repeated`, `confirmed`,
+`verified`, the current one marked) and the two ends that are not rungs (`not_reproducible`, `control_failed`). The
+table lists every stored check with its result, its counts as recorded, what the runner said about the environment
+("Environment differs from the recording" for an `environment differs` note or `environment_changed` of `true`), whether
+the runner was trusted, and whether the check belongs to the confirmation the finding comes from. A finding word the page
+does not know is shown as sent with a neutral "Unknown" badge. Above the table it says what Pass means (for the rerun,
+replay and strict verify, that the failure repeated; for the fixed control, that the fixed build is clean), and below it
+says so when a check counted towards the finding came from a runner that is not trusted. A failure with no stored checks
+shows "No checks recorded. This failure has not been confirmed." with the `hairspring confirm <failure id>` command to
+run, and says it needs Hermit, which runs on Linux on x86-64.
+
 **What a stored `command` is.** A record of the invocation, not a line to paste and run. It names the program by file
 name, leaves out the per-run plumbing (summary file, events directory) and shows the strict verify's result file as
 `verify.json`. A real run clears the guest's environment and rebuilds it, sets `HAIRSPRING_SEED`, the backend's

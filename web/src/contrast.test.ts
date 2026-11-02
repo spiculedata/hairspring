@@ -158,7 +158,15 @@ describe('every stylesheet and the canvas code use the tokens', () => {
 
   it('finds the stylesheets, including any added since', () => {
     expect(cssFiles).toEqual(
-      expect.arrayContaining(['explorer/explorer.css', 'overview/overview.css', 'runPanel/runPanel.css', 'seeds/seeds.css', 'styles.css', 'trial/trial.css']),
+      expect.arrayContaining([
+        'components/confirmation.css',
+        'explorer/explorer.css',
+        'overview/overview.css',
+        'runPanel/runPanel.css',
+        'seeds/seeds.css',
+        'styles.css',
+        'trial/trial.css',
+      ]),
     );
   });
 
