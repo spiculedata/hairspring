@@ -47,6 +47,10 @@ describe('firstSafeTargetName', () => {
   it('is the first name made only of letters, digits, dot, underscore and hyphen', () => {
     expect(firstSafeTargetName([{ name: 'has space' }, { name: 'lock-lease' }])).toBe('lock-lease');
   });
+  it('needs a letter or digit first, so a name cannot read as an option or a path', () => {
+    expect(firstSafeTargetName([{ name: '--sweep' }, { name: '..' }, { name: '-x' }, { name: '.hidden' }, { name: '_x' }])).toBeUndefined();
+    expect(firstSafeTargetName([{ name: '--sweep' }, { name: 'a.b-c_d' }])).toBe('a.b-c_d');
+  });
   it('is undefined for no usable name', () => {
     expect(firstSafeTargetName([])).toBeUndefined();
     expect(firstSafeTargetName([{ name: '$(x)' }, { name: '' }])).toBeUndefined();

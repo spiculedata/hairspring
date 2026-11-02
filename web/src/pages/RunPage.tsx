@@ -53,7 +53,7 @@ export function RunPage({ id }: { id: string }) {
   return (
     <>
       <p>
-        <Link to="/">← Runs</Link>
+        <Link to="/runs">← Runs</Link>
       </p>
       <h1>
         {run.target} <StatusBadge kind="run" state={run.state} trials={run.trials} completion={properties.page?.header.completion} />

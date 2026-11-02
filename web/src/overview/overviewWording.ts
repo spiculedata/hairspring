@@ -41,12 +41,13 @@ export const guideTargets = (names: readonly string[], total: number): string =>
 
 export const GUIDE_STEP_LIST = 'See which targets the command line knows, including the built-in demos.';
 export const GUIDE_STEP_INIT = 'To test your own program, write a starter configuration file, then add a target to it.';
-export const GUIDE_STEP_RUN = 'Run a target with a seed. A violation prints the steps and where the bundle was written.';
+export const GUIDE_STEP_RUN = 'Run a target from hairspring targets with a seed. The server\'s list and the command line\'s may differ. A violation prints the steps and where the bundle was written.';
 export const GUIDE_STEP_REPLAY = 'Replay a bundle to run the recorded steps again.';
 export const GUIDE_STEP_BROWSER = 'Or start a run from the browser: the Runs page has a form for it.';
 export const GUIDE_NOT_A_RESULT = 'Whether a run finds anything depends on the target and the seed. A run that finds nothing says only that those trials did not fail.';
 export const GUIDE_PROCESS_NOTE =
   'The process backend, which runs an unmodified program, needs Linux on x86-64 with Hermit installed. docs/quickstart.md in the repository covers it. docs/support-matrix.md says which languages have passed the acceptance test, and on what.';
+export const lastGoodLoad = (what: string): string => `Showing the last successful load of ${what}.`;
 export const GUIDE_RUNS_LINK = 'Open the Runs page';
 
 export const CMD_TARGETS = 'hairspring targets';

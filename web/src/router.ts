@@ -42,7 +42,10 @@ const RUN_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 const isDigits = (s: string, max: number): boolean => s.length > 0 && s.length <= max && /^\d+$/.test(s);
 
-/** A run's page, or the home address if the id is not valid. */
+/**
+ * A run's page. An invalid id falls back to '/', which is the Overview page, not the run list (that is '/runs'). The
+ * fallback is kept because `seedsPath` reads '/' as "no valid run"; do not use this as a link to the run list.
+ */
 export function runPath(runId: string): string {
   return RUN_ID.test(runId) ? `/runs/${runId}` : '/';
 }

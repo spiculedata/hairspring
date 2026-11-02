@@ -113,6 +113,7 @@ describe('OverviewPage', () => {
       expect(container.textContent).toContain('This server lists 2 targets: lock-lease, pubsub-buggy.');
       const commands = [...container.querySelectorAll('.guide code')].map((c) => c.textContent);
       expect(commands).toContain('hairspring test lock-lease --seed 1');
+      expect(container.textContent).toContain('a target from hairspring targets');
       expect(container.querySelector('table')).toBeNull();
     });
 
@@ -220,6 +221,7 @@ describe('OverviewPage', () => {
       const { container } = await mount({ targets: 500 });
       expect(container.textContent).toContain('Could not load targets');
       expect(container.textContent).not.toContain('This server lists no targets.');
+      expect(container.textContent).toContain('The targets could not be loaded, so the commands below use a placeholder.');
       const commands = [...container.querySelectorAll('.guide code')].map((c) => c.textContent);
       expect(commands).toContain('hairspring test <target> --seed 1');
     });

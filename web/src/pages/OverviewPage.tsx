@@ -10,6 +10,7 @@ import {
   NO_ATTENTION_RUNS,
   OVERVIEW_HEADING,
   WORKERS_HEADING,
+  lastGoodLoad,
   attentionNone,
 } from '../overview/overviewWording';
 import type { FailureSummary, Run } from '../types';
@@ -65,15 +66,20 @@ export function OverviewPage() {
   const workers = usePolling(api.workers, WORKERS_POLL_MS);
   const targets = usePolling(api.targets, TARGETS_POLL_MS);
   const hasNoRuns = runs.data?.length === 0;
+  // After a failed poll the last good list may be out of date, so an empty one no longer shows the guide.
+  const isRunsEmpty = hasNoRuns && runs.error === undefined;
   const hasNoFailures = failures.data?.length === 0;
-  const showGuide = hasNoRuns;
+  const showGuide = isRunsEmpty;
   const showAttention = !(hasNoRuns && hasNoFailures);
   return (
     <>
       <h1>{OVERVIEW_HEADING}</h1>
       {runs.error && <LoadFailed what="runs" message={runs.error} />}
+      {runs.error && runs.data !== undefined && <p className="muted">{lastGoodLoad('runs')}</p>}
       {failures.error && <LoadFailed what="failures" message={failures.error} />}
+      {failures.error && failures.data !== undefined && <p className="muted">{lastGoodLoad('failures')}</p>}
       {workers.error && <LoadFailed what="workers" message={workers.error} />}
+      {workers.error && workers.data !== undefined && <p className="muted">{lastGoodLoad('workers')}</p>}
       {showGuide && targets.error && <LoadFailed what="targets" message={targets.error} />}
       <UpdatedAt at={runs.updatedAt} />
       {showGuide && <FirstRunGuide targets={targets.data} targetsFailed={targets.error !== undefined} />}

@@ -2,7 +2,7 @@ import type { FailureSummary, Run } from '../types';
 
 /** Run states that put a run in "needs attention": the two the server uses for a run that did not end well. */
 const ATTENTION_STATES: readonly string[] = ['failed', 'error'];
-const SAFE_NAME = /^[A-Za-z0-9._-]+$/;
+const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /** The runs newest first, as a new array; runs created at the same time keep the order the server sent them in. */
 function newestFirst(runs: readonly Run[]): Run[] {
@@ -22,7 +22,7 @@ export function recentRuns(runs: readonly Run[], limit: number): Run[] {
   return newestFirst(runs).slice(0, limit);
 }
 
-/** The first target name that is safe to show inside a command (no spaces or shell characters), or undefined. */
+/** The first target name that is safe to show inside a command (starts with a letter or digit, then only letters, digits, dot, underscore or hyphen, so it cannot read as an option or a path), or undefined. */
 export function firstSafeTargetName(targets: readonly { name: string }[]): string | undefined {
   return targets.find((t) => SAFE_NAME.test(t.name))?.name;
 }
