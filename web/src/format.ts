@@ -1,5 +1,3 @@
-export type Tone = 'good' | 'bad' | 'busy' | 'idle';
-
 export function relativeTime(ms: number, now: number = Date.now()): string {
   const secs = Math.floor((now - ms) / 1000);
   if (secs < 0) return 'just now';
@@ -29,20 +27,6 @@ export function formatDuration(ms: number): string {
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
   const secs = Math.round(ms / 1000);
   return `${Math.floor(secs / 60)}m ${secs % 60}s`;
-}
-
-export function stateTone(state: string): Tone {
-  switch (state) {
-    case 'passed':
-      return 'good';
-    case 'failed':
-    case 'error':
-      return 'bad';
-    case 'running':
-      return 'busy';
-    default:
-      return 'idle';
-  }
 }
 
 export type SeedParse = { ok: true; value: number | undefined } | { ok: false; message: string };

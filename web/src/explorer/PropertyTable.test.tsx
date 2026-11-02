@@ -70,8 +70,8 @@ describe('PropertyTable', () => {
     });
     const html = renderToString(<PropertyTable properties={[unmet]} />);
     expect(html).toContain('Never reached');
-    expect(html).toContain('status-unmet');
-    expect(html).not.toContain('status-violation');
+    expect(html).toContain('badge-gap');
+    expect(html).not.toContain('badge-bad');
     const body = html.slice(html.indexOf('<tbody'));
     expect(body).not.toMatch(/fail|violation/i);
     expect(body).toContain('coverage gap, not a finding');

@@ -1,5 +1,5 @@
 import type { Run } from '../types';
-import { StateBadge } from './Badge';
+import { StatusBadge } from './StatusBadge';
 import { Link } from './Layout';
 import { TimeStamp } from './TimeStamp';
 
@@ -25,7 +25,7 @@ export function RunsTable({ runs }: { runs: readonly Run[] }) {
             </td>
             <td>{r.target}</td>
             <td>
-              <StateBadge state={r.state} trials={r.trials} />
+              <StatusBadge kind="run" state={r.state} trials={r.trials} />
             </td>
             <td className="num opt">{r.steps.toLocaleString()}</td>
             <td>

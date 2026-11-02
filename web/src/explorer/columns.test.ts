@@ -6,7 +6,7 @@ import {
   FLEXIBLE_MIN_PX as TRIAL_FLEXIBLE_MIN_PX,
 } from '../seeds/columns';
 import { readSource } from '../readSource';
-import { statusLabel, statusMark } from '../wording';
+import { statusLabel } from '../wording';
 import {
   COLUMN_KEYS,
   COLUMN_WIDTHS_PX,
@@ -60,20 +60,23 @@ describe('property table column budget', () => {
 });
 
 describe('the status column shows every status label whole', () => {
-  // A conservative width for text at the 15px body size: 0.6em per character, plus the cell's 8px padding each side.
-  const BODY_PX = 15;
+  // A conservative width: 0.6em per character, plus the cell's 8px padding each side.
   const EM_PER_CHAR = 0.6;
   const PAD_PX = 16;
-  const longest = (['violation', 'unmet', 'unrated', 'pass'] as const).map((s) => `${statusMark(s)} ${statusLabel(s)}`).sort((a, b) => b.length - a.length)[0];
+  // The badge is 12px text with its mark (one character and a .3em gap), and .5rem padding and a 1px border each side.
+  const BADGE_PX = 12;
+  const BADGE_CHROME_PX = 18;
+  const longest = (['violation', 'unmet', 'unrated', 'pass'] as const).map((s) => `m ${statusLabel(s)}`).sort((a, b) => b.length - a.length)[0];
+  const badgeWidth = longest.length * EM_PER_CHAR * BADGE_PX + BADGE_CHROME_PX;
 
   it('is wide enough for the longest label on a desktop', () => {
-    expect(longest.length * EM_PER_CHAR * BODY_PX + PAD_PX).toBeLessThanOrEqual(COLUMN_WIDTHS_PX.status ?? 0);
+    expect(badgeWidth + PAD_PX).toBeLessThanOrEqual(COLUMN_WIDTHS_PX.status ?? 0);
   });
 
   it('is wide enough on a phone, where the stylesheet sets the first column in rem', () => {
     const m = /table\.props col:nth-child\(1\) \{ width: ([\d.]+)rem/.exec(explorerCss);
     expect(m).not.toBeNull();
-    expect(longest.length * EM_PER_CHAR * BODY_PX + PAD_PX).toBeLessThanOrEqual(Number(m![1]) * 16);
+    expect(badgeWidth + PAD_PX).toBeLessThanOrEqual(Number(m![1]) * 16);
   });
 
   it('keeps the phone table as wide as its three columns', () => {

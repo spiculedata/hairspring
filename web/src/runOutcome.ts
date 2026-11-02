@@ -1,4 +1,4 @@
-import { stateTone, type Tone } from './format';
+import { runStateEntry, type Tone } from './statusMap';
 import type { RunCompletion } from './types';
 import { formatCount } from './wording';
 
@@ -32,15 +32,15 @@ const trialsPhrase = (n: number): string => `${formatCount(n)} ${n === 1 ? 'tria
  * The outcome shown for a run. A run the server calls `passed` is never shown as "passed": that reads as a clean bill
  * of health. "No failure seen" needs two things: the run's completion is known and it finished, and at least one trial
  * ran. Until the completion is known the label is the neutral "Finished". The word "planned" is used only when the
- * server sent a planned count (a run cut short by a time or step limit). Every other state is shown as sent.
+ * server sent a planned count (a run cut short by a time or step limit). Every other state comes from the status table; one it does not know is a neutral "Unknown".
  */
 export function runOutcome({ state, trials, completion }: RunOutcomeInput): RunOutcome {
   const title = `Server state: ${state}`;
-  if (state !== 'passed') return { label: state, tone: stateTone(state), title };
+  if (state !== 'passed') return { ...runStateEntry(state), title };
   const stopped = (scope: string): RunOutcome => ({ label: STOPPED_EARLY, scope, tone: 'idle', title });
   switch (completion?.kind) {
     case 'running':
-      return { label: 'running', tone: 'busy', title };
+      return { ...runStateEntry('running'), title };
     case 'stopped_at_first_failure':
       return { label: STOPPED_AT_FIRST_FAILURE, tone: 'bad', title };
     case 'aborted':
