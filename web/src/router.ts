@@ -42,7 +42,10 @@ const RUN_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 const isDigits = (s: string, max: number): boolean => s.length > 0 && s.length <= max && /^\d+$/.test(s);
 
-/** A run's page, or the run list if the id is not valid. */
+/**
+ * A run's page. An invalid id falls back to '/', which is the Overview page, not the run list (that is '/runs'). The
+ * fallback is kept because `seedsPath` reads '/' as "no valid run"; do not use this as a link to the run list.
+ */
 export function runPath(runId: string): string {
   return RUN_ID.test(runId) ? `/runs/${runId}` : '/';
 }
@@ -63,6 +66,7 @@ export function trialPath(runId: string, seq: number): string | undefined {
 }
 
 export type Route =
+  | { name: 'overview' }
   | { name: 'runs' }
   | { name: 'run'; id: string }
   | { name: 'seeds'; id: string }
@@ -76,7 +80,8 @@ export type Route =
 
 export function matchRoute(path: string): Route {
   const parts = path.split('/').filter(Boolean);
-  if (parts.length === 0 || (parts.length === 1 && parts[0] === 'runs')) return { name: 'runs' };
+  if (parts.length === 0) return { name: 'overview' };
+  if (parts.length === 1 && parts[0] === 'runs') return { name: 'runs' };
   if (parts.length === 2 && parts[0] === 'runs') return { name: 'run', id: parts[1] };
   if (parts.length === 3 && parts[0] === 'runs' && parts[2] === 'seeds' && RUN_ID.test(parts[1])) return { name: 'seeds', id: parts[1] };
   if (parts.length === 4 && parts[0] === 'runs' && !RUN_ID.test(parts[1])) return { name: 'notfound' };

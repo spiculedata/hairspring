@@ -14,7 +14,7 @@ describe('NotFound', () => {
     const html = renderToString(<NotFound what="run" />);
     expect(html).toContain('This run does not exist');
     expect(html).toContain('may have been removed');
-    expect(html).toMatch(/<a href="\/"[^>]*>[^<]*Runs/);
+    expect(html).toMatch(/<a href="\/runs"[^>]*>[^<]*Runs/);
     expect(html).toContain('role="alert"');
   });
   it('says so for a page that does not exist, and to check the address', () => {

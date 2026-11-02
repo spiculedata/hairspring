@@ -1,0 +1,14 @@
+/* Overview page. Colours come from the tokens in styles.css only. */
+.guide { margin: 1rem 0; }
+.guide h2 { margin-top: 0; }
+.guide-steps { padding-left: 1.5rem; }
+.guide-steps li { margin: .75rem 0; }
+.guide-command { margin: .35rem 0 0; max-width: 100%; }
+.guide-command code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.overview-list { list-style: none; margin: .5rem 0; padding: 0; }
+.overview-list li { padding: .5rem 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.overview-detail { margin-top: .25rem; font-size: .9rem; }
+.overview-list .time-relative { display: inline; margin-left: .5rem; }
+@media (max-width: 40rem) {
+  .overview-list .time-relative { display: block; margin-left: 0; }
+}

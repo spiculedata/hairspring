@@ -157,7 +157,9 @@ describe('every stylesheet and the canvas code use the tokens', () => {
   const LITERAL = /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/;
 
   it('finds the stylesheets, including any added since', () => {
-    expect(cssFiles).toEqual(expect.arrayContaining(['explorer/explorer.css', 'seeds/seeds.css', 'styles.css', 'trial/trial.css']));
+    expect(cssFiles).toEqual(
+      expect.arrayContaining(['explorer/explorer.css', 'overview/overview.css', 'runPanel/runPanel.css', 'seeds/seeds.css', 'styles.css', 'trial/trial.css']),
+    );
   });
 
   it('writes no colour literal in any stylesheet outside the token blocks of styles.css', () => {

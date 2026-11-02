@@ -8,6 +8,7 @@ describe('pageTitle', () => {
   it('gives every page its own title ending in the product name', () => {
     const titles = [
       title('/'),
+      title('/runs'),
       title('/runs/run_12'),
       title('/runs/run_12/seeds'),
       title('/runs/run_12/trials/7'),
@@ -29,7 +30,8 @@ describe('pageTitle', () => {
     expect(title('/runs/run_12/seeds')).toBe('Seeds of run run_12 · Hairspring');
     expect(title('/failures')).toBe('Failures · Hairspring');
     expect(title('/failures/f_9')).toBe('Failure f_9 · Hairspring');
-    expect(title('/')).toBe('Runs · Hairspring');
+    expect(title('/')).toBe('Overview · Hairspring');
+    expect(title('/runs')).toBe('Runs · Hairspring');
   });
 
   it('says so when the page does not exist', () => {

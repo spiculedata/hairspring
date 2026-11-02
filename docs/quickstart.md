@@ -121,6 +121,21 @@ that does not finish within `trial_timeout_secs` is reported as inconclusive, ne
   small budget says only that those seeds did not fail. Raise `max_trials`, or run the `fixed` mode for comparison
   (the same program with a mutex).
 
+## The Overview page
+
+With `hairspring serve` running, the web UI opens on the Overview page (the address `/`). The list of runs, with the form
+that starts one, is the Runs page at `/runs`. Overview shows only what the server sends:
+
+- **Needs attention**: runs whose state is `failed` or `error` among the newest 20 runs, and the newest stored failures.
+  When neither list has an entry it says which runs it looked at; it does not say that anything is fine.
+- **Recent runs**: the newest five runs, each with its status badge.
+- **Workers**: how many workers the server lists and when one was last heard from. It does not say what they are doing.
+- **No runs yet**: when the server has no stored runs, the page lists the next steps from this guide
+  (`hairspring targets`, `hairspring init`, `hairspring test <target> --seed 1`, `hairspring replay`). A list or a count
+  that could not be loaded is reported by name and is never shown as empty.
+
+The page loads again by itself every few seconds.
+
 ## Start a run or a sweep from the web UI
 
 With `hairspring serve` running, the Runs page of the web UI has a form that starts a run through `POST /api/runs`. Pick
