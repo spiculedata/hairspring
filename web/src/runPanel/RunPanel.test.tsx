@@ -52,20 +52,33 @@ describe('RunPanel', () => {
     expect(lists.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('renders the search failure case', () => {
+  it('renders a failure with no sweep summary', () => {
     const d = detail({ state: 'failed', trials: 4 }, { properties: { first_failing_seed: '1016', stopped_at_first_failure: true }, failures: [] });
     const html = renderToString(<RunPanel detail={d} page={withCompletion({ kind: 'stopped_at_first_failure' })} />);
     expect(text(html)).toContain('A failure: seed 1016 failed.');
-    expect(text(html)).toContain('it has no rate');
+    expect(text(html)).toContain('no rate is stated here');
   });
 
   it('renders the sweep rate with the interval from the failed property row', () => {
     const d = detail(
-      { state: 'failed', trials: 100, mode: 'sweep' },
+      { state: 'failed', trials: 100, mode: 'search' },
       { sweep: { trials: 100, passes: 97, violations: 3, inconclusive: 0, unusable: 0, infra: 0, first_failing_seeds: ['1016'] } },
     );
     const html = renderToString(<RunPanel detail={d} page={page({ properties: [row()] })} />);
     expect(text(html)).toContain('Rate for the trials run: 3/4,790 · 0.06% · [0.02%–0.18%]');
+  });
+
+  it('prints the single rate line only when the page holds the one failed property in full', () => {
+    const d = detail(
+      { state: 'failed', trials: 100, mode: 'search' },
+      { sweep: { trials: 100, passes: 97, violations: 3, inconclusive: 0, unusable: 0, infra: 0, first_failing_seeds: ['1016'] } },
+    );
+    const more = renderToString(<RunPanel detail={d} page={page({ next_cursor: 'c2' })} />);
+    expect(text(more)).not.toContain('Rate for the trials run');
+    const filtered = renderToString(<RunPanel detail={d} page={page({ counts_by_status: { pass: 3 }, properties: [row({ status: 'pass' })] })} />);
+    expect(text(filtered)).not.toContain('Rate for the trials run');
+    const two = renderToString(<RunPanel detail={d} page={page({ counts_by_status: { violation: 2 }, properties: [row(), row({ idx: 1 })] })} />);
+    expect(text(two)).toContain('2 failed properties have a rate');
   });
 
   it('renders zero trials as nothing run, with a neutral badge', () => {
@@ -83,7 +96,7 @@ describe('RunPanel', () => {
 
   it('escapes nothing from the program under test: no property ids or messages are shown', () => {
     const r = row({ guest: { id: 'secret.id', msg: '<b>boom</b>', loc: null } });
-    const d = detail({ state: 'failed', mode: 'sweep', trials: 100 }, { sweep: { trials: 100, passes: 97, violations: 3, inconclusive: 0, unusable: 0, infra: 0, first_failing_seeds: [] } });
+    const d = detail({ state: 'failed', mode: 'search', trials: 100 }, { sweep: { trials: 100, passes: 97, violations: 3, inconclusive: 0, unusable: 0, infra: 0, first_failing_seeds: [] } });
     const html = renderToString(<RunPanel detail={d} page={page({ properties: [r] })} />);
     expect(html).not.toContain('secret.id');
     expect(html).not.toContain('boom');

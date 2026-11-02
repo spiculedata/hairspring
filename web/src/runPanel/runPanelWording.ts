@@ -35,12 +35,9 @@ export const MARKED_FAILED_SHOWS = 'The server marked the run failed.';
 export const firstFailingSeed = (seed: string): string => `The first failing seed is ${seed}.`;
 export const NOT_CONFIRMED_NOT = 'That a failure is confirmed: no failure of this run has a confirmed or verified status.';
 
-// ---- Search ----
-/** The sentence of startRunWording.ts SEARCH_EXPLAINED, as a limit of what the run shows. */
-export const SEARCH_NO_RATE_NOT =
-  'How often it fails: a search ends at its first confirmed failure, so its trial count was decided by its outcome and it has no rate.';
-export const searchNoFailure = (n: number): string => `${trialsPhrase(n)} ran and none of them failed.`;
-export const SEARCH_NO_FAILURE_NOT = 'That the target cannot fail: only those trials were run.';
+// ---- A run with no sweep summary ----
+// The server's run detail reports mode "search" for sweeps too, so these sentences never depend on the mode.
+export const NO_FAILURE_NOT = 'That the target cannot fail: only those trials were run.';
 
 // ---- Sweep ----
 export const sweepCounts = (trials: number, passes: number, violations: number): string =>
@@ -58,7 +55,7 @@ export const sweepNothingRated = (trials: number): string => `${trialsPhrase(tri
 export const SWEEP_NOTHING_RATED_NOT = 'Whether the target fails: no trial was rated.';
 export const SWEEP_PARTIAL_RATE_NOT =
   'A rate: the sweep stopped when something happened, so the figures are counts only and stopping then can bias them.';
-export const SWEEP_NO_SUMMARY_NOT = 'A rate: the server gave no sweep summary for this run, so the figures are counts only.';
+export const SWEEP_NO_SUMMARY_NOT = 'A sweep rate: the server gave no sweep summary for this run, so no rate is stated here.';
 
 /** Trials that are in no rate: listed apart by the server, never described as passes. Empty when there are none. */
 export function notInAnyRate(s: { inconclusive: number; unusable: number; infra: number }): string | undefined {
@@ -70,11 +67,13 @@ export function notInAnyRate(s: { inconclusive: number; unusable: number; infra:
   return parts.length === 0 ? undefined : `Not in any rate: ${parts.join(', ')}.`;
 }
 
+export const SWEEP_DISAGREES_NOT =
+  'Whether the target fails: the sweep counts show no failing trial but the run has a failure, so no claim is made.';
+
 // ---- Stopped early, partial, or not yet known ----
 export const stoppedEarlyNot = (label: string | undefined): string =>
   label === undefined
     ? 'The run stopped early or its trial data is incomplete. The figures are counts of the trials that ran, not a rate.'
     : `How the run ended, as the server marks it: ${label}. The figures are counts of the trials that ran, not a rate.`;
 export const COMPLETION_NOT_LOADED_NOT = 'How the run ended: its completion has not loaded.';
-export const UNKNOWN_MODE_NOT = 'How the trials were chosen: the run mode is not one this page knows.';
 export const UNVERIFIED_NOT = 'That the trial data is trustworthy: it includes unverified worker data.';

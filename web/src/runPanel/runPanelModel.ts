@@ -1,4 +1,4 @@
-import type { Excluded, FindingStatus, RateCellData, RunCompletion, SweepSummary } from '../types';
+import { FINDING_STATUSES, type Excluded, FindingStatus, RateCellData, RunCompletion, SweepSummary } from '../types';
 import { excludedText, rateText } from '../wording';
 import * as w from './runPanelWording';
 
@@ -6,8 +6,6 @@ import * as w from './runPanelWording';
 export interface RunPanelInput {
   /** `run.state` as sent. */
   readonly state: string;
-  /** `run.mode` as sent; absent from an old server. */
-  readonly mode: string | undefined;
   /** `run.trials`. */
   readonly trials: number;
   /** The property page's `header.completion`; absent until the page has loaded. */
@@ -21,8 +19,10 @@ export interface RunPanelInput {
   readonly failureCount: number;
   /** `properties.first_failing_seed`. */
   readonly firstFailingSeed?: string | null;
-  /** The rate cells (kind `rate`) of the failed properties on the loaded page. */
+  /** The rate cell of the failed property, given only when the loaded page holds the one failed property in full. */
   readonly failedRates: readonly RateCellData[];
+  /** `counts_by_status.violation` of the property page, when it has loaded. */
+  readonly failedPropertyCount?: number;
   /** Each failure's finding status; `undefined` where the server did not send one. */
   readonly findings: ReadonlyArray<FindingStatus | undefined>;
   readonly excluded?: Excluded;
@@ -38,7 +38,8 @@ export interface RunPanelModel {
 const LIVE_STATES = new Set(['queued', 'running']);
 const ERRORED_STATES = new Set(['error', 'cancelled']);
 const FINISHED_STATES = new Set(['passed', 'failed']);
-const CONFIRMED: ReadonlySet<FindingStatus | undefined> = new Set<FindingStatus>(['confirmed', 'verified']);
+const CONFIRMED: ReadonlySet<string> = new Set<FindingStatus>(['confirmed', 'verified']);
+const KNOWN_FINDINGS: ReadonlySet<string> = new Set<string>(FINDING_STATUSES);
 
 const only = (lines: ReadonlyArray<string | undefined>): string[] => lines.filter((l): l is string => l !== undefined);
 
@@ -85,19 +86,9 @@ function earlyResult(i: RunPanelInput): RunPanelModel | undefined {
   return undefined;
 }
 
-function searchLines(i: RunPanelInput, stoppedEarly: boolean): RunPanelModel {
-  if (hasFailure(i)) {
-    return { shows: failureLines(i), doesNotShow: only([w.SEARCH_NO_RATE_NOT, stoppedEarly ? w.stoppedEarlyNot(i.completionLabel) : undefined]) };
-  }
-  if (stoppedEarly) return { shows: [w.trialsRan(i.trials)], doesNotShow: [w.stoppedEarlyNot(i.completionLabel)] };
-  if (i.completion === undefined) return { shows: [w.trialsRan(i.trials)], doesNotShow: [w.COMPLETION_NOT_LOADED_NOT] };
-  return { shows: [w.searchNoFailure(i.trials)], doesNotShow: [w.SEARCH_NO_FAILURE_NOT] };
-}
-
-function rateLines(rates: readonly RateCellData[]): string[] {
-  if (rates.length === 0) return [];
-  if (rates.length > 1) return [w.severalRates(rates.length)];
-  return [w.rateForTrialsRun(rateText(rates[0]))];
+function rateLines(i: RunPanelInput): string[] {
+  if ((i.failedPropertyCount ?? 0) > 1) return [w.severalRates(i.failedPropertyCount ?? 0)];
+  return i.failedRates.length === 1 ? [w.rateForTrialsRun(rateText(i.failedRates[0]))] : [];
 }
 
 /** A sweep the server gave a summary for, that ran to its plan: the one case a rate may be stated. */
@@ -106,6 +97,8 @@ function sweepWithSummary(i: RunPanelInput, s: SweepSummary): RunPanelModel {
   const apart = w.notInAnyRate(s);
   if (rated === 0) return { shows: [w.sweepNothingRated(s.trials)], doesNotShow: only([w.SWEEP_NOTHING_RATED_NOT, apart]) };
   if (s.violations === 0) {
+    // The counts and the run disagree: say the counts and make no claim.
+    if (hasFailure(i)) return { shows: [w.trialsRan(s.trials), ...failureLines(i)], doesNotShow: only([w.SWEEP_DISAGREES_NOT, apart]) };
     return { shows: [w.trialsRan(s.trials), w.sweepNoFailure(rated)], doesNotShow: only([w.SWEEP_NO_FAILURE_NOT, apart]) };
   }
   const seed = i.firstFailingSeed ?? s.first_failing_seeds[0];
@@ -114,41 +107,47 @@ function sweepWithSummary(i: RunPanelInput, s: SweepSummary): RunPanelModel {
       w.sweepCounts(s.trials, s.passes, s.violations),
       w.ratedFailed(s.violations, rated),
       seed ? w.firstFailingSeed(seed) : undefined,
-      ...rateLines(i.failedRates),
+      ...rateLines(i),
     ]),
     doesNotShow: only([w.SWEEP_OUTSIDE_NOT, apart]),
   };
 }
 
-function sweepLines(i: RunPanelInput, stoppedEarly: boolean): RunPanelModel {
+/** Counts only: the run's completion is not known yet, or it stopped early, or the server gave no sweep summary. */
+function countsOnly(i: RunPanelInput, stoppedEarly: boolean): RunPanelModel {
   const s = i.sweep;
-  if (s && !stoppedEarly) return sweepWithSummary(i, s);
-  const counts = s ? w.sweepPartialCounts(s.trials, s.violations) : w.trialsRan(i.trials);
-  const noRate = i.sweepPartial ? w.SWEEP_PARTIAL_RATE_NOT : s ? undefined : w.SWEEP_NO_SUMMARY_NOT;
+  const failure = hasFailure(i);
+  const noRate = i.sweepPartial ? w.SWEEP_PARTIAL_RATE_NOT : !s && (failure || stoppedEarly) && i.completion !== undefined ? w.SWEEP_NO_SUMMARY_NOT : undefined;
   return {
-    shows: only([counts, ...(s ? [] : i.failureCount > 0 ? failureLines(i) : [])]),
-    doesNotShow: only([stoppedEarly ? w.stoppedEarlyNot(i.completionLabel) : undefined, noRate]),
+    shows: only([s ? w.sweepPartialCounts(s.trials, s.violations) : w.trialsRan(i.trials), ...(!s && failure ? failureLines(i) : [])]),
+    doesNotShow: only([
+      i.completion === undefined ? w.COMPLETION_NOT_LOADED_NOT : undefined,
+      stoppedEarly ? w.stoppedEarlyNot(i.completionLabel) : undefined,
+      noRate,
+      !s && !failure && !stoppedEarly && i.completion !== undefined ? w.NO_FAILURE_NOT : undefined,
+    ]),
   };
 }
 
+/**
+ * The server's run detail reports mode "search" for sweeps as well, so the mode is never read. Only a sweep carries a
+ * summary (and only once it is over), so a summary is the one sign of a sweep; without one the panel says nothing that
+ * depends on the mode.
+ */
 function modeLines(i: RunPanelInput, stoppedEarly: boolean): RunPanelModel {
-  if (i.mode === 'search') return searchLines(i, stoppedEarly);
-  if (i.mode === 'sweep') return sweepLines(i, stoppedEarly);
-  return {
-    shows: only([w.trialsRan(i.trials), ...(hasFailure(i) ? failureLines(i) : [])]),
-    doesNotShow: only([w.UNKNOWN_MODE_NOT, stoppedEarly ? w.stoppedEarlyNot(i.completionLabel) : undefined, i.completion === undefined ? w.COMPLETION_NOT_LOADED_NOT : undefined]),
-  };
+  if (i.sweep && i.completion !== undefined && !stoppedEarly) return sweepWithSummary(i, i.sweep);
+  return countsOnly(i, stoppedEarly);
 }
 
 function noFailureConfirmed(i: RunPanelInput): boolean {
-  return i.failureCount > 0 && i.findings.length > 0 && i.findings.every((f) => f !== undefined && !CONFIRMED.has(f));
+  return i.failureCount > 0 && i.findings.length > 0 && i.findings.every((f) => f !== undefined && KNOWN_FINDINGS.has(f) && !CONFIRMED.has(f));
 }
 
 /**
  * What a run shows and what it does not, in plain sentences. Every sentence comes from a server field or from wording
  * already in the repository (runPanelWording.ts). A run that is going, errored, cancelled, in a state this page does not
  * know, or that ran no trial makes no result claim; "none of them failed" is said only for a finished, complete run whose
- * completion is known, and a rate only for a sweep the server gave a full summary for.
+ * completion is known and the server gave a sweep summary, and a rate only for a sweep the server gave a full summary for.
  */
 export function runPanelModel(i: RunPanelInput): RunPanelModel {
   const early = earlyResult(i);

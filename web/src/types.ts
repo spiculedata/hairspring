@@ -26,12 +26,15 @@ export interface Run {
   steps: number;
   trials: number;
   error: string | null;
-  /** `search` or `sweep` (docs/architecture.md, "Sweep mode"). Absent from a server too old to send it. */
+  /** The stored column, which reads `search` for sweeps as well (issue #132): do not decide anything from it. */
   mode?: string;
 }
 
 /** Where a failure stands, derived by the server from its stored confirmation checks. */
 export type FindingStatus = 'candidate' | 'rerun_repeated' | 'confirmed' | 'verified' | 'not_reproducible' | 'control_failed';
+
+/** Every finding status this browser knows; one the server adds later is not in this list. */
+export const FINDING_STATUSES: readonly FindingStatus[] = ['candidate', 'rerun_repeated', 'confirmed', 'verified', 'not_reproducible', 'control_failed'];
 
 /** A failure's standing in one line. Present on the failures of `GET /api/runs/{id}`, absent from other lists. */
 export interface FindingSummary {
