@@ -10,6 +10,7 @@ import { usePropertyOverview } from '../explorer/usePropertyOverview';
 import { Loading, NotFound } from '../components/Notices';
 import { TimeStamp } from '../components/TimeStamp';
 import { useReportMissing } from '../PageStatus';
+import { RunPanel } from '../runPanel/RunPanel';
 import { UpdatedAt } from '../components/UpdatedAt';
 import { formatDuration } from '../format';
 import { seedsPath } from '../seeds/filters';
@@ -90,6 +91,11 @@ export function RunPage({ id }: { id: string }) {
         </button>
       )}
       {cancelMsg && <span className="muted"> {cancelMsg}</span>}
+      {detail.data && (
+        <ErrorBoundary label="What this run shows" onRetry={detail.reload}>
+          <RunPanel detail={detail.data} page={properties.page} />
+        </ErrorBoundary>
+      )}
       <ErrorBoundary label="Property table" onRetry={properties.reload}>
         <PropertyOverviewPanel model={properties} />
       </ErrorBoundary>

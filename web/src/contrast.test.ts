@@ -156,8 +156,8 @@ describe('every stylesheet and the canvas code use the tokens', () => {
   const NAMED_IN_CODE = new RegExp(`['"\`](?:${NAMED})['"\`]`, 'i');
   const LITERAL = /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/;
 
-  it('finds all four stylesheets', () => {
-    expect(cssFiles).toEqual(['explorer/explorer.css', 'seeds/seeds.css', 'styles.css', 'trial/trial.css']);
+  it('finds the stylesheets, including any added since', () => {
+    expect(cssFiles).toEqual(expect.arrayContaining(['explorer/explorer.css', 'seeds/seeds.css', 'styles.css', 'trial/trial.css']));
   });
 
   it('writes no colour literal in any stylesheet outside the token blocks of styles.css', () => {

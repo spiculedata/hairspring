@@ -26,10 +26,15 @@ export interface Run {
   steps: number;
   trials: number;
   error: string | null;
+  /** The stored column, which reads `search` for sweeps as well (issue #132): do not decide anything from it. */
+  mode?: string;
 }
 
 /** Where a failure stands, derived by the server from its stored confirmation checks. */
 export type FindingStatus = 'candidate' | 'rerun_repeated' | 'confirmed' | 'verified' | 'not_reproducible' | 'control_failed';
+
+/** Every finding status this browser knows; one the server adds later is not in this list. */
+export const FINDING_STATUSES: readonly FindingStatus[] = ['candidate', 'rerun_repeated', 'confirmed', 'verified', 'not_reproducible', 'control_failed'];
 
 /** A failure's standing in one line. Present on the failures of `GET /api/runs/{id}`, absent from other lists. */
 export interface FindingSummary {
@@ -94,10 +99,29 @@ export interface RunPropertySummary {
   stopped_at_first_failure: boolean;
 }
 
+/** The server's own count of how every trial of a finished sweep ended (`sweep` of `GET /api/runs/{id}`). */
+export interface SweepSummary {
+  trials: number;
+  passes: number;
+  violations: number;
+  /** Timed out, or cut short by the wall-clock budget. */
+  inconclusive: number;
+  /** Finished, but their events could not be used. */
+  unusable: number;
+  /** The host failed ("failed in the host"). */
+  infra: number;
+  /** Decimal strings, lowest first, at most ten. */
+  first_failing_seeds: string[];
+}
+
 export interface RunDetail {
   run: Run;
   failures: FailureSummary[];
   properties?: RunPropertySummary;
+  /** Absent for a search, a run still going, and a sweep that ended short of its budget without reaching a limit. */
+  sweep?: SweepSummary;
+  /** The sweep ended in an error or was cancelled, so its counts are not offered as a rate. */
+  sweep_partial?: boolean;
 }
 
 export interface FailureDetail {
