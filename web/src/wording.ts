@@ -205,7 +205,7 @@ export function excludedText(e: { degraded: number; perturbing: number; inconclu
 }
 
 /** The failures list is cut at its limit, and says so, so a full page is not read as the whole history. */
-export const failuresListCutOff = (shown: number): string => `Showing the newest ${formatCount(shown)} failures. Older ones are not listed.`;
+export const failuresListCutOff = (shown: number): string => `Showing the newest ${formatCount(shown)} failures. There may be older ones.`;
 
 // ---- Replay of a bundle ----
 

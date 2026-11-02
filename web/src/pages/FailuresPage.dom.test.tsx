@@ -53,13 +53,13 @@ describe('FailuresPage', () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ failures: many })));
     const { container } = render(<FailuresPage />);
     await waitFor(() => expect(container.querySelectorAll('tbody tr')).toHaveLength(50));
-    expect(container.textContent).toContain('Showing the newest 50 failures. Older ones are not listed.');
+    expect(container.textContent).toContain('Showing the newest 50 failures. There may be older ones.');
   });
 
   it('does not say the list is cut off when it is shorter than the limit', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ failures: [row('f_a', 1)] })));
     const { container } = render(<FailuresPage />);
     await waitFor(() => expect(container.querySelectorAll('tbody tr')).toHaveLength(1));
-    expect(container.textContent).not.toContain('Older ones');
+    expect(container.textContent).not.toContain('There may be older ones');
   });
 });
