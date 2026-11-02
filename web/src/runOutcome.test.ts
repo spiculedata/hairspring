@@ -67,6 +67,20 @@ describe('runOutcome for a passed run whose completion is not known', () => {
   });
 });
 
+describe('runOutcome for a completion kind it does not know', () => {
+  const unknown = { kind: 'something_new' } as unknown as RunCompletion;
+
+  it('is a neutral "Finished", never "No failure seen", so an unknown server value cannot look like a pass', () => {
+    const o = passed(30, unknown);
+    expect(o).toMatchObject({ label: 'Finished', scope: '30 trials', tone: 'idle' });
+    expect(o.label).not.toBe('No failure seen');
+  });
+
+  it('is "No trials run" when no trial ran', () => {
+    expect(passed(0, unknown)).toMatchObject({ label: 'No trials run', tone: 'idle' });
+  });
+});
+
 describe('runOutcome for the other states', () => {
   it('takes their words from the status table, without a scope', () => {
     for (const state of ['queued', 'running', 'failed', 'error', 'cancelled']) {

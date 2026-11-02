@@ -208,10 +208,6 @@ export function excludedText(e: { degraded: number; perturbing: number; inconclu
 export const REPLAY_FAILED_AGAIN = 'Failed again on replay';
 export const REPLAY_DID_NOT_FAIL = 'Did not fail on replay';
 
-export function replayVerdict(failedAgain: boolean): string {
-  return `${failedAgain ? REPLAY_FAILED_AGAIN : REPLAY_DID_NOT_FAIL}.`;
-}
-
 export const REPLAY_CAVEAT =
   'A replay runs the stored steps once more on this server. It shows whether this bundle fails here, now. One replay is not a confirmation, and it does not show how often the failure occurs or that it is fixed.';
 
