@@ -23,7 +23,7 @@ export function formatPct(fraction: number): string {
   return `${(clamped * 100).toFixed(2)}%`;
 }
 
-function plural(n: number, one: string, many: string): string {
+export function plural(n: number, one: string, many: string): string {
   return `${formatCount(n)} ${n === 1 ? one : many}`;
 }
 
