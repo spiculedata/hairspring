@@ -4,6 +4,8 @@ const PRODUCT = 'Hairspring';
 
 function heading(route: Route): string {
   switch (route.name) {
+    case 'overview':
+      return 'Overview';
     case 'runs':
       return 'Runs';
     case 'run':

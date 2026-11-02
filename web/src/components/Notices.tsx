@@ -13,9 +13,9 @@ export function NotFound({ what }: { what: 'run' | 'trial' | 'failure' | 'page' 
   return (
     <p className="error" role="alert">
       {what === 'page' ? (
-        <>There is no page at this address. Check the address, or go to <Link to="/">Runs</Link>.</>
+        <>There is no page at this address. Check the address, or go to <Link to="/runs">Runs</Link>.</>
       ) : (
-        <>{`This ${what} does not exist here. It may have been removed.`} Go back to <Link to="/">Runs</Link>.</>
+        <>{`This ${what} does not exist here. It may have been removed.`} Go back to <Link to="/runs">Runs</Link>.</>
       )}
     </p>
   );
