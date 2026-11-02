@@ -21,6 +21,17 @@ describe('Layout', () => {
     expect(html).not.toMatch(/<a href="\/targets" aria-current/);
   });
 
+  it('has a Failures link, marked current on the list only, and the nav order is Runs, Failures, Targets, Workers', () => {
+    const html = render('/failures');
+    expect(html).toMatch(/<a href="\/failures" aria-current="page"/);
+    expect(html.match(/aria-current="page"/g)).toHaveLength(1);
+    const order = ['href="/"', 'href="/failures"', 'href="/targets"', 'href="/workers"'].map((s) => html.indexOf(s));
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(isNavActive('/failures', '/failures')).toBe(true);
+    expect(isNavActive('/', '/failures')).toBe(false);
+    expect(isNavActive('/failures', '/failures/f_1')).toBe(false);
+  });
+
   it('counts a run, its seeds, its trials and a failure as part of Runs', () => {
     for (const path of ['/', '/runs/run_1', '/runs/run_1/seeds', '/runs/run_1/trials/3', '/failures/f_1']) {
       expect(isNavActive('/', path), path).toBe(true);

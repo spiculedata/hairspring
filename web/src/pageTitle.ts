@@ -14,6 +14,8 @@ function heading(route: Route): string {
       return `Trial ${route.seq} of run ${route.id}`;
     case 'seed':
       return `Seed ${route.seed} of run ${route.id}`;
+    case 'failures':
+      return 'Failures';
     case 'failure':
       return `Failure ${route.id}`;
     case 'targets':

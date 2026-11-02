@@ -22,6 +22,8 @@ describe('App: the document title follows the route', () => {
     expect(document.title).toBe('Targets · Hairspring');
     act(() => navigate('/workers'));
     expect(document.title).toBe('Workers · Hairspring');
+    act(() => navigate('/failures'));
+    expect(document.title).toBe('Failures · Hairspring');
     act(() => navigate('/runs/run_12'));
     expect(document.title).toBe('Run run_12 · Hairspring');
     act(() => navigate('/nowhere'));

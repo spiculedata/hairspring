@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { matchRoute, seedPath, trialPath } from './router';
+import { failurePath, matchRoute, seedPath, trialPath } from './router';
+
+describe('the failures list route', () => {
+  it('matches /failures, with or without a trailing slash, apart from one failure', () => {
+    expect(matchRoute('/failures')).toEqual({ name: 'failures' });
+    expect(matchRoute('/failures/')).toEqual({ name: 'failures' });
+    expect(matchRoute('/failures/f_1')).toEqual({ name: 'failure', id: 'f_1' });
+  });
+  it('builds a failure path only from a plain id', () => {
+    expect(failurePath('f_0123')).toBe('/failures/f_0123');
+    expect(failurePath('../x')).toBeUndefined();
+    expect(failurePath('a b')).toBeUndefined();
+  });
+});
 
 describe('trial routes', () => {
   it('matches a trial by sequence number and a seed by its decimal string', () => {

@@ -12,6 +12,7 @@ describe('pageTitle', () => {
       title('/runs/run_12/seeds'),
       title('/runs/run_12/trials/7'),
       title('/runs/run_12/seeds/1016'),
+      title('/failures'),
       title('/failures/f_9'),
       title('/targets'),
       title('/workers'),
@@ -26,6 +27,7 @@ describe('pageTitle', () => {
     expect(title('/runs/run_12/trials/7')).toBe('Trial 7 of run run_12 · Hairspring');
     expect(title('/runs/run_12/seeds/1016')).toBe('Seed 1016 of run run_12 · Hairspring');
     expect(title('/runs/run_12/seeds')).toBe('Seeds of run run_12 · Hairspring');
+    expect(title('/failures')).toBe('Failures · Hairspring');
     expect(title('/failures/f_9')).toBe('Failure f_9 · Hairspring');
     expect(title('/')).toBe('Runs · Hairspring');
   });

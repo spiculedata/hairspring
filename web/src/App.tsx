@@ -4,6 +4,7 @@ import { Layout } from './components/Layout';
 import { NotFound } from './components/Notices';
 import { TokenPrompt } from './components/TokenPrompt';
 import { FailurePage } from './pages/FailurePage';
+import { FailuresPage } from './pages/FailuresPage';
 import { Targets, Workers } from './pages/Lists';
 import { RunPage } from './pages/RunPage';
 import { Runs } from './pages/Runs';
@@ -49,6 +50,7 @@ export function App() {
         {route.name === 'runs' && <Runs />}
         {route.name === 'run' && <RunPage id={route.id} />}
         {route.name === 'seeds' && <SeedsPage id={route.id} />}
+        {route.name === 'failures' && <FailuresPage />}
         {route.name === 'failure' && <FailurePage id={route.id} />}
         {route.name === 'trial' &&
           (validTrial ? <TrialPage runId={route.id} seq={Number(route.seq)} /> : <NotFound what="page" />)}
