@@ -1,4 +1,5 @@
 import type { PropertyStatus } from './types';
+import { CHECK_STATUS_LABELS, FINDING_LABELS } from './confirmationWording';
 import { REPLAY_DID_NOT_FAIL, REPLAY_FAILED_AGAIN, UNKNOWN_LABEL, statusLabel } from './wording';
 
 /**
@@ -9,7 +10,7 @@ import { REPLAY_DID_NOT_FAIL, REPLAY_FAILED_AGAIN, UNKNOWN_LABEL, statusLabel } 
  * "passed" is not in the run table on purpose: a run's pass word is shown by `runOutcome`, which needs the trial count
  * and the completion before it may say "No failure seen".
  */
-export type Tone = 'good' | 'bad' | 'busy' | 'idle' | 'gap';
+export type Tone = 'good' | 'bad' | 'busy' | 'idle' | 'gap' | 'confirm';
 
 export interface StatusEntry {
   readonly label: string;
@@ -49,3 +50,27 @@ export const REPLAY_STATUSES = Object.freeze({
 export const runStateEntry = (state: string): StatusEntry => lookup(RUN_STATES, state);
 export const propertyStatusEntry = (status: string): StatusEntry => lookup(PROPERTY_STATUSES, status);
 export const replayEntry = (failedAgain: boolean): StatusEntry => (failedAgain ? REPLAY_STATUSES.failedAgain : REPLAY_STATUSES.didNotFail);
+
+/**
+ * Where a failure stands, by the six words the server derives from its stored checks. Only `confirmed` and `verified`
+ * take the confirmation tone; every other state, and any word this table does not have, is neutral. None is a pass tone.
+ */
+export const FINDING_STATES: Readonly<Record<string, StatusEntry>> = Object.freeze({
+  candidate: { label: FINDING_LABELS.candidate, tone: 'idle' },
+  rerun_repeated: { label: FINDING_LABELS.rerun_repeated, tone: 'idle' },
+  confirmed: { label: FINDING_LABELS.confirmed, tone: 'confirm' },
+  verified: { label: FINDING_LABELS.verified, tone: 'confirm' },
+  not_reproducible: { label: FINDING_LABELS.not_reproducible, tone: 'idle' },
+  control_failed: { label: FINDING_LABELS.control_failed, tone: 'idle' },
+});
+
+/** One stored check's result. Inconclusive and skipped checks show nothing either way, so they are neutral. */
+export const CHECK_STATUSES: Readonly<Record<string, StatusEntry>> = Object.freeze({
+  pass: { label: CHECK_STATUS_LABELS.pass, tone: 'good' },
+  fail: { label: CHECK_STATUS_LABELS.fail, tone: 'bad' },
+  inconclusive: { label: CHECK_STATUS_LABELS.inconclusive, tone: 'idle' },
+  skipped: { label: CHECK_STATUS_LABELS.skipped, tone: 'idle' },
+});
+
+export const findingEntry = (status: string): StatusEntry => lookup(FINDING_STATES, status);
+export const checkStatusEntry = (status: string): StatusEntry => lookup(CHECK_STATUSES, status);

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api } from '../api';
 import { useReportMissing } from '../PageStatus';
+import { FailureConfirmation } from '../components/FailureConfirmation';
 import { Link } from '../components/Layout';
 import { Loading, LoadFailed, NotFound } from '../components/Notices';
 import { ReplayVerdict } from '../components/ReplayVerdict';
@@ -54,6 +55,7 @@ export function FailurePage({ id }: { id: string }) {
       </div>
       {replayError && <p className="error" role="alert">{replayError}</p>}
       {replay && <ReplayVerdict failedAgain={replay.reproduced} />}
+      <FailureConfirmation failureId={id} />
       <ol className="timeline">
         {stepsToShow.map((s) => (
           <li key={s.index}>

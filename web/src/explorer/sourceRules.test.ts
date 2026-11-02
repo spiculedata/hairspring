@@ -59,7 +59,9 @@ describe('source rules (plan 7.2 item 1 and 5.7 rule 5)', () => {
     const checked = ALL.filter(([p]) => !p.endsWith('/types.ts'));
     expect(checked.some(([p]) => p.includes('/pages/'))).toBe(true);
     expect(checked.some(([p]) => p.includes('/trial/'))).toBe(true);
-    for (const [path, src] of checked) expect(code(src).replace(/\.reproduced\b/g, ''), path).not.toMatch(/reproduc/i);
+    // The server's own finding state `not_reproducible` is the one other use: its key and its label are the server's word.
+    const SERVER_STATE = /\.reproduced\b|\bnot_reproducible\b|'Not reproducible'/g;
+    for (const [path, src] of checked) expect(code(src).replace(SERVER_STATE, ''), path).not.toMatch(/reproduc/i);
   });
 
   it('never says a replay "still violated" the property: a replay is one more run, not a confirmation', () => {
@@ -71,7 +73,8 @@ describe('source rules (plan 7.2 item 1 and 5.7 rule 5)', () => {
   });
 
   it('never maps a status or class key to its own engine word as a label, in any case ("pass: \'pass\'", "violation: \'violation\'")', () => {
-    for (const [path, src] of ALL.filter(([p]) => !p.endsWith('/types.ts'))) {
+    // `confirmationWording.ts` labels the server's stored check statuses (`pass`, `fail`, `inconclusive`, `skipped`), which are not property statuses.
+    for (const [path, src] of ALL.filter(([p]) => !p.endsWith('/types.ts') && !p.endsWith('/confirmationWording.ts'))) {
       expect(code(src), path).not.toMatch(/\b(pass|violation|unmet)\s*:\s*['"`](pass|passed|violation|unmet)\b/i);
     }
   });

@@ -1,6 +1,6 @@
 import { runOutcome } from '../runOutcome';
 import type { Tone } from '../statusMap';
-import { propertyStatusEntry, replayEntry } from '../statusMap';
+import { checkStatusEntry, findingEntry, propertyStatusEntry, replayEntry } from '../statusMap';
 import type { RunCompletion } from '../types';
 
 export type StatusBadgeProps =
@@ -9,7 +9,11 @@ export type StatusBadgeProps =
   /** A property row's status, as the server sends it. */
   | { readonly kind: 'property'; readonly status: string }
   /** The result of replaying a bundle once. */
-  | { readonly kind: 'replay'; readonly failedAgain: boolean };
+  | { readonly kind: 'replay'; readonly failedAgain: boolean }
+  /** Where a failure stands, as the server derives it from its stored checks. */
+  | { readonly kind: 'finding'; readonly status: string }
+  /** One stored check's result. */
+  | { readonly kind: 'check'; readonly status: string };
 
 interface BadgeView {
   readonly label: string;
@@ -28,6 +32,10 @@ function viewOf(props: StatusBadgeProps): BadgeView {
       return { ...propertyStatusEntry(props.status), title: `Server status: ${props.status}` };
     case 'replay':
       return replayEntry(props.failedAgain);
+    case 'finding':
+      return { ...findingEntry(props.status), title: `Server state: ${props.status}` };
+    case 'check':
+      return { ...checkStatusEntry(props.status), title: `Server status: ${props.status}` };
   }
 }
 

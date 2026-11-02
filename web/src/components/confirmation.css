@@ -1,0 +1,15 @@
+/* The confirmation ladder and the check table on the failure page. Colours come from the status tokens in styles.css. */
+.badge-confirm { color: var(--confirm); background: var(--confirm-bg); border-color: var(--confirm-line); }
+.badge-confirm::before { content: '◆' / ''; }
+.ladder { list-style: none; margin: .75rem 0; padding: 0; display: grid; gap: .35rem; }
+.ladder li { display: flex; flex-wrap: wrap; gap: .25rem .75rem; align-items: baseline; padding: .4rem .6rem; border: 1px solid var(--border); border-radius: 6px; }
+.ladder li.ladder-current { border-color: var(--confirm-line); background: var(--confirm-bg); }
+.ladder-mark { font-size: .8rem; color: var(--text-muted); }
+.ladder-current .ladder-mark { color: var(--confirm); font-weight: 600; }
+.checks { font-size: .9rem; }
+.checks td { vertical-align: top; }
+.check-detail { margin: 0; }
+.check-detail div { display: flex; flex-wrap: wrap; gap: .25rem .5rem; }
+.check-detail dt { color: var(--text-muted); }
+.check-detail dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 640px) { .checks { display: block; overflow-x: auto; } }
