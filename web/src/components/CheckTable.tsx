@@ -8,6 +8,8 @@ import {
   ENV_MATCHES,
   ENV_NOT_REPORTED,
   OTHER_CONFIRMATION_NOTE,
+  TABLE_CAPTION,
+  UNTRUSTED_COUNTED_NOTE,
   countsText,
 } from '../confirmationWording';
 import type { CheckView } from '../types';
@@ -31,7 +33,8 @@ export function environmentText(detail: Readonly<Record<string, string>>): strin
   return detail.environment_changed === 'false' ? ENV_MATCHES : ENV_NOT_REPORTED;
 }
 
-function CheckRow({ check, inFinding }: { check: CheckView; inFinding: boolean }) {
+/** `inFinding` is undefined when the server names no confirmation, so no claim is made about the row. */
+function CheckRow({ check, inFinding }: { check: CheckView; inFinding: boolean | undefined }) {
   const kind = own(CHECK_KIND_LABELS, check.kind);
   const known = KNOWN_STATUSES.includes(check.status);
   const detail = Object.entries(check.guest.detail);
@@ -54,7 +57,7 @@ function CheckRow({ check, inFinding }: { check: CheckView; inFinding: boolean }
         <TimeStamp ms={check.started_at} />
       </td>
       <td>{check.runner_trusted ? 'Yes' : 'No'}</td>
-      <td>{inFinding ? 'Yes' : 'No'}</td>
+      {inFinding !== undefined && <td>{inFinding ? 'Yes' : 'No'}</td>}
       <td>
         <details>
           <summary>Details</summary>
@@ -89,34 +92,38 @@ function CheckRow({ check, inFinding }: { check: CheckView; inFinding: boolean }
  * confirmation other than the one the finding comes from is listed and marked as not counting towards it.
  */
 export function CheckTable({ checks, confirmationId }: { checks: readonly CheckView[]; confirmationId: string | null }) {
-  const anyOther = checks.some((c) => c.confirmation_id !== confirmationId);
+  const named = confirmationId !== null;
+  const counts = (c: CheckView): boolean | undefined => (named ? c.confirmation_id === confirmationId : undefined);
+  const anyOther = named && checks.some((c) => c.confirmation_id !== confirmationId);
+  const untrustedCounted = named && checks.some((c) => counts(c) === true && !c.runner_trusted);
   const differs = checks.some((c) => c.status === 'inconclusive' && environmentText(c.guest.detail) === ENV_DIFFERS);
+  const heads = ['Order', 'Check', 'Check result', 'Runs counted', 'Environment', 'Started', 'Trusted runner', ...(named ? ['Counts towards the finding'] : []), 'Details'];
   return (
     <section aria-labelledby="checks-heading">
       <h2 id="checks-heading">{CHECKS_HEADING}</h2>
-      <table className="checks">
-        <thead>
-          <tr>
-            <th className="num">Order</th>
-            <th>Check</th>
-            <th>Result</th>
-            <th>Runs counted</th>
-            <th>Environment</th>
-            <th>Started</th>
-            <th>Trusted runner</th>
-            <th>Counts towards the finding</th>
-            <th>Details</th>
-          </tr>
-        </thead>
-        <tbody>
-          {checks.map((c) => (
-            <CheckRow key={c.id} check={c} inFinding={c.confirmation_id === confirmationId} />
-          ))}
-        </tbody>
-      </table>
-      {differs && <p role="note">{ENVIRONMENT_DIFFERS_NOTE}</p>}
-      {anyOther && <p className="muted">{OTHER_CONFIRMATION_NOTE}</p>}
       <p className="muted">{CHECKS_NOTE}</p>
+      <div className="checks-scroll">
+        <table className="checks">
+          <caption className="sr-only">{TABLE_CAPTION}</caption>
+          <thead>
+            <tr>
+              {heads.map((h) => (
+                <th key={h} scope="col" className={h === 'Order' ? 'num' : undefined}>
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {checks.map((c) => (
+              <CheckRow key={c.id} check={c} inFinding={counts(c)} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {differs && <p role="note">{ENVIRONMENT_DIFFERS_NOTE}</p>}
+      {untrustedCounted && <p role="note">{UNTRUSTED_COUNTED_NOTE}</p>}
+      {anyOther && <p className="muted">{OTHER_CONFIRMATION_NOTE}</p>}
     </section>
   );
 }

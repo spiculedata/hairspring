@@ -31,7 +31,7 @@ export const FINDING_MEANINGS: Readonly<Record<string, string>> = Object.freeze(
 
 export const LADDER_HEADING = 'Confirmation';
 export const LADDER_NOTE =
-  'The server works out where a failure stands from the checks stored for it, using one confirmation. A state says how far the checks have repeated the failure. None of them says the failure is fixed.';
+  'The server works out where a failure stands from the checks stored for it, using one confirmation. None of the states says the failure is fixed.';
 export const CURRENT_MARK = 'Current';
 export const REACHED_MARK = 'Reached';
 export const NOT_REACHED_MARK = 'Not reached';
@@ -58,7 +58,9 @@ export const CHECK_STATUS_LABELS: Readonly<Record<string, string>> = Object.free
 
 export const CHECKS_HEADING = 'Checks';
 export const CHECKS_NOTE =
-  'A check passes when it showed what it set out to: for the reruns and the replay, that the failure repeats; for the fixed control, that the fixed build is clean at the seed. Inconclusive and skipped checks show nothing either way. A claim uses only checks from trusted runners.';
+  'For the same-seed rerun, the bundle replay and the strict verify, Pass means the failure repeated, and Fail means it did not. For the fixed control, Pass means the fixed build is clean at the seed. Inconclusive and Skipped show nothing either way. A claim uses only checks from trusted runners.';
+export const UNTRUSTED_COUNTED_NOTE = 'Some checks counted here came from runners that are not trusted.';
+export const TABLE_CAPTION = 'Stored checks for this failure';
 export const OTHER_CONFIRMATION_NOTE =
   'The finding is worked out from one confirmation. Checks from other confirmations are listed but do not count towards it.';
 export const ENVIRONMENT_DIFFERS_NOTE = 'inconclusive: environment differs from the recording; this does not show the bug is fixed';
@@ -67,8 +69,10 @@ export const ENV_MATCHES = 'Environment matches the recording';
 export const ENV_NOT_REPORTED = 'Not reported';
 
 export const NO_CHECKS_TEXT = 'No checks recorded. This failure has not been confirmed.';
-export const NO_CHECKS_HINT = 'To record checks, run:';
-export const noChecksCommand = (failureId: string): string => `hairspring confirm ${failureId}`;
+export const NO_CHECKS_HINT = 'To record checks, run the command below. It needs Hermit, which runs on Linux on x86-64.';
+const FAILURE_ID = /^fail_[0-9a-f]{16}$/;
+/** The command to record checks. An id not in the server's format is replaced by a placeholder, never echoed. */
+export const noChecksCommand = (failureId: string): string => `hairspring confirm ${FAILURE_ID.test(failureId) ? failureId : '<failure id>'}`;
 
 export function countsText(c: { passed: number; failed: number; inconclusive: number }): string {
   return `${formatCount(c.passed)} passed, ${formatCount(c.failed)} failed, ${formatCount(c.inconclusive)} inconclusive`;

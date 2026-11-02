@@ -30,6 +30,14 @@ function check(over: Partial<CheckView> = {}): CheckView {
   };
 }
 
+/** The text of one column's cell in each body row, found by its heading. */
+function columnValues(html: string, heading: string): string[] {
+  const heads = (html.match(/<th[^>]*>.*?<\/th>/g) ?? []).map(text);
+  const col = heads.indexOf(heading);
+  const rows = html.match(/<tbody>.*<\/tbody>/)?.[0].match(/<tr>.*?<\/tr>/g) ?? [];
+  return rows.map((r) => text((r.match(/<td[^>]*>.*?<\/td>/g) ?? [])[col] ?? ''));
+}
+
 describe('status map for findings and checks', () => {
   it.each([
     ['candidate', 'Candidate', 'idle'],
@@ -141,7 +149,8 @@ describe('ConfirmationLadder', () => {
   it('says no state means the failure is fixed', () => {
     for (const s of FINDINGS) {
       const t = text(renderToString(<ConfirmationLadder finding={s} environmentPinned />));
-      expect(t).toContain('None of them says the failure is fixed.');
+      expect(t).toContain('None of the states says the failure is fixed.');
+      expect(t).not.toContain('how far the checks have repeated');
       expect(t).not.toMatch(/\breproduced\b|\bresolved\b/i);
     }
   });
@@ -192,22 +201,59 @@ describe('CheckTable', () => {
     const html = renderToString(<CheckTable checks={[check({ guest: { command: 'x', detail: { environment_changed: 'false' } } })]} confirmationId="conf_a" />);
     expect(text(html)).not.toContain('this does not show the bug is fixed');
   });
-  it('marks checks outside the confirmation the finding comes from, and says why', () => {
-    const html = renderToString(
-      <CheckTable checks={[check({ id: 'a' }), check({ id: 'b', confirmation_id: 'conf_old', ordinal: 2 })]} confirmationId="conf_a" />,
-    );
-    const rows = html.match(/<tr>.*?<\/tr>/g) ?? [];
-    expect(text(rows[1])).toMatch(/Yes<\/?.*Yes|Yes.*Yes/);
-    expect(text(rows[2])).toMatch(/Yes.*No/);
+  it('shows Yes or No in the "Counts towards the finding" cell of each row, for a mixed list', () => {
+    const checks = [
+      check({ id: 'a', ordinal: 1 }),
+      check({ id: 'b', confirmation_id: 'conf_old', ordinal: 2 }),
+      check({ id: 'c', ordinal: 3 }),
+      check({ id: 'd', confirmation_id: 'conf_old', ordinal: 4 }),
+    ];
+    const html = renderToString(<CheckTable checks={checks} confirmationId="conf_a" />);
+    expect(columnValues(html, 'Counts towards the finding')).toEqual(['Yes', 'No', 'Yes', 'No']);
     expect(text(html)).toContain('Checks from other confirmations are listed but do not count towards it.');
   });
-  it('treats every check as outside when the server names no confirmation', () => {
-    const html = renderToString(<CheckTable checks={[check()]} confirmationId={null} />);
-    expect(text(html)).toContain('do not count towards it');
+  it('shows no other-confirmations note when every check is in the finding confirmation', () => {
+    const html = renderToString(<CheckTable checks={[check()]} confirmationId="conf_a" />);
+    expect(columnValues(html, 'Counts towards the finding')).toEqual(['Yes']);
+    expect(text(html)).not.toContain('other confirmations');
   });
-  it('shows trusted and untrusted runners in words', () => {
-    const html = renderToString(<CheckTable checks={[check({ runner_trusted: false })]} confirmationId="conf_a" />);
-    expect(text(html)).toContain('No');
+  it('makes no Counts-towards claim, and no other-confirmations note, when the server names no confirmation', () => {
+    const html = renderToString(<CheckTable checks={[check(), check({ id: 'z', ordinal: 2 })]} confirmationId={null} />);
+    expect(text(html)).not.toContain('Counts towards');
+    expect(text(html)).not.toContain('other confirmations');
+    expect(html.match(/<tbody>.*<\/tbody>/)?.[0].match(/<tr>/g)).toHaveLength(2);
+  });
+  it('shows trusted and untrusted runners in words, per row', () => {
+    const html = renderToString(<CheckTable checks={[check({ runner_trusted: false }), check({ id: 'b', ordinal: 2 })]} confirmationId="conf_a" />);
+    expect(columnValues(html, 'Trusted runner')).toEqual(['No', 'Yes']);
+  });
+  it('says some counted checks came from untrusted runners only when a counting check did', () => {
+    const line = 'Some checks counted here came from runners that are not trusted.';
+    const untrusted = renderToString(<CheckTable checks={[check({ runner_trusted: false })]} confirmationId="conf_a" />);
+    expect(text(untrusted)).toContain(line);
+    const trusted = renderToString(<CheckTable checks={[check()]} confirmationId="conf_a" />);
+    expect(text(trusted)).not.toContain(line);
+    const outside = renderToString(
+      <CheckTable checks={[check(), check({ id: 'o', confirmation_id: 'conf_old', runner_trusted: false })]} confirmationId="conf_a" />,
+    );
+    expect(text(outside)).not.toContain(line);
+    const unnamed = renderToString(<CheckTable checks={[check({ runner_trusted: false })]} confirmationId={null} />);
+    expect(text(unnamed)).not.toContain(line);
+  });
+  it('puts the note on what Pass means above the table, and names the headings', () => {
+    const html = renderToString(<CheckTable checks={[check()]} confirmationId="conf_a" />);
+    const note = 'Pass means the failure repeated';
+    expect(text(html)).toContain(note);
+    expect(html.indexOf(note)).toBeLessThan(html.indexOf('<table'));
+    expect(html).toContain('>Check result<');
+    expect(html).toContain('>Runs counted<');
+  });
+  it('keeps table semantics: column scopes, a hidden caption, and a scroll wrapper', () => {
+    const html = renderToString(<CheckTable checks={[check()]} confirmationId="conf_a" />);
+    expect((html.match(/<th scope="col"/g) ?? []).length).toBe((html.match(/<th[ >]/g) ?? []).length);
+    expect(html).toMatch(/<caption class="sr-only">/);
+    expect(html).toContain('class="checks-scroll"');
+    expect(readSource('components/confirmation.css')).not.toMatch(/display:\s*block/);
   });
   it('shows an unknown kind and status as sent, escaped, with a neutral badge', () => {
     const html = renderToString(

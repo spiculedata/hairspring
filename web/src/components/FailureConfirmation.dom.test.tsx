@@ -51,6 +51,31 @@ describe('FailureConfirmation', () => {
     expect(container.textContent).toContain('3 passed, 0 failed, 0 inconclusive');
   });
 
+  it('passes the confirmation the server names through, so the table marks which checks count', async () => {
+    const mk = (id: string, confirmation_id: string) =>
+      ({
+        id, confirmation_id, ordinal: 1, kind: 'same_seed_rerun', status: 'pass', counts: { passed: 3, failed: 0, inconclusive: 0 },
+        artefacts: [], environment: {}, started_at: 1, finished_at: 2, runner_trusted: true, created_at: 2, guest: { command: 'x', detail: {} },
+      }) as unknown as CheckView;
+    const checks = [mk('a', 'conf_old'), mk('b', 'conf_new'), mk('c', 'conf_old')];
+    vi.stubGlobal('fetch', vi.fn(async () => json(body({ finding: 'confirmed', confirmation_id: 'conf_new', checks }))));
+    const { container } = render(<FailureConfirmation failureId="fail_0123456789abcdef" />);
+    await waitFor(() => expect(container.querySelectorAll('tbody tr')).toHaveLength(3));
+    const heads = [...container.querySelectorAll('th')].map((h) => h.textContent);
+    const col = heads.indexOf('Counts towards the finding');
+    const cells = [...container.querySelectorAll('tbody tr')].map((r) => r.querySelectorAll('td')[col].textContent);
+    expect(cells).toEqual(['No', 'Yes', 'No']);
+  });
+
+  it('shows a placeholder, not the text, when the failure id is not in the server format', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json(body())));
+    const { container } = render(<FailureConfirmation failureId="<b>x</b>" />);
+    await waitFor(() => expect(container.textContent).toContain('No checks recorded.'));
+    expect(container.textContent).toContain('hairspring confirm <failure id>');
+    expect(container.textContent).toContain('Linux on x86-64');
+    expect(container.querySelector('b')).toBeNull();
+  });
+
   it('says it could not load, with the reason, and does not claim there are no checks', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json({ error: 'database is locked' }, 503)));
     const { container } = render(<FailureConfirmation failureId="fail_0123456789abcdef" />);

@@ -12,4 +12,5 @@
 .check-detail div { display: flex; flex-wrap: wrap; gap: .25rem .5rem; }
 .check-detail dt { color: var(--text-muted); }
 .check-detail dd { margin: 0; overflow-wrap: anywhere; }
-@media (max-width: 640px) { .checks { display: block; overflow-x: auto; } }
+.checks-scroll { overflow-x: auto; }
+.checks-scroll .checks { min-width: 48rem; }

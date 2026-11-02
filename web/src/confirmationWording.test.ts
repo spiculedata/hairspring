@@ -7,6 +7,7 @@ import {
   FINDING_MEANINGS,
   LADDER_NOTE,
   LADDER_RUNGS,
+  NO_CHECKS_HINT,
   NO_CHECKS_TEXT,
   countsText,
   noChecksCommand,
@@ -26,7 +27,7 @@ describe('finding wording (the server derives these six states)', () => {
   });
   it('never says fixed or resolved except to deny it', () => {
     for (const text of Object.values(FINDING_MEANINGS)) expect(text).not.toMatch(/\b(resolved|solved)\b|\bis fixed\b|\bwas fixed\b/i);
-    expect(LADDER_NOTE).toContain('None of them says the failure is fixed.');
+    expect(LADDER_NOTE).toContain('None of the states says the failure is fixed.');
   });
   it('never uses the word "reproduced" or "found"', () => {
     for (const text of [...Object.values(FINDING_MEANINGS), ...Object.values(FINDING_LABELS), LADDER_NOTE]) {
@@ -54,6 +55,11 @@ describe('check wording', () => {
   });
   it('gives the real command for a failure with no checks', () => {
     expect(NO_CHECKS_TEXT).toBe('No checks recorded. This failure has not been confirmed.');
-    expect(noChecksCommand('fail_0123')).toBe('hairspring confirm fail_0123');
+    expect(noChecksCommand('fail_0123456789abcdef')).toBe('hairspring confirm fail_0123456789abcdef');
+    for (const bad of ['fail_0123', '<script>', 'fail_0123456789ABCDEF', 'x fail_0123456789abcdef', 'fail_0123456789abcdef\n']) {
+      expect(noChecksCommand(bad)).toBe('hairspring confirm <failure id>');
+    }
+    expect(NO_CHECKS_HINT).toContain('Hermit');
+    expect(NO_CHECKS_HINT).toContain('Linux on x86-64');
   });
 });
