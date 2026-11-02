@@ -248,6 +248,16 @@ describe('CheckTable', () => {
     expect(html).toContain('>Check result<');
     expect(html).toContain('>Runs counted<');
   });
+  it('says exactly what Pass and Fail mean for each kind of check, with strict verify apart from the reruns', () => {
+    const t = text(renderToString(<CheckTable checks={[check()]} confirmationId="conf_a" />));
+    expect(t).toContain(
+      'For the same-seed rerun and the bundle replay, Pass means the failure repeated, and Fail means it did not. ' +
+        'For the strict verify, Pass means the result file says verified with bitwise parity and a matched verdict, and the verify run failed the way the recording did; ' +
+        'Fail means the verify did not agree with the recording. ' +
+        'For the fixed control, Pass means the fixed build is clean at the seed.',
+    );
+    expect(t).not.toContain('the bundle replay and the strict verify, Pass');
+  });
   it('keeps table semantics: column scopes, a hidden caption, and a scroll wrapper', () => {
     const html = renderToString(<CheckTable checks={[check()]} confirmationId="conf_a" />);
     expect((html.match(/<th scope="col"/g) ?? []).length).toBe((html.match(/<th[ >]/g) ?? []).length);

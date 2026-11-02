@@ -47,7 +47,7 @@ export const sweepPartialCounts = (trials: number, violations: number): string =
 export const ratedFailed = (violations: number, rated: number): string =>
   `${formatCount(violations)} of ${formatCount(rated)} rated ${rated === 1 ? 'trial' : 'trials'} failed.`;
 export const rateForTrialsRun = (rateText: string): string => `Rate for the trials run: ${rateText}`;
-export const severalRates = (n: number): string => `${formatCount(n)} failed properties have a rate; each rate and its interval is in the property table.`;
+export const severalRates = (n: number): string => `${formatCount(n)} properties failed; any rate is in the property table.`;
 export const SWEEP_OUTSIDE_NOT = 'How often it fails outside these trials: the rate is for the trials run.';
 export const sweepNoFailure = (rated: number): string => `Those ${formatCount(rated)} rated ${rated === 1 ? 'trial' : 'trials'} did not fail.`;
 export const SWEEP_NO_FAILURE_NOT = 'That the target cannot fail. A sweep with no failure says only that those trials did not fail.';
