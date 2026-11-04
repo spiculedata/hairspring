@@ -23,3 +23,21 @@ export function retryDelay(error: unknown, baseMs: number, stopOn: readonly numb
 }
 
 export const isNotFound = (error: unknown): boolean => error instanceof ApiError && error.status === NOT_FOUND;
+
+/** The longest a poll waits between attempts while requests keep failing. */
+export const MAX_BACKOFF_MS = 30_000;
+
+/**
+ * How long to wait after the `failures`-th failure in a row: the usual interval after the first, doubling for each
+ * further one up to MAX_BACKOFF_MS. An interval already longer than that ceiling is kept as it is.
+ */
+export function backoffDelay(baseMs: number, failures: number): number {
+  const doublings = Math.max(0, failures - 1);
+  return Math.max(baseMs, Math.min(MAX_BACKOFF_MS, baseMs * 2 ** doublings));
+}
+
+/**
+ * Whether a failure says the server could not be reached or could not answer (no response, or a 5xx), as opposed to
+ * answering with a refusal such as a 401, 404 or 429.
+ */
+export const isConnectivityFailure = (error: unknown): boolean => !(error instanceof ApiError) || error.status >= 500;

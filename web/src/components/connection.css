@@ -1,0 +1,11 @@
+/* Offline banner. Colours come from the tokens in styles.css only. */
+.connection-banner {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  padding: .5rem 1rem;
+  color: var(--gap);
+  background: var(--gap-bg);
+  border-bottom: 1px solid var(--gap-line);
+  overflow-wrap: anywhere;
+}
