@@ -162,3 +162,32 @@ fn a_sim_target_is_skipped_with_a_note_and_the_later_targets_still_run() {
         "svc was confirmed: {said}"
     );
 }
+
+#[test]
+fn a_confirm_error_on_a_process_target_is_reported_and_the_later_targets_still_run() {
+    let (dir, hermit) = project("confirm-error");
+    // `aaa-logged` sorts first and sweeps normally, but its Hermit logging makes the confirmation pipeline refuse it.
+    let first = "[target.aaa-logged]\nkind = \"process\"\ncommand = [\"/bin/sh\", \"guest.sh\"]\nhermit_args = [\"--verbose\"]\n[target.aaa-logged.budget]\nmax_trials = 20\n";
+    let toml = std::fs::read_to_string(dir.join("hairspring.toml")).unwrap();
+    std::fs::write(dir.join("hairspring.toml"), format!("{first}{toml}")).unwrap();
+    let o = run(
+        &dir,
+        &hermit,
+        &["test", "--sweep", "--seeds", "1..11", "--confirm"],
+    );
+    let said = text(&o);
+    assert_eq!(
+        o.status.code(),
+        Some(2),
+        "the command ends with the error status: {said}"
+    );
+    assert!(
+        said.contains("error: aaa-logged: the sweep finished and is stored as"),
+        "the error names the target and says the sweep is stored: {said}"
+    );
+    assert!(said.contains("sweeping svc"), "later target ran: {said}");
+    assert!(
+        said.contains("finding: confirmed"),
+        "svc was confirmed: {said}"
+    );
+}
