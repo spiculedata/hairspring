@@ -39,6 +39,7 @@ pub fn run_all(make: &dyn Fn() -> Arc<dyn Store>) {
     run_listing_and_missing(&*make());
     failures_and_blobs(&*make());
     jobs_lease_order_and_exclusivity(&*make());
+    jobs_of_one_run_can_be_leased_alone(&*make());
     jobs_expiry_retry_and_permanent_failure(&*make());
     jobs_wrong_worker_cannot_complete(&*make());
     events_are_ordered_and_paged(&*make());
@@ -49,7 +50,6 @@ pub fn run_all(make: &dyn Fn() -> Arc<dyn Store>) {
     expired_exhausted_jobs_are_reported_for_finalisation(&*make());
     finish_job_is_atomic_and_idempotent(&*make());
     finish_job_stores_every_failure_of_a_run_in_order(&*make());
-    release_job_gives_a_job_back_without_spending_an_attempt(&*make());
     finish_job_leaves_cancelled_runs_alone(&*make());
     counts_for_admission_control(&*make());
     stale_workers_can_be_pruned(&*make());
@@ -133,6 +133,47 @@ pub fn failures_and_blobs(s: &dyn Store) {
     assert_eq!(s.list_failures(&r.id).unwrap().len(), 1);
     assert_eq!(s.list_recent_failures(5).unwrap()[0].id, f.id);
     assert!(s.get_failure("nope").unwrap().is_none());
+}
+
+pub fn jobs_of_one_run_can_be_leased_alone(s: &dyn Store) {
+    let older = new_run(s, "t", 1);
+    let newer = new_run(s, "t", 2);
+    let older_job = s.enqueue_job(&older.id, "run", "{}", 100).unwrap();
+    let newer_job = s.enqueue_job(&newer.id, "run", "{}", 200).unwrap();
+    let got = s
+        .lease_run_job(&newer.id, "fg", 30, 1000)
+        .unwrap()
+        .expect("the newer run's own job");
+    assert_eq!((got.id.as_str(), got.attempts), (newer_job.id.as_str(), 1));
+    assert!(
+        s.lease_run_job(&newer.id, "fg", 30, 1001)
+            .unwrap()
+            .is_none(),
+        "no other job of that run, and the older run's job is not offered"
+    );
+    let untouched = s.get_job(&older_job.id).unwrap().unwrap();
+    assert_eq!(
+        (untouched.status, untouched.attempts),
+        (JobStatus::Queued, 0)
+    );
+    let any = s
+        .lease_job("w", 30, 1002)
+        .unwrap()
+        .expect("a worker leases any run's job");
+    assert_eq!(any.id, older_job.id);
+    // A lease that ran out is taken over for its own run only.
+    assert!(s
+        .lease_run_job(&newer.id, "fg2", 30, 500_000)
+        .unwrap()
+        .is_some());
+    assert!(s
+        .lease_run_job(&older.id, "fg2", 30, 500_000)
+        .unwrap()
+        .is_some());
+    assert!(s
+        .lease_run_job("no-such-run", "fg2", 30, 900_000)
+        .unwrap()
+        .is_none());
 }
 
 pub fn jobs_lease_order_and_exclusivity(s: &dyn Store) {
@@ -463,23 +504,6 @@ pub fn finish_job_stores_every_failure_of_a_run_in_order(s: &dyn Store) {
     assert!(stored.iter().all(|f| f.run_id == r.id));
     let ids: std::collections::BTreeSet<_> = stored.iter().map(|f| &f.id).collect();
     assert_eq!(ids.len(), 3, "each failure has an id of its own");
-}
-
-pub fn release_job_gives_a_job_back_without_spending_an_attempt(s: &dyn Store) {
-    let r = new_run(s, "t", 1);
-    s.enqueue_job(&r.id, "run", "{}", 2).unwrap();
-    let job = s.lease_job("w1", 60, 10).unwrap().unwrap();
-    assert_eq!(job.attempts, 1);
-    assert!(
-        !s.release_job(&job.id, "intruder").unwrap(),
-        "only the lease holder may give a job back"
-    );
-    assert!(s.release_job(&job.id, "w1").unwrap());
-    let back = s.get_job(&job.id).unwrap().unwrap();
-    assert_eq!((back.status, back.attempts), (JobStatus::Queued, 0));
-    assert!(!s.release_job(&job.id, "w1").unwrap(), "no longer leased");
-    let again = s.lease_job("w2", 60, 20).unwrap().expect("leasable again");
-    assert_eq!((again.id.as_str(), again.attempts), (job.id.as_str(), 1));
 }
 
 pub fn finish_job_leaves_cancelled_runs_alone(s: &dyn Store) {

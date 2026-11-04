@@ -38,8 +38,10 @@ impl SqliteStore {
             .optional()?)
     }
 
+    /// Leases the oldest runnable job, of `only_run` when that is given and of any run otherwise.
     pub(crate) fn jobs_lease_job(
         &self,
+        only_run: Option<&str>,
         worker_id: &str,
         lease_secs: u64,
         now: i64,
@@ -48,8 +50,8 @@ impl SqliteStore {
         let tx = write_tx(&mut conn)?;
         let id: Option<String> = tx
             .query_row(
-                "SELECT id FROM jobs WHERE (status='queued' OR (status='running' AND lease_until < ?)) AND attempts < ? ORDER BY created_at, rowid LIMIT 1",
-                params![now, MAX_JOB_ATTEMPTS],
+                "SELECT id FROM jobs WHERE (status='queued' OR (status='running' AND lease_until < ?)) AND attempts < ? AND (?3 IS NULL OR run_id = ?3) ORDER BY created_at, rowid LIMIT 1",
+                params![now, MAX_JOB_ATTEMPTS, only_run],
                 |r| r.get(0),
             )
             .optional()?;
@@ -99,15 +101,6 @@ impl SqliteStore {
                status = CASE WHEN attempts >= ? THEN 'failed' ELSE 'queued' END
              WHERE id=? AND status='running' AND lease_owner=?",
             params![error, MAX_JOB_ATTEMPTS, id, worker_id],
-        )?;
-        Ok(n > 0)
-    }
-
-    pub(crate) fn jobs_release_job(&self, id: &str, worker_id: &str) -> Result<bool> {
-        let n = self.conn().execute(
-            "UPDATE jobs SET status='queued', lease_owner=NULL, lease_until=NULL, attempts=attempts-1
-             WHERE id=? AND status='running' AND lease_owner=? AND attempts > 0",
-            params![id, worker_id],
         )?;
         Ok(n > 0)
     }

@@ -61,7 +61,7 @@ fn queued_run(
 #[test]
 fn an_interrupt_never_cancels_a_run_that_belongs_to_someone_else() {
     let (svc, store, engine) = setup();
-    // An older queued run, such as one left behind by an earlier command that was killed. It is leased first.
+    // An older queued run, such as one left behind by an earlier command that was killed.
     let foreign = queued_run(&svc, &engine);
     let stop = AtomicBool::new(true);
     let detail = svc
@@ -81,6 +81,47 @@ fn an_interrupt_never_cancels_a_run_that_belongs_to_someone_else() {
         1,
         "no attempt was spent"
     );
+}
+
+#[test]
+fn a_foreground_run_leaves_an_older_queued_job_of_another_run_alone() {
+    let (svc, store, engine) = setup();
+    let older = queued_run(&svc, &engine);
+    let small = StartRun {
+        budget: Some(Budget {
+            max_steps: 1_000_000,
+            max_trials: 2,
+            wall_secs: 60,
+        }),
+        ..long_sweep()
+    };
+    let detail = svc
+        .run_sync_until(&engine, &small, RunMode::Sweep, &AtomicBool::new(false))
+        .unwrap();
+    assert_eq!(detail.run.state, RunState::Passed, "{:?}", detail.run);
+    let other = svc.get_run(&older).unwrap().unwrap();
+    assert_eq!(other.run.state, RunState::Queued, "{:?}", other.run);
+    assert_eq!(other.run.trials, 0);
+    let events = store.list_events(&older, 0, 100).unwrap();
+    assert!(
+        events.iter().all(|e| e.kind != "started"),
+        "no started event was added to the other run: {events:?}"
+    );
+    let job = svc.lease("worker").unwrap().expect("still queued");
+    assert_eq!(job.run_id, older);
+    assert_eq!(
+        store.get_job(&job.job_id).unwrap().unwrap().attempts,
+        1,
+        "the job's first attempt is the worker's"
+    );
+}
+
+#[test]
+fn a_worker_still_leases_the_oldest_job_of_any_run() {
+    let (svc, _, engine) = setup();
+    let first = queued_run(&svc, &engine);
+    let _second = queued_run(&svc, &engine);
+    assert_eq!(svc.lease("w").unwrap().unwrap().run_id, first);
 }
 
 #[test]

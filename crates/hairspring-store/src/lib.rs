@@ -165,6 +165,15 @@ pub trait Store: Send + Sync {
     fn get_job(&self, id: &str) -> Result<Option<Job>>;
     /// Leases the oldest runnable job (queued, or running with an expired lease).
     fn lease_job(&self, worker_id: &str, lease_secs: u64, now: i64) -> Result<Option<Job>>;
+    /// Like [`Store::lease_job`], but only a job of the run `run_id` is considered: a foreground command uses it so it
+    /// never takes the jobs of other runs, which are left to workers.
+    fn lease_run_job(
+        &self,
+        run_id: &str,
+        worker_id: &str,
+        lease_secs: u64,
+        now: i64,
+    ) -> Result<Option<Job>>;
     fn heartbeat_job(&self, id: &str, worker_id: &str, lease_secs: u64, now: i64) -> Result<bool>;
     fn complete_job(&self, id: &str, worker_id: &str) -> Result<bool>;
     /// Fails running jobs whose lease expired after their last permitted attempt, and reports them
@@ -181,9 +190,6 @@ pub trait Store: Send + Sync {
     fn queued_job_count(&self) -> Result<u64>;
     /// Records a failure; requeues the job until [`MAX_JOB_ATTEMPTS`] is reached.
     fn fail_job(&self, id: &str, worker_id: &str, error: &str, now: i64) -> Result<bool>;
-    /// Gives a leased job back untouched: it is queued again and the attempt its lease spent is not counted. Only the
-    /// lease holder may do this; `false` says it was not.
-    fn release_job(&self, id: &str, worker_id: &str) -> Result<bool>;
 
     // events
     fn add_event(&self, run_id: &str, kind: &str, payload_json: &str, now: i64) -> Result<i64>;

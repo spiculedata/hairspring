@@ -266,11 +266,11 @@ fn ctrl_c_during_a_sweep_keeps_the_trials_judged_before_it() {
 }
 
 #[test]
-fn ctrl_c_while_running_another_runs_expired_job_gives_it_back_and_cancels_only_our_run() {
+fn a_foreground_command_does_not_run_another_runs_expired_job() {
     use hairspring_store::{now_ms, SqliteStore, Store};
     let dir = scratch("foreign");
-    project(&dir, &hanging(&dir));
     // Run A is killed hard mid-trial, leaving its job leased; its guests are cleaned up by hand.
+    project(&dir, &hanging(&dir));
     let mut a = spawn(
         &dir,
         &["test", "svc", "--sweep", "--trials", "5", "--seed", "1"],
@@ -296,9 +296,11 @@ fn ctrl_c_while_running_another_runs_expired_job_gives_it_back_and_cancels_only_
         .expect("A's job");
     assert_eq!(taken.run_id, a_run);
     assert!(store.heartbeat_job(&taken.id, "probe", 0, 0).unwrap());
+    let events_before = store.list_events(&a_run, 0, 100).unwrap().len();
+    let a_state = store.get_run(&a_run).unwrap().unwrap().state;
     drop(store);
 
-    // Run B leases A's job first. Ctrl-C while A's trial runs.
+    // Run B runs its own job, and A's is not touched: B's guest is the only one that starts, and Ctrl-C ends B alone.
     let b = spawn(
         &dir,
         &["test", "svc", "--sweep", "--trials", "5", "--seed", "1"],
@@ -309,9 +311,11 @@ fn ctrl_c_while_running_another_runs_expired_job_gives_it_back_and_cancels_only_
 
     let store = SqliteStore::open(&dir.join(".hairspring/hairspring.db")).unwrap();
     let a_after = store.get_run(&a_run).unwrap().unwrap();
-    assert!(
-        !a_after.state.is_terminal(),
-        "A is not finished or failed: {a_after:?}"
+    assert_eq!(a_after.state, a_state, "A is left as it was: {a_after:?}");
+    assert_eq!(
+        store.list_events(&a_run, 0, 100).unwrap().len(),
+        events_before,
+        "no event was added to A"
     );
     let b_run = store
         .list_runs(10)
@@ -320,10 +324,9 @@ fn ctrl_c_while_running_another_runs_expired_job_gives_it_back_and_cancels_only_
         .find(|r| r.id != a_run)
         .unwrap();
     assert_eq!(b_run.state.as_str(), "cancelled");
+    let job = store.get_job(&taken.id).unwrap().unwrap();
+    assert_eq!(job.attempts, taken.attempts, "A's job spent no attempt");
+    // A worker can still take it over.
     let again = store.lease_job("probe-2", 30, now_ms()).unwrap();
-    assert_eq!(
-        again.map(|j| j.run_id),
-        Some(a_run),
-        "A's job is queued and can be leased again"
-    );
+    assert_eq!(again.map(|j| j.run_id), Some(a_run));
 }

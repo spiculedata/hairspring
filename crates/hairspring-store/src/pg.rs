@@ -169,6 +169,37 @@ impl PgStore {
         Ok(())
     }
 
+    /// Leases the oldest runnable job, of `only_run` when that is given and of any run otherwise.
+    fn lease_oldest_job(
+        &self,
+        only_run: Option<&str>,
+        worker_id: &str,
+        lease_secs: u64,
+        now: i64,
+    ) -> Result<Option<Job>> {
+        let mut c = self.client()?;
+        let mut tx = c.transaction()?;
+        let max_attempts = MAX_JOB_ATTEMPTS as i32;
+        // SKIP LOCKED: concurrent workers each get a different job instead of queueing behind one another.
+        let Some(row) = tx.query_opt(
+            "SELECT id FROM jobs WHERE (status='queued' OR (status='running' AND lease_until < $1)) AND attempts < $2
+             AND ($3::text IS NULL OR run_id = $3) ORDER BY created_at, seq LIMIT 1 FOR UPDATE SKIP LOCKED",
+            &[&now, &max_attempts, &only_run],
+        )?
+        else {
+            tx.commit()?;
+            return Ok(None);
+        };
+        let id: String = row.get(0);
+        let until = now.saturating_add((lease_secs as i64).saturating_mul(1000));
+        let job = tx.query_one(
+            "UPDATE jobs SET status='running', lease_owner=$1, lease_until=$2, attempts=attempts+1 WHERE id=$3 RETURNING *",
+            &[&worker_id, &until, &id],
+        )?;
+        tx.commit()?;
+        Ok(Some(job_from_row(&job)))
+    }
+
     fn client(&self) -> Result<r2d2::PooledConnection<PostgresConnectionManager<NoTls>>> {
         Ok(self.pool.get()?)
     }
@@ -367,27 +398,17 @@ impl Store for PgStore {
     }
 
     fn lease_job(&self, worker_id: &str, lease_secs: u64, now: i64) -> Result<Option<Job>> {
-        let mut c = self.client()?;
-        let mut tx = c.transaction()?;
-        let max_attempts = MAX_JOB_ATTEMPTS as i32;
-        // SKIP LOCKED: concurrent workers each get a different job instead of queueing behind one another.
-        let Some(row) = tx.query_opt(
-            "SELECT id FROM jobs WHERE (status='queued' OR (status='running' AND lease_until < $1)) AND attempts < $2
-             ORDER BY created_at, seq LIMIT 1 FOR UPDATE SKIP LOCKED",
-            &[&now, &max_attempts],
-        )?
-        else {
-            tx.commit()?;
-            return Ok(None);
-        };
-        let id: String = row.get(0);
-        let until = now.saturating_add((lease_secs as i64).saturating_mul(1000));
-        let job = tx.query_one(
-            "UPDATE jobs SET status='running', lease_owner=$1, lease_until=$2, attempts=attempts+1 WHERE id=$3 RETURNING *",
-            &[&worker_id, &until, &id],
-        )?;
-        tx.commit()?;
-        Ok(Some(job_from_row(&job)))
+        self.lease_oldest_job(None, worker_id, lease_secs, now)
+    }
+
+    fn lease_run_job(
+        &self,
+        run_id: &str,
+        worker_id: &str,
+        lease_secs: u64,
+        now: i64,
+    ) -> Result<Option<Job>> {
+        self.lease_oldest_job(Some(run_id), worker_id, lease_secs, now)
     }
 
     fn heartbeat_job(&self, id: &str, worker_id: &str, lease_secs: u64, now: i64) -> Result<bool> {
@@ -489,15 +510,6 @@ impl Store for PgStore {
             "UPDATE jobs SET last_error=$1, lease_until=NULL, status = CASE WHEN attempts >= $2 THEN 'failed' ELSE 'queued' END
              WHERE id=$3 AND status='running' AND lease_owner=$4",
             &[&error, &(MAX_JOB_ATTEMPTS as i32), &id, &worker_id],
-        )?;
-        Ok(n > 0)
-    }
-
-    fn release_job(&self, id: &str, worker_id: &str) -> Result<bool> {
-        let n = self.client()?.execute(
-            "UPDATE jobs SET status='queued', lease_owner=NULL, lease_until=NULL, attempts=attempts-1
-             WHERE id=$1 AND status='running' AND lease_owner=$2 AND attempts > 0",
-            &[&id, &worker_id],
         )?;
         Ok(n > 0)
     }
