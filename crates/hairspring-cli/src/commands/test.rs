@@ -3,7 +3,7 @@ use super::sweep_note;
 use crate::cli::{Format, TestArgs};
 use crate::ctx::{CmdResult, Ctx};
 use crate::host::{self, HostFacts};
-use hairspring_engine::config::Budget;
+use hairspring_engine::config::{Budget, TargetKind};
 use hairspring_engine::confirm::ConfirmRequest;
 use hairspring_engine::format::{to_junit, to_sarif, to_text};
 use hairspring_engine::mode::RunMode;
@@ -200,11 +200,27 @@ pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write)
             }
         }
         if args.confirm && mode.is_sweep() {
-            let Some(confirmed) = confirm_sweep_failures(ctx, &svc, &detail.run.id, out)? else {
-                return write_interrupted(err, true);
-            };
-            if text_mode && !confirmed {
-                writeln!(out, "  --confirm: the sweep stored no failure to confirm")?;
+            if !matches!(spec.kind, TargetKind::Process { .. }) {
+                writeln!(
+                    out,
+                    "  --confirm: skipped, a sim target cannot be confirmed"
+                )?;
+            } else {
+                match confirm_sweep_failures(ctx, &svc, &detail.run.id, out) {
+                    Ok(None) => {
+                        writeln!(err, "hairspring: the remaining targets were not run")?;
+                        return write_interrupted(err, true);
+                    }
+                    Ok(Some(false)) => {
+                        writeln!(out, "  --confirm: the sweep stored no failure to confirm")?;
+                    }
+                    Ok(Some(true)) => {}
+                    Err(e) => {
+                        // The sweep is stored; later targets still run, and the command ends with the error status.
+                        writeln!(err, "error: {name}: {e}")?;
+                        code = code.max(crate::EXIT_ERROR);
+                    }
+                }
             }
         }
         code = code.max(match outcome.status {

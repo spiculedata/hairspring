@@ -10,7 +10,8 @@
   recorded.
 - `hairspring test --sweep --confirm` runs the confirmation pipeline (the defaults of `hairspring confirm`) on every
   failure row the sweep stored, once the sweep ends, and prints each result. It works on the command line only: the
-  server does not confirm sweeps by itself and workers do not run confirmations.
+  server does not confirm sweeps by itself and workers do not run confirmations. A `sim` target is skipped with a
+  note, since it cannot be confirmed, and the sweep carries on to the later targets with its own exit status.
 - The run page's activity panel shows each event as a titled line with labelled facts instead of raw JSON, with the raw
   event behind a "Raw event" disclosure.
 - `scripts/check-embedded-ui.sh` checks that a release binary serves the web UI built from the repository's `web/`

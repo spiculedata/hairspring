@@ -128,3 +128,37 @@ fn the_flag_needs_text_output_so_the_report_stays_one_document() {
         "nothing was run or printed"
     );
 }
+
+#[test]
+fn a_sim_target_is_skipped_with_a_note_and_the_later_targets_still_run() {
+    let (dir, hermit) = project("sim");
+    let sim = "[target.aaa-sim]\nkind = \"sim\"\nsim = \"lock-lease\"\n";
+    let toml = std::fs::read_to_string(dir.join("hairspring.toml")).unwrap();
+    std::fs::write(dir.join("hairspring.toml"), format!("{sim}{toml}")).unwrap();
+    let o = run(
+        &dir,
+        &hermit,
+        &[
+            "test",
+            "--sweep",
+            "--trials",
+            "30",
+            "--seed",
+            "1",
+            "--confirm",
+        ],
+    );
+    let said = text(&o);
+    assert_eq!(o.status.code(), Some(1), "the sweep's own status: {said}");
+    assert!(said.contains("sweeping svc"), "later target ran: {said}");
+    assert!(said.contains("aaa-sim"), "{said}");
+    assert!(
+        said.contains("--confirm: skipped, a sim target cannot be confirmed"),
+        "{said}"
+    );
+    assert!(!said.contains("confirming its failures failed"), "{said}");
+    assert!(
+        said.contains("finding: confirmed"),
+        "svc was confirmed: {said}"
+    );
+}

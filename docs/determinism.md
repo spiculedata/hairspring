@@ -369,10 +369,9 @@ failure row the sweep stored, with the defaults of `hairspring confirm` (three s
 bundle; no control and no strict verify, so use `hairspring confirm <run id>` with `--control` or `--strict-verify` for
 those), stores the checks and prints each result after the sweep's report. Ctrl-C behaves as it does for
 `hairspring confirm`: the checks that finished are stored, the rest are recorded as skipped, and the command exits 130.
-The exit status stays the sweep's (1 when a property failed); the findings are in the printed text. `--confirm` needs
+The exit status stays the sweep's (1 when a property failed); the findings are in the printed text. A `sim` target in the sweep is swept as usual and then skipped with a printed note, because it cannot be confirmed, and later targets still run. If confirming a `process` target's failures fails (for example its bundle is missing), the error is printed, the later targets still run, and the command exits 2 once they have. `--confirm` needs
 `--sweep` and `--format text`. It works on the command line only: the server does not schedule confirmations for
 finished sweep runs, and remote workers do not run them, so a sweep run on a server still needs `hairspring confirm`.
-Like `hairspring confirm`, it cannot confirm a failure from a `sim` target.
 
 A sweep stores at most 16 rows; a property whose first failing seed comes after that has no row, and the run's claim
 stays withheld. The server refuses a result with further failures unless the run is a sweep with a first failure, the
