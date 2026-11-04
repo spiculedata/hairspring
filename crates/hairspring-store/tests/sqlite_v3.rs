@@ -89,7 +89,7 @@ fn table_exists(conn: &Connection, name: &str) -> bool {
 
 const NEW_TABLES: [&str; 4] = ["run_identity", "trees", "trial_lineage", "tree_branches"];
 /// The schema version this build creates and migrates to (versions 4 and 5 only add tables to version 3).
-const CURRENT_VERSION: i64 = 5;
+const CURRENT_VERSION: i64 = 6;
 
 #[test]
 fn a_fresh_database_is_current_and_has_the_tree_tables() {

@@ -633,3 +633,33 @@ fn the_in_memory_digest_bound_of_a_sweep_is_the_servers_allowance() {
         hairspring_store::MAX_DIGEST_BYTES_PER_RUN
     );
 }
+
+#[test]
+fn a_sweep_is_stored_and_reported_as_a_sweep_and_a_search_as_a_search() {
+    let (svc, store, engine) = setup();
+    let sweep = svc
+        .start_run_with_mode(&engine, &lock_lease(3), RunMode::Sweep)
+        .unwrap();
+    let search = svc.start_run(&engine, &lock_lease(3)).unwrap();
+    assert_eq!(
+        (sweep.mode.as_str(), search.mode.as_str()),
+        ("sweep", "search")
+    );
+    let listed: Vec<(String, String)> = svc
+        .list_runs(10)
+        .unwrap()
+        .into_iter()
+        .map(|r| (r.id, r.mode))
+        .collect();
+    assert!(
+        listed.contains(&(sweep.id.clone(), "sweep".to_string())),
+        "{listed:?}"
+    );
+    assert!(
+        listed.contains(&(search.id.clone(), "search".to_string())),
+        "{listed:?}"
+    );
+    assert_eq!(svc.get_run(&sweep.id).unwrap().unwrap().run.mode, "sweep");
+    assert_eq!(svc.get_run(&search.id).unwrap().unwrap().run.mode, "search");
+    assert_eq!(store.get_run(&sweep.id).unwrap().unwrap().mode, "sweep");
+}

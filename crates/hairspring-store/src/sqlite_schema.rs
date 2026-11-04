@@ -3,10 +3,11 @@
 //! A database is created at version 1 and then migrated like any older one, so a fresh database and a migrated one
 //! cannot differ. Migration runs inside one `BEGIN IMMEDIATE` transaction that re-reads the version, so several
 //! processes opening the same old file at once migrate it exactly once and none of them sees a half-migrated file.
+use crate::run_mode::{mode_of_config, SEARCH_MODE, SWEEP_MODE};
 use crate::types::{Result, StoreError};
 use rusqlite::Connection;
 
-pub(crate) const SCHEMA_VERSION: i64 = 5;
+pub(crate) const SCHEMA_VERSION: i64 = 6;
 
 const SCHEMA_V1: &str = "
 CREATE TABLE runs (
@@ -139,6 +140,30 @@ CREATE TABLE IF NOT EXISTS failure_checks (
 CREATE INDEX IF NOT EXISTS failure_checks_failure ON failure_checks(failure_id, created_at, confirmation_id, ordinal);
 ";
 
+/// Version 6 is data only: `runs.mode` was never written by an insert, so every run carries the column default. A run
+/// whose stored `config_json` names the sweep mode gets it back. The text is read the way a new run's is (a
+/// `config_json` that is not JSON stays a search), and a run holding any other mode than the default is left alone.
+fn backfill_run_modes(conn: &Connection) -> Result<()> {
+    let mut find =
+        conn.prepare("SELECT id, config_json FROM runs WHERE mode=? AND config_json LIKE ?")?;
+    let sweeps: Vec<String> = find
+        .query_map([SEARCH_MODE, &format!("%{SWEEP_MODE}%")], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|(_, config)| mode_of_config(config) == SWEEP_MODE)
+        .map(|(id, _)| id)
+        .collect();
+    for id in sweeps {
+        conn.execute(
+            "UPDATE runs SET mode=? WHERE id=? AND mode=?",
+            [SWEEP_MODE, &id, SEARCH_MODE],
+        )?;
+    }
+    Ok(())
+}
+
 /// The tables a version 3 database must have.
 const V3_TABLES: [&str; 4] = ["run_identity", "trees", "trial_lineage", "tree_branches"];
 /// The tables version 4 added.
@@ -182,13 +207,18 @@ fn ensure_secret_column(conn: &Connection) -> Result<()> {
 /// write rows; a database that lost a table or an index is reported, not repaired (the children query names its
 /// index, so a missing one would otherwise fail later, at the first read).
 fn verify_current(conn: &Connection) -> Result<()> {
+    verify_v5_objects(conn, SCHEMA_VERSION)
+}
+
+/// Versions 5 and 6 have the same tables and indexes (version 6 only rewrites data).
+fn verify_v5_objects(conn: &Connection, version: i64) -> Result<()> {
     let tables: Vec<&str> = V3_TABLES
         .into_iter()
         .chain(V4_TABLES)
         .chain(V5_TABLES)
         .collect();
     let indexes: Vec<&str> = V3_INDEXES.into_iter().chain(V5_INDEXES).collect();
-    verify_objects(conn, SCHEMA_VERSION, &tables, &indexes)
+    verify_objects(conn, version, &tables, &indexes)
 }
 
 /// A version 3 database is looked at the same way before version 4 is added: the upgrade does not quietly recreate
@@ -241,12 +271,16 @@ fn upgrade(conn: &Connection, from: i64) -> Result<()> {
     match from {
         3 => verify_v3(conn)?,
         4 => verify_v4(conn)?,
+        5 => verify_v5_objects(conn, 5)?,
         _ => conn.execute_batch(MIGRATE_V2_TO_V3)?,
     }
     if from <= 3 {
         conn.execute_batch(MIGRATE_V3_TO_V4)?;
     }
-    conn.execute_batch(MIGRATE_V4_TO_V5)?;
+    if from <= 4 {
+        conn.execute_batch(MIGRATE_V4_TO_V5)?;
+    }
+    backfill_run_modes(conn)?;
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }

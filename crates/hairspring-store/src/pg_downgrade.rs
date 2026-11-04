@@ -1,4 +1,4 @@
-//! Offline downgrade of a PostgreSQL schema from version 3, 4 or 5 to version 2. See [`crate::downgrade`].
+//! Offline downgrade of a PostgreSQL schema from version 3, 4, 5 or 6 to version 2. See [`crate::downgrade`].
 use crate::downgrade::*;
 use crate::pg::{valid_schema, MIGRATION_LOCK};
 use crate::types::{Result, StoreError};

@@ -132,8 +132,9 @@ A run has a mode. `search` (the default, and the only behaviour before sweeps) e
 its trial count was decided by its outcome and it has no rate. `sweep` runs every trial of its budget, continues after
 a violation and stores every trial, so a rate can be stated for the trials it ran. The mode travels with the job
 (`start_run_with_mode`, the `mode` field of `POST /api/runs` and of the MCP `start_run`, `hairspring test --sweep`), is
-read back from the stored job, and is absent (so a search) in jobs queued before sweeps existed. It needs no schema
-change: the trial rows added in version 2 already hold every verdict.
+read back from the stored job, and is absent (so a search) in jobs queued before sweeps existed. The trial rows
+added in version 2 already hold every verdict; since schema version 6 the mode is also stored in `runs.mode` (see
+Stored run mode).
 
 - **Trials.** The same unit as in search (one seed on the process and WebAssembly backends, one exploration round on a
   simulation target), run in the same batches of `parallelism`, judged in seed order, bounded by the trial budget, the
@@ -329,8 +330,22 @@ Opening a version 4 database adds the table and its index in the same transactio
 database that lost one of its own tables or indexes is refused rather than repaired, on both backends, and a current
 database is only looked at (no DDL). An older release refuses a version 5 database. **Back up first; stop every older
 server and worker before upgrading.** The offline downgrade (`hairspring_store::downgrade_sqlite` and
-`downgrade_postgres`, also `cargo run -p hairspring-store --example store_downgrade`) now accepts versions 3, 4 and 5 and
-drops the version 5 table first, so stored checks are lost by a downgrade.
+`downgrade_postgres`, also `cargo run -p hairspring-store --example store_downgrade`) now accepts versions 3, 4, 5 and 6
+and drops the version 5 table first, so stored checks are lost by a downgrade.
+
+## Stored run mode (schema version 6)
+
+Version 6 adds no table or column. `runs.mode` has existed since version 2 but no insert ever set it, so every run read
+back as `search`, sweeps included (`GET /api/runs` and `GET /api/runs/{id}`). A new run now stores its mode: the store
+reads it from the run's `config_json` (the same text that becomes the job payload), `sweep` only when that is a JSON
+object whose `mode` is exactly `sweep`, and `search` for anything else, including text that is not JSON. Opening a
+version 5 database sets `mode` to `sweep` on the runs whose `config_json` says so and which still hold the default
+`search`, in the same transaction as the version bump, on both backends. A run whose `config_json` cannot be read stays
+`search`, and a run holding any other mode is left alone. The migration changes only that column. An older release
+refuses a version 6 database; a downgrade from version 6 to 2 keeps the corrected modes. **Back up first; stop every
+older server and worker before upgrading.** A version 5 server left running after the upgrade keeps storing sweeps as
+`search`, and the backfill does not run again to correct them. Version 6 has the same tables and columns as version 5,
+so there is no offline downgrade from 6 to 5: that step is resetting the stored schema version to 5 by hand.
 
 ## Bundles
 

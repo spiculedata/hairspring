@@ -1,4 +1,4 @@
-//! Offline downgrade of a SQLite database from schema version 3, 4 or 5 to version 2. See [`crate::downgrade`].
+//! Offline downgrade of a SQLite database from schema version 3, 4, 5 or 6 to version 2. See [`crate::downgrade`].
 use crate::downgrade::*;
 use crate::types::{Result, StoreError};
 use rusqlite::{Connection, OpenFlags};

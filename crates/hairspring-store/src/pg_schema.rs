@@ -1,10 +1,11 @@
 //! PostgreSQL schema versions and the migration between them. A schema is created at version 1 and then migrated like
 //! any older one, so a fresh schema and a migrated one cannot differ. The caller holds an advisory lock for the whole
 //! migration transaction.
+use crate::run_mode::{mode_of_config, SEARCH_MODE, SWEEP_MODE};
 use crate::types::{Result, StoreError};
 use postgres::Transaction;
 
-pub(crate) const SCHEMA_VERSION: i32 = 5;
+pub(crate) const SCHEMA_VERSION: i32 = 6;
 
 /// The tables a version 3 schema must have.
 const V3_TABLES: [&str; 4] = ["run_identity", "trees", "trial_lineage", "tree_branches"];
@@ -166,6 +167,7 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             tx.batch_execute(MIGRATE_V2_TO_V3)?;
             tx.batch_execute(MIGRATE_V3_TO_V4)?;
             tx.batch_execute(MIGRATE_V4_TO_V5)?;
+            backfill_run_modes(tx)?;
             tx.execute(
                 "INSERT INTO schema_version(version) VALUES ($1)",
                 &[&SCHEMA_VERSION],
@@ -176,6 +178,7 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             tx.batch_execute(MIGRATE_V2_TO_V3)?;
             tx.batch_execute(MIGRATE_V3_TO_V4)?;
             tx.batch_execute(MIGRATE_V4_TO_V5)?;
+            backfill_run_modes(tx)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(2) => {
@@ -187,6 +190,7 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             tx.batch_execute(MIGRATE_V2_TO_V3)?;
             tx.batch_execute(MIGRATE_V3_TO_V4)?;
             tx.batch_execute(MIGRATE_V4_TO_V5)?;
+            backfill_run_modes(tx)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(3) => {
@@ -194,12 +198,19 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             verify_objects(tx, 3, &V3_TABLES, &V3_INDEXES)?;
             tx.batch_execute(MIGRATE_V3_TO_V4)?;
             tx.batch_execute(MIGRATE_V4_TO_V5)?;
+            backfill_run_modes(tx)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(4) => {
             let tables: Vec<&str> = V3_TABLES.into_iter().chain(V4_TABLES).collect();
             verify_objects(tx, 4, &tables, &V3_INDEXES)?;
             tx.batch_execute(MIGRATE_V4_TO_V5)?;
+            backfill_run_modes(tx)?;
+            tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
+        }
+        Some(5) => {
+            verify_v5_schema(tx, 5)?;
+            backfill_run_modes(tx)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(v) if v == SCHEMA_VERSION => verify_current(tx)?,
@@ -212,15 +223,41 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
     Ok(())
 }
 
+/// Version 6 is data only, as on SQLite: `runs.mode` was never written by an insert, so every run carries the column
+/// default. A run whose stored `config_json` names the sweep mode gets it back. The text is read the way a new run's
+/// is, in Rust (`config_json` is TEXT, and a cast to JSON would fail the whole migration on one malformed row), so a
+/// `config_json` that is not JSON stays a search; a run holding any other mode than the default is left alone.
+fn backfill_run_modes(tx: &mut Transaction<'_>) -> Result<()> {
+    let candidates = tx.query(
+        "SELECT id, config_json FROM runs WHERE mode=$1 AND config_json LIKE $2",
+        &[&SEARCH_MODE, &format!("%{SWEEP_MODE}%")],
+    )?;
+    for row in candidates {
+        let (id, config): (String, String) = (row.get(0), row.get(1));
+        if mode_of_config(&config) == SWEEP_MODE {
+            tx.execute(
+                "UPDATE runs SET mode=$1 WHERE id=$2 AND mode=$3",
+                &[&SWEEP_MODE, &id, &SEARCH_MODE],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// Reports a current schema that lost one of its tables or a version 3 index instead of repairing it.
 fn verify_current(tx: &mut Transaction<'_>) -> Result<()> {
+    verify_v5_schema(tx, SCHEMA_VERSION)
+}
+
+/// Versions 5 and 6 have the same tables and indexes (version 6 only rewrites data).
+fn verify_v5_schema(tx: &mut Transaction<'_>, version: i32) -> Result<()> {
     let tables: Vec<&str> = V3_TABLES
         .into_iter()
         .chain(V4_TABLES)
         .chain(V5_TABLES)
         .collect();
     let indexes: Vec<&str> = V3_INDEXES.into_iter().chain(V5_INDEXES).collect();
-    verify_objects(tx, SCHEMA_VERSION, &tables, &indexes)?;
+    verify_objects(tx, version, &tables, &indexes)?;
     verify_checks_seq(tx)
 }
 

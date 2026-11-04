@@ -4,7 +4,7 @@ use hairspring_store::*;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
-const CURRENT_VERSION: i64 = 5;
+const CURRENT_VERSION: i64 = 6;
 
 fn temp_db(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -253,7 +253,7 @@ fn downgrading_a_version_five_database_drops_the_checks_and_the_version_four_tab
         },
     )
     .unwrap();
-    assert_eq!((dry.from_version, dry.applied), (5, false));
+    assert_eq!((dry.from_version, dry.applied), (6, false));
     let conn = Connection::open(&path).unwrap();
     assert_eq!(
         user_version(&conn),
@@ -264,7 +264,7 @@ fn downgrading_a_version_five_database_drops_the_checks_and_the_version_four_tab
     drop(conn);
 
     let report = downgrade_sqlite(&path, &DowngradeOptions::default()).unwrap();
-    assert_eq!((report.from_version, report.to_version), (5, 2));
+    assert_eq!((report.from_version, report.to_version), (6, 2));
     let conn = Connection::open(&path).unwrap();
     assert_eq!(user_version(&conn), 2);
     for t in ["failure_checks", "run_digest_use", "run_coverage"] {
