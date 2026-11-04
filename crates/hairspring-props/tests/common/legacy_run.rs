@@ -320,12 +320,12 @@ impl LegacyRunProps {
                 }
                 None => IdAcc::start(p, !inconclusive),
             };
-            showed_failure |= p.failure().is_some();
             let acc = match (acc.decided, inconclusive) {
                 (false, false) => acc.decide(p),
                 _ => acc,
             };
             let acc = if acc.kind == p.kind {
+                showed_failure |= p.failure().is_some();
                 acc.with_trial(class, p)
             } else if inconclusive {
                 // A timed-out trial's kind is not trusted: it decides nothing and is no mismatch. It still counts as

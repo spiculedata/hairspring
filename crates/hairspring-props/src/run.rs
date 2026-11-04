@@ -566,7 +566,6 @@ fn fold_digest(
             continue;
         };
         let p = observe(e, &row.id, &row.msg, &row.loc);
-        showed_failure |= p.failed();
         let acc = match ids.remove(&row.id) {
             Some(acc) => acc,
             None => IdAcc::start(&p, !inconclusive),
@@ -576,6 +575,9 @@ fn fold_digest(
             _ => acc,
         };
         let acc = if acc.kind == p.kind {
+            // Only a failure the run attributes to the id counts as shown, so the count never says a failure was
+            // shown that no stored per-id field records.
+            showed_failure |= p.failed();
             acc.with_trial(class, &p)
         } else if inconclusive {
             // A timed-out trial's kind is not trusted: it decides nothing and is no mismatch. It still counts as

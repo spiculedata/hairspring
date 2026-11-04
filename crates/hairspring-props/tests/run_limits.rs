@@ -216,3 +216,57 @@ fn a_summary_stored_before_the_failure_count_existed_reads_it_as_zero() {
     assert_eq!(summary.inconclusive_trials, 2);
     assert_eq!(summary.inconclusive_with_failure_trials, 0);
 }
+
+#[test]
+fn a_failure_of_a_kind_the_run_did_not_keep_is_not_counted_as_shown() {
+    let kept = fold(&single(AssertKind::Sometimes, 3, 0));
+    let timed_out = fold(&single(AssertKind::Always, 0, 2));
+    let summary = RunProps::new()
+        .add(1, &kept)
+        .add_inconclusive(2, &timed_out)
+        .summary();
+    assert_eq!(summary.inconclusive_trials, 1);
+    assert_eq!(summary.inconclusive_with_failure_trials, 0);
+}
+
+/// A complete one-process report of `always` ids, each evaluated once; the id is given with its count of falses.
+fn report_of_ids_with_falses(ids: &[(&str, u64)]) -> String {
+    let mut out = hello("p1");
+    for (id, falses) in ids {
+        out.push_str(&catalog_min("p1", id, AssertKind::Always));
+        let first_false = (*falses > 0).then_some(("t", 2));
+        out.push_str(&assert_line(
+            "p1",
+            id,
+            1,
+            *falses,
+            first_false,
+            Some(("t", 1)),
+        ));
+    }
+    out.push_str(&ev(&format!(
+        r#"{{"v":1,"kind":"end","proc":"p1","reason":"exit","status":0,"sites":{},"evals":{},"dropped":0,"threads":0}}"#,
+        ids.len(),
+        ids.len() * 2
+    )));
+    out
+}
+
+#[test]
+fn a_failing_id_is_still_counted_when_a_passing_id_follows_it_in_the_same_trial() {
+    let trial = fold(&report_of_ids_with_falses(&[("a", 1), ("b", 0)]));
+    let summary = RunProps::new().add_inconclusive(1, &trial).summary();
+    assert_eq!(summary.inconclusive_with_failure_trials, 1);
+}
+
+#[test]
+fn a_failure_on_an_id_dropped_by_the_cap_is_not_counted() {
+    let kept = fold(&report_of_ids_with_falses(&[("a", 0)]));
+    let dropped = fold(&report_of_ids_with_falses(&[("b", 1)]));
+    let summary = RunProps::with_id_cap(1)
+        .add(1, &kept)
+        .add_inconclusive(2, &dropped)
+        .summary();
+    assert_eq!(summary.ids_dropped, 1);
+    assert_eq!(summary.inconclusive_with_failure_trials, 0);
+}

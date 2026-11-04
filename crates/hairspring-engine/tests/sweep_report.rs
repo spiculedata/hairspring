@@ -189,3 +189,24 @@ fn the_report_never_uses_the_forbidden_wording() {
         }
     }
 }
+
+#[test]
+fn a_sweeps_not_rated_line_says_how_many_timed_out_trials_showed_a_failure() {
+    let outcome = RunOutcome {
+        property_run: Some(hairspring_props::RunSummary {
+            trials: 5,
+            inconclusive_trials: 2,
+            inconclusive_with_failure_trials: 1,
+            ..Default::default()
+        }),
+        ..sweep(&[Pass, Pass, Violation, Inconclusive, Inconclusive])
+    };
+    let text = to_text("svc", &outcome);
+    assert!(
+        text.contains(
+            "  not rated trials: 2 inconclusive (1 showed a failure, not counted as a finding); "
+        ),
+        "{text}"
+    );
+    assert!(text.contains("  hits: 1/3 rated trials"), "{text}");
+}

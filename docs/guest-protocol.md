@@ -204,13 +204,20 @@ front end can print the same lines.
   A failed run is treated this way even if an older stored record lacks the stopped flag.
 * If a stored inconclusive count is larger than the trial count, it is capped and a `note:` line says so.
 * When some inconclusive trials showed a failure, the `not rated trials:` line says how many, once per trial (for
-  example `8 inconclusive (2 showed a failure, not counted as findings)`). Those failures are never hits and are not
-  in the rate. The count comes from the stored property summary of the run; a summary written before the count existed
-  reads it as 0, so for such a run a zero there means the count is not known, not that none failed.
+  example `8 inconclusive (2 showed a failure, not counted as findings)`). The line is in the text report of both
+  search runs and sweeps. A sweep that stopped before its trial budget prints counts only, without this line. The
+  failures are never hits and are not in the rate. Only a failure that the run attributes to a stored per-id field
+  counts: a timed-out trial whose declared kind differs from the kind the run kept is not counted. The count can be
+  lower than the trials that showed a failure, never higher, when ids were dropped by the id cap, because a dropped
+  id has no stored field.
+* The count comes from the stored property summary of the run. A run with no stored property summary has an unknown
+  count, and the line says nothing about it. A run can lack the summary because it predates the count, the fold
+  failed, no ids were held, or the summary was over the size limit. A summary written before the count existed reads
+  it as 0, so for such a run a zero there means the count is not known, not that none failed.
 * Runs stored before schema version 2 hold no inconclusive count at all and read as 0 inconclusive trials, which cannot
   be told apart from a real zero. Their rated count may include timed-out trials, so the denominator can be too large
   and the rate lower than it would be with only the rated trials. The store does not mark these runs; a run with no
-  stored property summary and more than zero trials is the usual sign of one.
+  stored property summary and more than zero trials is one sign of one.
 * Not done: failures per core-hour with a Garwood interval, the exact rate-ratio test for comparing two builds, pooling
   within an arm, and the "uncalibrated" label for a zero from an arm with no positive control.
 * The word is "hits". The report does not say "found", "discovered", "unassisted" or "bug rate".
