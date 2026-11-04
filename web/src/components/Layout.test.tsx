@@ -1,5 +1,6 @@
 import { renderToString } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { readSource } from '../readSource';
 import { Layout, isNavActive } from './Layout';
 
 const render = (path: string) => renderToString(<Layout path={path}>body</Layout>);
@@ -12,6 +13,23 @@ describe('Layout', () => {
     expect(html).toContain('href="#main"');
     expect(html).toMatch(/<main id="main" tabindex="-1"/);
     expect(html).toContain('Skip to content');
+  });
+
+  it('puts the navigation in a side column beside the main content, with the theme switch in the top bar', () => {
+    const html = render('/');
+    expect(html).toMatch(/<header class="topbar">[\s\S]*role="group"[\s\S]*<\/header>/);
+    expect(html).toMatch(/<div class="frame"><nav class="sidenav" aria-label="Main">/);
+    expect(html.indexOf('class="sidenav"')).toBeLessThan(html.indexOf('<main'));
+    expect(html.match(/<nav /g)).toHaveLength(1);
+  });
+
+  it('collapses the side column into a wrapping top bar on phones, with no fixed widths that could scroll sideways', () => {
+    const shell = readSource('shell/shell.css');
+    const phone = shell.slice(shell.indexOf('@media (max-width: 860px)'));
+    expect(phone).toMatch(/\.frame \{[^}]*grid-template-columns: minmax\(0, 1fr\)/);
+    expect(phone).toMatch(/\.sidenav ul \{[^}]*flex-wrap: wrap/);
+    expect(shell).toMatch(/\.frame > main \{[^}]*min-width: 0/);
+    expect(shell).not.toMatch(/(?<!min-|max-)width:\s*\d+(px|rem)/);
   });
 
   it('marks the current page in the navigation with aria-current, on the link, and only there', () => {

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { navigate } from '../router';
+import { ThemeSwitch } from '../shell/ThemeSwitch';
 
 const LINKS: Array<[string, string]> = [
   ['/', 'Overview'],
@@ -42,20 +43,27 @@ export function Layout({ path, children, announcement }: { path: string; childre
       </a>
       <header className="topbar">
         <span className="brand">Hairspring</span>
-        <nav aria-label="Main">
-          {LINKS.map(([to, label]) => (
-            <Link key={to} to={to} current={isNavActive(to, path)}>
-              <span className={isNavActive(to, path) ? 'active' : ''}>{label}</span>
-            </Link>
-          ))}
-        </nav>
+        <ThemeSwitch />
       </header>
       <div className="sr-only" role="status" aria-live="polite">
         {announcement}
       </div>
-      <main id="main" tabIndex={-1}>
-        {children}
-      </main>
+      <div className="frame">
+        <nav className="sidenav" aria-label="Main">
+          <ul>
+            {LINKS.map(([to, label]) => (
+              <li key={to}>
+                <Link to={to} current={isNavActive(to, path)}>
+                  {label}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </nav>
+        <main id="main" tabIndex={-1}>
+          {children}
+        </main>
+      </div>
     </>
   );
 }
