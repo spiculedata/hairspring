@@ -1,5 +1,5 @@
-import { reportPollFailure, reportPollSuccess } from './connectionStatus';
-import { backoffDelay, isConnectivityFailure, retryDelay, STOP_ON_UNAUTHORIZED } from './pollPolicy';
+import { registerPoller } from './connectionStatus';
+import { backoffDelay, isConnectivityFailure, isRateLimited, retryDelay, STOP_ON_UNAUTHORIZED } from './pollPolicy';
 
 export interface PollOptions<T> {
   load: () => Promise<T>;
@@ -16,16 +16,17 @@ const isHidden = (): boolean => hasBrowser && document.visibilityState === 'hidd
 /**
  * Loads now and then every `intervalMs` until `stop(data)` is true. A failure is reported and retried by the rules in
  * pollPolicy.ts: a 404 or a 401 ends the loop (a 401 has raised the token prompt once; the caller starts a new loop when
- * a token is entered), a 429 waits at least as long as Retry-After, and failures in a row wait longer each time.
+ * a token is entered), a 429 waits at least as long as Retry-After, and failures or 429s in a row wait longer each time.
  *
  * While the tab is hidden no request is made; when it is shown again the loop refreshes at once. The browser coming back
- * online also refreshes at once. Results are reported to connectionStatus.ts so one banner can say the server is out of
- * reach. Returns a function that cancels the loop; nothing is delivered after that.
+ * online also refreshes at once. Results are reported to connectionStatus.ts under this loop's own entry, which is removed when the loop ends, so one
+ * banner can say the server is out of reach. Returns a function that cancels the loop; nothing is delivered after that.
  */
 export function startPolling<T>({ load, intervalMs, stop, onData, onError }: PollOptions<T>): () => void {
   let ended = false;
   let inFlight = false;
   let failures = 0;
+  const status = registerPoller();
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const clearTimer = () => {
@@ -39,12 +40,13 @@ export function startPolling<T>({ load, intervalMs, stop, onData, onError }: Pol
   const end = () => {
     ended = true;
     clearTimer();
+    status.unregister();
     if (!hasBrowser) return;
     document.removeEventListener('visibilitychange', onVisibility);
     window.removeEventListener('online', onOnline);
   };
   const refreshNow = () => {
-    if (ended || inFlight) return;
+    if (ended) return;
     clearTimer();
     void run();
   };
@@ -64,17 +66,18 @@ export function startPolling<T>({ load, intervalMs, stop, onData, onError }: Pol
       const next = await load();
       if (ended) return;
       failures = 0;
-      reportPollSuccess();
+      status.success();
       onData(next);
       if (stop?.(next)) return end();
     } catch (e) {
       if (ended) return;
       if (isConnectivityFailure(e)) {
         failures += 1;
-        reportPollFailure();
+        status.failure();
       } else {
-        failures = 0;
-        reportPollSuccess();
+        // The server answered, so the connection is up; repeated 429s still back the loop off.
+        failures = isRateLimited(e) ? failures + 1 : 0;
+        status.success();
       }
       onError(e);
       const wait = retryDelay(e, intervalMs, STOP_ON_UNAUTHORIZED);

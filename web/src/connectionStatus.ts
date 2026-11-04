@@ -2,17 +2,27 @@
 export const OFFLINE_AFTER_FAILURES = 2;
 
 export interface Connection {
-  /** Requests that have failed in a row, across every poll on the page; any success clears it. */
+  /** The most requests that any one poll on the page has failed in a row; a poll's success or end clears its own count. */
   readonly failures: number;
+}
+
+/** What one poll reports through. Each poll registers its own, so it can only clear its own failures. */
+export interface PollerStatus {
+  success: () => void;
+  failure: () => void;
+  /** Call when the poll ends for any reason; its failures stop counting. */
+  unregister: () => void;
 }
 
 const NONE: Connection = { failures: 0 };
 let current: Connection = NONE;
+const pollers = new Map<symbol, number>();
 const listeners = new Set<() => void>();
 
-function set(next: Connection): void {
-  if (next.failures === current.failures) return;
-  current = next;
+function recompute(): void {
+  const failures = Math.max(0, ...pollers.values());
+  if (failures === current.failures) return;
+  current = failures === 0 ? NONE : { failures };
   for (const listener of listeners) listener();
 }
 
@@ -23,8 +33,27 @@ export function subscribeConnection(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-export const reportPollSuccess = (): void => set(NONE);
-export const reportPollFailure = (): void => set({ failures: current.failures + 1 });
+export function registerPoller(): PollerStatus {
+  const id = Symbol('poller');
+  pollers.set(id, 0);
+  const update = (change: (failures: number) => number) => {
+    const failures = pollers.get(id);
+    if (failures === undefined) return;
+    pollers.set(id, change(failures));
+    recompute();
+  };
+  return {
+    success: () => update(() => 0),
+    failure: () => update((failures) => failures + 1),
+    unregister: () => {
+      pollers.delete(id);
+      recompute();
+    },
+  };
+}
 
-/** For tests: forget everything reported so far. */
-export const resetConnection = (): void => set(NONE);
+/** For tests: forget every poller and everything reported so far. */
+export function resetConnection(): void {
+  pollers.clear();
+  recompute();
+}

@@ -15,18 +15,21 @@ const getOnline = (): boolean => navigator.onLine;
 /**
  * A banner for when the page cannot get fresh data: the browser says it is offline, or requests have failed several times
  * in a row. It says the data shown is the last that arrived and that the page tries again by itself. Mount it once, in the
- * page chrome; it shows nothing otherwise.
+ * page chrome; otherwise it renders an empty live region.
  */
 export function ConnectionBanner() {
   const online = useSyncExternalStore(subscribeOnline, getOnline, () => true);
   const { failures } = useSyncExternalStore(subscribeConnection, getConnection, getConnection);
   const unreachable = failures >= OFFLINE_AFTER_FAILURES;
-  if (online && !unreachable) return null;
+  const message = !online
+    ? 'You are offline. The data shown is the last data received. This page refreshes when the connection returns.'
+    : unreachable
+      ? 'Cannot reach the server. The data shown is the last data received. This page tries again by itself.'
+      : undefined;
+  // The live region stays in the page so that screen readers register it before the text is added to it.
   return (
-    <div className="connection-banner" role="status">
-      {online
-        ? 'Cannot reach the server. The data shown is the last data received. This page tries again by itself.'
-        : 'You are offline. The data shown is the last data received. This page refreshes when the connection returns.'}
+    <div className="connection-status" role="status">
+      {message !== undefined && <div className="connection-banner">{message}</div>}
     </div>
   );
 }

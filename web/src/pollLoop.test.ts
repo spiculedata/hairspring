@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from './api';
-import { getConnection, reportPollFailure, resetConnection } from './connectionStatus';
+import { getConnection, registerPoller, resetConnection } from './connectionStatus';
 import { startPolling } from './pollLoop';
 
 const INTERVAL = 1000;
@@ -181,7 +181,9 @@ describe('startPolling', () => {
 
     it('does not count a refusal as the connection being down, but does count it as having answered', async () => {
       const load = vi.fn().mockRejectedValue(new ApiError(429, 'slow'));
-      reportPollFailure();
+      const other = registerPoller();
+      other.failure();
+      other.unregister();
       const cancel = startPolling({ load, intervalMs: INTERVAL, onData: vi.fn(), onError: vi.fn() });
       await settle();
       expect(getConnection().failures).toBe(0);
@@ -189,12 +191,103 @@ describe('startPolling', () => {
     });
 
     it('refreshes at once when the browser comes back online, and starts the waits again', async () => {
-      const load = vi.fn().mockRejectedValueOnce(new TypeError('x')).mockRejectedValueOnce(new TypeError('x')).mockResolvedValue('ok');
+      const load = vi.fn().mockRejectedValue(new TypeError('x'));
       const cancel = startPolling({ load, intervalMs: INTERVAL, onData: vi.fn(), onError: vi.fn() });
       await settle();
       window.dispatchEvent(new Event('online'));
       await settle();
       expect(load).toHaveBeenCalledTimes(2);
+      // Without the reset this would be the second failure in a row and wait twice the interval.
+      await vi.advanceTimersByTimeAsync(INTERVAL - 1);
+      expect(load).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(load).toHaveBeenCalledTimes(3);
+      cancel();
+    });
+
+    it('ignores the browser coming back online while the tab is hidden', async () => {
+      const load = vi.fn().mockRejectedValue(new TypeError('x'));
+      const cancel = startPolling({ load, intervalMs: INTERVAL, onData: vi.fn(), onError: vi.fn() });
+      await settle();
+      vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+      document.dispatchEvent(new Event('visibilitychange'));
+      window.dispatchEvent(new Event('online'));
+      await vi.advanceTimersByTimeAsync(INTERVAL * 10);
+      expect(load).toHaveBeenCalledTimes(1);
+      cancel();
+      vi.restoreAllMocks();
+    });
+
+    it('does not let one poll\'s success hide another poll\'s failures', async () => {
+      const failing = startPolling({ load: vi.fn().mockRejectedValue(new TypeError('x')), intervalMs: INTERVAL, onData: vi.fn(), onError: vi.fn() });
+      const working = startPolling({ load: vi.fn().mockResolvedValue('ok'), intervalMs: INTERVAL, onData: vi.fn(), onError: vi.fn() });
+      await vi.advanceTimersByTimeAsync(INTERVAL);
+      expect(getConnection().failures).toBe(2);
+      failing();
+      working();
+    });
+
+    it('clears its failures when it is cancelled', async () => {
+      const load = vi.fn().mockRejectedValue(new TypeError('x'));
+      const cancel = startPolling({ load, intervalMs: INTERVAL, onData: vi.fn(), onError: vi.fn() });
+      await vi.advanceTimersByTimeAsync(INTERVAL);
+      expect(getConnection().failures).toBe(2);
+      cancel();
+      expect(getConnection().failures).toBe(0);
+    });
+
+    it('clears its failures when it ends on a 404 or a 401', async () => {
+      for (const status of [404, 401]) {
+        const load = vi.fn().mockRejectedValueOnce(new TypeError('x')).mockRejectedValueOnce(new TypeError('x')).mockRejectedValue(new ApiError(status, 'x'));
+        startPolling({ load, intervalMs: INTERVAL, onData: vi.fn(), onError: vi.fn() });
+        await vi.advanceTimersByTimeAsync(INTERVAL * 4);
+        expect(load).toHaveBeenCalledTimes(3);
+        expect(getConnection().failures).toBe(0);
+      }
+    });
+
+    it('clears its failures when it ends because the data is final', async () => {
+      const load = vi.fn().mockRejectedValueOnce(new TypeError('x')).mockRejectedValueOnce(new TypeError('x')).mockResolvedValue('done');
+      startPolling({ load, intervalMs: INTERVAL, stop: () => true, onData: vi.fn(), onError: vi.fn() });
+      await vi.advanceTimersByTimeAsync(INTERVAL * 4);
+      expect(getConnection().failures).toBe(0);
+    });
+  });
+
+  describe('when the server refuses with 429', () => {
+    beforeEach(() => resetConnection());
+
+    it('waits at least as long as Retry-After', async () => {
+      const load = vi.fn().mockRejectedValueOnce(new ApiError(429, 'slow', INTERVAL * 5)).mockResolvedValue('ok');
+      const cancel = startPolling({ load, intervalMs: INTERVAL, onData: vi.fn(), onError: vi.fn() });
+      await settle();
+      await vi.advanceTimersByTimeAsync(INTERVAL * 5 - 1);
+      expect(load).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(load).toHaveBeenCalledTimes(2);
+      cancel();
+    });
+
+    it('backs off on repeated 429s that carry no Retry-After', async () => {
+      const load = vi.fn().mockRejectedValue(new ApiError(429, 'slow'));
+      const cancel = startPolling({ load, intervalMs: INTERVAL, onData: vi.fn(), onError: vi.fn() });
+      await settle();
+      await vi.advanceTimersByTimeAsync(INTERVAL);
+      expect(load).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(INTERVAL * 2 - 1);
+      expect(load).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(load).toHaveBeenCalledTimes(3);
+      cancel();
+    });
+
+    it('returns to the usual interval after a success', async () => {
+      const load = vi.fn().mockRejectedValueOnce(new ApiError(429, 'x')).mockRejectedValueOnce(new ApiError(429, 'x')).mockResolvedValue('ok');
+      const cancel = startPolling({ load, intervalMs: INTERVAL, onData: vi.fn(), onError: vi.fn() });
+      await vi.advanceTimersByTimeAsync(INTERVAL * 3);
+      expect(load).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(INTERVAL);
+      expect(load).toHaveBeenCalledTimes(4);
       cancel();
     });
   });

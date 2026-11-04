@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from './api';
-import { backoffDelay, isConnectivityFailure, MAX_BACKOFF_MS, retryDelay, STOP_ON_UNAUTHORIZED } from './pollPolicy';
+import { backoffDelay, isConnectivityFailure, isRateLimited, MAX_BACKOFF_MS, retryDelay, STOP_ON_UNAUTHORIZED } from './pollPolicy';
 
 const BASE = 2000;
 
@@ -49,5 +49,13 @@ describe('isConnectivityFailure', () => {
     expect(isConnectivityFailure(new TypeError('Failed to fetch'))).toBe(true);
     expect(isConnectivityFailure(new ApiError(502, 'bad gateway'))).toBe(true);
     for (const status of [400, 401, 403, 404, 429]) expect(isConnectivityFailure(new ApiError(status, 'x'))).toBe(false);
+  });
+});
+
+describe('isRateLimited', () => {
+  it('is true only for a 429', () => {
+    expect(isRateLimited(new ApiError(429, 'slow'))).toBe(true);
+    expect(isRateLimited(new ApiError(500, 'x'))).toBe(false);
+    expect(isRateLimited(new TypeError('x'))).toBe(false);
   });
 });
