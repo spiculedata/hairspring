@@ -113,7 +113,11 @@ therefore issues each remote worker a random secret, shown once in the register 
 it never appears in the worker list. Every worker endpoint (`lease`, `progress`, `heartbeat`, `trials`, `complete`
 and `fail`) requires `worker_secret` and refuses a request that names a worker without it, so neither the trust flag
 nor a worker's lease can be borrowed by naming a worker's id; no endpoint identifies a worker by id alone. Only
-`register` is open to any `run` token, and it returns the new worker's own secret. The secret is a bearer
+`register` is open to any `run` token, and it returns the new worker's own secret. Registration is limited per token: `hairspring serve --register-limit N` (default 100 per hour, `0`
+disables) makes `register` answer `429 Too Many Requests` with a `Retry-After` header once a token has registered
+`N` workers in the hour, so one `run` token cannot fill the worker cap. Tokens that differ only in surrounding
+whitespace share one allowance. The count is kept in server memory, so it is the same on SQLite and PostgreSQL, needs no
+schema change and starts again from zero when the server restarts. The secret is a bearer
 credential: anyone who holds it acts as that worker. A worker that is pruned, or whose server database was replaced,
 registers again and gets a new id and secret; **a new id starts untrusted**, so an administrator must set trust
 again. Secrets are drawn from `/dev/urandom`, so the server needs a Unix host. A run that passed but holds fewer
