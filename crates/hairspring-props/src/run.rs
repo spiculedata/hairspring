@@ -8,7 +8,7 @@
 use crate::catalog::RunCatalog;
 use crate::digest::{DigestEntry, TrialDigest};
 use crate::event::{AssertKind, Loc};
-use crate::limits::MAX_IDS_PER_RUN;
+use crate::limits::{MAX_IDS_PER_RUN, MAX_PROVISIONAL_REFS};
 use crate::stats::{rule_of_three, wilson, Z_95};
 use crate::trial::{failure_basis, FailureReason, PropertyFailure, TrialProps, Witness};
 use std::collections::BTreeMap;
@@ -228,9 +228,9 @@ struct IdAcc {
     perturbing: u64,
     conflicted: u64,
     inconclusive_failures: u64,
-    /// Seeds of the timed-out trials whose failure of this id was counted while the kind was still undecided. They
-    /// are the only counts a decision can take back, so they are kept until then and dropped after.
-    provisional_failure_seeds: Vec<u64>,
+    /// Positions in the run of the timed-out trials whose failure of this id was counted while the kind was still
+    /// undecided. They are the only counts a decision can take back, so they are kept until then and dropped after.
+    provisional_failure_trials: Vec<u64>,
     trials_hit: u64,
     trials_true: u64,
     trials_false: u64,
@@ -260,7 +260,7 @@ impl IdAcc {
             perturbing: 0,
             conflicted: 0,
             inconclusive_failures: 0,
-            provisional_failure_seeds: Vec::new(),
+            provisional_failure_trials: Vec::new(),
             trials_hit: 0,
             trials_true: 0,
             trials_false: 0,
@@ -436,8 +436,11 @@ impl IdAcc {
 struct FoldState {
     summary: RunSummary,
     ids: BTreeMap<String, IdAcc>,
-    /// Timed-out trials whose counted failure still rests on an id that has not decided its kind.
+    /// Timed-out trials, by position in the run, whose counted failure still rests on an id that has not decided its
+    /// kind. A position, not a seed: seeds may repeat.
     provisional: BTreeMap<u64, ProvisionalTrial>,
+    /// The sum of `undecided` over `provisional`, bounded by [`MAX_PROVISIONAL_REFS`].
+    provisional_refs: usize,
 }
 
 /// How many ids attribute a failure to one timed-out trial, and how many of those are still undecided. The trial is in
@@ -485,6 +488,7 @@ impl RunProps {
                 },
                 ids: BTreeMap::new(),
                 provisional: BTreeMap::new(),
+                provisional_refs: 0,
             },
             id_cap,
             catalog: RunCatalog::new(),
@@ -535,6 +539,12 @@ impl RunProps {
         self.state.summary.clone()
     }
 
+    /// How many provisional attributions are held (see [`MAX_PROVISIONAL_REFS`]). For tests of the bound.
+    #[doc(hidden)]
+    pub fn provisional_refs(&self) -> usize {
+        self.state.provisional_refs
+    }
+
     /// Per-id statistics sorted by id.
     pub fn finish(self) -> Vec<PropertyStat> {
         self.state
@@ -573,11 +583,12 @@ fn fold_digest(
         mut summary,
         mut ids,
         mut provisional,
+        mut provisional_refs,
     } = state;
     let class = TrialClass::of(seed, digest);
     let inconclusive = class.inconclusive;
-    let mut attributing = 0u32;
-    let mut undecided = 0u32;
+    let ordinal = summary.trials;
+    let mut attribution = Attribution::default();
     for e in digest.entries.iter().filter(|e| e.catalogued) {
         let Some(row) = catalog.get(e.idx) else {
             continue;
@@ -591,21 +602,22 @@ fn fold_digest(
         let acc = match (acc.decided, inconclusive) {
             (false, false) => {
                 let kept = acc.kind == p.kind;
-                release_provisional(&mut acc, kept, &mut summary, &mut provisional);
+                release_provisional(
+                    &mut acc,
+                    kept,
+                    &mut summary,
+                    &mut provisional,
+                    &mut provisional_refs,
+                );
                 acc.decide(&p)
             }
             _ => acc,
         };
         let acc = if acc.kind == p.kind {
-            let mut acc = acc;
             // Only a failure the run attributes to the id counts as shown, so the count never says a failure was
             // shown that no stored per-id field records.
             if inconclusive && p.failed() {
-                attributing += 1;
-                if !acc.decided {
-                    undecided += 1;
-                    acc.provisional_failure_seeds.push(seed);
-                }
+                attribution.note(&row.id, acc.decided);
             }
             acc.with_trial(class, &p)
         } else if inconclusive {
@@ -645,18 +657,13 @@ fn fold_digest(
     summary.perturbing_trials += u64::from(class.perturbing);
     summary.degraded_trials += u64::from(class.degraded || digest.ids_dropped > 0);
     summary.inconclusive_trials += u64::from(inconclusive);
-    if attributing > 0 {
-        summary.inconclusive_with_failure_trials += 1;
-        if undecided > 0 {
-            provisional.insert(
-                seed,
-                ProvisionalTrial {
-                    attributing,
-                    undecided,
-                },
-            );
-        }
-    }
+    attribution.count(
+        ordinal,
+        &mut summary,
+        &mut ids,
+        &mut provisional,
+        &mut provisional_refs,
+    );
     summary.report_missing_trials += u64::from(class.unreported && !inconclusive);
     summary.conflict_trials += u64::from(!inconclusive && digest.flags.has_conflicts);
     summary.ids_dropped = summary.ids_dropped.saturating_add(digest.ids_dropped);
@@ -664,22 +671,83 @@ fn fold_digest(
         summary,
         ids,
         provisional,
+        provisional_refs,
+    }
+}
+
+/// The ids that attribute a failure to one timed-out trial: whether any of them has settled its kind (then the trial
+/// can never be taken back), and the ids that have not.
+#[derive(Default)]
+struct Attribution {
+    attributing: u32,
+    settled: bool,
+    undecided_ids: Vec<String>,
+}
+
+impl Attribution {
+    fn note(&mut self, id: &str, decided: bool) {
+        self.attributing += 1;
+        if decided {
+            self.settled = true;
+        } else {
+            self.undecided_ids.push(id.to_owned());
+        }
+    }
+
+    /// Counts the trial at `ordinal` if an id attributes a failure to it. A trial that only undecided ids attribute is
+    /// remembered until they settle, unless that would pass [`MAX_PROVISIONAL_REFS`]; then it is not counted, which
+    /// keeps the count a lower bound.
+    fn count(
+        self,
+        ordinal: u64,
+        summary: &mut RunSummary,
+        ids: &mut BTreeMap<String, IdAcc>,
+        provisional: &mut BTreeMap<u64, ProvisionalTrial>,
+        refs: &mut usize,
+    ) {
+        if self.attributing == 0 {
+            return;
+        }
+        let undecided = self.undecided_ids.len();
+        if self.settled || undecided == 0 {
+            summary.inconclusive_with_failure_trials += 1;
+            return;
+        }
+        if *refs + undecided > MAX_PROVISIONAL_REFS {
+            return;
+        }
+        summary.inconclusive_with_failure_trials += 1;
+        *refs += undecided;
+        provisional.insert(
+            ordinal,
+            ProvisionalTrial {
+                attributing: self.attributing,
+                undecided: undecided as u32,
+            },
+        );
+        for id in &self.undecided_ids {
+            if let Some(acc) = ids.get_mut(id) {
+                acc.provisional_failure_trials.push(ordinal);
+            }
+        }
     }
 }
 
 /// An id settles its kind: the timed-out trials whose failure it counted while undecided are now final if the kind was
-/// kept, and are taken back from the id (already done by `decide`) and from the run's count if it was replaced, unless
-/// another id still attributes a failure to the same trial.
+/// kept, and are taken back from the run's count if it was replaced, unless another id still attributes a failure to
+/// the same trial.
 fn release_provisional(
     acc: &mut IdAcc,
     kept: bool,
     summary: &mut RunSummary,
     provisional: &mut BTreeMap<u64, ProvisionalTrial>,
+    refs: &mut usize,
 ) {
-    for seed in std::mem::take(&mut acc.provisional_failure_seeds) {
-        let Some(trial) = provisional.get_mut(&seed) else {
+    for ordinal in std::mem::take(&mut acc.provisional_failure_trials) {
+        let Some(trial) = provisional.get_mut(&ordinal) else {
             continue;
         };
+        *refs = refs.saturating_sub(1);
         trial.undecided = trial.undecided.saturating_sub(1);
         if !kept {
             trial.attributing = trial.attributing.saturating_sub(1);
@@ -689,7 +757,7 @@ fn release_provisional(
             }
         }
         if trial.undecided == 0 {
-            provisional.remove(&seed);
+            provisional.remove(&ordinal);
         }
     }
 }

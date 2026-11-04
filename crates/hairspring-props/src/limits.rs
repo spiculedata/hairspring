@@ -35,6 +35,12 @@ pub const MAX_IDS_PER_PROC: usize = 4096;
 /// id costs at most about 1.5 KiB (id, message and location), so the map is bounded near 25 MiB however many trials
 /// run and however many per-seed-unique ids a guest invents.
 pub const MAX_IDS_PER_RUN: usize = 16 * 1024;
+/// Most provisional attributions the host holds while counting the timed-out trials that showed a failure. A failure
+/// seen in a timed-out trial under a kind that no conclusive trial has settled yet may still be taken back, so the
+/// trial is remembered (one trial position per undecided id that attributes it) until the id settles. Past this many
+/// the host stops counting trials that only undecided ids attribute, so the count stays a lower bound and the memory
+/// stays near 2 MiB however many timed-out trials and ids a guest produces.
+pub const MAX_PROVISIONAL_REFS: usize = 32 * 1024;
 /// Most `thread` lines (and so the largest `end.threads` count) one process may send.
 pub const MAX_THREADS_PER_PROC: usize = 256;
 /// Most processes one trial may report.

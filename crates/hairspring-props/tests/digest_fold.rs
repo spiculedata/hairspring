@@ -133,13 +133,18 @@ fn random_trial(rng: &mut Rng, id_pool: u64) -> TrialProps {
 type Trials = Vec<(u64, TrialProps, bool)>;
 
 fn random_run(seed: u64, trials: usize, id_pool: u64) -> Trials {
+    random_run_with(seed, trials, id_pool, 15)
+}
+
+/// A run in which `timed_out_percent` of the trials are inconclusive.
+fn random_run_with(seed: u64, trials: usize, id_pool: u64, timed_out_percent: u64) -> Trials {
     let mut rng = Rng(seed | 1);
     (0..trials)
         .map(|i| {
             (
                 (i as u64) * 3 + 100,
                 random_trial(&mut rng, id_pool),
-                rng.chance(15),
+                rng.chance(timed_out_percent),
             )
         })
         .collect()
@@ -210,6 +215,20 @@ fn the_digest_fold_is_byte_identical_to_the_previous_fold_on_random_runs() {
         let new = current(&trials, MAX_IDS_PER_RUN);
         assert_eq!(as_json(&old), as_json(&new), "seed {seed}");
     }
+}
+
+#[test]
+fn the_digest_fold_matches_on_runs_of_few_ids_and_many_timed_out_trials() {
+    let mut counted = 0;
+    for seed in 1..=400u64 {
+        let trials = random_run_with(seed * 15_485_863, 60, 3, 70);
+        for cap in [MAX_IDS_PER_RUN, 2] {
+            let (old, new) = (legacy(&trials, cap), current(&trials, cap));
+            assert_eq!(as_json(&old), as_json(&new), "seed {seed}, cap {cap}");
+            counted += new.1.inconclusive_with_failure_trials;
+        }
+    }
+    assert!(counted > 0, "the generator must exercise the count");
 }
 
 #[test]

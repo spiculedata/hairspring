@@ -208,11 +208,13 @@ front end can print the same lines.
   search runs and sweeps. A sweep that stopped before its trial budget prints counts only, without this line. The
   failures are never hits and are not in the rate. The count is a lower bound, not the number of failures that
   happened. It covers only timed-out trials whose events were read: a trial whose events could not be used is not
-  looked at. Only a failure that the run attributes to a stored per-id field counts: a timed-out trial whose declared
-  kind differs from the kind the run kept is not counted, and neither is one whose failure was seen under a kind that
-  a later conclusive trial replaced. Ids dropped by the id cap have no stored field and are not counted either. In a
-  sweep the "N inconclusive" figure also includes trials with unusable output, and a timed-out trial that Hermit also
-  reported as a host failure can add to the count.
+  looked at. Only a failure that the run attributes to a stored per-id field counts. A timed-out trial whose failing
+  kind differed from the id's kind at that point is not counted, even if that kind is the one the run finally kept.
+  A failure seen under a kind that a later conclusive trial replaced is not counted either. Ids dropped by the id cap
+  have no stored field and are not counted. A run holds at most 32,768 provisional attributions while kinds are
+  undecided; past that, trials that only undecided ids attribute are left out. In a sweep the "N inconclusive" figure
+  also includes trials with unusable output, and a timed-out trial that Hermit also reported as a host failure can
+  add to the count.
 * The count comes from the stored property summary of the run. A run with no stored property summary has an unknown
   count, and the line says nothing about it. A run can lack the summary because it predates the count, the fold
   failed, no ids were held, or the summary was over the size limit. A summary written before the count existed reads

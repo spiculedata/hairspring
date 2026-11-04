@@ -259,7 +259,7 @@ pub struct LegacyRunProps {
     summary: RunSummary,
     ids: BTreeMap<String, IdAcc>,
     id_cap: usize,
-    /// Every failure a timed-out trial showed under the kind its id had at that moment: `(seed, id, kind)`. Whether
+    /// Every failure a timed-out trial showed under the kind its id had at that moment: `(position of the trial in the run, id, kind)`. Whether
     /// it counts is settled only at the end, from the kind each id finally kept.
     timed_out_failures: Vec<(u64, String, AssertKind)>,
 }
@@ -314,6 +314,7 @@ impl LegacyRunProps {
             mut timed_out_failures,
         } = self;
         let class = TrialClass::of(seed, trial, inconclusive);
+        let ordinal = summary.trials;
         let mut dropped = 0u64;
         for p in &trial.properties {
             let acc = match ids.remove(&p.id) {
@@ -330,7 +331,7 @@ impl LegacyRunProps {
             };
             let acc = if acc.kind == p.kind {
                 if inconclusive && p.failure().is_some() {
-                    timed_out_failures.push((seed, p.id.clone(), p.kind));
+                    timed_out_failures.push((ordinal, p.id.clone(), p.kind));
                 }
                 acc.with_trial(class, p)
             } else if inconclusive {
