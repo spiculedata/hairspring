@@ -3,12 +3,15 @@ import { LoadFailed } from '../components/Notices';
 import { StartRunForm } from '../components/StartRunForm';
 import { RunsTable } from '../components/RunsTable';
 import { UpdatedAt } from '../components/UpdatedAt';
+import { startAccess } from '../me';
+import { useMe } from '../meStore';
 import { navigate } from '../router';
 import { usePolling } from '../usePolling';
 
 function NewRun() {
   const targets = usePolling(api.targets, 60_000);
-  return <StartRunForm targets={targets.data ?? []} start={api.startRun} onStarted={navigate} />;
+  const access = startAccess(useMe());
+  return <StartRunForm targets={targets.data ?? []} start={api.startRun} onStarted={navigate} access={access} />;
 }
 
 export function Runs() {

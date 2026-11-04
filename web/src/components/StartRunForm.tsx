@@ -1,4 +1,5 @@
 import { useRef, useState, type FormEvent } from 'react';
+import type { Access } from '../me';
 import { buildStartRun, enforcedBudget, startErrorText, type RunMode, type StartFormErrors, type StartRunBody } from '../startRun';
 import {
   BUDGET_HEADING,
@@ -23,7 +24,11 @@ interface Props {
   readonly start: (body: StartRunBody) => Promise<{ run: Pick<Run, 'id'> }>;
   /** Called with the path of the new run's page. */
   readonly onStarted: (path: string) => void;
+  /** Whether the caller's role may start a run, and the one line that says why not. Absent means no restriction is known. */
+  readonly access?: Access;
 }
+
+const ACCESS_NOTE_ID = 'start-access-note';
 
 function BudgetFacts({ budget, showSteps }: { budget: Budget; showSteps: boolean }) {
   return (
@@ -55,7 +60,7 @@ function FieldError({ id, message }: { id: string; message: string | undefined }
 }
 
 /** The start-run form: target, search or sweep, an optional seed and, for a sweep, the number of trials. */
-export function StartRunForm({ targets, start, onStarted }: Props) {
+export function StartRunForm({ targets, start, onStarted, access = { canStart: true } }: Props) {
   const [targetName, setTargetName] = useState('');
   const [mode, setMode] = useState<RunMode>('search');
   const [seedText, setSeedText] = useState('');
@@ -71,7 +76,7 @@ export function StartRunForm({ targets, start, onStarted }: Props) {
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (target === undefined || inFlight.current) return;
+    if (target === undefined || inFlight.current || !access.canStart) return;
     const built = buildStartRun({ target, mode, seedText, trialsText });
     setMessage(undefined);
     if (!built.ok) {
@@ -160,9 +165,18 @@ export function StartRunForm({ targets, start, onStarted }: Props) {
       )}
       {shown !== undefined && <BudgetFacts budget={shown} showSteps={target?.kind === SIMULATION_KIND} />}
       <div className="row">
-        <button type="submit" disabled={target === undefined || pending}>
+        <button
+          type="submit"
+          disabled={target === undefined || pending || !access.canStart}
+          aria-describedby={access.note === undefined ? undefined : ACCESS_NOTE_ID}
+        >
           {pending ? STARTING : isSweep ? START_SWEEP : START_RUN}
         </button>
+        {access.note !== undefined && (
+          <span id={ACCESS_NOTE_ID} className="start-access-note muted">
+            {access.note}
+          </span>
+        )}
       </div>
       {message !== undefined && (
         <p className="error" role="alert">

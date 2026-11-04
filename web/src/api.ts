@@ -1,3 +1,4 @@
+import { isMe, type Me } from './me';
 import { parseSse, type SseEvent } from './sse';
 import type { StartRunBody } from './startRun';
 import type { Coverage, FailureChecks, FailureDetail, FailureSummary, PropertyPage, PropertyQuery, ReplayResult, Run, RunDetail, Target, Worker } from './types';
@@ -149,6 +150,11 @@ export const api = {
   coverage: async (runId: string, signal?: AbortSignal): Promise<Coverage> => {
     const body = await request<unknown>(`/api/runs/${encodeURIComponent(runId)}/coverage`, { signal });
     if (!isCoverage(body)) throw new ApiError(502, 'the server sent a coverage response in an unexpected shape');
+    return body;
+  },
+  me: async (): Promise<Me> => {
+    const body = await request<unknown>('/api/me');
+    if (!isMe(body)) throw new ApiError(502, 'the server sent a /api/me response in an unexpected shape');
     return body;
   },
   /** `{ status, version }`, and `organisation` when the server has a name and this caller has a valid token. Read with `organisationName`. */

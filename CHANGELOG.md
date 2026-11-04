@@ -32,6 +32,10 @@
   field is left out (the answer is still 200) once that limit is used up, so health cannot be used to guess tokens.
   A request without a token is never limited.
 
+- The web UI asks `GET /api/me` for the caller's role once per page load, and again after the token changes. When the
+  role cannot start runs (`read`), the Runs page disables Start run and Start sweep and says so in one line, instead
+  of waiting for a 403. If the server cannot answer, the button stays available and the server still decides.
+
 ### Changed
 
 - The `not rated trials:` line in the text report of a search run or a sweep now says how many inconclusive trials
