@@ -7,6 +7,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "hs_internal.h"
@@ -140,12 +141,29 @@ static void publish_events_fd(int fd) {
   __atomic_store_n(&hs_proc.fd, hs_events_fd_remember(fd), __ATOMIC_RELEASE);
 }
 
+/* Opens the events file without blocking and keeps it only if it is a regular file. O_NONBLOCK stops a FIFO with no
+** reader from hanging the program in open(); the S_ISREG check refuses a FIFO that has a reader and any device, which
+** would receive the events as data. O_NONBLOCK is cleared afterwards so later writes behave as for any file.
+** Returns -1 on any failure, with nothing left open. */
+static int open_events_file(const char *path) {
+  int fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0644);
+  if (fd < 0) return -1;
+  struct stat st;
+  int flags = fcntl(fd, F_GETFL);
+  if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || flags < 0 ||
+      fcntl(fd, F_SETFL, flags & ~O_NONBLOCK) != 0) {
+    close(fd);
+    return -1;
+  }
+  return fd;
+}
+
 static void open_events(void) {
   const char *mode = getenv("HAIRSPRING_EVENTS");
   const char *path = events_file_setting();
   if (mode && strcmp(mode, "off") == 0) return;
   if (path && path[0]) {
-    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NOFOLLOW, 0644);
+    int fd = open_events_file(path);
     if (fd >= 0) {
       int high = private_copy(fd);
       if (high != fd && high >= 0) close(fd);

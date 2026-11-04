@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -123,16 +124,34 @@ static size_t read_all(int fd, char *buf, size_t cap) {
   return len;
 }
 
+/* A hung sample must fail its test, not the whole run: SIGALRM kills the child, which closes the pipe. */
+#define RUN_TIMEOUT_SECONDS 30
+static volatile pid_t g_watched_child;
+static volatile sig_atomic_t g_timed_out;
+
+static void on_alarm(int sig) {
+  (void)sig;
+  g_timed_out = 1;
+  if (g_watched_child > 0) kill(g_watched_child, SIGKILL);
+}
+
 static struct capture *run_capture(const char *scenario, const char *arg, const char *const *env) {
   struct capture *c = calloc(1, sizeof *c);
   c->buf = malloc(MAX_OUT);
   int fds[2];
   if (pipe(fds) != 0) abort();
+  signal(SIGALRM, on_alarm);
+  g_timed_out = 0;
   pid_t pid = spawn(scenario, arg, env, fds[1]);
+  g_watched_child = pid;
+  alarm(RUN_TIMEOUT_SECONDS);
   close(fds[1]);
   c->len = read_all(fds[0], c->buf, MAX_OUT - 1);
   close(fds[0]);
   waitpid(pid, &c->status, 0);
+  alarm(0);
+  g_watched_child = 0;
+  CHECK(!g_timed_out); /* the sample hung and was killed */
   c->buf[c->len] = 0;
   split_lines(c);
   return c;
@@ -499,6 +518,35 @@ static void test_unwritable_events_file_falls_back_to_stderr_and_is_counted(void
   free_capture(c);
 }
 
+static void test_events_file_fifo_without_a_reader_does_not_hang_and_falls_back(void) {
+  char dir[] = "/tmp/hs_fifo_XXXXXX";
+  CHECK(mkdtemp(dir) != NULL);
+  char fifo[96];
+  snprintf(fifo, sizeof fifo, "%s/events", dir);
+  CHECK(mkfifo(fifo, 0600) == 0);
+  char setting[128];
+  snprintf(setting, sizeof setting, "HAIRSPRING_EVENTS_FILE=%s", fifo);
+  const char *env[] = {setting, NULL};
+  struct capture *c = run_capture("basic", NULL, env);
+  CHECK(!g_timed_out);
+  CHECK(WIFEXITED(c->status) && WEXITSTATUS(c->status) == 0);
+  check_all_lines_wellformed(c);
+  CHECK_U64(count(c, "end", "p1"), 1);
+  CHECK(field(find_line(c, "end", "p1", NULL), "dropped") >= 1);
+  free_capture(c);
+  unlink(fifo);
+  rmdir(dir);
+}
+
+static void test_events_file_that_is_a_device_is_refused_and_falls_back(void) {
+  const char *env[] = {"HAIRSPRING_EVENTS_FILE=/dev/null", NULL};
+  struct capture *c = run_capture("basic", NULL, env);
+  check_all_lines_wellformed(c);
+  CHECK_U64(count(c, "end", "p1"), 1); /* the report reached stderr, not the device */
+  CHECK(field(find_line(c, "end", "p1", NULL), "dropped") >= 1);
+  free_capture(c);
+}
+
 static void test_events_file_symlink_is_not_followed(void) {
   char target[] = "/tmp/hs_target_XXXXXX";
   int tmp = mkstemp(target);
@@ -705,6 +753,8 @@ int main(int argc, char **argv) {
   RUN(test_report_survives_a_timer_signal_during_the_write);
   RUN(test_empty_catalog_reports_work_and_end);
   RUN(test_fork_while_another_thread_holds_the_key_lock_does_not_hang_the_child);
+  RUN(test_events_file_fifo_without_a_reader_does_not_hang_and_falls_back);
+  RUN(test_events_file_that_is_a_device_is_refused_and_falls_back);
   RUN(test_a_lost_events_descriptor_is_dropped_not_redirected);
   RUN(test_eval_lines_check_the_events_descriptor_too);
   RUN(test_an_ignored_signal_stays_ignored_and_is_reported_as_not_installed);
