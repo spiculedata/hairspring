@@ -1,5 +1,6 @@
 import type { RateCellData } from '../types';
-import { formatPct, rateParts, rateText } from '../wording';
+import { lowerPct, upperPct } from '../percent';
+import { rateParts, rateText } from '../wording';
 
 const PERCENT = 100;
 
@@ -12,7 +13,7 @@ function IntervalBar({ lower, upper }: { lower: number; upper: number }) {
   const left = toPercent(lower);
   const width = Math.max(0, toPercent(upper) - left);
   return (
-    <span className="rate-bar" role="img" aria-label={`interval ${formatPct(lower)} to ${formatPct(upper)}`}>
+    <span className="rate-bar" role="img" aria-label={`interval ${lowerPct(lower)} to ${upperPct(upper)}`}>
       <span className="rate-bar-fill" style={{ left: `${left}%`, width: `${width}%` }} />
     </span>
   );

@@ -1,0 +1,28 @@
+# Directed-rounding cases shared by the CLI report (crates/hairspring-props/src/percent.rs) and the web client
+# (web/src/percent.ts). Each line is: direction fraction expected. Both test suites read this file, so the two cannot
+# drift apart without one of them failing.
+#
+# Zero events in 300 rated trials: the exact bound is 0.9936%, which must be shown as 1.00%, never 0.99%.
+upper 0.009936081944 1.00%
+# Zero events in 600000 rated trials: the bound is about 0.0005%, below a hundredth of a percent.
+upper 0.000004992 <0.01%
+# Every rated trial had the event (k = N): the point estimate is exactly 1, the lower bound is the exact one.
+upper 1 100.00%
+lower 1 100.00%
+nearest 1 100.00%
+lower 0.990063918 99.00%
+upper 0 0.00%
+lower 0 0.00%
+nearest 0 0.00%
+upper 0.043165728790 4.32%
+lower 0.005114237790 0.51%
+lower 0.017876213100 1.78%
+# A figure that is already two decimals is not moved by float noise.
+upper 0.0149 1.49%
+lower 0.0149 1.49%
+nearest 0.0149 1.49%
+nearest 0.0006263 0.06%
+# A non-zero figure below 0.01% is stated as less than that, in every direction.
+upper 0.000000499 <0.01%
+lower 0.00005 <0.01%
+nearest 0.00005 <0.01%
