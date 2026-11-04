@@ -113,7 +113,22 @@ therefore issues each remote worker a random secret, shown once in the register 
 it never appears in the worker list. Every worker endpoint (`lease`, `progress`, `heartbeat`, `trials`, `complete`
 and `fail`) requires `worker_secret` and refuses a request that names a worker without it, so neither the trust flag
 nor a worker's lease can be borrowed by naming a worker's id; no endpoint identifies a worker by id alone. Only
-`register` is open to any `run` token, and it returns the new worker's own secret. The secret is a bearer
+`register` is open to any `run` token, and it returns the new worker's own secret.
+
+Registration is limited per token. `hairspring serve --register-limit N` (default 100, `0` disables) makes `register`
+answer `429 Too Many Requests` with a `Retry-After` header once a token has made `N` registration attempts in a fixed
+one-hour window. The window starts at the token's first counted attempt, so up to `2N` attempts can pass either side of
+a boundary, and `Retry-After` is always the full window (3600 seconds), not the time left. Attempts that pass the role
+check count even if they then fail (for example `caps is too large` or `worker limit reached`). Every header spelling
+of one token (extra spaces or tabs) shares one allowance, and when the server runs with no tokens (loopback only) all
+callers share a single allowance. The count is kept in server memory, so it is the same on SQLite and PostgreSQL, needs
+no schema change and starts again from zero when the server restarts.
+
+The limit slows one token filling the worker table but does not prevent it. The table holds at most 1000 workers, and a
+worker is pruned only once it is more than 24 hours old, so at the default one token can reach the cap in about ten
+hours and keep it full, because 100 registrations an hour is 2400 in 24 hours. To stop a single token filling the cap,
+set `--register-limit` lower than the cap divided by 24 (41 or fewer per hour keeps one token under 1000 live workers).
+The secret is a bearer
 credential: anyone who holds it acts as that worker. A worker that is pruned, or whose server database was replaced,
 registers again and gets a new id and secret; **a new id starts untrusted**, so an administrator must set trust
 again. Secrets are drawn from `/dev/urandom`, so the server needs a Unix host. A run that passed but holds fewer
