@@ -177,6 +177,87 @@ HS__ALWAYS_INLINE void hs__hit(struct hs_site *s, const int64_t *v) {
 #define HS__STR2(x) #x
 #define HS__STR(x) HS__STR2(x)
 
+/* How a call site gets its record.
+**
+** The portable way is a function-local `static` with a section attribute (the #else branch below), and the catalog is
+** the linker's collection of that section. g++ does not apply the section attribute to a static in a C++ function
+** template, and rejects one file that has both an inline-function site and an ordinary-function site (issue #23). So
+** with g++ in C++ on ELF x86-64 and aarch64 the record is written by inline assembly instead: `.pushsection` puts the
+** record and its offline JSON text in the catalog sections whatever the function is, and the assembly hands the
+** record's address back as `hs__site`. The assembler template is plain text, so the id, the message and the file name
+** must not contain a character that is special in it (see hs__plain_text). A site that the optimiser deletes as dead
+** code is not catalogued on this path, because the assembly goes with it. */
+#if defined(__cplusplus) && defined(__GNUC__) && !defined(__clang__) && defined(__ELF__) && \
+    (defined(__x86_64__) || defined(__aarch64__))
+#define HS__ASM_SITES 1
+#endif
+
+#ifdef HS__ASM_SITES
+/* The address of a string literal as an operand: `i` on x86-64, `S` (a symbolic address) on aarch64, where `i` is
+** refused. */
+#if defined(__x86_64__)
+#define HS__ASM_ADDR(label_) "lea " label_ "(%%rip), %[out]"
+#define HS__ASM_SYM "i"
+#else
+#define HS__ASM_ADDR(label_) "adrp %[out], " label_ "\n\tadd %[out], %[out], :lo12:" label_
+#define HS__ASM_SYM "S"
+#endif
+
+/* True when s[lo, hi) has no character that would change the meaning of the assembler template or of the offline JSON
+** line: `%`, braces and `|` (operand and dialect syntax), `"` and `\` (string syntax), control characters. The range
+** is halved on each step so a 512 byte message stays well inside the constexpr depth limit. */
+constexpr bool hs__plain_char(char c) {
+  return c >= 0x20 && c != 0x7f && c != '%' && c != '{' && c != '}' && c != '|' && c != '"' && c != '\\';
+}
+constexpr bool hs__plain_text(const char *s, size_t lo, size_t hi) {
+  return hi - lo == 0   ? true
+         : hi - lo == 1 ? hs__plain_char(s[lo])
+                        : hs__plain_text(s, lo, lo + (hi - lo) / 2) && hs__plain_text(s, lo + (hi - lo) / 2, hi);
+}
+#define HS__PLAIN(lit_) (hs__plain_text((lit_), 0, sizeof(lit_) - 1))
+
+#define HS__JQ "\\\"" /* the two characters \" : a quote inside an assembler string */
+
+/* The record (live counters), then its offline JSON twin, then the record's address. The fields after `kind` are
+** written as zeros; the offsets are checked below against struct hs_site. The labels are unique per copy of the
+** assembly (%=), so inlining and template instantiation cannot define one twice. The braces of the JSON are written
+** as bytes because `{` and `}` are dialect syntax in an x86 template. */
+#define HS__SITE(kind_, kind_name_, must_, id_, msg_)                                                          \
+  HS__STATIC_ASSERT(sizeof(id_) > 1 && sizeof(id_) <= 129, "an id is 1 to 128 bytes");                         \
+  HS__STATIC_ASSERT(sizeof(msg_) <= 513, "a message is at most 512 bytes");                                    \
+  HS__STATIC_ASSERT(HS__PLAIN(id_) && HS__PLAIN(msg_) && HS__PLAIN(__FILE__),                                  \
+                    "with g++ an id, a message and the file name must not contain % { } | \" \\ or control characters"); \
+  struct hs_site *hs__site;                                                                                    \
+  __asm__ volatile(                                                                                            \
+      ".pushsection " HS__SECTION ",\"aw\",@progbits\n\t"                                                      \
+      ".balign 64\n"                                                                                           \
+      ".Lhs_site%=:\n\t"                                                                                       \
+      ".quad %c[id]\n\t.quad %c[msg]\n\t.quad %c[file]\n\t"                                                    \
+      ".long %c[line]\n\t.short %c[kind]\n\t.short 0\n\t"                                                      \
+      ".zero %c[rest]\n\t"                                                                                     \
+      ".popsection\n\t"                                                                                        \
+      ".pushsection " HS__STR_SECTION ",\"a\",@progbits\n\t"                                                   \
+      ".byte 0x7b\n\t"                                                                                         \
+      ".ascii \"" HS__JQ "v" HS__JQ ":1," HS__JQ "kind" HS__JQ ":" HS__JQ "catalog" HS__JQ ","                 \
+      HS__JQ "id" HS__JQ ":" HS__JQ id_ HS__JQ "," HS__JQ "type" HS__JQ ":" HS__JQ kind_name_ HS__JQ ","        \
+      HS__JQ "must_hit" HS__JQ ":" must_ "," HS__JQ "msg" HS__JQ ":" HS__JQ msg_ HS__JQ ","                     \
+      HS__JQ "loc" HS__JQ ":\"\n\t"                                                                            \
+      ".byte 0x7b\n\t"                                                                                         \
+      ".ascii \"" HS__JQ "file" HS__JQ ":" HS__JQ __FILE__ HS__JQ "," HS__JQ "line" HS__JQ ":" HS__STR(__LINE__) \
+      "\"\n\t"                                                                                                 \
+      ".byte 0x7d, 0x7d, 0\n\t"                                                                                \
+      ".popsection\n\t" HS__ASM_ADDR(".Lhs_site%=")                                                            \
+      : [out] "=r"(hs__site)                                                                                   \
+      : [id] HS__ASM_SYM(id_), [msg] HS__ASM_SYM(msg_), [file] HS__ASM_SYM(__FILE__), [line] "i"(__LINE__), [kind] "i"(kind_),         \
+        [rest] "i"(sizeof(struct hs_site) - offsetof(struct hs_site, trues)))
+#define HS__SITE_REF (hs__site)
+
+HS__STATIC_ASSERT(offsetof(struct hs_site, id) == 0 && offsetof(struct hs_site, msg) == 8 &&
+                      offsetof(struct hs_site, file) == 16 && offsetof(struct hs_site, line) == 24 &&
+                      offsetof(struct hs_site, kind) == 28 && offsetof(struct hs_site, flags) == 30 &&
+                      offsetof(struct hs_site, trues) == 32,
+                  "the assembly that writes a record assumes this layout");
+#else
 /* The record (live counters) and its offline JSON twin. `id_` and `msg_` must be string literals. */
 #define HS__SITE(kind_, kind_name_, must_, id_, msg_)                                                          \
   HS__STATIC_ASSERT(sizeof(id_) > 1 && sizeof(id_) <= 129, "an id is 1 to 128 bytes");                         \
@@ -187,6 +268,8 @@ HS__ALWAYS_INLINE void hs__hit(struct hs_site *s, const int64_t *v) {
   static const char hs__offline[] __attribute__((used, section(HS__STR_SECTION))) HS__RETAIN =                 \
       "{\"v\":1,\"kind\":\"catalog\",\"id\":\"" id_ "\",\"type\":\"" kind_name_ "\",\"must_hit\":" must_       \
       ",\"msg\":\"" msg_ "\",\"loc\":{\"file\":\"" __FILE__ "\",\"line\":" HS__STR(__LINE__) "}}"
+#define HS__SITE_REF (&hs__site)
+#endif
 
 /* Up to four integer values; missing ones are zero. */
 #ifdef __cplusplus
@@ -202,14 +285,14 @@ HS__ALWAYS_INLINE void hs__hit(struct hs_site *s, const int64_t *v) {
   do {                                                            \
     HS__SITE(kind_, kind_name_, must_, id_, msg_);                \
     HS__CHECK_VALS(__VA_ARGS__);                                  \
-    hs__eval(&hs__site, (uint64_t)!!(cond_), HS__VALS(__VA_ARGS__)); \
+    hs__eval(HS__SITE_REF, (uint64_t)!!(cond_), HS__VALS(__VA_ARGS__)); \
   } while (0)
 
 #define HS__POINT(kind_, kind_name_, must_, id_, msg_, ...) \
   do {                                                      \
     HS__SITE(kind_, kind_name_, must_, id_, msg_);          \
     HS__CHECK_VALS(__VA_ARGS__);                            \
-    hs__hit(&hs__site, HS__VALS(__VA_ARGS__));              \
+    hs__hit(HS__SITE_REF, HS__VALS(__VA_ARGS__));              \
   } while (0)
 
 #define HS_ALWAYS(cond, id, msg, ...) \
