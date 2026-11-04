@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { navigate } from '../router';
 import { GLOSSARY } from './glossaryData';
 import { GlossaryPage } from './GlossaryPage';
 import { Term } from './Term';
@@ -40,7 +41,7 @@ describe('Term', () => {
     expect(document.getElementById(id as string)?.textContent).toContain(GLOSSARY.seed.definition);
   });
 
-  it('closes on Escape and keeps focus on the button', () => {
+  it('closes on Escape from the button and keeps focus on it', () => {
     render(<Term term="seed">seed</Term>);
     const button = screen.getByRole('button', { name: 'seed' });
     button.focus();
@@ -48,6 +49,50 @@ describe('Term', () => {
     fireEvent.keyDown(button, { key: 'Escape' });
     expect(button.getAttribute('aria-expanded')).toBe('false');
     expect(document.activeElement).toBe(button);
+  });
+
+  it('closes on Escape from the Glossary link inside the definition and returns focus to the button', () => {
+    render(<Term term="seed">seed</Term>);
+    const button = screen.getByRole('button', { name: 'seed' });
+    fireEvent.click(button);
+    const link = screen.getByRole('link', { name: /glossary/i });
+    link.focus();
+    expect(document.activeElement).toBe(link);
+    fireEvent.keyDown(link, { key: 'Escape' });
+    expect(button.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText(GLOSSARY.seed.definition)).toBeNull();
+    expect(document.activeElement).toBe(button);
+  });
+
+  it('ignores Escape while closed, so it is left to whatever else is listening', () => {
+    const onKeyDown = vi.fn();
+    render(
+      <div onKeyDown={onKeyDown}>
+        <Term term="seed">seed</Term>
+      </div>,
+    );
+    const button = screen.getByRole('button', { name: 'seed' });
+    button.focus();
+    fireEvent.keyDown(button, { key: 'Escape' });
+    expect(onKeyDown).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes when keyboard focus leaves it, and stays open while focus moves inside it', () => {
+    render(
+      <>
+        <Term term="seed">seed</Term>
+        <a href="#after">after</a>
+      </>,
+    );
+    const button = screen.getByRole('button', { name: 'seed' });
+    fireEvent.click(button);
+    const link = screen.getByRole('link', { name: /glossary/i });
+    fireEvent.blur(button, { relatedTarget: link });
+    fireEvent.focusOut(button, { relatedTarget: link });
+    expect(button.getAttribute('aria-expanded')).toBe('true');
+    const after = screen.getByRole('link', { name: 'after' });
+    fireEvent.focusOut(link, { relatedTarget: after });
+    expect(button.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('closes when the reader presses elsewhere', () => {
@@ -79,6 +124,24 @@ describe('Term', () => {
 });
 
 describe('GlossaryPage', () => {
+  it('scrolls to the entry named by the address on mount and again when only the fragment changes', () => {
+    const scroll = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scroll(this.id);
+    };
+    try {
+      act(() => navigate('/glossary#seed'));
+      render(<GlossaryPage />);
+      expect(scroll).toHaveBeenLastCalledWith('seed');
+      act(() => navigate('/glossary#bundle'));
+      expect(scroll).toHaveBeenLastCalledWith('bundle');
+    } finally {
+      Element.prototype.scrollIntoView = original;
+      act(() => navigate('/'));
+    }
+  });
+
   it('has one heading and lists every entry as a term with its definition and an address fragment', () => {
     const { container } = render(<GlossaryPage />);
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);

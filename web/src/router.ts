@@ -36,6 +36,11 @@ export function useSearch(): string {
   return useLocationPart(() => window.location.search);
 }
 
+/** The address's fragment (with its leading `#`), which changes when the reader follows a link to another entry. */
+export function useHash(): string {
+  return useLocationPart(() => window.location.hash);
+}
+
 const MAX_SEED_DIGITS = 20;
 const MAX_SEQ_DIGITS = 19;
 const RUN_ID = /^[A-Za-z0-9_-]{1,64}$/;

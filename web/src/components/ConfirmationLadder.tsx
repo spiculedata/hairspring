@@ -38,9 +38,9 @@ export function ConfirmationLadder({ finding, environmentPinned }: { finding: st
   const showsEnvironment = finding === 'confirmed' || finding === 'verified';
   return (
     <section className="ladder-section" aria-labelledby="confirmation-heading">
-      <h2 id="confirmation-heading">
-        <Term term="confirmation">{LADDER_HEADING}</Term>
-      </h2>
+      <Term term="confirmation" heading={{ id: 'confirmation-heading' }}>
+        {LADDER_HEADING}
+      </Term>
       <p>
         <StatusBadge kind="finding" status={finding} />
         {showsEnvironment && <span className="muted ladder-env">{` ${environmentPinned ? ENVIRONMENT_PINNED : ENVIRONMENT_NOT_PINNED}`}</span>}

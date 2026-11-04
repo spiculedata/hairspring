@@ -138,7 +138,7 @@ The page loads again by itself every few seconds.
 
 A Glossary page at `/glossary` defines the words the pages use (seed, trial, sweep, bundle and so on). On the failure
 page, a word with a dotted underline, such as Confirmation, opens its definition when pressed or activated from the
-keyboard, with a link to the glossary entry. The definitions follow the wiki Glossary.
+keyboard, with a link to the glossary entry. The definitions are shortened from the wiki Glossary.
 
 ## Start a run or a sweep from the web UI
 

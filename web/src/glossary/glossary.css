@@ -1,5 +1,6 @@
 /* Inline definitions and the Glossary page. Colours come from the tokens in styles.css. */
 .term { display: inline; }
+.term-block h2 { margin-bottom: .3rem; }
 button.term-button {
   display: inline;
   padding: 0;
