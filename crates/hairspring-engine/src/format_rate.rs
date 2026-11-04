@@ -26,7 +26,13 @@ fn counts(outcome: &RunOutcome) -> Option<RunCounts> {
     let hits = u64::from(outcome.status == RunStatus::Failed);
     let inconclusive = outcome.inconclusive.min(outcome.trials);
     let rated = outcome.trials - inconclusive;
-    RunCounts::new(hits.min(rated), rated, inconclusive, 0).ok()
+    let with_failures = outcome
+        .property_run
+        .as_ref()
+        .map_or(0, |run| run.inconclusive_with_failure_trials);
+    RunCounts::new(hits.min(rated), rated, inconclusive, 0)
+        .ok()
+        .map(|counts| counts.with_inconclusive_failures(with_failures))
 }
 
 /// Said when a stored count cannot be believed, so the capped figures are not read as exact.

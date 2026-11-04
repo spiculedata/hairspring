@@ -179,3 +179,40 @@ fn the_summary_reports_the_cap_the_accumulator_actually_uses() {
     assert_eq!(RunProps::with_id_cap(2).summary().id_cap, 2);
     assert_eq!(RunProps::new().summary().id_cap, MAX_IDS_PER_RUN);
 }
+
+/// A complete one-process report in which each given id failed once.
+fn report_of_failing_ids(ids: &[&str]) -> String {
+    let mut out = hello("p1");
+    for id in ids {
+        out.push_str(&catalog_min("p1", id, AssertKind::Always));
+        out.push_str(&assert_line("p1", id, 1, 1, Some(("t", 2)), Some(("t", 1))));
+    }
+    out.push_str(&ev(&format!(
+        r#"{{"v":1,"kind":"end","proc":"p1","reason":"exit","status":0,"sites":{},"evals":{},"dropped":0,"threads":0}}"#,
+        ids.len(),
+        ids.len() * 2
+    )));
+    out
+}
+
+#[test]
+fn the_summary_counts_inconclusive_trials_that_showed_a_failure_once_per_trial() {
+    let two_failing = fold(&report_of_failing_ids(&["a", "b"]));
+    let clean = fold(&single(AssertKind::Always, 3, 0));
+    let conclusive_failure = fold(&single(AssertKind::Always, 4, 1));
+    let summary = RunProps::new()
+        .add_inconclusive(1, &two_failing)
+        .add_inconclusive(2, &clean)
+        .add(3, &conclusive_failure)
+        .summary();
+    assert_eq!(summary.inconclusive_trials, 2);
+    assert_eq!(summary.inconclusive_with_failure_trials, 1);
+}
+
+#[test]
+fn a_summary_stored_before_the_failure_count_existed_reads_it_as_zero() {
+    let json = r#"{"trials":3,"perturbing_trials":0,"degraded_trials":0,"inconclusive_trials":2,"report_missing_trials":0,"conflict_trials":0,"kind_mismatches":0,"kind_mismatch_details":[]}"#;
+    let summary: RunSummary = serde_json::from_str(json).expect("an older summary still reads");
+    assert_eq!(summary.inconclusive_trials, 2);
+    assert_eq!(summary.inconclusive_with_failure_trials, 0);
+}

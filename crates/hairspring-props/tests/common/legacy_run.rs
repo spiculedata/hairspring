@@ -310,6 +310,7 @@ impl LegacyRunProps {
         } = self;
         let class = TrialClass::of(seed, trial, inconclusive);
         let mut dropped = 0u64;
+        let mut showed_failure = false;
         for p in &trial.properties {
             let acc = match ids.remove(&p.id) {
                 Some(acc) => acc,
@@ -319,6 +320,7 @@ impl LegacyRunProps {
                 }
                 None => IdAcc::start(p, !inconclusive),
             };
+            showed_failure |= p.failure().is_some();
             let acc = match (acc.decided, inconclusive) {
                 (false, false) => acc.decide(p),
                 _ => acc,
@@ -360,6 +362,7 @@ impl LegacyRunProps {
         summary.perturbing_trials += u64::from(class.perturbing);
         summary.degraded_trials += u64::from(class.degraded || lost_ids);
         summary.inconclusive_trials += u64::from(inconclusive);
+        summary.inconclusive_with_failure_trials += u64::from(inconclusive && showed_failure);
         summary.report_missing_trials += u64::from(class.unreported && !inconclusive);
         summary.conflict_trials += u64::from(!inconclusive && !trial.conflicts.is_empty());
         summary.ids_dropped = summary.ids_dropped.saturating_add(dropped);

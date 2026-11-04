@@ -128,6 +128,10 @@ pub struct RunSummary {
     /// Trials added with [`RunProps::add_inconclusive`]: their failures are not findings.
     #[serde(default)]
     pub inconclusive_trials: u64,
+    /// Inconclusive trials in which at least one property showed a failure, counted once per trial. Not findings. A
+    /// summary stored before this count existed reads it as 0, which cannot be told apart from a real zero.
+    #[serde(default)]
+    pub inconclusive_with_failure_trials: u64,
     /// Conclusive trials in which at least one process sent no `end`. Timed-out trials are counted in
     /// `inconclusive_trials` instead.
     pub report_missing_trials: u64,
@@ -556,11 +560,13 @@ fn fold_digest(
     } = state;
     let class = TrialClass::of(seed, digest);
     let inconclusive = class.inconclusive;
+    let mut showed_failure = false;
     for e in digest.entries.iter().filter(|e| e.catalogued) {
         let Some(row) = catalog.get(e.idx) else {
             continue;
         };
         let p = observe(e, &row.id, &row.msg, &row.loc);
+        showed_failure |= p.failed();
         let acc = match ids.remove(&row.id) {
             Some(acc) => acc,
             None => IdAcc::start(&p, !inconclusive),
@@ -608,6 +614,7 @@ fn fold_digest(
     summary.perturbing_trials += u64::from(class.perturbing);
     summary.degraded_trials += u64::from(class.degraded || digest.ids_dropped > 0);
     summary.inconclusive_trials += u64::from(inconclusive);
+    summary.inconclusive_with_failure_trials += u64::from(inconclusive && showed_failure);
     summary.report_missing_trials += u64::from(class.unreported && !inconclusive);
     summary.conflict_trials += u64::from(!inconclusive && digest.flags.has_conflicts);
     summary.ids_dropped = summary.ids_dropped.saturating_add(digest.ids_dropped);

@@ -26,6 +26,8 @@ pub struct RunCounts {
     rated: u64,
     inconclusive: u64,
     crashed: u64,
+    /// Of the inconclusive trials, how many showed a failure. Never hits: only said in the not-rated line.
+    inconclusive_failures: u64,
 }
 
 /// More hits than rated trials: the counts contradict each other and no rate is computed from them.
@@ -51,7 +53,18 @@ impl RunCounts {
             rated,
             inconclusive,
             crashed,
+            inconclusive_failures: 0,
         })
+    }
+
+    /// The same counts, saying that `failures` of the inconclusive trials showed a failure. More than the inconclusive
+    /// trials is capped to them: a trial is counted once, so the count cannot be larger.
+    #[must_use]
+    pub fn with_inconclusive_failures(self, failures: u64) -> Self {
+        RunCounts {
+            inconclusive_failures: failures.min(self.inconclusive),
+            ..self
+        }
     }
 
     pub fn hits(&self) -> u64 {
@@ -155,15 +168,24 @@ fn interval_text(f: &Figures) -> String {
     )
 }
 
+fn inconclusive_text(counts: &RunCounts) -> String {
+    match counts.inconclusive_failures {
+        0 => format!("{} inconclusive", counts.inconclusive),
+        1 => format!(
+            "{} inconclusive (1 showed a failure, not counted as a finding)",
+            counts.inconclusive
+        ),
+        n => format!(
+            "{} inconclusive ({n} showed a failure, not counted as findings)",
+            counts.inconclusive
+        ),
+    }
+}
+
 fn not_rated_line(counts: &RunCounts) -> Option<String> {
-    let parts: Vec<String> = [
-        (counts.inconclusive, "inconclusive"),
-        (counts.crashed, "failed in the host"),
-    ]
-    .iter()
-    .filter(|(n, _)| *n > 0)
-    .map(|(n, what)| format!("{n} {what}"))
-    .collect();
+    let inconclusive = (counts.inconclusive > 0).then(|| inconclusive_text(counts));
+    let crashed = (counts.crashed > 0).then(|| format!("{} failed in the host", counts.crashed));
+    let parts: Vec<String> = inconclusive.into_iter().chain(crashed).collect();
     if parts.is_empty() {
         return None;
     }
