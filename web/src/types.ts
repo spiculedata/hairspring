@@ -275,3 +275,22 @@ export interface Worker {
   last_seen: number;
   registered_at: number;
 }
+
+/** One step of a run's coverage series, taken at trial number `seq`. All counts are cumulative and never fall. */
+export interface CoveragePoint {
+  seq: number;
+  /** Distinct catalogued property ids reached at least once. */
+  ids_hit: number;
+  /** Distinct catalogued property ids that held true at least once. */
+  ids_true: number;
+  /** Distinct schedule fingerprints seen. */
+  schedules: number;
+}
+
+/** `GET /api/runs/{id}/coverage`: the series, thinned by the server (`downsampled`) when it was very long. */
+export interface Coverage {
+  run_id: string;
+  trials: number;
+  downsampled: boolean;
+  points: CoveragePoint[];
+}

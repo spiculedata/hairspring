@@ -140,6 +140,20 @@ A Glossary page at `/glossary` defines the words the pages use (seed, trial, swe
 page, a word with a dotted underline, such as Confirmation, opens its definition when pressed or activated from the
 keyboard, with a link to the glossary entry. The definitions are shortened from the wiki Glossary.
 
+## Coverage chart on the run page
+
+A run page has a **Coverage over trials** section, drawn from `GET /api/runs/{id}/coverage`. It has three small charts
+that share one axis, the trial number: property ids reached, property ids seen true, and distinct schedules. Each is a
+cumulative count of distinct things seen so far, so a line never falls, and each has its own scale starting at zero
+because the units differ. A flat stretch means nothing new was seen there; it does not mean nothing is left to find.
+Under the charts, **Show as a table** lists the same points as figures.
+
+- The chart draws at most 2,000 points. A longer series is thinned evenly, keeping the first and the last point, and the
+  page says **Downsampled** with how many points it shows of how many it received. The server may already have thinned a
+  very long series; the page says that too.
+- A run that is still going is refreshed every few seconds, and loaded once more when it ends.
+- A run with no judged trial says so instead of drawing an empty chart.
+
 ## Side navigation and colour theme
 
 The web UI has a side navigation column with links to Overview, Runs, Failures, Targets and Workers; the link for the

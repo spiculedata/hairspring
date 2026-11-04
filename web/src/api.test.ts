@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, failureChecksUrl, getTokenVersion, isPropertyPage, onTokenChange, parseRetryAfter, propertiesUrl, setToken } from './api';
+import { api, failureChecksUrl, getTokenVersion, isCoverage, isPropertyPage, onTokenChange, parseRetryAfter, propertiesUrl, setToken } from './api';
 import { page } from './explorer/fixtures';
 import type { FailureChecks, FindingStatus } from './types';
 
@@ -101,6 +101,30 @@ describe('propertiesUrl', () => {
 
   it('leaves out an empty prefix', () => {
     expect(propertiesUrl('run_1', { q: '' })).toBe('/api/runs/run_1/properties');
+  });
+});
+
+describe('coverage', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const body = { run_id: 'run_1', trials: 3, downsampled: false, points: [{ seq: 1, ids_hit: 1, ids_true: 0, schedules: 1 }] };
+
+  it('asks for the run by its encoded id and returns a well-formed series', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(body), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(api.coverage('run/1')).resolves.toEqual(body);
+    expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toBe('/api/runs/run%2F1/coverage');
+  });
+
+  it('refuses a body of the wrong shape as an error, not a crash', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ...body, points: [{ seq: 'x' }] }), { status: 200 })));
+    await expect(api.coverage('run_1')).rejects.toThrow(/unexpected shape/);
+  });
+
+  it('accepts only non-negative counts and a boolean downsampled flag', () => {
+    expect(isCoverage(body)).toBe(true);
+    expect(isCoverage({ ...body, downsampled: 'no' })).toBe(false);
+    expect(isCoverage({ ...body, points: [{ ...body.points[0], schedules: -1 }] })).toBe(false);
+    expect(isCoverage(null)).toBe(false);
   });
 });
 
