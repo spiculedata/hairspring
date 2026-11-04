@@ -9,22 +9,26 @@ const EDGE_MIN = 3; // WCAG 1.4.11
 
 const css = readSource('styles.css');
 
-/** The declarations of the `:root` block that is directly inside `scope` (the whole file when it is empty). */
-function tokens(scope: 'light' | 'dark'): Readonly<Record<string, string>> {
-  const source =
-    scope === 'light'
-      ? css.slice(0, css.indexOf('@media (prefers-color-scheme: dark)'))
-      : css.slice(css.indexOf('@media (prefers-color-scheme: dark)'));
-  const block = /:root\s*\{([^}]*)\}/.exec(source);
-  if (!block) throw new Error(`no :root block for ${scope}`);
+/** The token declarations of the first block with this selector, searching from where `from` first appears. */
+function block(selector: string, from: string): Readonly<Record<string, string>> {
+  const start = css.indexOf(from);
+  if (start < 0) throw new Error(`no ${from} in styles.css`);
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const found = new RegExp(`${escaped}\\s*\\{([^}]*)\\}`).exec(css.slice(start));
+  if (!found) throw new Error(`no block for ${selector}`);
   const out: Record<string, string> = {};
-  for (const m of block[1].matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);/g)) out[m[1]] = m[2].trim();
+  for (const m of found[1].matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);/g)) out[m[1]] = m[2].trim();
   return out;
 }
 
-/** Light values, with the dark block laid over them, as the browser computes them in dark mode. */
-const light = tokens('light');
-const THEMES = { light, dark: { ...light, ...tokens('dark') } } as const;
+const DARK_MEDIA = '@media (prefers-color-scheme: dark)';
+const SYSTEM_DARK = ':root:not([data-theme="light"])';
+const CHOSEN_DARK = ':root[data-theme="dark"]';
+const light = block(':root', ':root');
+/** Dark as the browser computes it when the reader's system is dark, and when they chose dark with the switch: both are checked. */
+const systemDark = { ...light, ...block(SYSTEM_DARK, DARK_MEDIA) };
+const chosenDark = { ...light, ...block(CHOSEN_DARK, CHOSEN_DARK) };
+const THEMES = { light, dark: systemDark, 'dark (chosen with the switch)': chosenDark } as const;
 
 const STATUS = ['fail', 'gap', 'pass', 'live', 'neutral', 'confirm'] as const;
 const GROUNDS = ['--bg', '--surface', '--surface-2'] as const;
@@ -75,6 +79,11 @@ for (const [name, theme] of Object.entries(THEMES)) {
       for (const bg of ['--bg', '--surface']) expect(ratio(theme, '--accent', bg), `accent on ${bg}`).toBeGreaterThanOrEqual(TEXT_MIN);
     });
 
+    it(`gives the current navigation link (text on the soft accent) and the theme switch labels at least ${TEXT_MIN}:1`, () => {
+      expect(ratio(theme, '--text', '--accent-soft')).toBeGreaterThanOrEqual(TEXT_MIN);
+      expect(ratio(theme, '--text-muted', '--surface')).toBeGreaterThanOrEqual(TEXT_MIN);
+    });
+
     it(`gives the text on a primary button at least ${TEXT_MIN}:1 against the button`, () => {
       expect(ratio(theme, '--accent-ink', '--accent')).toBeGreaterThanOrEqual(TEXT_MIN);
     });
@@ -110,6 +119,18 @@ for (const [name, theme] of Object.entries(THEMES)) {
     });
   });
 }
+
+describe('the theme switch', () => {
+  it('gives a chosen dark theme exactly the tokens the system dark theme has', () => {
+    expect(block(CHOSEN_DARK, CHOSEN_DARK)).toEqual(block(SYSTEM_DARK, DARK_MEDIA));
+  });
+
+  it('stops the system dark block applying to an explicit light choice, and sets the browser colour scheme for each choice', () => {
+    expect(css).toContain(`${DARK_MEDIA} {\n  ${SYSTEM_DARK} {`);
+    expect(css).toMatch(/:root\[data-theme="light"\] \{[^}]*color-scheme: light/);
+    expect(css).toMatch(/:root\[data-theme="dark"\] \{[^}]*color-scheme: dark/);
+  });
+});
 
 describe('stylesheet use of the tokens', () => {
   const rules = css.slice(css.indexOf('* { box-sizing'));
@@ -164,6 +185,7 @@ describe('every stylesheet and the canvas code use the tokens', () => {
         'explorer/explorer.css',
         'overview/overview.css',
         'runPanel/runPanel.css',
+        'shell/shell.css',
         'seeds/seeds.css',
         'styles.css',
         'trial/trial.css',
@@ -208,6 +230,6 @@ describe('every stylesheet and the canvas code use the tokens', () => {
 
   it('defines the scroll-edge shadow as a token in both themes', () => {
     expect(light['--scroll-shadow']).toBeDefined();
-    expect(THEMES.dark['--scroll-shadow']).not.toBe(light['--scroll-shadow']);
+    expect(chosenDark['--scroll-shadow']).not.toBe(light['--scroll-shadow']);
   });
 });

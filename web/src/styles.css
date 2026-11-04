@@ -18,7 +18,7 @@
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #151312; --surface: #1f1c1a; --surface-2: #292524;
     --text: #f5f5f4; --text-muted: #b7b1ab; --text-subtle: #a8a29e;
     --border: #36312e; --border-strong: #78716c;
@@ -30,21 +30,29 @@
     --neutral: #cfd4dc; --neutral-bg: #262a33; --neutral-line: #475467;
     --confirm: #c3b5fd; --confirm-bg: #241a45; --confirm-line: #6927da;
     --scroll-shadow: rgba(0, 0, 0, .6);
+    color-scheme: dark;
   }
 }
+/* The same dark tokens again, for a reader who chose Dark with the switch; src/contrast.test.ts checks the two blocks match. */
+:root[data-theme="dark"] {
+  --bg: #151312; --surface: #1f1c1a; --surface-2: #292524;
+  --text: #f5f5f4; --text-muted: #b7b1ab; --text-subtle: #a8a29e;
+  --border: #36312e; --border-strong: #78716c;
+  --accent: #a4bcfd; --accent-ink: #101323; --accent-soft: #1d2346; --focus: #a4bcfd;
+  --fail: #fda29b; --fail-bg: #3a1410; --fail-line: #b42318;
+  --gap: #fec84b; --gap-bg: #33240a; --gap-line: #b54708;
+  --pass: #75e0a7; --pass-bg: #0b2a1c; --pass-line: #067647;
+  --live: #84caff; --live-bg: #0c2340; --live-line: #175cd3;
+  --neutral: #cfd4dc; --neutral-bg: #262a33; --neutral-line: #475467;
+  --confirm: #c3b5fd; --confirm-bg: #241a45; --confirm-line: #6927da;
+  --scroll-shadow: rgba(0, 0, 0, .6);
+  color-scheme: dark;
+}
+:root[data-theme="light"] { color-scheme: light; }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif; }
 main { max-width: 1000px; margin: 0 auto; padding: 1rem 16px 4rem; }
-.topbar { display: flex; gap: 1.5rem; align-items: baseline; padding: .75rem 16px; border-bottom: 1px solid var(--line); }
-.brand { font-weight: 700; letter-spacing: .02em; }
-nav { display: flex; gap: 1rem; }
-nav a { color: var(--muted); text-decoration: none; }
-nav .active { color: var(--fg); font-weight: 600; border-bottom: 2px solid var(--accent); }
 a { color: var(--accent); }
-.skip-link { position: absolute; left: 16px; top: -4rem; padding: .5rem .75rem; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 6px; z-index: 10; }
-.skip-link:focus { top: .5rem; }
-main:focus { outline: none; }
-nav a[aria-current] span { text-decoration: none; }
 .time-relative { display: block; font-size: .8rem; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .updated-at { margin: .25rem 0; font-size: .8rem; }
