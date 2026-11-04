@@ -82,6 +82,7 @@ if [ -n "$vjson" ]; then
     : > "$PWD/.hermit-verify-summary-AbC123"
     sleep 30
   fi
+  [ "$vmode" = leaky ] && : > "$PWD/.hermit-verify-summary-Fresh1"
   if [ "$vmode" = heal ]; then
     echo fine
     rc=0
@@ -100,7 +101,7 @@ if [ -n "$vjson" ]; then
   fi
   head='"verified":false,"bitwise_parity":false'
   case "$vmode" in
-    good|hang|heal) printf '{"verified": true, "bitwise_parity": true, "verdict": "matched"}' > "$vjson";;
+    good|hang|heal|leaky) printf '{"verified": true, "bitwise_parity": true, "verdict": "matched"}' > "$vjson";;
     diverged) printf '{"verified": true, "bitwise_parity": false, "verdict": "diverged"}' > "$vjson";;
     malformed) printf 'not json at all' > "$vjson";;
     skid)

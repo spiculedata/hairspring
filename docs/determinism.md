@@ -99,15 +99,22 @@ A failed strict verify used to leave Hermit's two run logs in `/tmp`, and Hermit
 inside the trial's directory, which the engine removes after the trial, so those printed paths no longer exist. The
 verify's verdict is read from its result file, which is unaffected.
 
-A strict verify (Hermit's `--verify`, which `hairspring confirm --strict-verify` runs) also stages a file named `.hermit-verify-summary-XXXXXX` (a random suffix) in the directory Hermit runs in. That is the target's working directory: its `cwd` setting, or the directory `hairspring` was started from when none is set. If the working directory sits inside a git work tree whose top-level `.gitignore` has an `ignored/` line (the nearest enclosing work tree is used), Hermit puts the file in that tree's `ignored/` directory instead of the working directory. Hermit removes the file when it exits normally. If Hermit is killed, for example when the verify runs past its time
-limit, the engine removes the staging files that appeared in the working directory during that verify (regular files
-with that name that were not there before it started; other files are left alone). If one cannot be removed, the check's
-detail names it. A staging file Hermit put in `ignored/` of the enclosing work tree is not found and stays, and so does
-one left when the engine itself is killed before it can clean up: it is safe to delete once no `hermit` is running.
-Another `hermit` verify running in the same directory at the same time can lose its staging file to the clean-up, which
-makes that verify inconclusive. Run `hairspring confirm` from a working directory that is not shared and does not hold
+A strict verify (Hermit's `--verify`, which `hairspring confirm --strict-verify` runs) also stages a file named
+`.hermit-verify-summary-XXXXXX` (a random suffix) in the directory Hermit runs in. That is the target's working
+directory: its `cwd` setting, or the directory `hairspring` was started from when none is set. If the working directory
+sits inside a git work tree whose top-level `.gitignore` has an `ignored/` line (the nearest enclosing work tree is
+used), Hermit puts the file in that tree's `ignored/` directory instead of the working directory. Hermit removes the
+file when it exits normally. If Hermit is killed by the engine, for example when the verify runs past its time limit,
+the engine removes the staging files that appeared in the working directory during that verify (regular files with that
+name that were not there before it started; other files are left alone). If one cannot be removed, the check's detail
+names it. If Hermit crashes or is stopped by a signal of its own accord, the engine does not clean up, and its file
+stays too. A staging file Hermit put in `ignored/` of the enclosing work tree is not found and stays, and so does one
+left when the engine itself is killed before it can clean up: it is safe to delete once no `hermit` is running. Another
+`hermit` verify running in the same directory at the same time can lose its staging file to the clean-up, which makes
+that verify inconclusive. Run `hairspring confirm` from a working directory that is not shared and does not hold
 evidence, and look for `.hermit-verify-summary-*` (in `ignored/` of the enclosing work tree, if there is one) after a
-verify that was killed. The failed-verify logs are separate: they now live in the engine's per-trial directory and are deleted with it.
+verify that was killed. The failed-verify logs are separate: they now live in the engine's per-trial directory and are
+deleted with it.
 
 A directory the trial could not be cleaned of (for example on a filesystem that refuses the mode change) is reported on
 the engine's standard error and never changes the trial's verdict.

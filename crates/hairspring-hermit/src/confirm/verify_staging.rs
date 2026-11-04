@@ -66,3 +66,84 @@ pub(super) fn left_behind(names: &[String]) -> String {
         names.join(", ")
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("hs-staging-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn watch(dir: &Path) -> Staging {
+        Staging::watch(Some(&dir.display().to_string())).unwrap()
+    }
+
+    #[test]
+    fn removes_a_new_regular_file_and_keeps_an_old_one() {
+        let dir = scratch("regular");
+        std::fs::write(dir.join(".hermit-verify-summary-Old000"), "").unwrap();
+        let staging = watch(&dir);
+        std::fs::write(dir.join(".hermit-verify-summary-New000"), "").unwrap();
+        std::fs::write(dir.join("evidence.txt"), "x").unwrap();
+        assert!(staging.remove_new().is_empty());
+        assert!(dir.join(".hermit-verify-summary-Old000").exists());
+        assert!(!dir.join(".hermit-verify-summary-New000").exists());
+        assert!(dir.join("evidence.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn leaves_a_directory_with_the_staging_name_alone() {
+        let dir = scratch("directory");
+        let staging = watch(&dir);
+        let sub = dir.join(".hermit-verify-summary-Dir000");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("inner"), "x").unwrap();
+        // Only regular files are removed; anything else with the name is left and named in the detail.
+        assert_eq!(staging.remove_new(), [".hermit-verify-summary-Dir000"]);
+        assert!(sub.join("inner").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn never_follows_or_removes_a_symlink_with_the_staging_name() {
+        let dir = scratch("symlink");
+        let target = dir.join("evidence.txt");
+        std::fs::write(&target, "x").unwrap();
+        let staging = watch(&dir);
+        std::os::unix::fs::symlink(&target, dir.join(".hermit-verify-summary-Link00")).unwrap();
+        assert_eq!(staging.remove_new(), [".hermit-verify-summary-Link00"]);
+        assert!(target.exists());
+        assert!(std::fs::symlink_metadata(dir.join(".hermit-verify-summary-Link00")).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn names_a_file_it_cannot_remove() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("readonly");
+        let staging = watch(&dir);
+        std::fs::write(dir.join(".hermit-verify-summary-Stuck0"), "").unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let can_still_write = std::fs::write(dir.join("probe"), "").is_ok();
+        let stuck = staging.remove_new();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if !can_still_write {
+            assert_eq!(stuck, [".hermit-verify-summary-Stuck0"]);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_detail_names_what_stayed_and_is_empty_when_nothing_did() {
+        assert_eq!(left_behind(&[]), "");
+        let text = left_behind(&["a".to_string(), "b".to_string()]);
+        assert!(text.ends_with("working directory: a, b"), "{text}");
+    }
+}

@@ -342,10 +342,18 @@ fn a_verify_that_ended_normally_removes_no_staging_file() {
         ..RigOptions::default()
     };
     let good = rig("verify-staging-good", o);
-    let other = good.dir.join("work").join(".hermit-verify-summary-Other1");
+    good.set("verify", "leaky");
+    let work = good.dir.join("work");
+    let other = work.join(".hermit-verify-summary-Other1");
     std::fs::write(&other, "").unwrap();
     run(&good);
-    assert!(other.exists());
+    let mut names = staging_files(&work);
+    names.sort();
+    assert_eq!(
+        names,
+        [".hermit-verify-summary-Fresh1", ".hermit-verify-summary-Other1"],
+        "a verify that ended on its own is not cleaned up after, even if a new staging file is there"
+    );
 }
 
 #[test]
