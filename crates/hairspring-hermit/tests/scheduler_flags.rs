@@ -222,3 +222,45 @@ fn bundles_from_before_scheduler_options_replay_under_the_default() {
     legacy.params.remove("scheduler");
     assert!(e.replay(&legacy).unwrap().reproduced);
 }
+
+fn failing_with_args(dir: &Path, user_args: &[&str]) -> (Engine, Bundle) {
+    let (e, _) = engine(
+        dir,
+        &["/bin/sh", "-c", "echo 'HAIRSPRING_VIOLATION: boom'; exit 1"],
+        SchedulerSpec::default(),
+        user_args,
+    );
+    let f = e
+        .run(&RunRequest::new("svc", 1), &mut |_| true)
+        .unwrap()
+        .failure
+        .unwrap();
+    (e, Bundle::decode(&f.bundle).unwrap())
+}
+
+#[test]
+fn bundles_record_the_hermit_arguments_including_the_global_seed() {
+    let d = scratch("args-recorded");
+    let (_, b) = failing_with_args(&d, &["--seed=7", "--tmp=/x"]);
+    assert_eq!(
+        b.params.get("hermit_args").map(String::as_str),
+        Some("--seed=7 --tmp=/x")
+    );
+}
+
+#[test]
+fn replay_refuses_a_bundle_recorded_with_a_different_global_seed() {
+    let (_, bundle) = failing_with_args(&scratch("seed-a"), &["--seed=7"]);
+    let (other, _) = failing_with_args(&scratch("seed-b"), &["--seed=8"]);
+    let err = other.replay(&bundle).unwrap_err().to_string();
+    assert!(
+        err.contains("hermit_args") && err.contains("--seed=7") && err.contains("--seed=8"),
+        "{err}"
+    );
+}
+
+#[test]
+fn replay_with_the_same_hermit_arguments_reproduces() {
+    let (e, bundle) = failing_with_args(&scratch("args-same"), &["--seed=7"]);
+    assert!(e.replay(&bundle).unwrap().reproduced);
+}

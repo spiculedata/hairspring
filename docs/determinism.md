@@ -207,8 +207,17 @@ compared), `1` reproduced, `2` error (including a refusal), `3` not reproduced o
 inconclusive: it does not show the bug is fixed. The API returns the same fact as `environment_changed` in the replay
 result.
 
-Not recorded yet: the Hermit commit, Hermit's global seed, hashes of declared input files, the full Hermit command
-line beyond `hermit_args` (the program's own command line and working directory are covered above, as hashes), the `--tmp` pre-seed, and the Hairspring commit. The environment is compared by
+Recorded as plain params, outside the environment fields above: the Hermit flags a target sets (`hermit_args`,
+which includes Hermit's global `--seed` when the target passes one), the scheduler flags (`scheduler`) and the
+virtual-time epoch (`epoch`, which replay takes from the bundle). Replay and `hairspring confirm` refuse a bundle whose `hermit_args` or
+`scheduler` differ from the target's, naming both values, so a changed global seed is an error rather than a
+mismatch. When a target passes no `--seed`, Hermit's own default applies; which Hermit build that was is covered by
+`hermit.path.sha256` and `hermit.version`. The Hermit flags are stored as text, so do not put a secret in
+`hermit_args`.
+
+Not recorded yet: the Hermit commit, hashes of declared input files (a target has no declared inputs today; only
+the program, `target.exe.sha256`, is hashed), the `--tmp` pre-seed, and the Hairspring commit (`build` is the crate
+version). The environment is compared by
 `hairspring confirm` (see [Confirming a failure](#confirming-a-failure)), but not by the search's own three reruns or on
 bundle import. Each new field needs its name added to the fixed list in `hairspring-core`.
 
