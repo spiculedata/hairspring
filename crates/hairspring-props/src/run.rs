@@ -228,6 +228,9 @@ struct IdAcc {
     perturbing: u64,
     conflicted: u64,
     inconclusive_failures: u64,
+    /// Seeds of the timed-out trials whose failure of this id was counted while the kind was still undecided. They
+    /// are the only counts a decision can take back, so they are kept until then and dropped after.
+    provisional_failure_seeds: Vec<u64>,
     trials_hit: u64,
     trials_true: u64,
     trials_false: u64,
@@ -257,6 +260,7 @@ impl IdAcc {
             perturbing: 0,
             conflicted: 0,
             inconclusive_failures: 0,
+            provisional_failure_seeds: Vec::new(),
             trials_hit: 0,
             trials_true: 0,
             trials_false: 0,
@@ -432,6 +436,16 @@ impl IdAcc {
 struct FoldState {
     summary: RunSummary,
     ids: BTreeMap<String, IdAcc>,
+    /// Timed-out trials whose counted failure still rests on an id that has not decided its kind.
+    provisional: BTreeMap<u64, ProvisionalTrial>,
+}
+
+/// How many ids attribute a failure to one timed-out trial, and how many of those are still undecided. The trial is in
+/// the run's count while `attributing` is above zero; the entry goes when no undecided id is left to change it.
+#[derive(Debug, Clone, Copy)]
+struct ProvisionalTrial {
+    attributing: u32,
+    undecided: u32,
 }
 
 /// Accumulator over trials. Consumed and returned by value, so no accumulator is ever shared or mutated in place.
@@ -470,6 +484,7 @@ impl RunProps {
                     ..RunSummary::default()
                 },
                 ids: BTreeMap::new(),
+                provisional: BTreeMap::new(),
             },
             id_cap,
             catalog: RunCatalog::new(),
@@ -557,10 +572,12 @@ fn fold_digest(
     let FoldState {
         mut summary,
         mut ids,
+        mut provisional,
     } = state;
     let class = TrialClass::of(seed, digest);
     let inconclusive = class.inconclusive;
-    let mut showed_failure = false;
+    let mut attributing = 0u32;
+    let mut undecided = 0u32;
     for e in digest.entries.iter().filter(|e| e.catalogued) {
         let Some(row) = catalog.get(e.idx) else {
             continue;
@@ -570,14 +587,26 @@ fn fold_digest(
             Some(acc) => acc,
             None => IdAcc::start(&p, !inconclusive),
         };
+        let mut acc = acc;
         let acc = match (acc.decided, inconclusive) {
-            (false, false) => acc.decide(&p),
+            (false, false) => {
+                let kept = acc.kind == p.kind;
+                release_provisional(&mut acc, kept, &mut summary, &mut provisional);
+                acc.decide(&p)
+            }
             _ => acc,
         };
         let acc = if acc.kind == p.kind {
+            let mut acc = acc;
             // Only a failure the run attributes to the id counts as shown, so the count never says a failure was
             // shown that no stored per-id field records.
-            showed_failure |= p.failed();
+            if inconclusive && p.failed() {
+                attributing += 1;
+                if !acc.decided {
+                    undecided += 1;
+                    acc.provisional_failure_seeds.push(seed);
+                }
+            }
             acc.with_trial(class, &p)
         } else if inconclusive {
             // A timed-out trial's kind is not trusted: it decides nothing and is no mismatch. It still counts as
@@ -616,9 +645,51 @@ fn fold_digest(
     summary.perturbing_trials += u64::from(class.perturbing);
     summary.degraded_trials += u64::from(class.degraded || digest.ids_dropped > 0);
     summary.inconclusive_trials += u64::from(inconclusive);
-    summary.inconclusive_with_failure_trials += u64::from(inconclusive && showed_failure);
+    if attributing > 0 {
+        summary.inconclusive_with_failure_trials += 1;
+        if undecided > 0 {
+            provisional.insert(
+                seed,
+                ProvisionalTrial {
+                    attributing,
+                    undecided,
+                },
+            );
+        }
+    }
     summary.report_missing_trials += u64::from(class.unreported && !inconclusive);
     summary.conflict_trials += u64::from(!inconclusive && digest.flags.has_conflicts);
     summary.ids_dropped = summary.ids_dropped.saturating_add(digest.ids_dropped);
-    FoldState { summary, ids }
+    FoldState {
+        summary,
+        ids,
+        provisional,
+    }
+}
+
+/// An id settles its kind: the timed-out trials whose failure it counted while undecided are now final if the kind was
+/// kept, and are taken back from the id (already done by `decide`) and from the run's count if it was replaced, unless
+/// another id still attributes a failure to the same trial.
+fn release_provisional(
+    acc: &mut IdAcc,
+    kept: bool,
+    summary: &mut RunSummary,
+    provisional: &mut BTreeMap<u64, ProvisionalTrial>,
+) {
+    for seed in std::mem::take(&mut acc.provisional_failure_seeds) {
+        let Some(trial) = provisional.get_mut(&seed) else {
+            continue;
+        };
+        trial.undecided = trial.undecided.saturating_sub(1);
+        if !kept {
+            trial.attributing = trial.attributing.saturating_sub(1);
+            if trial.attributing == 0 {
+                summary.inconclusive_with_failure_trials =
+                    summary.inconclusive_with_failure_trials.saturating_sub(1);
+            }
+        }
+        if trial.undecided == 0 {
+            provisional.remove(&seed);
+        }
+    }
 }

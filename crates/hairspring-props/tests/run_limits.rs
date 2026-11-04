@@ -259,6 +259,8 @@ fn a_failing_id_is_still_counted_when_a_passing_id_follows_it_in_the_same_trial(
     assert_eq!(summary.inconclusive_with_failure_trials, 1);
 }
 
+/// Pins what `RunCatalog` does with an id past the cap (it is never catalogued, so the digest has no entry for it); the
+/// fold cannot see the dropped id, so this cannot fail from a change in the fold alone.
 #[test]
 fn a_failure_on_an_id_dropped_by_the_cap_is_not_counted() {
     let kept = fold(&report_of_ids_with_falses(&[("a", 0)]));
@@ -268,5 +270,95 @@ fn a_failure_on_an_id_dropped_by_the_cap_is_not_counted() {
         .add_inconclusive(2, &dropped)
         .summary();
     assert_eq!(summary.ids_dropped, 1);
+    assert_eq!(summary.inconclusive_with_failure_trials, 0);
+}
+
+/// A complete one-process report of ids with their own kind and counts: `(id, kind, trues, falses)`.
+fn report_of_kinds(ids: &[(&str, AssertKind, u64, u64)]) -> String {
+    let mut out = hello("p1");
+    for (id, kind, trues, falses) in ids {
+        out.push_str(&catalog_min("p1", id, *kind));
+        let first_false = (*falses > 0).then_some(("t", 2));
+        let first_true = (*trues > 0).then_some(("t", 1));
+        out.push_str(&assert_line(
+            "p1",
+            id,
+            *trues,
+            *falses,
+            first_false,
+            first_true,
+        ));
+    }
+    out.push_str(&ev(&format!(
+        r#"{{"v":1,"kind":"end","proc":"p1","reason":"exit","status":0,"sites":{},"evals":{},"dropped":0,"threads":0}}"#,
+        ids.len(),
+        ids.len() * 2
+    )));
+    out
+}
+
+#[test]
+fn a_failure_seen_first_under_a_kind_that_a_later_trial_replaces_is_not_counted() {
+    let timed_out = fold(&single(AssertKind::Always, 0, 2));
+    let decided = fold(&single(AssertKind::Sometimes, 3, 0));
+    let run = RunProps::new()
+        .add_inconclusive(1, &timed_out)
+        .add(2, &decided);
+    let summary = run.summary();
+    let stat = run.finish().remove(0);
+    assert_eq!(stat.kind, AssertKind::Sometimes);
+    assert_eq!(stat.trials_inconclusive_with_failures, 0);
+    assert_eq!(summary.inconclusive_trials, 1);
+    assert_eq!(summary.inconclusive_with_failure_trials, 0);
+}
+
+#[test]
+fn a_failure_seen_first_is_still_counted_when_a_later_trial_keeps_the_kind() {
+    let timed_out = fold(&single(AssertKind::Always, 0, 2));
+    let decided = fold(&single(AssertKind::Always, 3, 0));
+    let run = RunProps::new()
+        .add_inconclusive(1, &timed_out)
+        .add(2, &decided);
+    let summary = run.summary();
+    let stat = run.finish().remove(0);
+    assert_eq!(stat.trials_inconclusive_with_failures, 1);
+    assert_eq!(summary.inconclusive_with_failure_trials, 1);
+}
+
+#[test]
+fn a_trial_still_counts_while_one_of_its_ids_keeps_its_failure() {
+    use AssertKind::{Always, Sometimes};
+    let timed_out = fold(&report_of_kinds(&[
+        ("a", Always, 0, 2),
+        ("b", Always, 0, 2),
+    ]));
+    let decides = fold(&report_of_kinds(&[
+        ("a", Sometimes, 1, 0),
+        ("b", Always, 1, 0),
+    ]));
+    let summary = RunProps::new()
+        .add_inconclusive(1, &timed_out)
+        .add(2, &decides)
+        .summary();
+    assert_eq!(summary.inconclusive_with_failure_trials, 1);
+}
+
+#[test]
+fn a_trial_stops_counting_when_every_id_that_showed_the_failure_changes_kind() {
+    use AssertKind::{Always, Sometimes};
+    let timed_out = fold(&report_of_kinds(&[
+        ("a", Always, 0, 2),
+        ("b", Always, 0, 2),
+    ]));
+    let decides = fold(&report_of_kinds(&[
+        ("a", Sometimes, 1, 0),
+        ("b", Sometimes, 1, 0),
+    ]));
+    let other_timed_out = fold(&report_of_kinds(&[("a", Sometimes, 0, 0)]));
+    let summary = RunProps::new()
+        .add_inconclusive(1, &timed_out)
+        .add_inconclusive(3, &other_timed_out)
+        .add(2, &decides)
+        .summary();
     assert_eq!(summary.inconclusive_with_failure_trials, 0);
 }
