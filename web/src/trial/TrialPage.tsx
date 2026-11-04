@@ -7,6 +7,7 @@ import { useReportMissing } from '../PageStatus';
 import { runPath } from '../router';
 import { usePolling } from '../usePolling';
 import { trialApi } from './api';
+import { TrialActions } from './TrialActions';
 import { TrialView } from './TrialView';
 import { downloadOutput, useOutputTails, useRunContext, useTrialDetail } from './useTrial';
 import type { StreamName } from './types';
@@ -29,7 +30,13 @@ function Loaded({ runId, seq }: { runId: string; seq: number }) {
   };
   return (
     <>
-      <TrialView detail={detail.data} context={context} tails={tails} onDownload={onDownload} />
+      <TrialView
+        detail={detail.data}
+        context={context}
+        tails={tails}
+        onDownload={onDownload}
+        actions={<TrialActions runId={runId} trial={detail.data.trial} context={context} />}
+      />
       {downloadError !== undefined && <ErrorLine message={downloadError} />}
     </>
   );

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { outputUrl, trialBySeedUrl, trialUrl } from './api';
+import { firstViolationUrl, outputUrl, trialBySeedUrl, trialUrl } from './api';
 import { detail } from './fixtures';
 import { isTrialDetail, isTrialPage } from './types';
 
@@ -8,6 +8,11 @@ describe('trial urls', () => {
     expect(trialUrl('run_0123', 16)).toBe('/api/runs/run_0123/trials/16');
     expect(trialBySeedUrl('run_0123', '18446744073709551615')).toBe('/api/runs/run_0123/trials?seed=18446744073709551615&limit=1');
     expect(outputUrl('run_0123', 16, 'stderr')).toBe('/api/runs/run_0123/trials/16/output/stderr');
+  });
+
+  it('asks for one violating trial of the run', () => {
+    expect(firstViolationUrl('run_0123')).toBe('/api/runs/run_0123/trials?verdict=violation&limit=1');
+    expect(firstViolationUrl('a&b')).toBe('/api/runs/a%26b/trials?verdict=violation&limit=1');
   });
 
   it('encodes a run id so it cannot add a path segment or a parameter', () => {

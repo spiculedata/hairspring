@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { RAW_EVENTS_NOTE } from '../wording';
 import { AboutSection } from './AboutSection';
 import { rankedCaveats } from './caveats';
@@ -20,6 +21,8 @@ export interface TrialViewProps {
   context: RunContext | undefined;
   tails: Partial<Record<StreamName, TailState>>;
   onDownload: (stream: StreamName) => void;
+  /** Shown under the header: links and copy buttons, which need the browser and are left out of a plain render. */
+  actions?: ReactNode;
 }
 
 const STREAMS: readonly StreamName[] = ['stdout', 'stderr'];
@@ -28,7 +31,7 @@ const STREAMS: readonly StreamName[] = ['stdout', 'stderr'];
  * The failure page for one trial as a pure function of its data, so it renders the same on the server for tests.
  * Everything from the program under test goes through GuestText in the sections below.
  */
-export function TrialView({ detail, context, tails, onDownload }: TrialViewProps) {
+export function TrialView({ detail, context, tails, onDownload, actions }: TrialViewProps) {
   const { trial } = detail;
   const kept = detail.guest.detail;
   const props = kept?.props;
@@ -44,6 +47,7 @@ export function TrialView({ detail, context, tails, onDownload }: TrialViewProps
   return (
     <>
       <TrialHeader runId={detail.run_id} trial={trial} context={context} />
+      {actions}
       {lead !== undefined && <p className="note caveat">{lead}</p>}
       <TrialNav items={navItems(hasDetail)} />
       {hasDetail && (
