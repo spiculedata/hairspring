@@ -67,7 +67,9 @@ impl RateLimiter {
 }
 
 const ANONYMOUS_PREFIX: &str = "ip:";
-/// IPv6 callers are grouped by this many leading bits: a single subscriber commonly holds a whole /64.
+/// IPv6 callers are grouped by this many leading bits: a single subscriber commonly holds a whole /64. A coarser
+/// prefix (/56, /48) would make customers of a host that hands out /64s from a shared block throttle each other, so
+/// the weakness for a holder of a larger allocation is documented in SECURITY.md instead.
 const IPV6_PREFIX_BITS: u32 = 64;
 
 /// The limiter key for a caller with no valid token: the address for IPv4, the /64 for IPv6. An IPv4-mapped

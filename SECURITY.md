@@ -54,7 +54,12 @@ agents.
   IPv6 callers one per /64. A holder of a larger IPv6 allocation (a /56 or /48) therefore gets a separate bucket for
   every /64 it controls, and can also push older anonymous windows out of the bounded table by sending from many
   /64s. This matters only where anonymous callers reach real endpoints (open mode, with no tokens configured).
-  Valid tokens keep their own buckets and are never evicted by anonymous traffic.
+  Valid tokens keep their own buckets and are never evicted by anonymous traffic. The bucket is not widened to a /56
+  or /48 because delegations differ: a hosting provider commonly gives each customer a /64 out of a shared /56 or
+  /48, so a wider bucket would make unrelated customers share one allowance and throttle each other. A /64 is the
+  smallest unit that one subscriber or host controls, and the cost of keeping it is the weakness described above. If
+  you need a coarser limit for anonymous IPv6 callers, enforce it at a proxy that knows your clients' allocations, or
+  configure tokens so that open mode is not in use.
 - **Behind a reverse proxy, anonymous callers share one bucket.** Forwarding headers such as `X-Forwarded-For` are
   deliberately not trusted (a client could set them to mint fresh buckets at will), so every anonymous caller
   arriving through the proxy is counted under the proxy's address. Authenticated callers are unaffected, since
