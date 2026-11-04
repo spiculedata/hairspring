@@ -12,8 +12,10 @@ export interface PanelSize {
 
 export interface Panel {
   key: PanelKey;
-  /** Largest value of the series: the top of its own scale. Every scale starts at zero. */
+  /** Largest value of the series. */
   max: number;
+  /** The value at the top edge of the plot and on the y-axis label: the last round tick at or above `max`. Every scale starts at zero. */
+  top: number;
   /** One x and one y per point, in drawing units. y grows downwards, so the largest value is 0. */
   xs: readonly number[];
   ys: readonly number[];
@@ -32,8 +34,9 @@ export function buildPanels(points: readonly CoveragePoint[], size: PanelSize): 
   const xs = trialAxis(points, size.width);
   return PANEL_KEYS.map((key) => {
     const max = points.reduce((m, p) => Math.max(m, p[key]), 0);
-    const ys = points.map((p) => (max > 0 ? size.height * (1 - p[key] / max) : size.height));
-    return { key, max, xs, ys };
+    const top = niceTicks(max).at(-1) ?? 0;
+    const ys = points.map((p) => (top > 0 ? size.height * (1 - p[key] / top) : size.height));
+    return { key, max, top, xs, ys };
   });
 }
 

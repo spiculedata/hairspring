@@ -50,6 +50,20 @@ describe('buildPanels', () => {
   });
 });
 
+describe('buildPanels axis', () => {
+  it('scales the line to the y-axis top label, so a maximum below a round tick sits below the top edge', () => {
+    const pts = [
+      { seq: 1, ids_hit: 0, ids_true: 0, schedules: 1 },
+      { seq: 2, ids_hit: 7, ids_true: 0, schedules: 1234 },
+    ];
+    const [hit, , schedules] = buildPanels(pts, { width: 100, height: 100 });
+    expect(hit?.top).toBe(10);
+    expect(hit?.ys[1]).toBeCloseTo(30);
+    expect(schedules?.top).toBe(2000);
+    expect(schedules?.ys[1]).toBeCloseTo(100 * (1 - 1234 / 2000));
+  });
+});
+
 describe('niceTicks', () => {
   it('gives round ticks from zero up to at least the maximum', () => {
     expect(niceTicks(5)).toEqual([0, 5]);

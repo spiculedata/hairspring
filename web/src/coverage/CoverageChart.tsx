@@ -1,6 +1,6 @@
 import { useId, useMemo } from 'react';
 import type { Coverage } from '../types';
-import { buildPanels, formatCount, niceTicks, panelSummary, type Panel, type PanelKey } from './coverageModel';
+import { buildPanels, formatCount, panelSummary, type Panel, type PanelKey } from './coverageModel';
 import { CoverageTable } from './CoverageTable';
 import { AXIS_LABEL, COVERAGE_NOTE, COVERAGE_TITLE, downsampledNote, PANEL_LABELS } from './coverageWording';
 import { downsamplePoints } from './downsample';
@@ -20,14 +20,13 @@ function PanelView({ panel, summary }: PanelViewProps) {
   const titleId = useId();
   const descId = useId();
   const label = PANEL_LABELS[panel.key];
-  const ticks = niceTicks(panel.max);
   return (
     <div className="coverage-panel" data-series={panel.key}>
       <h3>{label}</h3>
       <p className="muted coverage-summary">{summary}</p>
       <div className="coverage-plot">
         <div className="coverage-yaxis" aria-hidden="true">
-          <span>{formatCount(ticks[ticks.length - 1] ?? 0)}</span>
+          <span>{formatCount(panel.top)}</span>
           <span>0</span>
         </div>
         <svg viewBox={`0 0 ${VIEW.width} ${VIEW.height}`} preserveAspectRatio="none" role="img" aria-labelledby={`${titleId} ${descId}`}>

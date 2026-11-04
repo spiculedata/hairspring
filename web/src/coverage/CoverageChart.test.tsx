@@ -5,6 +5,7 @@ import type { Coverage, CoveragePoint } from '../types';
 import { CoverageChart } from './CoverageChart';
 import { MAX_CHART_POINTS } from './downsample';
 
+const VIEW_HEIGHT = 80;
 const points = (n: number): CoveragePoint[] =>
   Array.from({ length: n }, (_, i) => ({ seq: i + 1, ids_hit: Math.floor(i / 3), ids_true: Math.floor(i / 5), schedules: i + 1 }));
 const coverage = (n: number, over: Partial<Coverage> = {}): Coverage => ({ run_id: 'run_1', trials: n, downsampled: false, points: points(n), ...over });
@@ -40,6 +41,19 @@ describe('CoverageChart', () => {
     expect(html).toMatch(/<details/);
     expect(html).toContain('Show as a table');
     expect(html.match(/<tbody>.*<\/tbody>/)?.[0].match(/<tr/g)).toHaveLength(12);
+  });
+
+  it('labels the top of each y-axis with the value plotted at the top edge', () => {
+    const pts = Array.from({ length: 5 }, (_, i) => ({ seq: i + 1, ids_hit: i + 3, ids_true: 0, schedules: 0 })); // max 7
+    const html = renderToString(<CoverageChart coverage={{ run_id: 'r', trials: 5, downsampled: false, points: pts }} />);
+    const panel = html.match(/data-series="ids_hit".*?<\/svg>/)?.[0] ?? '';
+    expect(panel.match(/<div class="coverage-yaxis"[^>]*><span>([^<]*)<\/span>/)?.[1]).toBe('10');
+    const ys = (panel.match(/points="([^"]+)"/)?.[1] ?? '').split(' ').map((p) => Number(p.split(',')[1]));
+    expect(Math.min(...ys)).toBeCloseTo(VIEW_HEIGHT * 0.3, 0);
+  });
+
+  it('warns that the heading figures use every point when the page thinned the series', () => {
+    expect(text(renderToString(<CoverageChart coverage={coverage(5_000)} />))).toMatch(/figures under each heading come from every point/);
   });
 
   it('does not say downsampled when nothing was thinned', () => {

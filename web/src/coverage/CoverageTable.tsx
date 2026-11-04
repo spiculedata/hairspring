@@ -24,8 +24,8 @@ export function CoverageTable({ points }: { points: readonly CoveragePoint[] }) 
             </tr>
           </thead>
           <tbody>
-            {points.map((p) => (
-              <tr key={p.seq}>
+            {points.map((p, i) => (
+              <tr key={`${i}-${p.seq}`}>
                 <th scope="row">{formatCount(p.seq)}</th>
                 {PANEL_KEYS.map((k) => (
                   <td key={k} className="coverage-num">

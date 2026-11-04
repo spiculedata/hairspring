@@ -22,7 +22,7 @@ const COUNT = new Intl.NumberFormat('en-GB');
 export function downsampledNote(shown: number, total: number, serverThinned: boolean): string {
   if (shown < total) {
     const earlier = serverThinned ? ' The server had already thinned the series.' : '';
-    return `Downsampled: showing ${COUNT.format(shown)} of ${COUNT.format(total)} points. The table lists the same points as the chart.${earlier}`;
+    return `Downsampled: showing ${COUNT.format(shown)} of ${COUNT.format(total)} points. The table lists the same points as the chart. The figures under each heading come from every point, so the trial named there may not be one of those drawn.${earlier}`;
   }
   if (serverThinned) return 'Downsampled by the server: the series was thinned before it was sent, so the line has less detail than the run.';
   return '';
