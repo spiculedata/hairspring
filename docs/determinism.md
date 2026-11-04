@@ -67,8 +67,9 @@ clean-up, so they were left behind.
 
 Each Hermit trial now gets a private directory (mode 0700) that the engine removes itself after the trial, however it
 ended. It is made under `trial_dir` in the Hermit backend settings, which defaults to `/tmp`, the place Hermit made
-its files (it is started with a cleared environment, so the engine's own `TMPDIR` never applied). It is not under `summary_dir`: `/dev/shm` is small in some containers and mounted `noexec`, and
-the guest's `/tmp` has to stay where it was. If the directory cannot be made the trial fails as a Hermit start-up fault,
+its files (it is started with a cleared environment, so the engine's own `TMPDIR` never applied). It is not under
+`summary_dir`: `/dev/shm` is small in some containers and mounted `noexec`, and the guest's `/tmp` has to stay where it
+was. If the directory cannot be made the trial fails as a Hermit start-up fault,
 and nothing is run with a different `/tmp`.
 
 Hermit is pointed at that directory with two environment variables. No `--tmp` is passed (the events file still uses it,

@@ -102,14 +102,46 @@ fn chmod_no_follow(path: &Path, mode: u32) {
 }
 
 /// `O_DIRECTORY | O_NOFOLLOW`: the open fails, instead of following a link or blocking on a FIFO or a device that a
-/// surviving guest process swapped in. The values are fixed per platform.
-#[cfg(all(target_os = "linux", any(target_arch = "x86", target_arch = "x86_64")))]
+/// surviving guest process swapped in. The values are fixed per architecture, so an architecture that is not listed
+/// stops the build rather than getting numbers that mean other flags.
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "riscv32",
+        target_arch = "riscv64",
+        target_arch = "loongarch64"
+    )
+))]
 const OPEN_DIRECTORY_FLAGS: i32 = 0o200000 | 0o400000;
 #[cfg(all(
     target_os = "linux",
-    not(any(target_arch = "x86", target_arch = "x86_64"))
+    any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "powerpc",
+        target_arch = "powerpc64"
+    )
 ))]
 const OPEN_DIRECTORY_FLAGS: i32 = 0o40000 | 0o100000;
+#[cfg(all(
+    target_os = "linux",
+    not(any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "riscv32",
+        target_arch = "riscv64",
+        target_arch = "loongarch64",
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "powerpc",
+        target_arch = "powerpc64"
+    ))
+))]
+compile_error!(
+    "summary_dir needs the O_DIRECTORY and O_NOFOLLOW values for this Linux architecture; Hermit runs on x86_64"
+);
 #[cfg(target_os = "macos")]
 const OPEN_DIRECTORY_FLAGS: i32 = 0x0010_0000 | 0x0100;
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -124,10 +156,11 @@ fn open_directory(dir: &Path) -> io::Result<std::fs::File> {
 }
 
 /// A path that names the directory `handle` is open on, whatever `dir` now points at. Linux resolves paths through
-/// `/dev/fd`; elsewhere (development machines, where Hermit does not run) the path is used as given.
+/// `/proc/self/fd`, which a stripped-down container is likelier to have than `/dev/fd`; elsewhere (development
+/// machines, where Hermit does not run) the path is used as given.
 #[cfg(target_os = "linux")]
 fn through(_dir: &Path, handle: &std::fs::File) -> PathBuf {
-    PathBuf::from(format!("/dev/fd/{}", handle.as_raw_fd()))
+    PathBuf::from(format!("/proc/self/fd/{}", handle.as_raw_fd()))
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -373,6 +406,45 @@ mod tests {
             .map(|_| d.scratch_for().unwrap().path().file_name().unwrap().len())
             .collect();
         assert!(names.iter().all(|n| *n == names[0]), "{names:?}");
+    }
+
+    #[test]
+    fn a_directory_is_not_opened_through_a_link_or_a_plain_file() {
+        let b = base("open-flags");
+        let real = b.join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        symlink(&real, b.join("link")).unwrap();
+        std::fs::write(b.join("file"), "x").unwrap();
+        assert!(open_directory(&real).is_ok());
+        assert!(open_directory(&b.join("link")).is_err(), "a link");
+        assert!(open_directory(&b.join("file")).is_err(), "a file");
+    }
+
+    #[test]
+    fn a_fifo_swapped_in_does_not_block_the_clean_up() {
+        extern "C" {
+            fn mkfifo(path: *const std::os::raw::c_char, mode: u32) -> i32;
+        }
+        let b = base("fifo");
+        let d = PrivateDir::create(&b).unwrap();
+        let s = d.scratch_for().unwrap();
+        let fifo = s.path().join("pipe");
+        let c_path = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        // SAFETY: `c_path` is a valid NUL-terminated string that outlives the call.
+        assert_eq!(unsafe { mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        let path = s.path().to_path_buf();
+        s.remove().unwrap();
+        assert!(!path.exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_names_an_open_directory_through_proc_not_dev() {
+        let b = base("through");
+        let handle = open_directory(&b).unwrap();
+        let path = through(&b, &handle);
+        assert!(path.starts_with("/proc/self/fd"), "{}", path.display());
+        assert!(std::fs::read_dir(&path).is_ok());
     }
 
     fn not_root() -> bool {
