@@ -13,6 +13,17 @@ const NOT_RECORDED_AND_UNREADABLE: &str =
     "hermit.path.sha256 was not recorded and cannot be read now";
 const NOT_NOTICED: &str = "a different Hermit build would not be noticed";
 
+/// The fields that say where, and with what arguments, the program was started. Replay always starts it from the
+/// current configuration, so a change here is reported rather than followed.
+const TARGET_FIELDS: [&str; 2] = ["target.command.sha256", "target.cwd.sha256"];
+const TARGET_DIFFERS: &str = "command line or working directory differs from the recording";
+const TARGET_DIFFERS_EFFECT: &str =
+    "replay started the program from the current configuration; a program that reads its own paths can follow a different schedule";
+
+/// Added to a miss when the command line or working directory differs.
+pub const MISS_WITH_CHANGED_TARGET: &str =
+    "possible cause: the command line or working directory differs from the recording";
+
 /// Said when a replay misses on a host that differs from the recording.
 pub const MISS_ON_CHANGED_HOST: &str =
     "the environment differs from the recording, so this is not evidence the bug is fixed";
@@ -20,6 +31,35 @@ pub const MISS_ON_CHANGED_HOST: &str =
 pub struct EnvironmentCheck {
     pub warnings: Vec<String>,
     pub differs: bool,
+    /// The command line or working directory is not the recorded one.
+    pub target_differs: bool,
+}
+
+fn changed_target_fields(comparison: &EnvironmentComparison) -> Vec<&str> {
+    match comparison {
+        EnvironmentComparison::Differs(changes) => changes
+            .iter()
+            .map(|c| c.name.as_str())
+            .filter(|name| TARGET_FIELDS.contains(name))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A line naming the target fields an otherwise recorded environment lacks, so their absence is not silent.
+fn target_not_recorded(recorded: &EnvironmentIdentity) -> Option<String> {
+    let missing: Vec<&str> = TARGET_FIELDS
+        .iter()
+        .copied()
+        .filter(|name| recorded.get(name).is_none())
+        .collect();
+    let verb = if missing.len() == 1 { "was" } else { "were" };
+    (!missing.is_empty()).then(|| {
+        format!(
+            "{} {verb} not recorded: a changed command line or working directory would not be noticed",
+            missing.join(" and ")
+        )
+    })
 }
 
 fn loader_changed(comparison: &EnvironmentComparison) -> bool {
@@ -62,11 +102,20 @@ pub fn check(
             };
             warnings.push(format!("{why}: {NOT_NOTICED}"));
         }
+        warnings.extend(target_not_recorded(recorded));
     }
     warnings.extend(comparison.warning());
+    let target_changed = changed_target_fields(&comparison);
+    if !target_changed.is_empty() {
+        warnings.push(format!(
+            "{TARGET_DIFFERS} ({}): {TARGET_DIFFERS_EFFECT}",
+            target_changed.join(", ")
+        ));
+    }
     Ok(EnvironmentCheck {
         warnings,
         differs: comparison.differs() || tampered,
+        target_differs: !target_changed.is_empty(),
     })
 }
 
@@ -96,11 +145,17 @@ mod tests {
         identity(&[
             ("host.container", "none"),
             ("hermit.path.sha256", &"a".repeat(64)),
+            ("target.command.sha256", &"b".repeat(64)),
+            ("target.cwd.sha256", &"c".repeat(64)),
         ])
     }
 
     fn without_hash() -> EnvironmentIdentity {
-        identity(&[("host.container", "none")])
+        identity(&[
+            ("host.container", "none"),
+            ("target.command.sha256", &"b".repeat(64)),
+            ("target.cwd.sha256", &"c".repeat(64)),
+        ])
     }
 
     #[test]

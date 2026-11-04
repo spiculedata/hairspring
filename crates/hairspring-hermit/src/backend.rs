@@ -3,7 +3,7 @@ use crate::events;
 use crate::exec::{run_trial, scheduler_flags, Dirs, ProcessSpec, SpawnError, Trial};
 use crate::host_identity::HostSources;
 use crate::property_verdict::{self, FailureKey};
-use crate::replay_environment::{self, MISS_ON_CHANGED_HOST};
+use crate::replay_environment::{self, MISS_ON_CHANGED_HOST, MISS_WITH_CHANGED_TARGET};
 use crate::summary_dir::PrivateDir;
 use crate::tally::{Tally, TrialObserver};
 use crate::trace::{behaviour_hash, classify, steps, Verdict, HASH_SCHEME};
@@ -575,9 +575,14 @@ impl HermitBackend {
             && property_matches(bundle, &trial) != Some(false);
         let mut notes = replay_notes(bundle, &trial, &verdict, hang_relaxed);
         if !reproduced && environment.differs {
+            let miss = if environment.target_differs {
+                format!("{MISS_ON_CHANGED_HOST} ({MISS_WITH_CHANGED_TARGET})")
+            } else {
+                MISS_ON_CHANGED_HOST.to_string()
+            };
             notes = Some(match notes {
-                Some(existing) => format!("{existing}; {MISS_ON_CHANGED_HOST}"),
-                None => MISS_ON_CHANGED_HOST.to_string(),
+                Some(existing) => format!("{existing}; {miss}"),
+                None => miss,
             });
         }
         let steps = steps(

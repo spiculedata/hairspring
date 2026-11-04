@@ -136,6 +136,8 @@ pub fn collect(
             Some(allowlisted_hash(guest.env)),
         ),
         ("target.exe.sha256", target_hash(guest)),
+        ("target.command.sha256", command_hash(guest)),
+        ("target.cwd.sha256", cwd_hash(guest)),
     ];
     fields
         .into_iter()
@@ -265,20 +267,55 @@ fn is_regular_file(path: &Path) -> bool {
 /// directory), a bare name is looked up on the guest's pinned `PATH`. Only a regular file is hashed, so a device or a
 /// FIFO named as the command is never opened.
 fn target_hash(guest: &GuestInputs) -> Option<String> {
+    let found = resolved_program(guest)?;
+    is_regular_file(&found).then(|| hash_of(&found)).flatten()
+}
+
+/// Where the program named by the command is, or `None` when it cannot be found.
+fn resolved_program(guest: &GuestInputs) -> Option<PathBuf> {
     let program = guest.command.first()?;
-    let found = if program.contains('/') {
+    if program.contains('/') {
         let path = Path::new(program);
-        match (path.is_absolute(), guest.cwd) {
+        return Some(match (path.is_absolute(), guest.cwd) {
             (false, Some(cwd)) => Path::new(cwd).join(path),
             _ => path.to_path_buf(),
-        }
-    } else {
-        guest
-            .env
-            .get("PATH")?
-            .split(':')
-            .map(|dir| Path::new(dir).join(program))
-            .find(|candidate| is_regular_file(candidate))?
+        });
+    }
+    guest
+        .env
+        .get("PATH")?
+        .split(':')
+        .map(|dir| Path::new(dir).join(program))
+        .find(|candidate| is_regular_file(candidate))
+}
+
+/// A hash of the command line with the program as resolved (so the install path is part of it) and every argument as
+/// configured. Paths are not canonicalised: the text of a path is what a program can react to. Only the hash is
+/// recorded, because arguments can carry secrets and paths can carry user names.
+fn command_hash(guest: &GuestInputs) -> Option<String> {
+    let program = guest.command.first()?;
+    let resolved = resolved_program(guest)
+        .map_or_else(|| program.clone(), |p| p.to_string_lossy().into_owned());
+    let argv =
+        std::iter::once(resolved.as_str()).chain(guest.command[1..].iter().map(String::as_str));
+    Some(sha256_hex(&nul_terminated(argv)))
+}
+
+/// A hash of the directory the program starts in: the configured `cwd`, or the one the engine itself runs from when
+/// none is set (which is what the program inherits). The path text is hashed, never stored.
+fn cwd_hash(guest: &GuestInputs) -> Option<String> {
+    let here = std::env::current_dir().ok();
+    let effective = match (guest.cwd.map(Path::new), here) {
+        (Some(cwd), Some(here)) => here.join(cwd),
+        (Some(cwd), None) => cwd.to_path_buf(),
+        (None, here) => here?,
     };
-    is_regular_file(&found).then(|| hash_of(&found)).flatten()
+    Some(sha256_hex(effective.to_string_lossy().as_bytes()))
+}
+
+/// The items joined so that `a b` and `a`, `b` differ: each is followed by a NUL byte.
+fn nul_terminated<'a>(items: impl Iterator<Item = &'a str>) -> Vec<u8> {
+    items
+        .flat_map(|s| s.bytes().chain(std::iter::once(0)))
+        .collect()
 }

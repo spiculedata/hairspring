@@ -10,7 +10,7 @@ use crate::bundle::Bundle;
 use std::collections::BTreeMap;
 
 /// Every field a bundle may record. A param with any other name is not part of the environment.
-pub const KNOWN_FIELDS: [&str; 15] = [
+pub const KNOWN_FIELDS: [&str; 17] = [
     "host.kernel_release",
     "host.cpu_model",
     "host.cpu_flags.sha256",
@@ -26,6 +26,8 @@ pub const KNOWN_FIELDS: [&str; 15] = [
     "env.guest.names.sha256",
     "env.guest.allowlisted.sha256",
     "target.exe.sha256",
+    "target.command.sha256",
+    "target.cwd.sha256",
 ];
 pub const MAX_FIELD_VALUE_CHARS: usize = 256;
 /// Changes named in one warning; the rest are counted. A bundle is untrusted input, so the line must stay short.
