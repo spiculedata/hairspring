@@ -1,6 +1,8 @@
 /* App shell: top bar, side navigation and the theme switch. Colours come from the tokens in styles.css only. */
 .topbar { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; justify-content: space-between; padding: .6rem 16px; border-bottom: 1px solid var(--border); background: var(--surface); }
 .brand { font-weight: 700; letter-spacing: .02em; }
+.topbar-id { display: flex; flex-wrap: wrap; align-items: baseline; gap: .15rem .75rem; min-width: 0; }
+.org-name { min-width: 0; overflow-wrap: anywhere; color: var(--text-muted); padding-left: .75rem; border-left: 1px solid var(--border-strong); }
 .frame { display: grid; grid-template-columns: 12.5rem minmax(0, 1fr); align-items: stretch; }
 .frame > main { min-width: 0; }
 .sidenav { padding: .75rem .5rem; border-right: 1px solid var(--border); background: var(--surface); }

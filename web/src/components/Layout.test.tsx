@@ -32,6 +32,32 @@ describe('Layout', () => {
     expect(shell).not.toMatch(/(?<!min-|max-)width:\s*\d+(px|rem)/);
   });
 
+  it('shows no organisation name in the top bar unless one is set', () => {
+    expect(render('/')).not.toContain('org-name');
+    const empty = renderToString(<Layout path="/" organisation="">body</Layout>);
+    expect(empty).not.toContain('org-name');
+  });
+
+  it('shows the organisation name beside the brand, as text, when one is set', () => {
+    const html = renderToString(<Layout path="/" organisation="Acme Ltd">body</Layout>);
+    expect(html).toMatch(
+      /<header class="topbar"><div class="topbar-id"><span class="brand">Hairspring<\/span><span class="org-name">Acme Ltd<\/span><\/div>/,
+    );
+    expect(html.match(/Acme Ltd/g)).toHaveLength(1);
+  });
+
+  it('escapes markup in the organisation name', () => {
+    const html = renderToString(<Layout path="/" organisation={'<img src=x onerror=alert(1)>'}>body</Layout>);
+    expect(html).not.toContain('<img');
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+  });
+
+  it('lets a long organisation name wrap instead of widening the page', () => {
+    const shell = readSource('shell/shell.css');
+    expect(shell).toMatch(/\.org-name \{[^}]*overflow-wrap: anywhere/);
+    expect(shell).toMatch(/\.org-name \{[^}]*min-width: 0/);
+  });
+
   it('marks the current page in the navigation with aria-current, on the link, and only there', () => {
     const html = render('/workers');
     expect(html.match(/aria-current="page"/g)).toHaveLength(1);

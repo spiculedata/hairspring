@@ -14,12 +14,14 @@ import { MissingPageContext } from './PageStatus';
 import { pageTitle } from './pageTitle';
 import { matchRoute, usePath, useSearch } from './router';
 import { SeedsPage } from './seeds/SeedsPage';
+import { useOrganisation } from './shell/useOrganisation';
 import { SeedPage, TrialPage } from './trial/TrialPage';
 import { useDocumentTitle } from './useDocumentTitle';
 
 export function App() {
   const path = usePath();
   const search = useSearch();
+  const organisation = useOrganisation();
   const [needsToken, setNeedsToken] = useState(false);
   const [epoch, setEpoch] = useState(0);
   useEffect(() => onUnauthorized(() => setNeedsToken(true)), []);
@@ -34,7 +36,7 @@ export function App() {
 
   if (needsToken) {
     return (
-      <Layout path={path} announcement={title}>
+      <Layout path={path} announcement={title} organisation={organisation}>
         <TokenPrompt
           onDone={() => {
             setNeedsToken(false);
@@ -46,7 +48,7 @@ export function App() {
   }
 
   return (
-    <Layout path={path} announcement={title}>
+    <Layout path={path} announcement={title} organisation={organisation}>
       <MissingPageContext.Provider value={reportMissing}>
       <div key={`${path}${route.name === 'seeds' ? search : ''}:${epoch}`}>
         {route.name === 'overview' && <OverviewPage />}

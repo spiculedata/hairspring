@@ -3,6 +3,7 @@ mod api;
 mod auth;
 mod error;
 mod ndjson;
+mod organisation;
 mod ratelimit;
 mod read_api;
 mod sse;
@@ -10,6 +11,7 @@ mod ui;
 mod worker_api;
 
 pub use auth::Auth;
+pub use organisation::{parse_organisation, MAX_ORGANISATION_CHARS};
 
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Request, State};
 use axum::http::{header, HeaderName, HeaderValue, StatusCode};
@@ -60,6 +62,10 @@ pub struct ServerConfig {
     pub register_window: Duration,
     /// Shut down on Ctrl-C (for the CLI).
     pub handle_ctrl_c: bool,
+    /// The organisation's name, shown in the web UI's top bar when set. Plain text of at most
+    /// [`MAX_ORGANISATION_CHARS`] characters; a blank name is none. `GET /api/health` serves it, and only to a caller
+    /// the server would answer (a valid token, or any caller when there are no tokens).
+    pub organisation: Option<String>,
 }
 
 impl ServerConfig {
@@ -73,10 +79,22 @@ impl ServerConfig {
             register_limit: DEFAULT_REGISTER_LIMIT,
             register_window: DEFAULT_REGISTER_WINDOW,
             handle_ctrl_c: false,
+            organisation: None,
         }
     }
 
+    /// The name to serve: [`ServerConfig::organisation`] checked and trimmed, or `None`.
+    fn organisation_name(&self) -> io::Result<Option<Arc<str>>> {
+        let Some(raw) = &self.organisation else {
+            return Ok(None);
+        };
+        parse_organisation(raw)
+            .map(|name| name.map(Arc::from))
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))
+    }
+
     fn validate(&self) -> io::Result<()> {
+        self.organisation_name()?;
         if !self.addr.ip().is_loopback() && self.auth.is_open() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -100,6 +118,8 @@ pub struct AppState {
     /// What a refused registration is told to wait: the whole window, the longest it can take to clear.
     pub register_retry_after_secs: u64,
     pub sse_slots: Arc<tokio::sync::Semaphore>,
+    /// The checked organisation name, if one is configured.
+    pub organisation: Option<Arc<str>>,
 }
 
 /// Handle to a running server. Dropping it shuts the server down.
@@ -363,6 +383,7 @@ pub fn start(config: ServerConfig, svc: Service, engine: Engine) -> io::Result<R
         )),
         register_retry_after_secs: config.register_window.as_secs().max(1),
         sse_slots: Arc::new(tokio::sync::Semaphore::new(config.max_sse_streams)),
+        organisation: config.organisation_name()?,
     };
     let workers = spawn_workers(config.embedded_workers, &svc, &engine, &stopping);
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();

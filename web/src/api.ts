@@ -151,7 +151,8 @@ export const api = {
     if (!isCoverage(body)) throw new ApiError(502, 'the server sent a coverage response in an unexpected shape');
     return body;
   },
-  health: () => request<{ status: string; version: string }>('/api/health'),
+  /** `{ status, version }`, and `organisation` when the server has a name and this caller has a valid token. Read with `organisationName`. */
+  health: () => request<unknown>('/api/health'),
   targets: async () => (await request<{ targets: Target[] }>('/api/targets')).targets,
   runs: async (limit = 50) => (await request<{ runs: Run[] }>(`/api/runs?limit=${limit}`)).runs,
   run: (id: string) => request<RunDetail>(`/api/runs/${encodeURIComponent(id)}`),

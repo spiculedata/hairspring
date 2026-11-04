@@ -56,8 +56,18 @@ fn reject(rej: JsonRejection) -> ApiError {
     )
 }
 
-pub async fn health() -> Json<Value> {
-    Json(json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }))
+/// Liveness for probes, open to everyone. The organisation name, when one is configured, is added only for a caller
+/// the other endpoints would answer: a valid token (any role), or any caller when the server has no tokens.
+pub async fn health(State(s): State<AppState>, headers: HeaderMap) -> Json<Value> {
+    let mut body = json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") });
+    let authorization = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+    let known = s.auth.is_open() || s.auth.authenticate(authorization).is_some();
+    if let (true, Some(name)) = (known, &s.organisation) {
+        body["organisation"] = json!(name.as_ref());
+    }
+    Json(body)
 }
 
 pub async fn targets(
