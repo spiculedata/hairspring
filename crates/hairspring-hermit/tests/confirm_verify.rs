@@ -303,6 +303,51 @@ fn a_timed_out_verify_says_so_and_differs_from_a_hermit_failure() {
     assert_ne!(timed_out, failed_text);
 }
 
+fn staging_files(dir: &std::path::Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(".hermit-verify-summary-"))
+        .collect()
+}
+
+#[test]
+fn a_killed_verify_does_not_leave_its_staging_file_in_the_working_directory() {
+    let o = RigOptions {
+        trial_timeout: Duration::from_secs(1),
+        svc_in_work_dir: true,
+        ..RigOptions::default()
+    };
+    let hung = rig("verify-staging", o);
+    hung.set("verify", "hang");
+    let work = hung.dir.join("work");
+    let kept = work.join(".hermit-verify-summary-Kept00");
+    std::fs::write(&kept, "").unwrap();
+    std::fs::write(work.join("evidence.txt"), "x").unwrap();
+    let checks = run(&hung);
+    assert!(detail(verify_of(&checks), "inconclusive").contains("timed out"));
+    assert_eq!(
+        staging_files(&work),
+        [".hermit-verify-summary-Kept00"],
+        "only the file this verify made is removed"
+    );
+    assert!(work.join("evidence.txt").exists());
+}
+
+#[test]
+fn a_verify_that_ended_normally_removes_no_staging_file() {
+    let o = RigOptions {
+        svc_in_work_dir: true,
+        ..RigOptions::default()
+    };
+    let good = rig("verify-staging-good", o);
+    let other = good.dir.join("work").join(".hermit-verify-summary-Other1");
+    std::fs::write(&other, "").unwrap();
+    run(&good);
+    assert!(other.exists());
+}
+
 #[test]
 fn a_malformed_result_is_inconclusive_with_a_clear_message() {
     let rig = rig("verify-malformed", RigOptions::default());

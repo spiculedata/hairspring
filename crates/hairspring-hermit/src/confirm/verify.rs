@@ -13,6 +13,7 @@ use super::command;
 use super::context::{now_ms, Ctx};
 use super::pace::Pace;
 use super::verify_report as report;
+use super::verify_staging::{left_behind, Staging};
 use crate::backend::{failure_kind_matches, property_matches};
 use crate::exec::{run_trial_with, Dirs, Trial};
 use crate::trace::Verdict;
@@ -74,6 +75,7 @@ pub(super) fn check(ctx: &Ctx, pace: &mut Pace) -> CheckResult {
     let extra = flags(&result_path.display().to_string());
     // The two runs get twice a single run's time; the result file replaces the summary file.
     let timeout = pace.run_timeout(ctx.backend.trial_timeout(ctx.p) * 2);
+    let staging = Staging::watch(ctx.p.cwd);
     let run = run_trial_with(
         &ctx.backend.settings,
         ctx.p,
@@ -90,13 +92,24 @@ pub(super) fn check(ctx: &Ctx, pace: &mut Pace) -> CheckResult {
     // Read before the file is removed: its verdict and reason are what the detail has to show.
     let read = read_result(&result_path);
     let _ = std::fs::remove_file(&result_path);
+    // A verify that was killed (or never started cleanly) cannot have cleaned up after itself.
+    let killed = run.as_ref().map_or(true, |t| t.timed_out);
+    let stuck = match (&staging, killed) {
+        (Some(s), true) => s.remove_new(),
+        _ => Vec::new(),
+    };
+    let stuck_note = left_behind(&stuck);
     let trial = match run {
         Ok(t) => t,
-        Err(_) => return inconclusive("Hermit could not be started (host fault)"),
+        Err(_) => {
+            return inconclusive(&format!(
+                "Hermit could not be started (host fault){stuck_note}"
+            ))
+        }
     };
     let verdict = ctx.backend.verdict(ctx.p, &trial, timeout);
     if trial.timed_out || matches!(verdict, Verdict::Hang(_)) {
-        return inconclusive(&report::timed_out(timeout));
+        return inconclusive(&format!("{}{stuck_note}", report::timed_out(timeout)));
     }
     let error_line = trial.stderr_findings().error_line;
     let hermit_failed = match (&verdict, &read) {

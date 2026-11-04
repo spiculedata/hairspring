@@ -78,7 +78,10 @@ fi
 echo "hermit: virtual-time epoch=fake" >&2
 if [ -n "$vjson" ]; then
   vmode=$(cat "$dir/verify" 2>/dev/null || echo good)
-  [ "$vmode" = hang ] && sleep 30
+  if [ "$vmode" = hang ]; then
+    : > "$PWD/.hermit-verify-summary-AbC123"
+    sleep 30
+  fi
   if [ "$vmode" = heal ]; then
     echo fine
     rc=0
@@ -144,6 +147,8 @@ pub struct RigOptions {
     pub svc_script: Option<String>,
     /// What the backend gives one run; a strict verify gets twice this.
     pub trial_timeout: Duration,
+    /// Runs the failing target in a `work` directory inside the rig's directory instead of the test's own.
+    pub svc_in_work_dir: bool,
 }
 
 impl Default for RigOptions {
@@ -160,6 +165,7 @@ impl Default for RigOptions {
             hang_is_violation: false,
             svc_script: None,
             trial_timeout: Duration::from_secs(10),
+            svc_in_work_dir: false,
         }
     }
 }
@@ -213,7 +219,7 @@ pub fn rig(name: &str, o: RigOptions) -> Rig {
         d = dir.display()
     );
     let svc_script = o.svc_script.as_deref().unwrap_or(SEEDED_BUG);
-    let svc = process(
+    let mut svc = process(
         "svc",
         if o.hangs_once { &hang } else { svc_script },
         o.hermit_args.clone(),
@@ -222,6 +228,13 @@ pub fn rig(name: &str, o: RigOptions) -> Rig {
         o.hangs_once.then_some(2),
         o.hang_is_violation,
     );
+    if o.svc_in_work_dir {
+        let work = dir.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        if let TargetKind::Process { cwd, .. } = &mut svc.kind {
+            *cwd = Some(work.display().to_string());
+        }
+    }
     let fixed = process(
         "fixed",
         &o.control_script,
