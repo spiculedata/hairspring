@@ -23,6 +23,7 @@ pub mod sanitize;
 mod scan;
 mod strip_query;
 mod sweep;
+mod tree_input;
 mod trial_class;
 mod trial_query;
 mod types;
@@ -37,6 +38,9 @@ pub use error::ServiceError;
 pub use query::{
     PropertyQuery, SeedQuery, StripQuery, TrialQuery, DEFAULT_PAGE, MAX_PAGE, MAX_PREFIX_BYTES,
     MAX_SEED_PAGE, MAX_STRIP_PAGE,
+};
+pub use tree_input::{
+    check_command_json, check_edge_ref, check_new_branch, check_new_node, TreeFieldError,
 };
 pub use types::*;
 pub use view::{

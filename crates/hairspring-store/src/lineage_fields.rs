@@ -10,12 +10,12 @@ use crate::lineage::MAX_COMMAND_JSON_DEPTH;
 const SHA256_HEX_LEN: usize = 64;
 
 /// Whether `s` is a SHA-256 digest in lower-case hexadecimal.
-pub(crate) fn is_sha256_hex(s: &str) -> bool {
+pub fn is_sha256_hex(s: &str) -> bool {
     s.len() == SHA256_HEX_LEN && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// Whether `text` is one JSON document nested no deeper than [`MAX_COMMAND_JSON_DEPTH`].
-pub(crate) fn is_bounded_json(text: &str) -> bool {
+pub fn is_bounded_json(text: &str) -> bool {
     // The depth is measured first, by a loop that does not recurse, so the parser below is only ever given text
     // nested within the bound. Parsing into a value (rather than skipping it) also refuses what a store could not
     // round-trip, such as a lone surrogate escape.
@@ -25,7 +25,7 @@ pub(crate) fn is_bounded_json(text: &str) -> bool {
 
 /// The deepest nesting of `[` and `{` in the text; brackets inside strings do not count. It does not need valid JSON:
 /// on malformed text the figure is only a bound, and the parser rejects the text anyway.
-fn nesting_depth(valid_json: &str) -> usize {
+pub fn nesting_depth(valid_json: &str) -> usize {
     let (mut depth, mut deepest) = (0usize, 0usize);
     let (mut in_string, mut escaped) = (false, false);
     for b in valid_json.bytes() {

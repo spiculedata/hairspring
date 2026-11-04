@@ -229,6 +229,15 @@ Nothing writes to them yet except through the store interface; the server routes
   of the source node have finished (a finished run never starts another attempt, so those nodes cannot be deleted
   under it). A run is a tree's root or a branch, not both.
 
+**Field checks.** Tree and command fields come from workers, which are untrusted. Both stores refuse, with a typed
+`Invalid` rejection, an `edge_ref`, `point_hash` or `command_hash` that is not 64 lower-case hexadecimal digits (a
+SHA-256 digest), and a `command_json` that is empty, over 64 KiB, holds a NUL, nests more than 32 levels deep or is not
+well-formed JSON. The service layer (`hairspring_service::check_new_node`, `check_new_branch`, `check_command_json`)
+makes the same checks first and names the field in a `TreeFieldError`; it also requires the command to be a JSON object,
+so a bare number, string or array is refused. Nothing calls these yet, because no server route accepts tree input;
+the routes will call them before touching the store. Not checked: that `command_hash` equals the hash of a canonical
+form of `command_json` (it is a cache key the worker supplies), and repeated keys inside a command object.
+
 The node cap counts node numbers handed out, not rows: when a retried attempt deletes a run's nodes, the tree's counter
 does not go back, so a number never names two nodes and gaps in the numbering stand.
 
