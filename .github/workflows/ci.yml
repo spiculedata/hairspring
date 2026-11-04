@@ -58,13 +58,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Compiler versions
         run: ${{ matrix.cc }} --version && ${{ matrix.cxx }} --version
-      # Includes audit-control, the positive control for the call-site audit, and the seccomp no-syscall test.
+      # Includes the C++ template and mixed-file checks, audit-control (the positive control for the call-site audit) and the
+      # seccomp no-syscall test.
       - name: Test
         run: make test CC=${{ matrix.cc }}
-      # Compiler-specific placement behaviour for C++ call sites in files that mix inline and ordinary functions;
-      # not part of make test.
-      - name: C++ mixed inline and ordinary call sites
-        run: make cxx-mixed CC=${{ matrix.cc }}
       - name: Signal reports under ThreadSanitizer
         run: make tsan-signals CC=${{ matrix.cc }}
       - name: Signal reports under AddressSanitizer and UBSan

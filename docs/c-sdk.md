@@ -63,37 +63,53 @@ the thread-local slot pointer is declared `initial-exec` on Linux (one load from
 
 ### C++ templates and the catalog section
 
-Each call site declares its record as a function-local `static` with a section attribute, and the catalog is the
-linker's collection of that section. For code in a C++ function template (or a member of a class template) the
-compiler instantiates that static once per instantiation, as a COMDAT (vague-linkage) entity.
+How a call site gets its record depends on the compiler.
 
-* **What is guaranteed.** With clang (Apple clang, clang++ 18 on Linux x86-64) the records of template call sites are
-  in the catalog section, and the tests hold it to that (`make cxx-templates` requires it whenever `$(CC) --version`
-  names clang). With any compiler, an evaluation made at a call site whose record is *not* in the section is detected
-  at report time, unless one of the limits under "What is not detected" applies; it is not a guarantee against every
-  loss.
-* **What is observed with g++ 13.3 on Linux x86-64** (issue #23): at `-O0` and `-O2`, the records and
-  offline strings of template call sites were emitted into per-instantiation COMDAT sections
-  (`.data.rel.local.<mangled>`, `.rodata.<mangled>`) instead of `hs_catalog_v1` / `hs_catalog_str_v1`. Those sites were
-  absent from the `catalog` and `assert` lines and from the offline catalog. A call site in a non-template `inline`
-  function was placed correctly, so the difference is the template. Why g++ does not apply the section attribute to the
-  template's static is **not established**: it is inferred, not verified, to be a compiler behaviour for statics in
-  template instantiations. Other g++ versions are untested here.
-* **g++ 13.3 and mixed files** (observed on Linux x86-64 in two layouts: the earlier fixture and `cxx_mixed.cc`): a file that has a call site in an `inline`
-  function **and** a call site in an ordinary (non-inline, non-template) function does not compile; g++ reports
-  `'hs__site' causes a section type conflict with 'hs__site'` (and the same for `hs__offline`). Template sites were
-  not part of that error. Inference, not verified: g++ puts the static of an inline function into the named section as
-  a COMDAT-group member and the static of an ordinary function into the same-named section without a group, and
-  rejects one section name with different flags in a file. A file with only inline and template sites compiles, and
-  so does a file with only ordinary sites. `make cxx-mixed` checks the observed behaviour per compiler (g++ must fail
-  with that message, clang must compile and catalogue both sites); it is not part of `make test` because it asserts
-  compiler behaviour. Member functions defined inside a class body are implicitly `inline`, so a call site in a
-  non-template class's in-class member function that shares a file with a call site in an ordinary function is the
-  same mix and is expected to fail under g++ the same way (inference; not tested).
-* **Advice.** For C++ use clang, which catalogues every kind of site above. On Linux x86-64 with clang 18.1.3
-  the mixed file compiled and both sites were catalogued at `-O0` and `-O2` (also on Apple clang). With g++, keep call sites in ordinary
-  (non-inline, non-template) functions; sites in templates compile (in a file without the inline/ordinary mix) but
-  land outside the section, and the audit announces them once they are evaluated.
+* **clang (Apple clang, clang++ 18 on Linux x86-64) and every C compiler.** Each call site declares its record as a
+  function-local `static` with a section attribute, and the catalog is the linker's collection of that section. For code
+  in a C++ function template (or a member of a class template) clang places the records in the catalog section, and
+  `make cxx-templates` requires it.
+* **g++ on ELF, x86-64 and aarch64 (issue #23).** g++ 13.3 does not apply the section attribute to a static in a
+  function template: the record and the offline string went into per-instantiation COMDAT sections
+  (`.data.rel.local.<mangled>`, `.rodata.<mangled>`), so those sites were missing from the `catalog` and `assert`
+  lines. It also rejected a file with both an inline-function site and an ordinary-function site (`'hs__site' causes a
+  section type conflict with 'hs__site'`). The header therefore does not use the section attribute here. Each call site
+  is an `asm volatile` statement that writes the record and the offline text with `.pushsection` / `.popsection` into
+  `hs_catalog_v1` and `hs_catalog_str_v1`, and returns the record's address in a register (`lea` on x86-64, `adrp` and
+  `add` on aarch64). The assembler sees the same section name and flags from every site, so there is no conflict, and
+  templates, inline functions and ordinary functions are treated alike. Measured on g++ 13.3 (Ubuntu 24.04, binutils
+  2.42) at `-O2` (the default of the Makefile): `make cxx-templates`, `make cxx-mixed` and `make audit-control` pass.
+  At the call site the record's address is computed with one extra instruction sequence instead of being a link-time
+  constant; the counter updates are unchanged. The cost of that was not measured. The same targets and the whole
+  `make test` also passed with g++ 13.3 on aarch64 (a native arm64 Ubuntu 24.04 container), where the template and mixed
+  targets were also run at `-O0` and at `-O3 -flto`. Other g++ versions are untested here, and so is linking with lld (ld and gold with `--gc-sections`, `-flto` and PIE
+  kept every record); the assembly records have no `R` (retain) section flag.
+  * **Characters.** The id, the message and the file name are pasted into an assembler template, so with g++ in C++
+    they must not contain `%`, `{`, `}`, `|`, `"`, `\` or a control character (a byte below 0x20, or DEL, 0x7f). A site
+    that does is a compile error (`must not contain`, tested by `tests/fixtures/fail_cxx_*.cc`). Bytes of 0x80 and
+    above are allowed, so UTF-8 text such as `café` works in a message, and a file name under a directory with a
+    non-ASCII name works, on every target: the check compares unsigned bytes, so it does not depend on whether `char`
+    is signed (it is on x86-64, not on aarch64). The text must be valid UTF-8, as it must in C; nothing checks that
+    (`make cxx-utf8` builds a fixture with such text under `-fsigned-char` and `-funsigned-char`). With clang and in C
+    only `"` and `\` are excluded (see "Offline catalog" below).
+  * **Dead code.** The record is part of the statement, so a call site that the optimiser deletes as unreachable is not
+    catalogued with g++ in C++. The static form keeps the record of such a site. A must-hit site in code that is
+    compiled away therefore does not appear as unmet.
+  * **Duplicates.** The record is not in a COMDAT group, so an inline function or template instantiation that appears
+    in several translation units leaves one record per translation unit, though only the copy of the function the
+    linker keeps is ever incremented. The others stay at zero and are merged by id like any other record with the same
+    id; the report does not change.
+  * **Other targets.** On a target or compiler that is not in the two lists above (for example g++ on a 32-bit
+    target), the section-attribute form is used and the g++ behaviour described in the next bullet applies.
+* **Section-attribute form, other compilers.** If a compiler places a record outside the catalog section, an evaluation
+  made there is detected at report time (see "What is detected"), unless one of the limits under "What is not
+  detected" applies; it is not a guarantee against every loss. With g++ 13.3 on Linux x86-64 and this form, the
+  records of template call sites went to the COMDAT sections named above and a file mixing inline and ordinary sites
+  did not compile. `make cxx-templates` then accepts either a catalogued site or an announced loss with the right
+  count, and `make cxx-mixed` expects the compile error; both only run in that mode on targets that do not use the
+  assembly form.
+* **Advice.** Call sites work in templates, inline functions and ordinary functions with clang and with g++ on x86-64
+  and aarch64 Linux. Keep ids and messages to plain text if the code may be built with g++.
 * **What is detected.** Every evaluation made through a call-site macro adds one to the calling thread's `evals` and
   one to its record's `trues` or `falses`. At report time the SDK compares the sum of the threads' `evals` with the sum
   of the counters of the records it can find in the section. If the threads counted more, the difference is the number
@@ -128,14 +144,11 @@ compiler instantiates that static once per instantiation, as a COMDAT (vague-lin
   * With `HAIRSPRING_EVENTS=off` nothing is written, so there is no diagnostic line; `end.dropped` is still counted
     in the process but is not reported either, since the `end` line is not written.
   * The offline catalog (`hs_catalog_str_v1`) has no such check: a binary read without running it shows only the sites
-    that were placed in the section.
-* **This is a detection, not a fix.** Registering a record from inside a function body would, as far as is known here,
-  need a run-time initialisation check at the call site (for example a guarded function-local static with a dynamic
-  initialiser), which the cost argument above rules out; no such design was built or measured. Another route, also
-  untried, is to emit the record from inline assembly with `.pushsection` / `.popsection` so the compiler's section
-  handling is bypassed; whether that would work for template and inline sites, and at what cost, is unknown. Keep the
-  assertions that must be reported in non-template code, or in a function the template calls, or check the run for
-  `end.dropped` / the diagnostic line.
+    that were placed in the section. (With g++ on x86-64 and aarch64 the offline text is written by the same assembly
+    as the record, and `tests/check_cxx_offline.sh` reads the section of the test binary on Linux.)
+* **The audit is the safety net, not the fix.** Where the assembly form is not used, the only protection against a
+  record outside the section is the check above. Keep the assertions that must be reported in non-template code, or in
+  a function the template calls, or check the run for `end.dropped` / the diagnostic line.
 
 ## Environment
 
@@ -261,8 +274,8 @@ Where the parser can notice a loss without that, the SDK makes it:
   the parser accepted. In practice the per-trial event budget trips first (see above).
 * Beyond 16384 distinct ids the extra records are not catalogued at all; only `end.dropped` shows it.
 * An id outside the alphabet is sent with `_` in place of each bad byte; two such ids can merge.
-* Evaluations at call sites that are not in the catalog section (some C++ template sites under g++, see "C++ templates
-  and the catalog section") are counted in `end.dropped` by one and announced by a plain-text line; the sites
+* Evaluations at call sites that are not in the catalog section (for example C++ template sites with g++ on a target
+  that does not use the assembly form, see "C++ templates and the catalog section") are counted in `end.dropped` by one and announced by a plain-text line; the sites
   themselves cannot be listed.
 
 ### Limits and caveats
@@ -630,11 +643,14 @@ On aarch64 Linux, gcc 13.3 and clang 18 produce the same structure with `bl __aa
   (the comparison, no false alarm with several threads, the diagnostic and `end.dropped` after an `exit` report and a
   signal report). `make cxx-templates` builds `tests/fixtures/cxx_templates.cc` (function templates, a class template
   member, an inline function; no ordinary-function site) with its harness `cxx_templates_main.cc`, and checks that each
-  id is catalogued (clang: required) or announced as missing, with the right count (other compilers).
-  `make audit-control` builds the same fixture against a copy of the header whose records go to a section nobody
-  reads and checks that all 7 evaluations are announced; it is part of `make test`, which CI runs on Linux with gcc and
-  with clang (followed by `cxx-mixed`, `tsan-signals` and `asan-signals`). `make cxx-mixed` is the compiler-specific
-  check described above; it is not part of `make test`.
+  id is catalogued (required for clang and for g++ on x86-64 and aarch64 Linux) or announced as missing, with the right
+  count (other compilers or targets); where that is required it also reads the `hs_catalog_str_v1` section of the
+  binary on Linux and checks that every id is in it. `make cxx-mixed` builds a file with an inline-function site and an
+  ordinary-function site and requires both to be catalogued in the same cases (otherwise it expects the g++ 13.3 section
+  type conflict). `make cxx-staticfail` checks that g++ refuses an id or message with a character that is special in the
+  assembler template. `make audit-control` builds the same fixture against a copy of the header whose records go to a
+  section nobody reads and checks that all 7 evaluations are announced. All of them are part of `make test`, which CI
+  runs on Linux with gcc and with clang (followed by `tsan-signals` and `asan-signals`).
 * `tests/test_proc.c` with the programs in `tests/fixtures/hs_sample.c` (one binary per scenario, because a binary's
   catalog holds every assertion compiled into it): report shape, the same id at two call sites, fork tags and fresh
   child counters, 100 and 300 threads, crash with and without `HAIRSPRING_SIGNAL_REPORT` (also a null dereference,
@@ -684,8 +700,8 @@ instead of a pipe. Use the events file for multi-process runs on macOS.
 * `hs_choice` and the tape (layout not agreed), `hairspring catalog <binary>` (C2), shared objects. (The Rust SDK is
   in [rust-sdk.md](rust-sdk.md).)
 * Plan T2 (perf counters) and T3 (schedule perturbation under Hermit): need the Linux runner with perf and Hermit.
-* Verification of the C++ template behaviour under g++ on Linux after this change (the detection is tested with clang
-  on macOS, with the section deliberately bypassed; the g++ run is pending).
+* The g++ assembly form was run with g++ 13.3 on x86-64 (an emulated container; the C++ targets only, plus CI) and on
+  aarch64 (native container, the whole `make test`). g++ 14 and later are untested.
 * The full test run on real x86-64 Linux. x86-64 was compiled and disassembled only (an emulated container); the tests
   ran natively on aarch64 Linux.
 * The engine treating `end.dropped > 0` as degradation (a follow-up in `hairspring-props`).

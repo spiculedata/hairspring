@@ -25,7 +25,7 @@ LIB := $(BUILD)/libhairspring.a
 SCENARIOS := basic merge fork threads crash exit_status eval big forkexec spawn closefd forklock execself dup2fd manyids conflict empty limits plain_exit segv abort threadsegv alive alarm evalfd sigign
 SAMPLES := $(SCENARIOS:%=$(BUILD)/hs_sample_%)
 
-.PHONY: all lib fixtures test unit audit proc tsan-signals asan-signals ubsan-fatal nosyscall nosyscall-pic cxx cxx-templates audit-control cxx-mixed staticfail gnusource disasm conformance clean
+.PHONY: all lib fixtures test unit audit proc tsan-signals asan-signals ubsan-fatal nosyscall nosyscall-pic cxx cxx-templates audit-control cxx-mixed cxx-staticfail cxx-utf8 staticfail gnusource disasm conformance clean
 
 all: lib
 
@@ -115,9 +115,12 @@ cxx: $(LIB)
 	  out=$$($(BUILD)/cxx_sample 2>&1) && echo "$$out" | grep -q '"kind":"end"' && echo "ok   C++ sample reports" ; \
 	else echo "skip: $(CXXC) not installed"; fi
 
-# Call sites inside C++ templates must reach the catalog or be announced as missing, never vanish silently. clang places
-# them in the section, so it is held to that; any other compiler may do either (see docs/c-sdk.md).
-CXX_TEMPLATE_MODE := $(if $(filter 0,$(shell $(CC) --version 2>/dev/null | grep -c clang)),either,strict)
+# Call sites inside C++ templates must reach the catalog. clang places them in the section; g++ on ELF x86-64 and
+# aarch64 gets there through inline assembly (see hairspring.h). Any other compiler or target may either do that or
+# have the audit announce the loss (see docs/c-sdk.md), so it is only held to that.
+CXX_IS_CLANG := $(filter-out 0,$(shell $(CXXC) --version 2>/dev/null | grep -c clang))
+CXX_USES_ASM_SITES := $(and $(filter Linux,$(shell uname -s)),$(filter x86_64 aarch64,$(shell uname -m)),$(if $(CXX_IS_CLANG),,yes))
+CXX_TEMPLATE_MODE := $(if $(or $(CXX_IS_CLANG),$(CXX_USES_ASM_SITES)),strict,either)
 
 CXX_FIXTURE_SRC := tests/fixtures/cxx_templates.cc tests/fixtures/cxx_templates_main.cc
 
@@ -127,7 +130,8 @@ $(BUILD)/cxx_templates: $(CXX_FIXTURE_SRC) $(LIB) $(SDK_HDR) | $(BUILD)
 cxx-templates: $(LIB)
 	@if command -v $(CXXC) >/dev/null 2>&1; then $(MAKE) $(BUILD)/cxx_templates && \
 	  env -u HAIRSPRING_EVENTS -u HAIRSPRING_EVENTS_FILE $(BUILD)/cxx_templates 2>$(BUILD)/cxx_templates.events && \
-	  sh tests/check_cxx_templates.sh $(BUILD)/cxx_templates.events $(CXX_TEMPLATE_MODE) ; \
+	  sh tests/check_cxx_templates.sh $(BUILD)/cxx_templates.events $(CXX_TEMPLATE_MODE) && \
+	  sh tests/check_cxx_offline.sh $(BUILD)/cxx_templates $(CXX_TEMPLATE_MODE) ; \
 	else echo "skip: $(CXXC) not installed"; fi
 
 # Positive control for the audit: the same fixture built against a copy of the header whose records go to sections
@@ -146,17 +150,39 @@ audit-control: $(LIB) | $(BUILD)
 	  grep -q 'announced: 7 evaluation(s)' $(CTL)/verdict && echo "ok   audit announces a catalog that lost every site"; \
 	else echo "skip: $(CXXC) not installed"; fi
 
-# The mixed-file check. g++ 13.3 on Linux x86-64 rejects a file with both an inline-function site and an ordinary-function
-# site (observed in this layout; the general rule is an inference), clang accepts it. Because that is compiler
-# behaviour rather than SDK behaviour, this target is NOT part of `make test`.
-CXX_FAMILY := $(if $(filter 0,$(shell $(CXXC) --version 2>/dev/null | grep -c clang)),other,clang)
+# The mixed-file check: one inline-function site and one ordinary-function site in a file. clang and g++ with the
+# assembly records (see hairspring.h) must compile it and catalogue both; g++ 13.3 with section attributes rejected it
+# ("section type conflict"), which is what any other compiler or target is expected to still do.
+CXX_MIXED_MODE := $(if $(or $(CXX_IS_CLANG),$(CXX_USES_ASM_SITES)),catalogued,other)
 
 cxx-mixed: | $(BUILD)
 	@if command -v $(CXXC) >/dev/null 2>&1; then $(MAKE) $(LIB) && \
 	  if $(CXXC) -std=gnu++17 $(OPT) -g -pthread $(EXTRA) -o $(BUILD)/cxx_mixed tests/fixtures/cxx_mixed.cc $(LIB) $(LDFLAGS) 2>$(BUILD)/cxx_mixed.log; then \
 	    env -u HAIRSPRING_EVENTS -u HAIRSPRING_EVENTS_FILE $(BUILD)/cxx_mixed 2>$(BUILD)/cxx_mixed.events; \
 	  else : >$(BUILD)/cxx_mixed.events; fi; \
-	  sh tests/check_cxx_mixed.sh $(BUILD)/cxx_mixed.log $(BUILD)/cxx_mixed.events $(CXX_FAMILY); \
+	  sh tests/check_cxx_mixed.sh $(BUILD)/cxx_mixed.log $(BUILD)/cxx_mixed.events $(CXX_MIXED_MODE); \
+	else echo "skip: $(CXXC) not installed"; fi
+
+# With the assembly records an id, a message or a file name with a character that is special in the assembler template
+# must be rejected at compile time, not mis-assembled. Only meaningful where the assembly records are used.
+cxx-staticfail: | $(BUILD)
+	@if [ -n "$(CXX_USES_ASM_SITES)" ] && command -v $(CXXC) >/dev/null 2>&1; then \
+	  for f in tests/fixtures/fail_cxx_*.cc; do \
+	    if $(CXXC) -std=gnu++17 $(OPT) -fsigned-char -fsyntax-only $$f 2>$(BUILD)/fail.log; then echo "FAIL $$f compiled"; exit 1; \
+	    elif grep -q 'must not contain' $(BUILD)/fail.log; then echo "ok   $$f is rejected"; \
+	    else echo "FAIL $$f was rejected for another reason"; cat $(BUILD)/fail.log; exit 1; fi; done; \
+	else echo "skip: the assembly records are not used with $(CXXC) here"; fi
+
+# UTF-8 text (bytes of 0x80 and above) is accepted in an id, a message and a file name whether `char` is signed or
+# unsigned; a directory with a non-ASCII name puts such bytes in __FILE__ as well.
+cxx-utf8: | $(BUILD)
+	@if command -v $(CXXC) >/dev/null 2>&1; then \
+	  d="$(BUILD)/$$(printf 'caf\303\251')" && mkdir -p "$$d" && cp tests/fixtures/ok_cxx_utf8.cc "$$d/" && \
+	  for sign in -fsigned-char -funsigned-char; do \
+	    for src in tests/fixtures/ok_cxx_utf8.cc "$$d/ok_cxx_utf8.cc"; do \
+	      $(CXXC) -std=gnu++17 $(OPT) $$sign $(WARN) -Iinclude -c -o $(BUILD)/utf8.o "$$src" || { echo "FAIL $$src with $$sign"; exit 1; }; \
+	    done; done; \
+	  echo "ok   UTF-8 text is accepted with signed and unsigned char"; \
 	else echo "skip: $(CXXC) not installed"; fi
 
 # These must be rejected at compile time.
@@ -169,7 +195,7 @@ staticfail:
 gnusource: | $(BUILD)
 	$(CC) $(CFLAGS) -D_GNU_SOURCE -c -o $(BUILD)/gnusource.o src/hairspring.c && echo "ok   builds with -D_GNU_SOURCE"
 
-test: unit audit proc nosyscall nosyscall-pic staticfail cxx cxx-templates audit-control gnusource
+test: unit audit proc nosyscall nosyscall-pic staticfail cxx cxx-templates audit-control cxx-mixed cxx-staticfail cxx-utf8 gnusource
 
 conformance: $(SAMPLES)
 	cd ../.. && HS_C_SDK_BUILD=$(abspath $(BUILD)) cargo test -p hairspring-props --test c_sdk

@@ -1,7 +1,7 @@
 // cxx_templates.cc -- call sites inside function templates, a class template member and a plain inline function.
-// This file has NO call site in an ordinary (non-inline, non-template) function: g++ 13.3 rejects a file that mixes
-// those with inline-function sites (see cxx_mixed.cc). The harness main is in cxx_templates_main.cc.
-// Some compilers place the records of template call sites outside the catalog section; the SDK must then say so at
+// This file has no call site in an ordinary (non-inline, non-template) function, so it also compiles where records are
+// section attributes and g++ rejects the mix (see cxx_mixed.cc). The harness main is in cxx_templates_main.cc.
+// Where a compiler places the records of template call sites outside the catalog section, the SDK must say so at
 // report time (tests/check_cxx_templates.sh). Run with the events on stderr.
 #include <cstdint>
 
