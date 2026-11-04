@@ -129,6 +129,8 @@ A Hermit bundle therefore records these fields (as `param.<name>` lines, which m
 | `env.guest.names` | the sorted names of the variables the guest and the Hermit process are given; replaced by `env.guest.names.sha256` (a hash of the same list) when the list is too long to record | names can reveal what a deployment uses; check them before publishing a bundle |
 | `env.guest.allowlisted.sha256` | hash of `NAME=value` lines for an allowlist of non-secret variables only (`PATH`, `LANG`, `LANGUAGE`, `TZ`, `LC_*`, `PYTHONDONTWRITEBYTECODE`, `PYTHONHASHSEED`) | yes. Values of every other variable are not recorded or hashed, since a hash of a short secret can be guessed offline |
 | `target.exe.sha256` | hash of the program the command starts, only if it is a regular file (not of its arguments or input files) | yes |
+| `target.command.sha256` | hash of the command line: the program as resolved (a path as given, joined to the working directory when relative; a bare name looked up on the guest's `PATH`) followed by every argument exactly as configured, each separated so `a b` and `a`, `b` differ. Paths are not canonicalised, because the text of a path is what a program can react to. | yes: the arguments and path text themselves are never stored, so a secret in an argument or a user name in a path is not revealed (a short, guessable argument list can still be tested offline) |
+| `target.cwd.sha256` | hash of the directory the program starts in: the target's `cwd`, or, when it is unset, the directory the engine itself runs from (which the program inherits) | yes: the path is hashed, never stored |
 
 Only these names exist. A bundle becomes v3 only when it carries one of them; a `host.*` or `env.*` param with any
 other name is ignored on read, so an unknown or hostile param can neither change the header nor be compared.
@@ -142,7 +144,7 @@ printable ASCII only, and the `.sha256` fields are lowercase hex (or `absent` fo
 that is not is malformed, is named in a warning, is not compared, and also counts as changed. The values are read when the run starts, before any trial or confirmation rerun, and they
 are the same fields for every failure the run reports.
 
-A bundle also does not record the program's command line or working directory: replay runs the command and directory from the current configuration. A program whose behaviour depends on the text of its own paths can follow a different schedule when the same files run from a differently named directory, and the replay then reads as a mismatch even though the recorded environment matches. This has been seen with a JVM, where the install path, the class path and the working directory are part of what the program reads. Replay from the same absolute paths as the recording.
+The command line and working directory are recorded as hashes (`target.command.sha256`, `target.cwd.sha256`), not as text. Replay always starts the program from the current configuration: it never silently takes a path from the bundle. A program whose behaviour depends on the text of its own paths can follow a different schedule when the same files run from a differently named directory (seen with a JVM, where the install path, the class path and the working directory are part of what the program reads), and the replay would then read as a mismatch even though everything else matches. So when either hash differs, replay says so (see below). Environment variable values are not recorded for this: only the allowlisted values already described are hashed, and the command line hash covers arguments, not the environment.
 
 On replay, the recorded fields are compared with the current host. Each recorded field is checked on its own: a
 malformed one is named in a warning and skipped, and the others are still compared.
@@ -151,6 +153,8 @@ malformed one is named in a warning and skipped, and the others are still compar
   shortened to 12 characters; after eight fields the rest are counted as `and N more`). The replay still runs. If it
   does not reproduce the failure, the trace says that the environment differs, so the miss is not evidence the bug is
   fixed.
+- `warning: command line or working directory differs from the recording (<fields>): replay started the program from the current configuration; a program that reads its own paths can follow a different schedule` appears when `target.command.sha256` or `target.cwd.sha256` differs, in addition to the `environment differs` line that names the field. The replay still runs. A miss then counts as a changed environment (exit `3`), and the replay's last step says `possible cause: the command line or working directory differs from the recording`. Replay cannot show the old command or directory, only that it differs, because only a hash was recorded; replay from the same absolute paths as the recording.
+- A bundle from before these two fields existed, which has an environment but not `target.command.sha256` and `target.cwd.sha256`, replays as before and prints `warning: target.command.sha256 and target.cwd.sha256 were not recorded: a changed command line or working directory would not be noticed`. Nothing is compared, so that is not counted as a difference.
 - If a `host.loader.*` hash changed, replay is refused, because the schedule itself is unreliable. The refusal is its
   own error kind, not an internal error: HTTP 409 on the REST API, and a tool error that starts with `environment
   mismatch` on MCP. `hairspring replay --allow-environment-change`, `"allow_environment_change": true` on
@@ -172,7 +176,7 @@ inconclusive: it does not show the bug is fixed. The API returns the same fact a
 result.
 
 Not recorded yet: the Hermit commit, Hermit's global seed, hashes of declared input files, the full Hermit command
-line beyond `hermit_args` (the program's own command line and working directory are covered above), the `--tmp` pre-seed, and the Hairspring commit. The environment is compared by
+line beyond `hermit_args` (the program's own command line and working directory are covered above, as hashes), the `--tmp` pre-seed, and the Hairspring commit. The environment is compared by
 `hairspring confirm` (see [Confirming a failure](#confirming-a-failure)), but not by the search's own three reruns or on
 bundle import. Each new field needs its name added to the fixed list in `hairspring-core`.
 

@@ -45,13 +45,37 @@ fn engine(host: &Path, fake_body: &str, script: &str) -> Engine {
 }
 
 fn engine_at(host: &Path, bin: PathBuf, script: &str) -> Engine {
+    engine_in(host, bin, script, None)
+}
+
+fn engine_in(host: &Path, bin: PathBuf, script: &str, cwd: Option<&Path>) -> Engine {
+    engine_full(host, bin, script, cwd, BTreeMap::new())
+}
+
+fn engine_with_env(host: &Path, env: BTreeMap<String, String>) -> Engine {
+    engine_full(
+        host,
+        write_fake(&scratch("bin"), PASSTHROUGH),
+        FAILS,
+        None,
+        env,
+    )
+}
+
+fn engine_full(
+    host: &Path,
+    bin: PathBuf,
+    script: &str,
+    cwd: Option<&Path>,
+    env: BTreeMap<String, String>,
+) -> Engine {
     let spec = TargetSpec {
         name: "svc".into(),
         description: String::new(),
         kind: TargetKind::Process {
             command: vec!["/bin/sh".into(), "-c".into(), script.into()],
-            env: BTreeMap::new(),
-            cwd: None,
+            env,
+            cwd: cwd.map(|c| c.display().to_string()),
             hermit_args: vec![],
             trial_timeout_secs: None,
             scheduler: SchedulerSpec::default(),
@@ -81,7 +105,15 @@ fn engine_at(host: &Path, bin: PathBuf, script: &str) -> Engine {
 }
 
 fn record(host: &Path) -> Bundle {
-    let out = engine(host, PASSTHROUGH, FAILS)
+    record_script(host, FAILS)
+}
+
+fn record_script(host: &Path, script: &str) -> Bundle {
+    record_with(&engine(host, PASSTHROUGH, script))
+}
+
+fn record_with(engine: &Engine) -> Bundle {
+    let out = engine
         .run(&RunRequest::new("svc", 1), &mut |_| true)
         .unwrap();
     assert_eq!(out.status, RunStatus::Failed, "{out:?}");
@@ -225,8 +257,14 @@ fn a_bundle_without_an_environment_replays_with_a_clear_note() {
 #[test]
 fn a_miss_on_a_changed_host_is_reported_differently_from_a_miss_on_the_same_host() {
     let host = fake_host("miss");
-    let bundle = record(&host);
-    let unchanged = engine(&host, PASSTHROUGH, PASSES).replay(&bundle).unwrap();
+    let flag = scratch("flag").join("fixed");
+    let script = format!(
+        "if [ -e {0} ]; then echo fine; else {FAILS}; fi",
+        flag.display()
+    );
+    let bundle = record_script(&host, &script);
+    std::fs::write(&flag, "").unwrap();
+    let unchanged = engine(&host, PASSTHROUGH, &script).replay(&bundle).unwrap();
     assert!(!unchanged.reproduced);
     assert!(unchanged.warnings.is_empty());
     assert!(unchanged
@@ -234,7 +272,7 @@ fn a_miss_on_a_changed_host_is_reported_differently_from_a_miss_on_the_same_host
         .iter()
         .all(|s| !s.label.contains("not evidence the bug is fixed")));
     put(&host, "proc/sys/kernel/osrelease", "6.9.1\n");
-    let changed = engine(&host, PASSTHROUGH, PASSES).replay(&bundle).unwrap();
+    let changed = engine(&host, PASSTHROUGH, &script).replay(&bundle).unwrap();
     assert!(!changed.reproduced);
     assert!(!unchanged.environment_changed);
     assert!(changed.environment_changed);
@@ -415,4 +453,136 @@ fn the_identity_is_taken_when_the_run_starts_not_after_the_reruns() {
     let bundle = run_failing(&engine(&host, &fake, FAILS));
     let id = EnvironmentIdentity::from_bundle(&bundle).identity.unwrap();
     assert_eq!(id.get("host.kernel_release"), Some("6.8.0-45-generic"));
+}
+
+const COMMAND_CWD_FIELDS: [&str; 2] = ["target.command.sha256", "target.cwd.sha256"];
+
+fn without_command_and_cwd(bundle: &Bundle) -> Bundle {
+    Bundle {
+        params: bundle
+            .params
+            .iter()
+            .filter(|(k, _)| !COMMAND_CWD_FIELDS.contains(&k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+        ..bundle.clone()
+    }
+}
+
+fn dir_named(name: &str) -> PathBuf {
+    let dir = scratch(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn in_dir(host: &Path, script: &str, cwd: &Path) -> Engine {
+    engine_in(
+        host,
+        write_fake(&scratch("bin"), PASSTHROUGH),
+        script,
+        Some(cwd),
+    )
+}
+
+const COMMAND_OR_CWD_DIFFERS: &str = "command line or working directory differs";
+
+#[test]
+fn a_bundle_records_the_command_line_and_working_directory_as_hashes_only() {
+    let host = fake_host("cmdrec");
+    let dir = dir_named("secret-user-dir");
+    let bundle = record_with(&in_dir(&host, FAILS, &dir));
+    let id = EnvironmentIdentity::from_bundle(&bundle).identity.unwrap();
+    for name in COMMAND_CWD_FIELDS {
+        assert_eq!(id.get(name).map(str::len), Some(64), "{name}");
+    }
+    assert!(!bundle.encode().contains("secret-user-dir"));
+    let r = in_dir(&host, FAILS, &dir).replay(&bundle).unwrap();
+    assert!(r.reproduced);
+    assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    assert!(!r.environment_changed);
+}
+
+#[test]
+fn a_changed_working_directory_is_detected_and_named() {
+    let host = fake_host("cwdchanged");
+    let bundle = record_with(&in_dir(&host, FAILS, &dir_named("one")));
+    let r = in_dir(&host, FAILS, &dir_named("two"))
+        .replay(&bundle)
+        .unwrap();
+    assert!(r.reproduced, "replay still runs from the configuration");
+    assert!(r.environment_changed);
+    assert!(has_warning(&r, "target.cwd.sha256"), "{:?}", r.warnings);
+    assert!(
+        !has_warning(&r, "target.command.sha256"),
+        "{:?}",
+        r.warnings
+    );
+    assert!(has_warning(&r, COMMAND_OR_CWD_DIFFERS), "{:?}", r.warnings);
+}
+
+#[test]
+fn a_changed_command_is_detected_and_named() {
+    let host = fake_host("cmdchanged");
+    let dir = dir_named("same");
+    let bundle = record_with(&in_dir(&host, FAILS, &dir));
+    let other = format!("{FAILS} # edited");
+    let r = in_dir(&host, &other, &dir).replay(&bundle).unwrap();
+    assert!(r.environment_changed);
+    assert!(has_warning(&r, "target.command.sha256"), "{:?}", r.warnings);
+    assert!(has_warning(&r, COMMAND_OR_CWD_DIFFERS), "{:?}", r.warnings);
+}
+
+#[test]
+fn a_miss_with_a_changed_directory_names_it_as_a_possible_cause() {
+    let host = fake_host("cwdmiss");
+    let script =
+        "if [ -e marker ]; then echo fine; else echo 'HAIRSPRING_VIOLATION: boom'; exit 1; fi";
+    let bundle = record_with(&in_dir(&host, script, &dir_named("plain")));
+    let marked = dir_named("marked");
+    std::fs::write(marked.join("marker"), "").unwrap();
+    let r = in_dir(&host, script, &marked).replay(&bundle).unwrap();
+    assert!(!r.reproduced);
+    assert!(r.environment_changed);
+    assert!(
+        r.steps.iter().any(|s| s
+            .label
+            .contains("possible cause: the command line or working directory differs")),
+        "{:?}",
+        r.steps
+    );
+}
+
+#[test]
+fn a_bundle_without_the_command_and_directory_still_replays_and_says_so() {
+    let host = fake_host("oldcmd");
+    let dir = dir_named("old");
+    let recorded = record_with(&in_dir(&host, FAILS, &dir));
+    let old = without_command_and_cwd(&recorded);
+    assert!(old.encode().starts_with("hairspring-bundle v3\n"));
+    let r = in_dir(&host, FAILS, &dir).replay(&old).unwrap();
+    assert!(r.reproduced);
+    assert!(
+        has_warning(
+            &r,
+            "target.command.sha256 and target.cwd.sha256 were not recorded"
+        ),
+        "{:?}",
+        r.warnings
+    );
+    assert!(!r.environment_changed, "not recorded is not a difference");
+    let other = in_dir(&host, FAILS, &dir_named("elsewhere"))
+        .replay(&old)
+        .unwrap();
+    assert!(!other.environment_changed);
+}
+
+#[test]
+fn environment_values_are_not_recorded_in_the_bundle() {
+    let host = fake_host("envvalues");
+    let mut spec_env = BTreeMap::new();
+    spec_env.insert("API_TOKEN".to_string(), "hunter2-secret".to_string());
+    let engine = engine_with_env(&host, spec_env);
+    let text = record_with(&engine).encode();
+    assert!(text.contains("API_TOKEN"), "the name is recorded");
+    assert!(!text.contains("hunter2-secret"), "{text}");
 }

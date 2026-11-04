@@ -34,6 +34,7 @@ fn hermit() -> HermitIdentity {
 
 struct Inputs {
     command: Vec<String>,
+    cwd: Option<String>,
     env: BTreeMap<String, String>,
     extra: Vec<String>,
     args: Vec<String>,
@@ -43,6 +44,7 @@ impl Default for Inputs {
     fn default() -> Self {
         Inputs {
             command: vec!["/bin/sh".to_string()],
+            cwd: Some("/work/one".to_string()),
             env: BTreeMap::from([("PATH".to_string(), "/bin".to_string())]),
             extra: vec![],
             args: vec![],
@@ -56,7 +58,7 @@ fn run(root: &Path, hermit: &HermitIdentity, i: &Inputs) -> EnvironmentIdentity 
         hermit,
         &GuestInputs {
             command: &i.command,
-            cwd: None,
+            cwd: i.cwd.as_deref(),
             env: &i.env,
             extra_env_names: &i.extra,
             hermit_args: &i.args,
@@ -327,4 +329,98 @@ fn no_value_carries_a_path_a_user_name_or_a_host_name() {
         assert!(!value.contains("/Users/"), "{name}: {value}");
         assert!(!value.contains("/home/"), "{name}: {value}");
     }
+}
+
+fn with_inputs(root: &Path, change: impl FnOnce(&mut Inputs)) -> EnvironmentIdentity {
+    let mut inputs = Inputs::default();
+    change(&mut inputs);
+    run(root, &hermit(), &inputs)
+}
+
+#[test]
+fn the_command_line_and_working_directory_are_recorded_as_hashes() {
+    let root = fake_host("cmdcwd");
+    let id = with_inputs(&root, |i| {
+        i.command = vec!["/bin/sh".into(), "-c".into(), "--token=hunter2".into()];
+        i.cwd = Some("/home/someone/project".into());
+    });
+    for name in ["target.command.sha256", "target.cwd.sha256"] {
+        let value = id.get(name).unwrap_or_else(|| panic!("{name} missing"));
+        assert_eq!(value.len(), 64, "{name}");
+    }
+    for (_, value) in id.fields() {
+        assert!(!value.contains("hunter2"), "{value}");
+        assert!(!value.contains("someone"), "{value}");
+    }
+}
+
+#[test]
+fn a_changed_working_directory_changes_only_the_cwd_hash() {
+    let root = fake_host("cwdchange");
+    let one = with_inputs(&root, |_| {});
+    let two = with_inputs(&root, |i| i.cwd = Some("/work/onf".into()));
+    assert_ne!(one.get("target.cwd.sha256"), two.get("target.cwd.sha256"));
+    assert_eq!(
+        one.get("target.command.sha256"),
+        two.get("target.command.sha256")
+    );
+}
+
+#[test]
+fn a_changed_command_line_changes_only_the_command_hash() {
+    let root = fake_host("cmdchange");
+    let one = with_inputs(&root, |_| {});
+    let other_arg = with_inputs(&root, |i| i.command = vec!["/bin/sh".into(), "-x".into()]);
+    let other_program = with_inputs(&root, |i| i.command = vec!["/bin/bash".into()]);
+    assert_ne!(
+        one.get("target.command.sha256"),
+        other_arg.get("target.command.sha256")
+    );
+    assert_ne!(
+        one.get("target.command.sha256"),
+        other_program.get("target.command.sha256")
+    );
+    assert_eq!(
+        one.get("target.cwd.sha256"),
+        other_arg.get("target.cwd.sha256")
+    );
+}
+
+#[test]
+fn argument_boundaries_matter_to_the_command_hash() {
+    let root = fake_host("argv");
+    let split = with_inputs(&root, |i| {
+        i.command = vec!["/bin/sh".into(), "a".into(), "b".into()]
+    });
+    let joined = with_inputs(&root, |i| i.command = vec!["/bin/sh".into(), "a b".into()]);
+    assert_ne!(
+        split.get("target.command.sha256"),
+        joined.get("target.command.sha256")
+    );
+}
+
+#[test]
+fn an_unset_working_directory_records_the_inherited_one() {
+    let root = fake_host("inherit");
+    let id = with_inputs(&root, |i| i.cwd = None);
+    assert!(id.get("target.cwd.sha256").is_some());
+}
+
+#[test]
+fn a_bare_program_name_is_hashed_with_its_resolved_location() {
+    let root = fake_host("resolve");
+    let bin_a = root.join("a");
+    let bin_b = root.join("b");
+    for d in [&bin_a, &bin_b] {
+        put(d, "tool", "x");
+    }
+    let hash_with_path = |dir: &Path| {
+        with_inputs(&root, |i| {
+            i.command = vec!["tool".into()];
+            i.env = BTreeMap::from([("PATH".to_string(), dir.display().to_string())]);
+        })
+        .get("target.command.sha256")
+        .map(str::to_string)
+    };
+    assert_ne!(hash_with_path(&bin_a), hash_with_path(&bin_b));
 }

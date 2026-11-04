@@ -204,3 +204,54 @@ fn a_bundle_without_an_environment_says_so() {
         text(&o)
     );
 }
+
+/// The bundle with the recorded value of `name` replaced, so the recording looks like another directory or command.
+fn with_param_replaced(bundle: &str, name: &str) -> String {
+    let prefix = format!("param.{name}=");
+    assert!(bundle.contains(&prefix), "{bundle}");
+    bundle
+        .lines()
+        .map(|l| match l.starts_with(&prefix) {
+            true => format!("{prefix}{FAKE_SHA}\n"),
+            false => format!("{l}\n"),
+        })
+        .collect()
+}
+
+#[test]
+fn a_changed_working_directory_is_reported_and_a_miss_is_inconclusive() {
+    let (d, hermit, body) = recorded("cwd");
+    let edited = with_param_replaced(&passing_seed(&body), "target.cwd.sha256");
+    let file = write_bundle(&d, "b.hairspring", &edited);
+    let o = run(&d, &hermit, &["replay", &file]);
+    assert_eq!(o.status.code(), Some(3), "{}", text(&o));
+    assert!(
+        text(&o).contains(
+            "warning: command line or working directory differs from the recording (target.cwd.sha256)"
+        ),
+        "{}",
+        text(&o)
+    );
+    assert!(
+        text(&o).contains("possible cause: the command line or working directory differs"),
+        "{}",
+        text(&o)
+    );
+}
+
+#[test]
+fn a_changed_command_is_reported() {
+    let (d, hermit, body) = recorded("cmd");
+    let edited = with_param_replaced(&body, "target.command.sha256");
+    let file = write_bundle(&d, "b.hairspring", &edited);
+    let o = run(&d, &hermit, &["replay", &file]);
+    assert_eq!(o.status.code(), Some(1), "{}", text(&o));
+    assert!(text(&o).contains("(target.command.sha256)"), "{}", text(&o));
+}
+
+#[test]
+fn a_new_bundle_holds_no_path_text() {
+    let (d, _, body) = recorded("nopath");
+    assert!(!body.contains(d.to_str().unwrap()), "{body}");
+    assert!(body.contains("param.target.cwd.sha256="), "{body}");
+}

@@ -56,7 +56,9 @@ for the exact wording and the configuration it was measured on. In short:
   `examples/language-fixtures/java/profiles-extra.tsv`), on Temurin 21.0.12.1. The fixture was reduced to 50 iterations per
   worker (`--k=50`) instead of 1,000.
 * Keep the JDK install, the program jar and the working directory at the same absolute paths for recording and for replay.
-  A bundle does not record the command line or the working directory ([determinism](../../docs/determinism.md)), and a JVM
+  A bundle records hashes of the command line and the working directory, not the paths themselves
+  ([determinism](../../docs/determinism.md)), and replay always starts the program from the current configuration. A JVM
   reads those paths: replay matched only from the same paths as the recording (JDK install, program jar and working
-  directory); a differently named directory changed the result. Re-record if the paths must change.
+  directory); a differently named directory changed the result. Replay now says when the command line or working
+  directory differs from the recording, and a miss then exits `3` (inconclusive). Re-record if the paths must change.
 * Trials are slow, about 210 s as run (up to three at once; about 105 s alone), so this suits nightly runs rather than every commit.

@@ -4,6 +4,10 @@
 
 ### Added
 
+- A Hermit bundle records hashes of the target's command line and working directory (`target.command.sha256`,
+  `target.cwd.sha256`; no paths or arguments are stored). Replay warns when either differs, still runs from the current
+  configuration, and a miss then exits 3 (inconclusive). Older bundles replay as before and say the fields were not
+  recorded.
 - The run page's activity panel shows each event as a titled line with labelled facts instead of raw JSON, with the raw
   event behind a "Raw event" disclosure.
 - `scripts/check-embedded-ui.sh` checks that a release binary serves the web UI built from the repository's `web/`
