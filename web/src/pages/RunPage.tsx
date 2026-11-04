@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { api, streamRunEvents } from '../api';
+import { useState } from 'react';
+import { api } from '../api';
 import { ActivityLog } from '../components/ActivityLog';
 import { Link } from '../components/Layout';
 import { StatusBadge } from '../components/StatusBadge';
@@ -16,28 +16,13 @@ import { UpdatedAt } from '../components/UpdatedAt';
 import { formatDuration } from '../format';
 import { seedsPath } from '../seeds/filters';
 import { BROWSE_SEEDS, noFailuresText } from '../wording';
-import type { SseEvent } from '../sse';
+import { navigate, useSearch } from '../router';
 import { usePolling } from '../usePolling';
+import { Tabs } from '../components/Tabs';
+import { RUN_TABS, runTabFromSearch, runTabSearch, type RunTabId } from './runTabs';
+import { useRunActivity } from './useRunActivity';
 
-const MAX_LOG_LINES = 200;
 const TERMINAL = new Set(['passed', 'failed', 'error', 'cancelled']);
-
-function Activity({ runId, active }: { runId: string; active: boolean }) {
-  const [lines, setLines] = useState<SseEvent[]>([]);
-  useEffect(() => {
-    const ctl = new AbortController();
-    streamRunEvents(runId, (e) => setLines((prev) => [...prev, e].slice(-MAX_LOG_LINES)), ctl.signal).catch(() => {
-      // Aborted on navigation, or the run ended: the polled state remains authoritative.
-    });
-    return () => ctl.abort();
-  }, [runId, active]);
-  return (
-    <section>
-      <h2>Activity</h2>
-      <ActivityLog lines={lines} />
-    </section>
-  );
-}
 
 export function RunPage({ id }: { id: string }) {
   const detail = usePolling(() => api.run(id), 1000, (d) => TERMINAL.has(d.run.state));
@@ -45,12 +30,15 @@ export function RunPage({ id }: { id: string }) {
   const run = detail.data?.run;
   const live = run === undefined || !TERMINAL.has(run.state);
   const properties = usePropertyOverview(id, live);
+  const activity = useRunActivity(id, live);
+  const tab = runTabFromSearch(useSearch());
   useReportMissing(detail.notFound);
 
   if (detail.notFound) return <NotFound what="run" />;
   if (detail.error && !run) return <p className="error" role="alert">{detail.error}</p>;
   if (!run) return <Loading what="run" />;
 
+  const failures = detail.data?.failures ?? [];
   const duration = run.started_at && run.finished_at ? formatDuration(run.finished_at - run.started_at) : undefined;
   return (
     <>
@@ -97,26 +85,49 @@ export function RunPage({ id }: { id: string }) {
           <RunPanel detail={detail.data} page={properties.page} />
         </ErrorBoundary>
       )}
-      <ErrorBoundary label="Property table" onRetry={properties.reload}>
-        <PropertyOverviewPanel model={properties} />
-      </ErrorBoundary>
-      <ErrorBoundary label="Coverage chart">
-        <CoveragePanel runId={run.id} live={live} />
-      </ErrorBoundary>
-      <p>
-        <Link to={seedsPath(run.id, {}) ?? '/'}>{BROWSE_SEEDS}</Link>
-      </p>
-      <h2>Failures</h2>
-      {detail.data?.failures.length === 0 && <p className="muted">{noFailuresText({ live, headline: properties.page?.headline })}</p>}
-      <FirstFailingSeed runId={run.id} seed={detail.data?.properties?.first_failing_seed} />
-      <ul>
-        {detail.data?.failures.map((f) => (
-          <li key={f.id}>
-            <Link to={`/failures/${f.id}`}>{f.message}</Link> <span className="muted">({f.shrunk_len} steps)</span>
-          </li>
-        ))}
-      </ul>
-      <Activity runId={run.id} active={live} />
+      <Tabs
+        label="Run sections"
+        idPrefix="run"
+        tabs={RUN_TABS.map((t) => (t.id === 'failures' ? { ...t, count: failures.length } : t))}
+        selected={tab}
+        onSelect={(next: string) => navigate(`${window.location.pathname}${runTabSearch(next as RunTabId)}`)}
+      >
+        {tab === 'properties' && (
+          <>
+            <ErrorBoundary label="Property table" onRetry={properties.reload}>
+              <PropertyOverviewPanel model={properties} />
+            </ErrorBoundary>
+            <ErrorBoundary label="Coverage chart">
+              <CoveragePanel runId={run.id} live={live} />
+            </ErrorBoundary>
+          </>
+        )}
+        {tab === 'seeds' && (
+          <p>
+            <Link to={seedsPath(run.id, {}) ?? '/'}>{BROWSE_SEEDS}</Link>
+          </p>
+        )}
+        {tab === 'failures' && (
+          <>
+            <h2>Failures</h2>
+            {failures.length === 0 && <p className="muted">{noFailuresText({ live, headline: properties.page?.headline })}</p>}
+            <FirstFailingSeed runId={run.id} seed={detail.data?.properties?.first_failing_seed} />
+            <ul>
+              {failures.map((f) => (
+                <li key={f.id}>
+                  <Link to={`/failures/${f.id}`}>{f.message}</Link> <span className="muted">({f.shrunk_len} steps)</span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+        {tab === 'activity' && (
+          <section>
+            <h2>Activity</h2>
+            <ActivityLog lines={activity} />
+          </section>
+        )}
+      </Tabs>
     </>
   );
 }
