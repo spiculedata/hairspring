@@ -95,6 +95,23 @@ fn may_see_organisation(
     s.auth.authenticate(authorization.to_str().ok()).is_some()
 }
 
+/// Who the caller is and what they may do, so a client can hide or explain actions instead of guessing from a 403.
+/// It carries the role name and what that role allows, whether the server is in open mode, and nothing that
+/// identifies or could stand in for the token.
+pub async fn me(State(s): State<AppState>, caller: Caller) -> Json<Value> {
+    let can = |needed: Role| caller.role.allows(needed);
+    Json(json!({
+        "role": caller.role.as_str(),
+        "open_mode": s.auth.is_open(),
+        "can": {
+            "read": can(Role::Read),
+            "run": can(Role::Run),
+            "admin": can(Role::Admin),
+        },
+        "roles": [Role::Read.as_str(), Role::Run.as_str(), Role::Admin.as_str()],
+    }))
+}
+
 pub async fn targets(
     State(s): State<AppState>,
     caller: Caller,

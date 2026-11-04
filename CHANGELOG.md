@@ -4,6 +4,9 @@
 
 ### Added
 
+- `GET /api/me` returns the caller's role (`read`, `run` or `admin`), what that role may do, and whether the server is
+  in open mode. It needs a valid token like the other read endpoints (401 otherwise) and never includes the token or a
+  digest of it.
 - A Hermit bundle records hashes of the target's command line and working directory (`target.command.sha256`,
   `target.cwd.sha256`; no paths or arguments are stored). Replay warns when either differs, still runs from the current
   configuration, and a miss then exits 3 (inconclusive). Older bundles replay as before and say the fields were not

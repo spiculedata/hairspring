@@ -269,6 +269,7 @@ async fn harden(req: Request, next: Next) -> Response {
 fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(api::health))
+        .route("/api/me", get(api::me))
         .route("/api/targets", get(api::targets))
         .route("/api/runs", get(api::list_runs).post(api::create_run))
         .route("/api/runs/{id}", get(api::get_run))
