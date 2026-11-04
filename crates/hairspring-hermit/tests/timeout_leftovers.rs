@@ -25,8 +25,9 @@ fn is_root() -> bool {
 }
 
 /// `@MARK@` is replaced with the marker directory. The fake records, one file each, the paths it made (`file`, `dir`,
-/// `nscd`, `log`), the `--tmp` value (`tmp-arg`), and what it was started with (`tmpdir`, `verify-tmpdir`). The guest
-/// command records what it can see (`guest-tmpdir`, `guest-verify-tmpdir`).
+/// `nscd`, `log`), its arguments (`argv`), the `--tmp` value (`tmp-arg`), and what it was started with (`tmpdir`,
+/// `verify-tmpdir`). The guest command records what it can see: its environment (`guest-env`), the names in it
+/// (`guest-env-names`), `guest-tmpdir` and `guest-verify-tmpdir`.
 const FAKE: &str = r#"#!/bin/sh
 MARK='@MARK@'
 printf '%s\n' "$@" > "$MARK/argv"
@@ -265,6 +266,8 @@ fn hermits_temporary_directory_is_set_only_where_it_cannot_reach_the_guest() {
 
 #[test]
 fn neither_variable_reaches_the_guest() {
+    // In `host` mode the fake removes `HERMIT_VERIFY_TMPDIR` itself (`env -u`), so that half of this test checks the
+    // fake, not Hermit. Only a live run settles what Hermit's real `host` base environment does.
     for args in [MINIMAL, HOST] {
         let r = rig("guest-env", "echo done", Options::new(args));
         r.run();
