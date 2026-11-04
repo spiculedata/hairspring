@@ -84,8 +84,24 @@ as before), so Hermit keeps making the guest's `/tmp` itself and the guest's vie
 guest would see a host path that changes from trial to trial. `HERMIT_VERIFY_TMPDIR` is Hermit's own setting, removed
 from the guest's environment under `host` and never passed on by `minimal` or `empty` (checked in the Hermit source at
 the pinned revision `25781c5c`, by reading, not by running). Either variable is left alone when the target sets it,
-passes it through with `--env`, or names a Hermit `--config` file. A fix for the default base environment needs a
-Hermit-only temporary-directory variable that Hermit strips the way it strips `HERMIT_VERIFY_TMPDIR`.
+passes it through with `--env`, or names a Hermit `--config` file.
+
+Why the default base environment is not fixed by the engine alone. Two engine-only changes were considered and
+rejected, from reading the Hermit source at the pinned revision (not by running it):
+
+- Always passing `--tmp=<engine directory>`. Hermit then no longer makes its private guest `/tmp`, but it also skips
+  the step that records that private directory in the guest's `/proc/self/mountinfo` ("user-supplied `--tmp` paths
+  deliberately do not call" it), so the guest's mount table could differ. This is from reading the source and has not
+  been run on a live Hermit; applying it to every trial could change what every guest can observe. It also would not
+  remove the `/etc/group` copy or the nscd directory, which Hermit makes with the host temporary directory.
+- Setting `TMPDIR` for Hermit. Hermit reads it for the `/etc/group` copy, the nscd directory and the private `/tmp`,
+  but under `host` it also becomes part of the guest's environment, and there is no way to remove a single variable
+  from that environment with the engine's command line.
+
+So the fix needs a Hermit change (a temporary-directory variable that Hermit strips the way it strips
+`HERMIT_VERIFY_TMPDIR`), or a way to name Hermit's files exactly at the moment of the timeout. Until then the
+recommendation is `--base-env=minimal` wherever leftovers matter, as the examples that pass it do. A test pins the current
+behaviour: in both modes the trial directory appears in neither Hermit's arguments nor the guest's environment.
 
 What this changes for a guest: nothing it can see. The guest's environment, `/tmp` and `/proc/self/mountinfo` are as
 before, and the scheduler flags, schedules, hashes and verdicts are unchanged. What it does change is Hermit's own

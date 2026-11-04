@@ -4,7 +4,8 @@
 //! trial, seed and run, because the launch environment is an input that moves schedules under Hermit. The seed- and
 //! trial-specific part lives only on the host: the backend gives Hermit `--tmp=<private per-trial directory>`, which
 //! Hermit mounts as the guest's `/tmp`, so the guest's fixed path lands in a directory only this trial can write.
-//! Hermit's own command line is not part of the guest's world, so the differing host path does not reach the guest.
+//! Hermit's own command line is not part of the guest's world, so the differing host path should not reach the guest.
+//! The effect of this `--tmp` on the guest's `/proc/self/mountinfo` has not been checked on a live Hermit.
 use crate::capture::EventLines;
 use crate::safe_open::open_regular;
 use crate::summary_dir::ScratchDir;
