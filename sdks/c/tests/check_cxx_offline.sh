@@ -15,10 +15,16 @@ dump=$(objdump -s -j hs_catalog_str_v1 "$bin") || { echo "FAIL no hs_catalog_str
 # objdump prints the bytes as hex and as text; the text column turns unprintable bytes into dots, which is enough to
 # find an id once the text columns are joined (an id never contains a dot-sensitive split: ids are matched whole).
 text=$(printf '%s\n' "$dump" | sed -n 's/^ [0-9a-f][0-9a-f]* [0-9a-f ]\{35\}  *//p' | tr -d '\n')
-for id in tmpl.zero tmpl.member tmpl.inline tmpl.main; do
+# Each line is compared up to the file name (the file name and the line number are not).
+for entry in 'tmpl.zero|sometimes|true|zero seen' 'tmpl.member|always|true|never negative' \
+  'tmpl.inline|always|true|positive' 'tmpl.main|reachable|true|reached'; do
+  id=${entry%%|*}; rest=${entry#*|}
+  type=${rest%%|*}; rest=${rest#*|}
+  must=${rest%%|*}; msg=${rest#*|}
+  want="{\"v\":1,\"kind\":\"catalog\",\"id\":\"$id\",\"type\":\"$type\",\"must_hit\":$must,\"msg\":\"$msg\",\"loc\":{\"file\":\""
   case $text in
-    *"id\":\"$id\""*) ;;
-    *) echo "FAIL $id is not in the offline catalog section"; exit 1 ;;
+    *"$want"*) ;;
+    *) echo "FAIL the offline catalog line for $id is missing or differs"; exit 1 ;;
   esac
 done
 echo "ok   every template call site is in the offline catalog section"

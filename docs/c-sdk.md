@@ -78,12 +78,20 @@ How a call site gets its record depends on the compiler.
   `hs_catalog_v1` and `hs_catalog_str_v1`, and returns the record's address in a register (`lea` on x86-64, `adrp` and
   `add` on aarch64). The assembler sees the same section name and flags from every site, so there is no conflict, and
   templates, inline functions and ordinary functions are treated alike. Measured on g++ 13.3 (Ubuntu 24.04, binutils
-  2.42) at `-O2`: `make cxx-templates`, `make cxx-mixed` and `make audit-control` pass. At the call site the record's address is computed with one extra instruction
-  sequence instead of being a link-time constant; the counter updates are unchanged. The cost of that was not measured. The same targets and the whole `make test` also passed with g++ 13.3 on aarch64 (a native arm64 Ubuntu 24.04 container). Other g++ versions are untested here.
+  2.42) at `-O2` (the default of the Makefile): `make cxx-templates`, `make cxx-mixed` and `make audit-control` pass.
+  At the call site the record's address is computed with one extra instruction sequence instead of being a link-time
+  constant; the counter updates are unchanged. The cost of that was not measured. The same targets and the whole
+  `make test` also passed with g++ 13.3 on aarch64 (a native arm64 Ubuntu 24.04 container), where the template and mixed
+  targets were also run at `-O0` and at `-O3 -flto`. Other g++ versions are untested here, and so is linking with lld (ld and gold with `--gc-sections`, `-flto` and PIE
+  kept every record); the assembly records have no `R` (retain) section flag.
   * **Characters.** The id, the message and the file name are pasted into an assembler template, so with g++ in C++
-    they must not contain `%`, `{`, `}`, `|`, `"`, `\` or a control character. A site that does is a compile error
-    (`must not contain`, tested by `tests/fixtures/fail_cxx_*.cc`). With clang and in C only `"` and `\` are excluded
-    (see "Offline catalog" below).
+    they must not contain `%`, `{`, `}`, `|`, `"`, `\` or a control character (a byte below 0x20, or DEL, 0x7f). A site
+    that does is a compile error (`must not contain`, tested by `tests/fixtures/fail_cxx_*.cc`). Bytes of 0x80 and
+    above are allowed, so UTF-8 text such as `café` works in a message, and a file name under a directory with a
+    non-ASCII name works, on every target: the check compares unsigned bytes, so it does not depend on whether `char`
+    is signed (it is on x86-64, not on aarch64). The text must be valid UTF-8, as it must in C; nothing checks that
+    (`make cxx-utf8` builds a fixture with such text under `-fsigned-char` and `-funsigned-char`). With clang and in C
+    only `"` and `\` are excluded (see "Offline catalog" below).
   * **Dead code.** The record is part of the statement, so a call site that the optimiser deletes as unreachable is not
     catalogued with g++ in C++. The static form keeps the record of such a site. A must-hit site in code that is
     compiled away therefore does not appear as unmet.

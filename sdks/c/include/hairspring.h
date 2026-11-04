@@ -204,10 +204,13 @@ HS__ALWAYS_INLINE void hs__hit(struct hs_site *s, const int64_t *v) {
 #endif
 
 /* True when s[lo, hi) has no character that would change the meaning of the assembler template or of the offline JSON
-** line: `%`, braces and `|` (operand and dialect syntax), `"` and `\` (string syntax), control characters. The range
+** line: `%`, braces and `|` (operand and dialect syntax), `"` and `\` (string syntax), control characters (below 0x20, and 0x7f). Bytes of 0x80 and above are plain: UTF-8 text reaches the
+** assembler and the JSON unchanged, so it must be valid UTF-8, as it must in C. The range
 ** is halved on each step so a 512 byte message stays well inside the constexpr depth limit. */
-constexpr bool hs__plain_char(char c) {
-  return c >= 0x20 && c != 0x7f && c != '%' && c != '{' && c != '}' && c != '|' && c != '"' && c != '\\';
+constexpr bool hs__plain_char(char ch) {
+  /* unsigned: `char` is signed on x86-64, so bytes of 0x80 and above (UTF-8) must not compare as negative */
+  return static_cast<unsigned char>(ch) >= 0x20 && static_cast<unsigned char>(ch) != 0x7f && ch != '%' && ch != '{' &&
+         ch != '}' && ch != '|' && ch != '"' && ch != '\\';
 }
 constexpr bool hs__plain_text(const char *s, size_t lo, size_t hi) {
   return hi - lo == 0   ? true

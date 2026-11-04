@@ -25,7 +25,7 @@ LIB := $(BUILD)/libhairspring.a
 SCENARIOS := basic merge fork threads crash exit_status eval big forkexec spawn closefd forklock execself dup2fd manyids conflict empty limits plain_exit segv abort threadsegv alive alarm evalfd sigign
 SAMPLES := $(SCENARIOS:%=$(BUILD)/hs_sample_%)
 
-.PHONY: all lib fixtures test unit audit proc tsan-signals asan-signals ubsan-fatal nosyscall nosyscall-pic cxx cxx-templates audit-control cxx-mixed cxx-staticfail staticfail gnusource disasm conformance clean
+.PHONY: all lib fixtures test unit audit proc tsan-signals asan-signals ubsan-fatal nosyscall nosyscall-pic cxx cxx-templates audit-control cxx-mixed cxx-staticfail cxx-utf8 staticfail gnusource disasm conformance clean
 
 all: lib
 
@@ -168,10 +168,22 @@ cxx-mixed: | $(BUILD)
 cxx-staticfail: | $(BUILD)
 	@if [ -n "$(CXX_USES_ASM_SITES)" ] && command -v $(CXXC) >/dev/null 2>&1; then \
 	  for f in tests/fixtures/fail_cxx_*.cc; do \
-	    if $(CXXC) -std=gnu++17 $(OPT) -fsyntax-only $$f 2>$(BUILD)/fail.log; then echo "FAIL $$f compiled"; exit 1; \
+	    if $(CXXC) -std=gnu++17 $(OPT) -fsigned-char -fsyntax-only $$f 2>$(BUILD)/fail.log; then echo "FAIL $$f compiled"; exit 1; \
 	    elif grep -q 'must not contain' $(BUILD)/fail.log; then echo "ok   $$f is rejected"; \
 	    else echo "FAIL $$f was rejected for another reason"; cat $(BUILD)/fail.log; exit 1; fi; done; \
 	else echo "skip: the assembly records are not used with $(CXXC) here"; fi
+
+# UTF-8 text (bytes of 0x80 and above) is accepted in an id, a message and a file name whether `char` is signed or
+# unsigned; a directory with a non-ASCII name puts such bytes in __FILE__ as well.
+cxx-utf8: | $(BUILD)
+	@if command -v $(CXXC) >/dev/null 2>&1; then \
+	  d="$(BUILD)/$$(printf 'caf\303\251')" && mkdir -p "$$d" && cp tests/fixtures/ok_cxx_utf8.cc "$$d/" && \
+	  for sign in -fsigned-char -funsigned-char; do \
+	    for src in tests/fixtures/ok_cxx_utf8.cc "$$d/ok_cxx_utf8.cc"; do \
+	      $(CXXC) -std=gnu++17 $(OPT) $$sign $(WARN) -Iinclude -c -o $(BUILD)/utf8.o "$$src" || { echo "FAIL $$src with $$sign"; exit 1; }; \
+	    done; done; \
+	  echo "ok   UTF-8 text is accepted with signed and unsigned char"; \
+	else echo "skip: $(CXXC) not installed"; fi
 
 # These must be rejected at compile time.
 staticfail:
@@ -183,7 +195,7 @@ staticfail:
 gnusource: | $(BUILD)
 	$(CC) $(CFLAGS) -D_GNU_SOURCE -c -o $(BUILD)/gnusource.o src/hairspring.c && echo "ok   builds with -D_GNU_SOURCE"
 
-test: unit audit proc nosyscall nosyscall-pic staticfail cxx cxx-templates audit-control cxx-mixed cxx-staticfail gnusource
+test: unit audit proc nosyscall nosyscall-pic staticfail cxx cxx-templates audit-control cxx-mixed cxx-staticfail cxx-utf8 gnusource
 
 conformance: $(SAMPLES)
 	cd ../.. && HS_C_SDK_BUILD=$(abspath $(BUILD)) cargo test -p hairspring-props --test c_sdk
