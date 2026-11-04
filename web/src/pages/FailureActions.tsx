@@ -13,6 +13,7 @@ import type { FailureSummary } from '../types';
 function useFirstViolationSeq(runId: string): number | undefined {
   const [seq, setSeq] = useState<number>();
   useEffect(() => {
+    setSeq(undefined);
     const ctl = new AbortController();
     trialApi
       .firstViolation(runId, ctl.signal)

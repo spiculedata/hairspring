@@ -52,4 +52,36 @@ describe('FailureActions', () => {
     const { container } = mount();
     expect([...container.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Copy link', 'Copy summary']);
   });
+
+  describe('when the run changes', () => {
+    const other: FailureSummary = { ...record, id: 'f_def', run_id: 'run_fedcba9876543210' };
+
+    function deferredFetch() {
+      const waiting: Array<(r: Response) => void> = [];
+      vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => waiting.push(resolve))));
+      return waiting;
+    }
+    const trialsBody = (run: string, trials: unknown[]) => json({ run_id: run, trials, next_cursor: null });
+
+    it('drops the previous run link at once and shows none if the new run has no failing trial', async () => {
+      const waiting = deferredFetch();
+      const view = render(<FailureActions record={record} />);
+      waiting[0](trialsBody(record.run_id, [detail().trial]));
+      await waitFor(() => expect(view.container.querySelector('a')).not.toBeNull());
+      view.rerender(<FailureActions record={other} />);
+      expect(view.container.querySelector('a')).toBeNull();
+      waiting[1](trialsBody(other.run_id, []));
+      await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2));
+      expect(view.container.querySelector('a')).toBeNull();
+    });
+
+    it('ignores a lookup for the earlier run that answers after the run changed or the page went away', async () => {
+      const waiting = deferredFetch();
+      const view = render(<FailureActions record={record} />);
+      view.rerender(<FailureActions record={other} />);
+      waiting[0](trialsBody(record.run_id, [detail().trial]));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(view.container.querySelector('a')).toBeNull();
+    });
+  });
 });

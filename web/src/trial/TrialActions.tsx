@@ -16,6 +16,7 @@ const LINK_TEXT = 'Shortest failing steps for this run';
 function useRunFailureId(runId: string): string | undefined {
   const [id, setId] = useState<string>();
   useEffect(() => {
+    setId(undefined);
     let current = true;
     api
       .run(runId)

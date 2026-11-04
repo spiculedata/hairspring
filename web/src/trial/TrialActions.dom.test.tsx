@@ -53,4 +53,35 @@ describe('TrialActions', () => {
     await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
     expect(container.querySelector('a')).toBeNull();
   });
+
+  describe('when the run changes', () => {
+    const runBody = (failures: FailureSummary[]) => json({ run: { id: 'x' }, failures });
+
+    function deferredFetch() {
+      const waiting: Array<(r: Response) => void> = [];
+      vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => waiting.push(resolve))));
+      return waiting;
+    }
+
+    it('drops the previous run link at once and shows none if the new run has no failure', async () => {
+      const waiting = deferredFetch();
+      const view = render(<TrialActions runId="run_0123456789abcdef" trial={detail().trial} context={undefined} />);
+      waiting[0](runBody([failure('f_abc')]));
+      await waitFor(() => expect(view.container.querySelector('a[href="/failures/f_abc"]')).not.toBeNull());
+      view.rerender(<TrialActions runId="run_fedcba9876543210" trial={detail().trial} context={undefined} />);
+      expect(view.container.querySelector('a')).toBeNull();
+      waiting[1](runBody([]));
+      await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2));
+      expect(view.container.querySelector('a')).toBeNull();
+    });
+
+    it('ignores a lookup for the earlier run that answers after the run changed', async () => {
+      const waiting = deferredFetch();
+      const view = render(<TrialActions runId="run_0123456789abcdef" trial={detail().trial} context={undefined} />);
+      view.rerender(<TrialActions runId="run_fedcba9876543210" trial={detail().trial} context={undefined} />);
+      waiting[0](runBody([failure('f_old')]));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(view.container.querySelector('a')).toBeNull();
+    });
+  });
 });
