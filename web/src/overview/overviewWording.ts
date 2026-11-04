@@ -12,6 +12,11 @@ export const ALL_RUNS_LINK = 'All runs';
 export const ALL_FAILURES_LINK = 'All failures';
 export const ALL_WORKERS_LINK = 'Workers page';
 
+/** One sentence, shown at the foot of the page, with the link on its second sentence's subject. */
+export const GLOSSARY_HINT_BEFORE = 'Unsure what a word on these pages means? The ';
+export const GLOSSARY_HINT_LINK = 'glossary';
+export const GLOSSARY_HINT_AFTER = ' defines each one.';
+
 /** Said only when both lists loaded and neither has an entry. It states what was looked at, not that anything is fine. */
 export const attentionNone = (runsLooked: number): string =>
   `None of the latest ${plural(runsLooked, 'run', 'runs')} failed or errored, and no failures are stored.`;

@@ -1,6 +1,7 @@
 import { api } from '../api';
 import { Loading, LoadFailed } from '../components/Notices';
 import { UpdatedAt } from '../components/UpdatedAt';
+import { Link } from '../components/Layout';
 import { FirstRunGuide } from '../overview/FirstRunGuide';
 import { AttentionFailures, AttentionRuns, RecentRuns, WorkersSummary } from '../overview/OverviewSections';
 import { attentionRuns, recentRuns } from '../overview/overviewModel';
@@ -9,6 +10,9 @@ import {
   NO_ATTENTION_FAILURES,
   NO_ATTENTION_RUNS,
   OVERVIEW_HEADING,
+  GLOSSARY_HINT_AFTER,
+  GLOSSARY_HINT_BEFORE,
+  GLOSSARY_HINT_LINK,
   WORKERS_HEADING,
   lastGoodLoad,
   attentionNone,
@@ -104,6 +108,11 @@ export function OverviewPage() {
           workers.error === undefined && <Loading what="workers" />
         )}
       </section>
+      <p className="muted">
+        {GLOSSARY_HINT_BEFORE}
+        <Link to="/glossary">{GLOSSARY_HINT_LINK}</Link>
+        {GLOSSARY_HINT_AFTER}
+      </p>
     </>
   );
 }

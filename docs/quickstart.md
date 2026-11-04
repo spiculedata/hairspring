@@ -136,6 +136,10 @@ that starts one, is the Runs page at `/runs`. Overview shows only what the serve
 
 The page loads again by itself every few seconds.
 
+A Glossary page at `/glossary` defines the words the pages use (seed, trial, sweep, bundle and so on). On the failure
+page, a word with a dotted underline, such as Confirmation, opens its definition when pressed or activated from the
+keyboard, with a link to the glossary entry. The definitions are shortened from the wiki Glossary.
+
 ## Start a run or a sweep from the web UI
 
 With `hairspring serve` running, the Runs page of the web UI has a form that starts a run through `POST /api/runs`. Pick

@@ -36,6 +36,11 @@ export function useSearch(): string {
   return useLocationPart(() => window.location.search);
 }
 
+/** The address's fragment (with its leading `#`), which changes when the reader follows a link to another entry. */
+export function useHash(): string {
+  return useLocationPart(() => window.location.hash);
+}
+
 const MAX_SEED_DIGITS = 20;
 const MAX_SEQ_DIGITS = 19;
 const RUN_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -76,6 +81,7 @@ export type Route =
   | { name: 'failure'; id: string }
   | { name: 'targets' }
   | { name: 'workers' }
+  | { name: 'glossary' }
   | { name: 'notfound' };
 
 export function matchRoute(path: string): Route {
@@ -95,5 +101,6 @@ export function matchRoute(path: string): Route {
   if (parts.length === 2 && parts[0] === 'failures') return { name: 'failure', id: parts[1] };
   if (parts.length === 1 && parts[0] === 'targets') return { name: 'targets' };
   if (parts.length === 1 && parts[0] === 'workers') return { name: 'workers' };
+  if (parts.length === 1 && parts[0] === 'glossary') return { name: 'glossary' };
   return { name: 'notfound' };
 }

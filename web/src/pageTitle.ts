@@ -24,6 +24,8 @@ function heading(route: Route): string {
       return 'Targets';
     case 'workers':
       return 'Workers';
+    case 'glossary':
+      return 'Glossary';
     case 'notfound':
       return 'No such page';
   }

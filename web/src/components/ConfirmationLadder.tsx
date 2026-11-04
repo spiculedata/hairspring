@@ -14,6 +14,7 @@ import {
   REACHED_MARK,
   UNKNOWN_FINDING_TEXT,
 } from '../confirmationWording';
+import { Term } from '../glossary/Term';
 import { GuestText } from './GuestText';
 import { StatusBadge } from './StatusBadge';
 
@@ -37,7 +38,9 @@ export function ConfirmationLadder({ finding, environmentPinned }: { finding: st
   const showsEnvironment = finding === 'confirmed' || finding === 'verified';
   return (
     <section className="ladder-section" aria-labelledby="confirmation-heading">
-      <h2 id="confirmation-heading">{LADDER_HEADING}</h2>
+      <Term term="confirmation" heading={{ id: 'confirmation-heading' }}>
+        {LADDER_HEADING}
+      </Term>
       <p>
         <StatusBadge kind="finding" status={finding} />
         {showsEnvironment && <span className="muted ladder-env">{` ${environmentPinned ? ENVIRONMENT_PINNED : ENVIRONMENT_NOT_PINNED}`}</span>}

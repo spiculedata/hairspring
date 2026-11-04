@@ -5,6 +5,7 @@ import { NotFound } from './components/Notices';
 import { TokenPrompt } from './components/TokenPrompt';
 import { FailurePage } from './pages/FailurePage';
 import { FailuresPage } from './pages/FailuresPage';
+import { GlossaryPage } from './glossary/GlossaryPage';
 import { Targets, Workers } from './pages/Lists';
 import { OverviewPage } from './pages/OverviewPage';
 import { RunPage } from './pages/RunPage';
@@ -59,6 +60,7 @@ export function App() {
         {route.name === 'seed' && <SeedPage runId={route.id} seed={route.seed} />}
         {route.name === 'targets' && <Targets />}
         {route.name === 'workers' && <Workers />}
+        {route.name === 'glossary' && <GlossaryPage />}
         {route.name === 'notfound' && <NotFound what="page" />}
       </div>
       </MissingPageContext.Provider>

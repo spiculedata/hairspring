@@ -12,6 +12,7 @@ import {
   UNTRUSTED_COUNTED_NOTE,
   countsText,
 } from '../confirmationWording';
+import { Term } from '../glossary/Term';
 import type { CheckView } from '../types';
 import { GuestText } from './GuestText';
 import { StatusBadge } from './StatusBadge';
@@ -33,6 +34,14 @@ export function environmentText(detail: Readonly<Record<string, string>>): strin
   return detail.environment_changed === 'false' ? ENV_MATCHES : ENV_NOT_REPORTED;
 }
 
+/** A check's name, as an inline definition when the glossary has one. Each key is written out so a test can check it. */
+function KindName({ kind, label }: { kind: string; label: string }) {
+  if (kind === 'bundle_replay') return <Term term="replay">{label}</Term>;
+  if (kind === 'fixed_control') return <Term term="control">{label}</Term>;
+  if (kind === 'strict_verify') return <Term term="strict-verify">{label}</Term>;
+  return <>{label}</>;
+}
+
 /** `inFinding` is undefined when the server names no confirmation, so no claim is made about the row. */
 function CheckRow({ check, inFinding }: { check: CheckView; inFinding: boolean | undefined }) {
   const kind = own(CHECK_KIND_LABELS, check.kind);
@@ -41,7 +50,7 @@ function CheckRow({ check, inFinding }: { check: CheckView; inFinding: boolean |
   return (
     <tr>
       <td className="num">{check.ordinal}</td>
-      <td>{kind ?? <GuestText text={check.kind} max={WORD_CHARS} expandable={false} />}</td>
+      <td>{kind === undefined ? <GuestText text={check.kind} max={WORD_CHARS} expandable={false} /> : <KindName kind={check.kind} label={kind} />}</td>
       <td>
         <StatusBadge kind="check" status={check.status} />
         {!known && (
