@@ -132,8 +132,9 @@ A run has a mode. `search` (the default, and the only behaviour before sweeps) e
 its trial count was decided by its outcome and it has no rate. `sweep` runs every trial of its budget, continues after
 a violation and stores every trial, so a rate can be stated for the trials it ran. The mode travels with the job
 (`start_run_with_mode`, the `mode` field of `POST /api/runs` and of the MCP `start_run`, `hairspring test --sweep`), is
-read back from the stored job, and is absent (so a search) in jobs queued before sweeps existed. It needs no schema
-change: the trial rows added in version 2 already hold every verdict.
+read back from the stored job, and is absent (so a search) in jobs queued before sweeps existed. The trial rows
+added in version 2 already hold every verdict; since schema version 6 the mode is also stored in `runs.mode` (see
+Stored run mode).
 
 - **Trials.** The same unit as in search (one seed on the process and WebAssembly backends, one exploration round on a
   simulation target), run in the same batches of `parallelism`, judged in seed order, bounded by the trial budget, the
@@ -341,7 +342,10 @@ object whose `mode` is exactly `sweep`, and `search` for anything else, includin
 version 5 database sets `mode` to `sweep` on the runs whose `config_json` says so and which still hold the default
 `search`, in the same transaction as the version bump, on both backends. A run whose `config_json` cannot be read stays
 `search`, and a run holding any other mode is left alone. The migration changes only that column. An older release
-refuses a version 6 database; a downgrade from version 6 to 2 keeps the corrected modes.
+refuses a version 6 database; a downgrade from version 6 to 2 keeps the corrected modes. **Back up first; stop every
+older server and worker before upgrading.** A version 5 server left running after the upgrade keeps storing sweeps as
+`search`, and the backfill does not run again to correct them. Version 6 has the same tables and columns as version 5,
+so there is no offline downgrade from 6 to 5: that step is resetting the stored schema version to 5 by hand.
 
 ## Bundles
 

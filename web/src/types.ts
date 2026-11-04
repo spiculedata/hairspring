@@ -26,7 +26,7 @@ export interface Run {
   steps: number;
   trials: number;
   error: string | null;
-  /** The stored column, which reads `search` for sweeps as well (issue #132): do not decide anything from it. */
+  /** The stored column. Servers older than schema version 6 read `search` for sweeps too (issue #132), so do not decide anything from it. */
   mode?: string;
 }
 

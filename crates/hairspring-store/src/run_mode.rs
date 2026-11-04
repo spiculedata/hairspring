@@ -8,7 +8,8 @@ pub(crate) const SEARCH_MODE: &str = "search";
 pub(crate) const SWEEP_MODE: &str = "sweep";
 
 /// The mode `config_json` names: `sweep` only for a JSON object whose `mode` is exactly the string `sweep`. Anything
-/// else (a search, a payload that predates modes, text that is not JSON) is a search, as it is for the service.
+/// else (a search, a payload that predates modes, text that is not JSON) is a search. The service reads the same text as a job payload, which also needs a target and a seed, so it can read a
+/// hand-made config as a search where this stores a sweep; the service never writes such a config.
 pub(crate) fn mode_of_config(config_json: &str) -> &'static str {
     let is_sweep = serde_json::from_str::<serde_json::Value>(config_json)
         .ok()
