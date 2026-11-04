@@ -148,6 +148,52 @@ fn crashed_and_inconclusive_trials_are_both_listed() {
 }
 
 #[test]
+fn inconclusive_trials_that_showed_a_failure_are_said_so_and_stay_out_of_the_hits() {
+    let c = counts(0, 200, 3, 0).with_inconclusive_failures(2);
+    let out = rate_lines(&c, false);
+    assert_eq!(
+        out[0],
+        "hits: 0/200 rated trials, exact one-sided 95% upper bound 1.49% (binomial, 0 of 200); about 3/200"
+    );
+    assert_eq!(
+        out[1],
+        format!(
+            "not rated trials: 3 inconclusive (2 showed a failure, not counted as findings); {NOT_RATED_TAIL}"
+        )
+    );
+    assert_eq!(c.hits(), 0);
+}
+
+#[test]
+fn one_failure_in_an_inconclusive_trial_reads_in_the_singular() {
+    let out = rate_lines(&counts(0, 10, 2, 0).with_inconclusive_failures(1), false);
+    assert_eq!(
+        out[1],
+        format!(
+            "not rated trials: 2 inconclusive (1 showed a failure, not counted as a finding); {NOT_RATED_TAIL}"
+        )
+    );
+}
+
+#[test]
+fn a_failure_count_above_the_inconclusive_count_is_capped_to_it() {
+    let out = rate_lines(&counts(0, 10, 2, 0).with_inconclusive_failures(9), false);
+    assert!(
+        out[1].contains("2 inconclusive (2 showed a failure"),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn without_failures_in_inconclusive_trials_the_line_is_unchanged() {
+    let out = rate_lines(&counts(0, 10, 2, 0).with_inconclusive_failures(0), false);
+    assert_eq!(
+        out[1],
+        format!("not rated trials: 2 inconclusive; {NOT_RATED_TAIL}")
+    );
+}
+
+#[test]
 fn an_inconclusive_only_run_has_no_rate_and_no_sensitivity_line() {
     assert_eq!(
         lines(0, 0, 5, 0, false),

@@ -17,6 +17,15 @@ fn stopped_at_first_hit(outcome: &RunOutcome) -> bool {
 /// A run that tested nothing is an error that did run trials, and is counted: it rated none of them. A sweep's counts
 /// are its own: violations among its passes and violations, with every other trial left out.
 fn counts(outcome: &RunOutcome) -> Option<RunCounts> {
+    let with_failures = outcome
+        .property_run
+        .as_ref()
+        .map_or(0, |run| run.inconclusive_with_failure_trials);
+    base_counts(outcome).map(|counts| counts.with_inconclusive_failures(with_failures))
+}
+
+/// The counts before the number of timed-out trials that showed a failure is added.
+fn base_counts(outcome: &RunOutcome) -> Option<RunCounts> {
     if let Some(sweep) = &outcome.sweep {
         return sweep.counts();
     }

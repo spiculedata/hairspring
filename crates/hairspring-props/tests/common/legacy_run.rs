@@ -259,6 +259,9 @@ pub struct LegacyRunProps {
     summary: RunSummary,
     ids: BTreeMap<String, IdAcc>,
     id_cap: usize,
+    /// Every failure a timed-out trial showed under the kind its id had at that moment: `(position of the trial in the run, id, kind)`. Whether
+    /// it counts is settled only at the end, from the kind each id finally kept.
+    timed_out_failures: Vec<(u64, String, AssertKind)>,
 }
 
 impl Default for LegacyRunProps {
@@ -285,6 +288,7 @@ impl LegacyRunProps {
             },
             ids: BTreeMap::new(),
             id_cap,
+            timed_out_failures: Vec::new(),
         }
     }
 
@@ -307,8 +311,10 @@ impl LegacyRunProps {
             mut summary,
             mut ids,
             id_cap,
+            mut timed_out_failures,
         } = self;
         let class = TrialClass::of(seed, trial, inconclusive);
+        let ordinal = summary.trials;
         let mut dropped = 0u64;
         for p in &trial.properties {
             let acc = match ids.remove(&p.id) {
@@ -324,6 +330,9 @@ impl LegacyRunProps {
                 _ => acc,
             };
             let acc = if acc.kind == p.kind {
+                if inconclusive && p.failure().is_some() {
+                    timed_out_failures.push((ordinal, p.id.clone(), p.kind));
+                }
                 acc.with_trial(class, p)
             } else if inconclusive {
                 // A timed-out trial's kind is not trusted: it decides nothing and is no mismatch. It still counts as
@@ -367,11 +376,23 @@ impl LegacyRunProps {
             summary,
             ids,
             id_cap,
+            timed_out_failures,
         }
     }
 
+    /// The summary; its count of timed-out trials that showed a failure is the number of distinct trials with a
+    /// failure under the kind its id finally kept.
     pub fn summary(&self) -> RunSummary {
-        self.summary.clone()
+        let counted: std::collections::BTreeSet<u64> = self
+            .timed_out_failures
+            .iter()
+            .filter(|(_, id, kind)| self.ids.get(id).is_some_and(|acc| acc.kind == *kind))
+            .map(|(seed, _, _)| *seed)
+            .collect();
+        RunSummary {
+            inconclusive_with_failure_trials: counted.len() as u64,
+            ..self.summary.clone()
+        }
     }
 
     /// Per-id statistics sorted by id.

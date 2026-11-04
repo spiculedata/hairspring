@@ -204,6 +204,26 @@ front end can print the same lines.
 * A run that stopped at its first hit prints its counts and "not a rate": the stop decided how many trials it ran.
   A failed run is treated this way even if an older stored record lacks the stopped flag.
 * If a stored inconclusive count is larger than the trial count, it is capped and a `note:` line says so.
+* When some inconclusive trials showed a failure, the `not rated trials:` line says how many, once per trial (for
+  example `8 inconclusive (2 showed a failure, not counted as findings)`). The line is in the text report of both
+  search runs and sweeps. A sweep that stopped before its trial budget prints counts only, without this line. The
+  failures are never hits and are not in the rate. The count is a lower bound, not the number of failures that
+  happened. It covers only timed-out trials whose events were read: a trial whose events could not be used is not
+  looked at. Only a failure that the run attributes to a stored per-id field counts. A timed-out trial whose failing
+  kind differed from the id's kind at that point is not counted, even if that kind is the one the run finally kept.
+  A failure seen under a kind that a later conclusive trial replaced is not counted either. Ids dropped by the id cap
+  have no stored field and are not counted. A run holds at most 32,768 provisional attributions while kinds are
+  undecided; past that, trials that only undecided ids attribute are left out. In a sweep the "N inconclusive" figure
+  also includes trials with unusable output, and a timed-out trial that Hermit also reported as a host failure can
+  add to the count.
+* The count comes from the stored property summary of the run. A run with no stored property summary has an unknown
+  count, and the line says nothing about it. A run can lack the summary because it predates the count, the fold
+  failed, no ids were held, or the summary was over the size limit. A summary written before the count existed reads
+  it as 0, so for such a run a zero there means the count is not known, not that none failed.
+* Runs stored before schema version 2 hold no inconclusive count at all and read as 0 inconclusive trials, which cannot
+  be told apart from a real zero. Their rated count may include timed-out trials, so the denominator can be too large
+  and the rate lower than it would be with only the rated trials. The store does not mark these runs; a run with no
+  stored property summary and more than zero trials is one sign of one.
 * Not done: failures per core-hour with a Garwood interval, the exact rate-ratio test for comparing two builds, pooling
   within an arm, and the "uncalibrated" label for a zero from an arm with no positive control.
 * The word is "hits". The report does not say "found", "discovered", "unassisted" or "bug rate".
