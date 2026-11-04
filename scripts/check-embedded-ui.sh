@@ -70,7 +70,8 @@ elif ! cmp -s "$WORK/index.html" "$DIST/index.html"; then
 fi
 
 # Assets are content-hashed by the build, so a file with the same name has the same content; compare the bytes anyway.
-for asset in $(grep -o '/assets/[A-Za-z0-9._-]*' "$DIST/index.html" | sort -u); do
+# Every same-origin file the page names: the hashed bundles under /assets/ and the root-level theme-init.js.
+for asset in $(grep -oE '(/assets/[A-Za-z0-9._-]+|/theme-init\.js)' "$DIST/index.html" | sort -u); do
   if ! fetch "$asset" "$WORK/asset"; then
     differ "the binary does not serve $asset"
   elif ! cmp -s "$WORK/asset" "$DIST$asset" 2>/dev/null; then

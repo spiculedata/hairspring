@@ -140,6 +140,15 @@ A Glossary page at `/glossary` defines the words the pages use (seed, trial, swe
 page, a word with a dotted underline, such as Confirmation, opens its definition when pressed or activated from the
 keyboard, with a link to the glossary entry. The definitions are shortened from the wiki Glossary.
 
+## Side navigation and colour theme
+
+The web UI has a side navigation column with links to Overview, Runs, Failures, Targets and Workers; the link for the
+section you are in is marked. On a narrow window (860 pixels wide or less) it becomes a row of links under the top bar.
+The top bar has a **Colour theme** switch with three buttons: System (follow the browser or operating system setting,
+the default), Light and Dark. The choice is saved in your browser's local storage, so it is remembered per browser and
+is not shared between browsers or machines. If the browser blocks storage (some private windows do), the choice still
+works but lasts only until you close or reload the page.
+
 ## Start a run or a sweep from the web UI
 
 With `hairspring serve` running, the Runs page of the web UI has a form that starts a run through `POST /api/runs`. Pick
