@@ -19,7 +19,8 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-type Params = BTreeMap<String, String>;
+/// The query string as text, so the service (not the extractor) decides what each value may be.
+pub(crate) type Params = BTreeMap<String, String>;
 
 fn read_run_id(caller: &Caller, id: &str) -> Result<(), ApiError> {
     caller.need(Role::Read)?;
@@ -38,7 +39,7 @@ fn path_number<T: std::str::FromStr>(s: &str, max_digits: usize) -> Result<T, Ap
     s.parse().map_err(|_| ApiError::not_found())
 }
 
-fn limit(p: &Params) -> Result<Option<u32>, ApiError> {
+pub(crate) fn limit(p: &Params) -> Result<Option<u32>, ApiError> {
     p.get("limit")
         .map(|v| {
             if !v.is_empty() && v.len() <= 10 && v.bytes().all(|b| b.is_ascii_digit()) {
@@ -51,7 +52,7 @@ fn limit(p: &Params) -> Result<Option<u32>, ApiError> {
         .transpose()
 }
 
-fn param(p: &Params, key: &str) -> Option<String> {
+pub(crate) fn param(p: &Params, key: &str) -> Option<String> {
     p.get(key).cloned()
 }
 

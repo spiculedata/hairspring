@@ -7,6 +7,11 @@
 - `GET /api/me` returns the caller's role (`read`, `run` or `admin`), what that role may do, and whether the server is
   in open mode. It needs a valid token like the other read endpoints (401 otherwise) and never includes the token or a
   digest of it.
+- `GET /api/runs` and `GET /api/failures` page with `cursor` and `next_cursor`, as the property and trial lists do, and
+  take filters: runs by `state`, `target` and `mode`; failures by `run`, `property` (a prefix) and `status`. `limit`
+  defaults to 50 and is at most 500. A value that is not valid is now a 400 with a JSON body that names the parameter.
+  Both stores give the same rows in the same order. See "Paging and filters on the runs and failures lists" in
+  `docs/architecture.md`.
 - A Hermit bundle records hashes of the target's command line and working directory (`target.command.sha256`,
   `target.cwd.sha256`; no paths or arguments are stored). Replay warns when either differs, still runs from the current
   configuration, and a miss then exits 3 (inconclusive). Older bundles replay as before and say the fields were not
