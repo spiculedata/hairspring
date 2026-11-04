@@ -364,6 +364,16 @@ message says how many reruns of the seed matched). To confirm, run `hairspring c
 failure of the run in turn and stores the checks for each. The claim gate needs every first-failure seed confirmed that
 way.
 
+To do that as the sweep ends, add `--confirm` to `hairspring test --sweep`. After each target's sweep it confirms every
+failure row the sweep stored, with the defaults of `hairspring confirm` (three same-seed reruns and a replay of the
+bundle; no control and no strict verify, so use `hairspring confirm <run id>` with `--control` or `--strict-verify` for
+those), stores the checks and prints each result after the sweep's report. Ctrl-C behaves as it does for
+`hairspring confirm`: the checks that finished are stored, the rest are recorded as skipped, and the command exits 130.
+The exit status stays the sweep's (1 when a property failed); the findings are in the printed text. `--confirm` needs
+`--sweep` and `--format text`. It works on the command line only: the server does not schedule confirmations for
+finished sweep runs, and remote workers do not run them, so a sweep run on a server still needs `hairspring confirm`.
+Like `hairspring confirm`, it cannot confirm a failure from a `sim` target.
+
 A sweep stores at most 16 rows; a property whose first failing seed comes after that has no row, and the run's claim
 stays withheld. The server refuses a result with further failures unless the run is a sweep with a first failure, the
 seeds rise strictly after that failure's, and the bundles total at most 1.5 MiB (a result travels in one request of at

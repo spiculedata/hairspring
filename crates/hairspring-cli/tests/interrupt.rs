@@ -175,6 +175,28 @@ fn ctrl_c_during_a_confirmation_kills_the_reruns_and_exits_130() {
     assert!(gone(&guest) && gone(&child));
 }
 
+#[test]
+fn ctrl_c_during_the_confirmation_after_a_sweep_exits_130_and_keeps_the_sweep() {
+    let dir = scratch("sweep-confirm");
+    // Seed 3 fails; the sweep runs it four times (the trial and its own reruns), and every later run of it hangs.
+    let guest = format!(
+        "[ $((FAKE_SCHED_SEED % 5)) -eq 3 ] || {{ echo ok; exit 0; }}; n=$(cat {d}/count 2>/dev/null || echo 0); n=$((n+1)); echo $n > {d}/count; [ $n -ge 5 ] && {{ {hang}; }}; echo 'HAIRSPRING_VIOLATION: lost update'; exit 1",
+        d = dir.display(),
+        hang = hanging(&dir)
+    );
+    project(&dir, &guest);
+    let cli = spawn(
+        &dir,
+        &["test", "svc", "--sweep", "--seeds", "1..6", "--confirm"],
+    );
+    let (guest, child, out) = interrupt_once_running(&dir, cli);
+    assert_eq!(out.status.code(), Some(EXIT_INTERRUPTED), "{}", text(&out));
+    assert!(text(&out).contains("interrupted"), "{}", text(&out));
+    assert!(gone(&guest) && gone(&child));
+    // The sweep itself finished before the confirmation began and stands as stored.
+    assert_eq!(latest_run_state(&dir), "failed");
+}
+
 /// The lines of `hairspring show` that state what the stored checks say about the failure.
 fn finding_lines(dir: &Path, run_id: &str) -> Vec<String> {
     text(&run(dir, &["show", run_id]))

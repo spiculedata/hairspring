@@ -8,6 +8,9 @@
   `target.cwd.sha256`; no paths or arguments are stored). Replay warns when either differs, still runs from the current
   configuration, and a miss then exits 3 (inconclusive). Older bundles replay as before and say the fields were not
   recorded.
+- `hairspring test --sweep --confirm` runs the confirmation pipeline (the defaults of `hairspring confirm`) on every
+  failure row the sweep stored, once the sweep ends, and prints each result. It works on the command line only: the
+  server does not confirm sweeps by itself and workers do not run confirmations.
 - The run page's activity panel shows each event as a titled line with labelled facts instead of raw JSON, with the raw
   event behind a "Raw event" disclosure.
 - `scripts/check-embedded-ui.sh` checks that a release binary serves the web UI built from the repository's `web/`

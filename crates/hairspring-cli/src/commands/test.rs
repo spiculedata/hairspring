@@ -1,13 +1,15 @@
+use super::confirm::{confirm_stored_run, write_interrupted, write_stored};
 use super::sweep_note;
 use crate::cli::{Format, TestArgs};
 use crate::ctx::{CmdResult, Ctx};
 use crate::host::{self, HostFacts};
 use hairspring_engine::config::Budget;
+use hairspring_engine::confirm::ConfirmRequest;
 use hairspring_engine::format::{to_junit, to_sarif, to_text};
 use hairspring_engine::mode::RunMode;
 use hairspring_engine::report::{RunOutcome, RunStatus};
 use hairspring_hermit::interrupt;
-use hairspring_service::StartRun;
+use hairspring_service::{Service, StartRun};
 use hairspring_store::RunState;
 use hairspring_store::{random_seed, sha256_hex};
 use serde_json::json;
@@ -52,6 +54,32 @@ fn write_failure_bundles(
         .collect()
 }
 
+/// Confirms each failure row the sweep stored, with the defaults of `hairspring confirm`, and prints the results.
+/// `Ok(None)` means Ctrl-C ended it; `Ok(Some(false))`, that the sweep stored no failure.
+fn confirm_sweep_failures(
+    ctx: &Ctx,
+    svc: &Service,
+    run_id: &str,
+    out: &mut dyn Write,
+) -> CmdResult<Option<bool>> {
+    let detail = svc
+        .get_run(run_id)?
+        .ok_or_else(|| format!("no stored run `{run_id}`"))?;
+    if detail.failures.is_empty() {
+        return Ok(Some(false));
+    }
+    let checked = confirm_stored_run(ctx, svc, &detail, &ConfirmRequest::default()).map_err(|e| {
+        format!("the sweep finished and is stored as {run_id}, but confirming its failures failed: {e}")
+    })?;
+    let Some(checked) = checked else {
+        return Ok(None);
+    };
+    for checks in &checked {
+        write_stored(out, checks)?;
+    }
+    Ok(Some(true))
+}
+
 pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write) -> CmdResult<i32> {
     let names: Vec<String> = if args.targets.is_empty() {
         ctx.engine.target_names()
@@ -60,6 +88,12 @@ pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write)
     };
     if host::involves_process_target(ctx.engine.config(), &names) {
         host::write_warnings(err, &HostFacts::probe())?;
+    }
+    if args.confirm && args.format != Format::Text {
+        return Err(
+            "--confirm prints each confirmation as text and cannot be mixed into other output; use it with --format text"
+                .into(),
+        );
     }
     let svc = ctx.service()?;
     if let Err(e) = interrupt::install_sigint_handler() {
@@ -163,6 +197,14 @@ pub fn run(ctx: &Ctx, args: &TestArgs, out: &mut dyn Write, err: &mut dyn Write)
             let completion = svc.completion_for(&detail.run)?;
             if let Some(note) = sweep_note::note(&completion, outcome.trials, budget.max_trials) {
                 writeln!(out, "  {note}")?;
+            }
+        }
+        if args.confirm && mode.is_sweep() {
+            let Some(confirmed) = confirm_sweep_failures(ctx, &svc, &detail.run.id, out)? else {
+                return write_interrupted(err, true);
+            };
+            if text_mode && !confirmed {
+                writeln!(out, "  --confirm: the sweep stored no failure to confirm")?;
             }
         }
         code = code.max(match outcome.status {

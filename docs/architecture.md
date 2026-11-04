@@ -155,8 +155,10 @@ Stored run mode).
   report (trace and replayable bundle), which is also what the run's first failure row holds; so does each later seed
   at which a property fails for the first time (`RunOutcome::more_failures`, at most 16 reports in all), so the claim gate
   can see every first-failure seed. Those later reports carry the sweep's own rerun note like the first (reruns of the
-  seed, made even past the limit on confirmed violations), but the sweep does not run the full confirmation pipeline:
-  `hairspring confirm <run id>` does that for every row. A sweep that sees one property fail has no extra report, except
+  seed, made even past the limit on confirmed violations), but the sweep does not run the full confirmation pipeline by
+  itself: `hairspring confirm <run id>` does that for every row, and `hairspring test --sweep --confirm` does the same
+  for the rows of the sweep it has just run (CLI only: the server does not schedule confirmations for finished sweep
+  runs, and remote workers do not run them). A sweep that sees one property fail has no extra report, except
   that a property failing after a first failure that named none gets its own. The server refuses further failures
   unless the run is a sweep with a first failure, with strictly rising seeds and at most 1.5 MiB of bundles in all.
 - **Simulation sweeps are not confirmed.** A failing seed from a simulation (`sim`) target, in a sweep or a search, cannot be confirmed: `hairspring confirm` stops with ``error: no backend available for target kind ``confirm` is not supported by the sim backend` `` (the stray backticks are in the message) and nothing is stored. Only `process` targets can be confirmed.
