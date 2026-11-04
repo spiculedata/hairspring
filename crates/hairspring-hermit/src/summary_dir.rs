@@ -173,13 +173,32 @@ fn through(dir: &Path, _handle: &std::fs::File) -> PathBuf {
 /// while this runs, so no mode is ever set through a path that could be one: the mode is set without following links,
 /// and a directory is entered through an open handle that is checked to be the directory that was looked at.
 fn make_accessible(dir: &Path) {
+    make_accessible_hooked(dir, &|_, _| {});
+}
+
+/// The points in [`make_accessible_hooked`] where a test swaps the entry being worked on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    /// The entry was looked at and found to be a directory; nothing was changed yet.
+    Checked,
+    /// The entry's mode was set; it is not open yet.
+    ModeSet,
+    /// The entry is open and was checked to be the directory that was looked at; it is not read yet.
+    Opened,
+}
+
+/// [`make_accessible`] calling `hook` at each [`Step`] for each entry, so a test can swap the entry at an exact point
+/// instead of racing it. The normal call passes a hook that does nothing.
+fn make_accessible_hooked(dir: &Path, hook: &dyn Fn(Step, &Path)) {
     let Ok(before) = std::fs::symlink_metadata(dir) else {
         return;
     };
     if !before.file_type().is_dir() {
         return;
     }
+    hook(Step::Checked, dir);
     chmod_no_follow(dir, 0o700);
+    hook(Step::ModeSet, dir);
     let Ok(handle) = open_directory(dir) else {
         return;
     };
@@ -187,13 +206,17 @@ fn make_accessible(dir: &Path) {
         Ok(opened) if (opened.dev(), opened.ino()) == (before.dev(), before.ino()) => {}
         _ => return,
     }
+    hook(Step::Opened, dir);
     let through_handle = through(dir, &handle);
     if let Ok(entries) = std::fs::read_dir(&through_handle) {
         for entry in entries.flatten() {
-            make_accessible(&through_handle.join(entry.file_name()));
+            make_accessible_hooked(&through_handle.join(entry.file_name()), hook);
         }
     }
 }
+
+#[cfg(test)]
+mod race_tests;
 
 /// Removes a directory tree, whatever modes the guest gave its contents. A tree already gone is fine.
 fn remove_tree(path: &Path) -> io::Result<()> {
