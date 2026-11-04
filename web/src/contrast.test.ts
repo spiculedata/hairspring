@@ -160,6 +160,7 @@ describe('every stylesheet and the canvas code use the tokens', () => {
     expect(cssFiles).toEqual(
       expect.arrayContaining([
         'components/confirmation.css',
+        'components/connection.css',
         'explorer/explorer.css',
         'overview/overview.css',
         'runPanel/runPanel.css',

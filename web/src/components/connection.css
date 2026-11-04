@@ -1,0 +1,16 @@
+/* Offline banner. Colours come from the tokens in styles.css only. The live region is always present and has no height
+   until it holds the banner. It is sticky at the page top; no page-level header is sticky (the sticky table headers
+   stick inside their own scroll regions), so it covers nothing. */
+.connection-status {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.connection-banner {
+  padding: .5rem 1rem;
+  color: var(--gap);
+  background: var(--gap-bg);
+  border-bottom: 1px solid var(--gap-line);
+  overflow-wrap: anywhere;
+}
