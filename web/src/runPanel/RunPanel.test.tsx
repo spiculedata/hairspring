@@ -65,7 +65,7 @@ describe('RunPanel', () => {
       { sweep: { trials: 100, passes: 97, violations: 3, inconclusive: 0, unusable: 0, infra: 0, first_failing_seeds: ['1016'] } },
     );
     const html = renderToString(<RunPanel detail={d} page={page({ properties: [row()] })} />);
-    expect(text(html)).toContain('Rate for the trials run: 3/4,790 · 0.06% · [0.02%–0.18%]');
+    expect(text(html)).toContain('Rate for the trials run: 3/4790 · 0.06% · [0.02%–0.18%]');
   });
 
   it('prints the single rate line only when the page holds the one failed property in full', () => {

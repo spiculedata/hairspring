@@ -25,16 +25,25 @@ export function plural(n: number, one: string, many: string): string {
   return `${formatCount(n)} ${n === 1 ? one : many}`;
 }
 
+/** A count with no thousands separators, matching the server's rate text. */
+function plainCount(n: number): string {
+  return Math.round(n).toString();
+}
+
+function plainPlural(n: number, one: string, many: string): string {
+  return `${plainCount(n)} ${n === 1 ? one : many}`;
+}
+
 function eventsPhrase(basis: RateBasis, k: number): string {
   switch (basis.replace(/_/g, '').toLowerCase()) {
     case 'trialsfalse':
-      return plural(k, 'failure', 'failures');
+      return plainPlural(k, 'failure', 'failures');
     case 'trialstrue':
-      return plural(k, 'trial where it held', 'trials where it held');
+      return plainPlural(k, 'trial where it held', 'trials where it held');
     case 'trialshit':
-      return plural(k, 'trial that reached it', 'trials that reached it');
+      return plainPlural(k, 'trial that reached it', 'trials that reached it');
     default:
-      return plural(k, 'event', 'events');
+      return plainPlural(k, 'event', 'events');
   }
 }
 
@@ -53,16 +62,16 @@ export function rateText(cell: RateCellData): string {
     case 'unrated':
       return UNRATED_TEXT;
     case 'not_a_rate':
-      return `${NOT_A_RATE_TEXT}${SEP}${eventsPhrase(cell.basis, cell.k)} in ${plural(cell.n, 'rated trial', 'rated trials')}`;
+      return `${NOT_A_RATE_TEXT}${SEP}${eventsPhrase(cell.basis, cell.k)} in ${plainPlural(cell.n, 'rated trial', 'rated trials')}`;
     case 'zero_events': {
       // The server's wording (hairspring-props honesty.rs): the bound is exact, and 3/n is only a note from 30 trials.
-      const n = formatCount(cell.n);
+      const n = plainCount(cell.n);
       const note = cell.n >= THREE_OVER_N_NOTE_FROM ? `; about 3/${n}` : '';
       return `0/${n}, exact one-sided 95% upper bound ${upperPct(cell.upper_bound)} (binomial, 0 of ${n})${note}`;
     }
     case 'rate':
       if (cell.n === 0) return UNRATED_TEXT;
-      return `${formatCount(cell.k)}/${formatCount(cell.n)}${SEP}${nearestPct(cell.point)}${SEP}[${lowerPct(cell.lower)}–${upperPct(cell.upper)}]`;
+      return `${plainCount(cell.k)}/${plainCount(cell.n)}${SEP}${nearestPct(cell.point)}${SEP}[${lowerPct(cell.lower)}–${upperPct(cell.upper)}]`;
   }
 }
 
@@ -80,18 +89,18 @@ export function rateParts(cell: RateCellData): RateParts {
       return { figure: UNRATED_TEXT, qualifier: undefined };
     case 'not_a_rate':
       return {
-        figure: `${eventsPhrase(cell.basis, cell.k)} in ${plural(cell.n, 'rated trial', 'rated trials')}`,
+        figure: `${eventsPhrase(cell.basis, cell.k)} in ${plainPlural(cell.n, 'rated trial', 'rated trials')}`,
         qualifier: NOT_A_RATE_TEXT,
       };
     case 'zero_events': {
-      const n = formatCount(cell.n);
+      const n = plainCount(cell.n);
       const note = cell.n >= THREE_OVER_N_NOTE_FROM ? `; about 3/${n}` : '';
       return { figure: `0/${n}`, qualifier: `exact one-sided 95% upper bound ${upperPct(cell.upper_bound)} (binomial, 0 of ${n})${note}` };
     }
     case 'rate':
       if (cell.n === 0) return { figure: UNRATED_TEXT, qualifier: undefined };
       return {
-        figure: `${formatCount(cell.k)}/${formatCount(cell.n)}${SEP}${nearestPct(cell.point)}`,
+        figure: `${plainCount(cell.k)}/${plainCount(cell.n)}${SEP}${nearestPct(cell.point)}`,
         qualifier: `[${lowerPct(cell.lower)}–${upperPct(cell.upper)}]`,
       };
   }

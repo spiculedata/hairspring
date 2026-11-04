@@ -25,7 +25,7 @@ describe('PropertyTable', () => {
     expect(html).toContain('Failed');
     expect(html).toContain('always');
     expect(html).toContain('wal.no-lost-commit');
-    expect(html).toContain('3/4,790');
+    expect(html).toContain('3/4790');
     expect(html).toContain('[0.02%–0.18%]');
     expect(html).toContain('seed 1016');
     expect(html).toContain('1,200,000');
