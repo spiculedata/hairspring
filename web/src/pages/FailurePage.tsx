@@ -7,6 +7,7 @@ import { Loading, LoadFailed, NotFound } from '../components/Notices';
 import { ReplayVerdict } from '../components/ReplayVerdict';
 import type { ReplayResult } from '../types';
 import { usePolling } from '../usePolling';
+import { FailureActions } from './FailureActions';
 
 function download(name: string, text: string) {
   const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
@@ -37,6 +38,7 @@ export function FailurePage({ id }: { id: string }) {
       </p>
       <h1>{record.target}: shortest failing steps</h1>
       <p>{record.message}</p>
+      <FailureActions record={record} />
       <div className="row">
         <button
           onClick={async () => {
