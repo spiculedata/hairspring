@@ -13,6 +13,7 @@ mod replay;
 mod rerun;
 mod verify;
 mod verify_report;
+mod verify_staging;
 
 use crate::backend::HermitBackend;
 use crate::exec::ProcessSpec;
