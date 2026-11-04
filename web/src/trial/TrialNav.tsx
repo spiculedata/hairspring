@@ -2,7 +2,10 @@ import type { ChangeEvent } from 'react';
 import type { NavItem } from './navItems';
 
 function scrollToSection(id: string): void {
-  document.getElementById(id)?.scrollIntoView?.();
+  const heading = document.getElementById(id);
+  if (!heading) return;
+  heading.scrollIntoView?.();
+  heading.focus({ preventScroll: true });
 }
 
 function jump(e: ChangeEvent<HTMLSelectElement>): void {

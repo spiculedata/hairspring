@@ -23,9 +23,9 @@ interface Props {
   onDownload: (stream: StreamName) => void;
 }
 
-function Lines({ lines, hits, onlyHits }: { lines: readonly string[]; hits: ReadonlySet<number>; onlyHits: boolean }) {
+function Lines({ stream, lines, hits, onlyHits }: { stream: StreamName; lines: readonly string[]; hits: ReadonlySet<number>; onlyHits: boolean }) {
   return (
-    <pre className="output-tail" tabIndex={0}>
+    <pre className="output-tail" tabIndex={0} aria-label={`${stream} tail`}>
       {lines.map((line, i) =>
         onlyHits && !hits.has(i) ? null : (
           <span key={i} className={hits.has(i) ? 'out-line out-hit' : 'out-line'}>
@@ -41,7 +41,7 @@ function Lines({ lines, hits, onlyHits }: { lines: readonly string[]; hits: Read
   );
 }
 
-function Body({ state, hits, onlyHits }: Pick<Props, 'state' | 'hits' | 'onlyHits'>) {
+function Body({ stream, state, hits, onlyHits }: Pick<Props, 'stream' | 'state' | 'hits' | 'onlyHits'>) {
   if (state.status === 'loading') return <p className="muted">Loading output…</p>;
   if (state.status === 'absent') return <p className="muted">Nothing was kept for this stream.</p>;
   if (state.status === 'error') {
@@ -57,7 +57,7 @@ function Body({ state, hits, onlyHits }: Pick<Props, 'state' | 'hits' | 'onlyHit
     <>
       {(tail.charsDropped > 0 || tail.linesDropped > 0) && <p className="muted">{outputTrimmed(tail.charsDropped, tail.linesDropped)}</p>}
       <p className="muted">Line numbers count from the first line shown here.</p>
-      <Lines lines={tail.lines} hits={hits} onlyHits={onlyHits} />
+      <Lines stream={stream} lines={tail.lines} hits={hits} onlyHits={onlyHits} />
     </>
   );
 }
@@ -68,7 +68,7 @@ export function OutputPanel({ stream, state, omittedBytes, hits, onlyHits, onDow
     <div className="output-stream">
       <p className="muted">{stream} (escaped, last 64 KiB at most)</p>
       {omittedBytes > 0 && <p className="muted">{outputOmitted(omittedBytes)}.</p>}
-      <Body state={state} hits={hits} onlyHits={onlyHits} />
+      <Body stream={stream} state={state} hits={hits} onlyHits={onlyHits} />
       <button type="button" onClick={() => onDownload(stream)}>
         {`Download ${stream}`}
       </button>

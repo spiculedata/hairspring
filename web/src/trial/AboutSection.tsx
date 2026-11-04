@@ -4,7 +4,7 @@ import { NOT_REPLAYED_NOTE } from '../wording';
 export function AboutSection({ caveats }: { caveats: readonly string[] }) {
   return (
     <section aria-labelledby="about-title">
-      <h2 id="about-title">About this page</h2>
+      <h2 id="about-title" tabIndex={-1}>About this page</h2>
       <p className="muted">{NOT_REPLAYED_NOTE}</p>
       {caveats.map((c) => (
         <p key={c} className="note">

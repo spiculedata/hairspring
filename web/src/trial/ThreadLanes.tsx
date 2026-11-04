@@ -62,7 +62,7 @@ export function ThreadLanes({ rows }: { rows: readonly LaneRow[] }) {
   const visible = ordered.slice(0, shown);
   return (
     <section aria-labelledby="threads-title">
-      <h2 id="threads-title">Threads</h2>
+      <h2 id="threads-title" tabIndex={-1}>Threads</h2>
       <p className="muted">{PER_THREAD_NOTE}</p>
       <p className="muted">{LANE_SCALE_NOTE}</p>
       <div className="table-scroll" role="region" aria-label="Threads, scrollable" tabIndex={0}>

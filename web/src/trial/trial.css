@@ -18,12 +18,6 @@ pre.output-tail { max-height: 22rem; white-space: pre-wrap; overflow-wrap: anywh
 pre.output-tail:focus-visible, pre.slices:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 pre.slices { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 14rem; }
 
-@media (max-width: 40rem) {
-  table.lanes, table.procs { min-width: 34rem; }
-  .trial-nav-list { display: none; }
-  .trial-nav-select { display: block; }
-}
-
 /* In-page navigation: a list on wide screens, a select on phones. */
 .trial-nav { margin: .75rem 0; }
 .trial-nav-list { display: flex; flex-wrap: wrap; gap: .25rem 1rem; list-style: none; padding: 0; margin: 0; }
@@ -44,3 +38,10 @@ table.lanes .lane-mark { top: 0; font-size: 1.1rem; }
 .output-tail .ln { display: inline-block; min-width: 3.5ch; margin-right: 1ch; text-align: right; color: var(--muted); user-select: none; font-variant-numeric: tabular-nums; }
 .output-tail .out-hit { background: var(--accent-soft); }
 table.slices-table { margin-top: 0; }
+
+/* Phone width. Last in the file so these win over the base rules above at equal specificity. */
+@media (max-width: 40rem) {
+  table.lanes, table.procs { min-width: 34rem; }
+  .trial-nav-list { display: none; }
+  .trial-nav-select { display: block; }
+}

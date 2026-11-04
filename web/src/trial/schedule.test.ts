@@ -33,3 +33,22 @@ describe('parseThreadSlices', () => {
     expect(parseThreadSlices('{"a":1}')).toBeUndefined();
   });
 });
+
+describe('parseThreadSlices limits', () => {
+  it('reads exactly the most rows and columns it allows', () => {
+    const rows = Array.from({ length: 200 }, (_, i) => ({ n: i }));
+    expect(parseThreadSlices(JSON.stringify(rows))?.rows).toHaveLength(200);
+    const wide = Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`c${i}`, i]));
+    expect(parseThreadSlices(JSON.stringify([wide]))?.columns).toHaveLength(8);
+  });
+
+  it('falls back to raw text for 201 rows', () => {
+    const rows = Array.from({ length: 201 }, (_, i) => ({ n: i }));
+    expect(parseThreadSlices(JSON.stringify(rows))).toBeUndefined();
+  });
+
+  it('falls back to raw text for 9 columns', () => {
+    const wide = Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`c${i}`, i]));
+    expect(parseThreadSlices(JSON.stringify([wide]))).toBeUndefined();
+  });
+});

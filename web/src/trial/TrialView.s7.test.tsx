@@ -34,6 +34,13 @@ describe('TrialView navigation', () => {
       expect(html).toContain(`id="${id}"`);
     }
   });
+
+  it('makes every nav target heading programmatically focusable, so a jump can move focus', () => {
+    const html = view();
+    for (const id of ['witness-title', 'threads-title', 'procs-title', 'health-title', 'schedule-title', 'output-title', 'about-title']) {
+      expect(html, id).toMatch(new RegExp(`<h2[^>]*(id="${id}"[^>]*tabindex="-1"|tabindex="-1"[^>]*id="${id}")`));
+    }
+  });
 });
 
 describe('TrialView ranked caveat', () => {

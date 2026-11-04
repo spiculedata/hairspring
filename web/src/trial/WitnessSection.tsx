@@ -61,7 +61,7 @@ function Failing({ f, procs }: { f: FailingProperty; procs: readonly KeptProc[] 
 export function WitnessSection({ failing, procs }: { failing: readonly FailingProperty[]; procs: readonly KeptProc[] }) {
   return (
     <section aria-labelledby="witness-title">
-      <h2 id="witness-title">Witness</h2>
+      <h2 id="witness-title" tabIndex={-1}>Witness</h2>
       <p className="muted">
         The four values are {WITNESS_VALUES_NOTE}.
       </p>

@@ -82,7 +82,7 @@ function SliceTable({ text }: { text: string }) {
 export function ScheduleSection({ trial, schedule }: { trial: TrialRow; schedule: ScheduleData | null }) {
   return (
     <section aria-labelledby="schedule-title">
-      <h2 id="schedule-title">Schedule</h2>
+      <h2 id="schedule-title" tabIndex={-1}>Schedule</h2>
       {schedule === null && <p className="muted">{NO_SCHEDULE_NOTE}</p>}
       <dl className="facts">
         {schedule !== null && <Field label="Scheduler turns">{formatCount(schedule.sched_turns)}</Field>}

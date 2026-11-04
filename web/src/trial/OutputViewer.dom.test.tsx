@@ -49,4 +49,42 @@ describe('OutputViewer', () => {
     find('zzz');
     expect(screen.getByText('No matching lines')).toBeTruthy();
   });
+
+  it('names the focusable output region after its stream', () => {
+    const { container } = mount();
+    const pre = container.querySelector('pre.output-tail');
+    expect(pre?.getAttribute('aria-label')).toBe('stdout tail');
+    expect(pre?.getAttribute('tabindex')).toBe('0');
+  });
+
+  it('keeps only the selected tab in the tab order', () => {
+    mount();
+    expect(screen.getByRole('tab', { name: 'stdout' }).getAttribute('tabindex')).toBe('0');
+    expect(screen.getByRole('tab', { name: 'stderr' }).getAttribute('tabindex')).toBe('-1');
+  });
+
+  it('moves between tabs with the arrow, Home and End keys, selecting and focusing the target', () => {
+    mount();
+    const stdout = screen.getByRole('tab', { name: 'stdout' });
+    const stderr = screen.getByRole('tab', { name: 'stderr' });
+    fireEvent.keyDown(stdout, { key: 'ArrowRight' });
+    expect(stderr.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(stderr);
+    fireEvent.keyDown(stderr, { key: 'ArrowRight' });
+    expect(stdout.getAttribute('aria-selected')).toBe('true');
+    fireEvent.keyDown(stdout, { key: 'ArrowLeft' });
+    expect(stderr.getAttribute('aria-selected')).toBe('true');
+    fireEvent.keyDown(stderr, { key: 'Home' });
+    expect(stdout.getAttribute('aria-selected')).toBe('true');
+    fireEvent.keyDown(stdout, { key: 'End' });
+    expect(stderr.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(stderr);
+  });
+
+  it('does not hide a panel with both the hidden attribute and an inline style', () => {
+    mount();
+    const hidden = document.querySelector('[role="tabpanel"][hidden]');
+    expect(hidden).not.toBeNull();
+    expect(hidden?.getAttribute('style')).toBeNull();
+  });
 });

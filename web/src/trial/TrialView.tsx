@@ -56,7 +56,7 @@ export function TrialView({ detail, context, tails, onDownload }: TrialViewProps
       )}
       <ScheduleSection trial={trial} schedule={detail.guest.schedule} />
       <section aria-labelledby="output-title">
-        <h2 id="output-title">Output</h2>
+        <h2 id="output-title" tabIndex={-1}>Output</h2>
         {streams.length > 0 ? (
           <OutputViewer streams={streams} tails={tails} omittedBytes={detail.output_omitted_bytes} onDownload={onDownload} />
         ) : (

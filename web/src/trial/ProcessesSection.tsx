@@ -14,7 +14,7 @@ function Cell({ text }: { text: string | null }) {
 export function ProcessesSection({ procs }: { procs: readonly KeptProc[] }) {
   return (
     <section aria-labelledby="procs-title">
-      <h2 id="procs-title">Processes</h2>
+      <h2 id="procs-title" tabIndex={-1}>Processes</h2>
       <div className="table-scroll" role="region" aria-label="Processes, scrollable" tabIndex={0}>
         <table className="procs" aria-label="Processes">
           <thead>
@@ -67,7 +67,7 @@ export function HealthSection({ health, degraded }: { health: KeptHealth; degrad
   const { accepted, problems } = healthCounters(health);
   return (
     <section aria-labelledby="health-title">
-      <h2 id="health-title">Event health</h2>
+      <h2 id="health-title" tabIndex={-1}>Event health</h2>
       <p>
         accepted {formatCount(accepted)} · degraded: {degraded ? 'yes' : 'no'}
       </p>
