@@ -77,6 +77,16 @@ describe('OverviewPage', () => {
     expect(container.querySelector('.guide')).toBeNull();
   });
 
+  it('points to the glossary in one sentence, on an empty store and on a busy one', async () => {
+    for (const store of [{}, { runs: [run('run_a', 'done', 5)] }]) {
+      const { container, unmount } = await mount(store);
+      const links = container.querySelectorAll('a[href="/glossary"]');
+      expect(links).toHaveLength(1);
+      expect(links[0].parentElement?.textContent).toBe('Unsure what a word on these pages means? The glossary defines each one.');
+      unmount();
+    }
+  });
+
   describe('an empty store', () => {
     it('says so plainly and shows the guide with the documented commands, and no run table', async () => {
       const { container } = await mount({});

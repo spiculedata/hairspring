@@ -76,6 +76,7 @@ export type Route =
   | { name: 'failure'; id: string }
   | { name: 'targets' }
   | { name: 'workers' }
+  | { name: 'glossary' }
   | { name: 'notfound' };
 
 export function matchRoute(path: string): Route {
@@ -95,5 +96,6 @@ export function matchRoute(path: string): Route {
   if (parts.length === 2 && parts[0] === 'failures') return { name: 'failure', id: parts[1] };
   if (parts.length === 1 && parts[0] === 'targets') return { name: 'targets' };
   if (parts.length === 1 && parts[0] === 'workers') return { name: 'workers' };
+  if (parts.length === 1 && parts[0] === 'glossary') return { name: 'glossary' };
   return { name: 'notfound' };
 }

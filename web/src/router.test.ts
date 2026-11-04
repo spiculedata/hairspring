@@ -66,3 +66,10 @@ describe('paths', () => {
     expect(trialPath('run_0123', 1.5)).toBeUndefined();
   });
 });
+
+describe('glossary route', () => {
+  it('matches /glossary exactly', () => {
+    expect(matchRoute('/glossary')).toEqual({ name: 'glossary' });
+    expect(matchRoute('/glossary/seed')).toEqual({ name: 'notfound' });
+  });
+});

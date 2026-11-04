@@ -38,3 +38,9 @@ describe('pageTitle', () => {
     expect(title('/nowhere')).toBe('No such page · Hairspring');
   });
 });
+
+describe('pageTitle, glossary', () => {
+  it('names the glossary page', () => {
+    expect(title('/glossary')).toBe('Glossary · Hairspring');
+  });
+});

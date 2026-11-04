@@ -1,0 +1,36 @@
+/* Inline definitions and the Glossary page. Colours come from the tokens in styles.css. */
+.term { display: inline; }
+button.term-button {
+  display: inline;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: .2em;
+  cursor: pointer;
+}
+button.term-button[aria-expanded='true'] { text-decoration-style: solid; }
+/* The definition opens in the flow of the text, not over it, so a scrolling table or a narrow screen cannot clip it. */
+.term-pop {
+  display: block;
+  max-width: 30rem;
+  margin: .3rem 0;
+  padding: .5rem .75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: .9rem;
+  font-weight: 400;
+  text-transform: none;
+}
+.glossary { margin: 1rem 0; }
+.glossary-entry { padding: .6rem 0; border-top: 1px solid var(--border); }
+.glossary-entry:first-child { border-top: 0; }
+.glossary dt { font-weight: 600; }
+.glossary dd { margin: .15rem 0 0; max-width: 42rem; }
+.glossary dt:target { color: var(--accent); }
