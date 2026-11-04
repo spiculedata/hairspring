@@ -6,10 +6,13 @@
 //! | Field | Accepted |
 //! |---|---|
 //! | `edge_ref`, `point_hash`, `command_hash` | 64 characters of lower-case hexadecimal (a SHA-256 digest) |
-//! | `command_json` | one JSON object, 1 to [`MAX_COMMAND_JSON_BYTES`] bytes, no NUL, at most [`MAX_COMMAND_JSON_DEPTH`] levels of nesting |
+//! | `command_json` | one JSON object, 1 to [`MAX_COMMAND_JSON_BYTES`] bytes, no NUL, at most [`MAX_COMMAND_JSON_DEPTH`] levels of nesting, no key repeated within an object |
 //!
 //! Whether `command_hash` equals the hash of a canonical form of `command_json` is not checked: it is a cache key
-//! the worker supplies, and which canonical form applies is not settled.
+//! the worker supplies. The canonical form (`hairspring_core::point::command_hash`) is built from a typed command
+//! whose integers are written as strings, and no document defines a mapping from arbitrary command JSON to it, nor
+//! a hash of the exact text, so there is nothing a check could be held to.
+use crate::command_keys::{parse_without_repeated_keys, KeyedParse};
 use crate::ServiceError;
 use hairspring_store::{
     is_sha256_hex, nesting_depth, NewBranch, NewNode, MAX_COMMAND_JSON_BYTES,
@@ -27,6 +30,8 @@ pub enum TreeFieldError {
     CommandHasNul,
     CommandTooDeep,
     CommandNotJson,
+    /// An object in the command repeats a key, so the command has no single meaning.
+    CommandRepeatedKey,
     /// The command is JSON, but not an object.
     CommandNotObject,
 }
@@ -50,6 +55,7 @@ impl fmt::Display for TreeFieldError {
                 )
             }
             Self::CommandNotJson => f.write_str("command_json is not well-formed JSON"),
+            Self::CommandRepeatedKey => f.write_str("command_json repeats a key within an object"),
             Self::CommandNotObject => f.write_str("command_json must be a JSON object"),
         }
     }
@@ -76,7 +82,7 @@ pub fn check_edge_ref(edge_ref: Option<&str>) -> Result<(), TreeFieldError> {
     edge_ref.map_or(Ok(()), |e| check_digest("edge_ref", e))
 }
 
-/// Checks a command as the worker sent it: size, NUL, nesting, well-formedness and shape, in that order.
+/// Checks a command as the worker sent it: size, NUL, nesting, well-formedness, repeated keys and shape.
 pub fn check_command_json(text: &str) -> Result<(), TreeFieldError> {
     if text.is_empty() {
         return Err(TreeFieldError::CommandEmpty);
@@ -91,10 +97,11 @@ pub fn check_command_json(text: &str) -> Result<(), TreeFieldError> {
     if nesting_depth(text) > MAX_COMMAND_JSON_DEPTH {
         return Err(TreeFieldError::CommandTooDeep);
     }
-    match serde_json::from_str::<serde_json::Value>(text) {
-        Ok(serde_json::Value::Object(_)) => Ok(()),
-        Ok(_) => Err(TreeFieldError::CommandNotObject),
-        Err(_) => Err(TreeFieldError::CommandNotJson),
+    match parse_without_repeated_keys(text) {
+        KeyedParse::Parsed(serde_json::Value::Object(_)) => Ok(()),
+        KeyedParse::Parsed(_) => Err(TreeFieldError::CommandNotObject),
+        KeyedParse::RepeatedKey => Err(TreeFieldError::CommandRepeatedKey),
+        KeyedParse::NotJson => Err(TreeFieldError::CommandNotJson),
     }
 }
 
@@ -225,6 +232,37 @@ mod tests {
             let shown: String = text.chars().take(40).collect();
             assert_eq!(check_command_json(&text), want, "{shown:?}");
         }
+    }
+
+    #[test]
+    fn a_repeated_key_in_any_object_is_refused() {
+        for text in [
+            r#"{"a":1,"a":2}"#,
+            r#"{"a":1,"b":{"x":1,"x":1}}"#,
+            r#"{"l":[{"k":1},{"k":1,"k":2}]}"#,
+            r#"{"a":1,"\u0061":2}"#,
+        ] {
+            assert_eq!(
+                check_command_json(text),
+                Err(TreeFieldError::CommandRepeatedKey),
+                "{text}"
+            );
+        }
+        for ok in [
+            r#"{"a":1,"b":2}"#,
+            r#"{"a":{"a":1},"b":{"a":2}}"#,
+            r#"{"l":[{"k":1},{"k":2}]}"#,
+        ] {
+            assert_eq!(check_command_json(ok), Ok(()), "{ok}");
+        }
+    }
+
+    #[test]
+    fn a_repeated_key_is_not_mistaken_for_bad_json() {
+        assert_eq!(
+            check_command_json(r#"{"a":1,"a":"#),
+            Err(TreeFieldError::CommandNotJson)
+        );
     }
 
     #[test]

@@ -3,6 +3,7 @@
 //! the REST server, remote workers and the MCP server all go through it.
 mod claim_view;
 pub mod claims;
+mod command_keys;
 mod completion;
 mod confirm;
 mod confirm_claims;

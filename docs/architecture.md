@@ -235,9 +235,12 @@ Nothing writes to them yet except through the store interface; the server routes
 SHA-256 digest), and a `command_json` that is empty, over 64 KiB, holds a NUL, nests more than 32 levels deep or is not
 well-formed JSON. The service layer (`hairspring_service::check_new_node`, `check_new_branch`, `check_command_json`)
 makes the same checks first and names the field in a `TreeFieldError`; it also requires the command to be a JSON object,
-so a bare number, string or array is refused. Nothing calls these yet, because no server route accepts tree input;
-the routes will call them before touching the store. Not checked: that `command_hash` equals the hash of a canonical
-form of `command_json` (it is a cache key the worker supplies), and repeated keys inside a command object.
+so a bare number, string or array is refused, and refuses a command in which any object repeats a key (a parser that
+keeps the last value would let two different texts read as one command). Nothing calls these yet, because no server
+route accepts tree input; the routes will call them before touching the store. Not checked: that `command_hash` equals
+the hash of `command_json`. It is a cache key the worker supplies. The only defined command hash is built from a typed
+command, with integers written as strings, and nothing defines a mapping from arbitrary command JSON to that form or a
+hash of the exact text, so a check would have nothing to be held to.
 
 The node cap counts node numbers handed out, not rows: when a retried attempt deletes a run's nodes, the tree's counter
 does not go back, so a number never names two nodes and gaps in the numbering stand.
