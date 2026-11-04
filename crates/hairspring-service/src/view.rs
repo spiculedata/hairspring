@@ -124,7 +124,9 @@ pub struct PropertyDetail {
 #[derive(Debug, Clone, Serialize)]
 pub struct GuestReason {
     pub reason: String,
-    /// Ids of the properties that failed in this trial, at most [`MAX_FAILING_SHOWN`] of the `failing_count`.
+    /// Ids of the properties that failed in this trial, judged by the kind this trial itself declared, at most
+    /// [`MAX_FAILING_SHOWN`] of the `failing_count`. The run's property table judges each property by the kind the run
+    /// saw first, so the two can differ.
     pub failing_ids: Vec<String>,
 }
 

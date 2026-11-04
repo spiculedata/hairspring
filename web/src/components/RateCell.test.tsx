@@ -8,7 +8,7 @@ const rate: RateCellData = { kind: 'rate', basis: 'trials_false', k: 3, n: 4790,
 describe('RateCell', () => {
   it('shows k/n with its interval and an interval bar with a text alternative', () => {
     const html = renderToString(<RateCell cell={rate} />);
-    expect(html).toContain('3/4,790');
+    expect(html).toContain('3/4790');
     expect(html).toContain('[0.02%–0.18%]');
     expect(html).toContain('role="img"');
     expect(html).toContain('aria-label="interval 0.02% to 0.18%"');
@@ -28,8 +28,8 @@ describe('RateCell', () => {
 
   it('zero failures: 0/n and the 3/n bound, no interval bar', () => {
     const html = renderToString(<RateCell cell={{ kind: 'zero_events', basis: 'trials_false', n: 4790, upper_bound: 1 - 0.05 ** (1 / 4790) }} />);
-    expect(html).toContain('0/4,790');
-    expect(html).toContain('exact one-sided 95% upper bound 0.07% (binomial, 0 of 4,790)');
+    expect(html).toContain('0/4790');
+    expect(html).toContain('exact one-sided 95% upper bound 0.07% (binomial, 0 of 4790)');
     expect(html).not.toContain('at most');
     expect(html).not.toContain('role="img"');
   });

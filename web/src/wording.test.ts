@@ -52,7 +52,7 @@ describe('rateText rounds outward, as the CLI report does', () => {
 
   it('a rate rounds its lower bound down and its upper bound up', () => {
     const cell: RateCellData = { kind: 'rate', basis: 'trials_false', k: 5, n: 1000, point: 0.005, lower: 0.001634, upper: 0.0116701 };
-    expect(rateText(cell)).toBe('5/1,000 · 0.50% · [0.16%–1.17%]');
+    expect(rateText(cell)).toBe('5/1000 · 0.50% · [0.16%–1.17%]');
   });
 });
 
@@ -68,14 +68,14 @@ describe('rateText truth table', () => {
   });
 
   it('k of n: always k/n with its interval', () => {
-    expect(rateText(rate(3, 4790, 0.0002, 0.0018))).toBe('3/4,790 · 0.06% · [0.02%–0.18%]');
+    expect(rateText(rate(3, 4790, 0.0002, 0.0018))).toBe('3/4790 · 0.06% · [0.02%–0.18%]');
   });
   it('k = n: still k/n with an interval', () => {
     expect(rateText(rate(16, 16, 0.806, 1))).toBe('16/16 · 100.00% · [80.60%–100.00%]');
   });
   it('k = 0: the exact bound the server sent, worded as the server words it, with 3/n only as a note', () => {
     const cell: RateCellData = { kind: 'zero_events', basis: 'trials_false', n: 4790, upper_bound: 1 - 0.05 ** (1 / 4790) };
-    expect(rateText(cell)).toBe('0/4,790, exact one-sided 95% upper bound 0.07% (binomial, 0 of 4,790); about 3/4,790');
+    expect(rateText(cell)).toBe('0/4790, exact one-sided 95% upper bound 0.07% (binomial, 0 of 4790); about 3/4790');
   });
   it('k = 0 with few trials: no 3/n note below 30 trials, and never "at most"', () => {
     const cell: RateCellData = { kind: 'zero_events', basis: 'trials_false', n: 10, upper_bound: 1 - 0.05 ** (1 / 10) };
@@ -104,6 +104,11 @@ describe('rateText truth table', () => {
     expect(text('TrialsFalse')).toBe(text('trials_false'));
     expect(text('TrialsFalse')).toContain('1 failure in 16 rated trials');
     expect(rateText({ kind: 'not_a_rate', basis: 'TrialsHit', k: 2, n: 5 })).toContain('2 trials that reached it');
+  });
+  it('prints counts in a rate without thousands separators, as the server does', () => {
+    expect(rateText({ kind: 'not_a_rate', basis: 'trials_false', k: 1200, n: 4790 })).toBe(
+      'not a rate (stopped at first failure) · 1200 failures in 4790 rated trials',
+    );
   });
   it('names the event by its basis and pluralises', () => {
     expect(rateText({ kind: 'not_a_rate', basis: 'trials_true', k: 2, n: 1 })).toBe(
@@ -190,7 +195,7 @@ describe('F16: the empty failures text is generated, never a fixed all-clear', (
 describe('rateParts: the figure is one short line, the qualifier is the rest', () => {
   it('puts k/n (or the counts) in the figure for every kind of cell', () => {
     const rate: RateCellData = { kind: 'rate', basis: 'TrialsFalse', k: 3, n: 4790, point: 0.000626, lower: 0.0002, upper: 0.0018 };
-    expect(rateParts(rate)).toEqual({ figure: '3/4,790 · 0.06%', qualifier: '[0.02%–0.18%]' });
+    expect(rateParts(rate)).toEqual({ figure: '3/4790 · 0.06%', qualifier: '[0.02%–0.18%]' });
     const zero: RateCellData = { kind: 'zero_events', basis: 'TrialsFalse', n: 3, upper_bound: 1 - 0.05 ** (1 / 3) };
     expect(rateParts(zero).figure).toBe('0/3');
     expect(rateParts(zero).qualifier).toBe('exact one-sided 95% upper bound 63.16% (binomial, 0 of 3)');
