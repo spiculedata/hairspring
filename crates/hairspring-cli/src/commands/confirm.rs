@@ -4,7 +4,7 @@ use crate::ctx::{CmdResult, Ctx};
 use hairspring_core::bundle::Bundle;
 use hairspring_engine::confirm::{environment_pinned, finding_status, CheckResult, ConfirmRequest};
 use hairspring_hermit::interrupt;
-use hairspring_service::{CheckView, FailureChecks, Service, MAX_BUNDLE_BYTES};
+use hairspring_service::{CheckView, FailureChecks, RunDetail, Service, MAX_BUNDLE_BYTES};
 use std::io::{Read, Write};
 use std::path::Path;
 
@@ -76,7 +76,25 @@ fn confirm_stored(
     })?)
 }
 
-fn write_stored(out: &mut dyn Write, checks: &FailureChecks) -> CmdResult<i32> {
+/// Confirms every stored failure of a run in turn, and returns what each one's checks now say. `None` when Ctrl-C
+/// ended it: the checks that finished are stored and the rest are recorded as skipped.
+pub(super) fn confirm_stored_run(
+    ctx: &Ctx,
+    svc: &Service,
+    detail: &RunDetail,
+    req: &ConfirmRequest,
+) -> CmdResult<Option<Vec<FailureChecks>>> {
+    let mut all = Vec::with_capacity(detail.failures.len());
+    for failure in &detail.failures {
+        all.push(confirm_stored(ctx, svc, &failure.id, req)?);
+        if interrupt::requested() {
+            return Ok(None);
+        }
+    }
+    Ok(Some(all))
+}
+
+pub(super) fn write_stored(out: &mut dyn Write, checks: &FailureChecks) -> CmdResult<i32> {
     writeln!(out, "failure {}", checks.failure_id)?;
     if newest_is_set_aside(checks) {
         writeln!(
@@ -151,7 +169,7 @@ fn confirm_bundle(
 }
 
 /// What Ctrl-C leaves behind, said on stdout where the rest of the confirmation is.
-fn write_interrupted(err: &mut dyn Write, stored: bool) -> CmdResult<i32> {
+pub(super) fn write_interrupted(err: &mut dyn Write, stored: bool) -> CmdResult<i32> {
     let kept = if stored {
         "the checks that finished are stored and the rest are recorded as skipped"
     } else {
@@ -197,13 +215,9 @@ pub fn run(
         if detail.failures.is_empty() {
             return Err(format!("run `{input}` has no failure to confirm").into());
         }
-        let mut all = Vec::new();
-        for failure in &detail.failures {
-            all.push(confirm_stored(ctx, &svc, &failure.id, &req)?);
-            if interrupt::requested() {
-                return write_interrupted(err, true);
-            }
-        }
+        let Some(all) = confirm_stored_run(ctx, &svc, &detail, &req)? else {
+            return write_interrupted(err, true);
+        };
         if args.json {
             // One document however many failures the run has: an array with an entry per failure.
             writeln!(out, "{}", serde_json::to_string(&all)?)?;

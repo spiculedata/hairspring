@@ -88,6 +88,11 @@ pub struct TestArgs {
     /// The seeds a sweep runs, as FIRST..END with END left out (for example 100..200 is 100 trials).
     #[arg(long, requires = "sweep", conflicts_with_all = ["seed", "trials"])]
     pub seeds: Option<SeedRange>,
+    /// After the sweep, run the confirmation pipeline on every failure row it stored (the defaults of `hairspring
+    /// confirm`) and print the results. Needs --sweep and text output; the exit status stays the sweep's. Command line
+    /// only: servers and workers do not do this.
+    #[arg(long, requires = "sweep")]
+    pub confirm: bool,
     #[arg(long, value_enum, default_value = "text")]
     pub format: Format,
     /// Where to write bundle files for failures.

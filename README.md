@@ -142,6 +142,7 @@ sweep runs the whole trial budget past every failure and stores every trial:
 ```bash
 hairspring test checkout --sweep --trials 1000 --seed 1   # trials at seeds 1 to 1000
 hairspring test checkout --sweep --seeds 5000..5500       # seeds 5000 to 5499 (END is not run)
+hairspring test checkout --sweep --trials 1000 --confirm  # then confirm every failure the sweep stored
 ```
 
 The report gives the violations out of the rated trials with a Wilson 95% interval (with no violation, an exact upper
