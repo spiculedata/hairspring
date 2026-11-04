@@ -33,8 +33,7 @@ type EngineResult =
 enum OnStop<'a> {
     /// Give the job up for another attempt (a server shutting down).
     Requeue,
-    /// Cancel the run named (a foreground command interrupted from the terminal). A job of any other run is never
-    /// cancelled.
+    /// Lease only the job of the run named, and cancel that run (a foreground command interrupted from the terminal).
     Cancel(&'a str),
 }
 
@@ -59,6 +58,16 @@ impl Service {
     /// Leases the next runnable job and marks its run as started. Jobs that ran out of
     /// attempts through lease expiry are finalised here so their runs never hang.
     pub fn lease(&self, worker_id: &str) -> Result<Option<LeasedJob>> {
+        self.lease_matching(worker_id, None)
+    }
+
+    /// Like [`Service::lease`], but only the job of the run `run_id` is taken. A foreground command uses this so it
+    /// never starts, or marks as running, a run that belongs to a worker.
+    fn lease_run(&self, worker_id: &str, run_id: &str) -> Result<Option<LeasedJob>> {
+        self.lease_matching(worker_id, Some(run_id))
+    }
+
+    fn lease_matching(&self, worker_id: &str, only_run: Option<&str>) -> Result<Option<LeasedJob>> {
         for expired in self.store.fail_expired_jobs(now_ms())? {
             self.finalise_run_as_error(
                 &expired.run_id,
@@ -66,10 +75,15 @@ impl Service {
             )?;
         }
         loop {
-            let Some(job) = self
-                .store
-                .lease_job(worker_id, self.cfg.lease_secs, now_ms())?
-            else {
+            let now = now_ms();
+            let leased = match only_run {
+                Some(run_id) => {
+                    self.store
+                        .lease_run_job(run_id, worker_id, self.cfg.lease_secs, now)?
+                }
+                None => self.store.lease_job(worker_id, self.cfg.lease_secs, now)?,
+            };
+            let Some(job) = leased else {
                 return Ok(None);
             };
             let payload: JobPayload = match serde_json::from_str(&job.payload_json) {
@@ -226,15 +240,6 @@ impl Service {
                 Ok(())
             }
         }
-    }
-
-    /// Gives a job back untouched (see [`Store::release_job`](hairspring_store::Store::release_job)). `false` means the
-    /// lease was already gone, which is reported on stderr, the way this crate reports what it cannot act on.
-    fn release(&self, job_id: &str, worker_id: &str) -> Result<()> {
-        if !self.store.release_job(job_id, worker_id)? {
-            eprintln!("hairspring: job {job_id} was not released: its lease was already gone");
-        }
-        Ok(())
     }
 
     /// Cancels the run of `job`, after storing the trials the engine judged before it stopped (a cancelled run accepts
@@ -455,9 +460,9 @@ impl Service {
         self.execute_next_on_stop(engine, worker_id, stop, OnStop::Requeue)
     }
 
-    /// Leases and executes one job, and cancels its run, instead of requeuing the job, when `stop` becomes true and the
-    /// job belongs to `own_run`: a job of another run is requeued untouched, and not started at all once `stop` is set. The
-    /// cancel is made before the engine's result is recorded, so the run ends `cancelled` however the engine ended.
+    /// Leases and executes the job of `own_run` only (jobs of other runs are left to workers), and cancels the run,
+    /// instead of requeuing the job, when `stop` becomes true. The cancel is made before the engine's result is
+    /// recorded, so the run ends `cancelled` however the engine ended.
     fn execute_next_cancelling(
         &self,
         engine: &Engine,
@@ -475,21 +480,13 @@ impl Service {
         stop: &AtomicBool,
         on_stop: OnStop,
     ) -> Result<bool> {
-        let Some(job) = self.lease(worker_id)? else {
-            return Ok(false);
+        // A foreground command leases only the job of its own run; a worker leases the oldest of any run.
+        let leased = match on_stop {
+            OnStop::Cancel(own_run) => self.lease_run(worker_id, own_run)?,
+            OnStop::Requeue => self.lease(worker_id)?,
         };
-        // The oldest queued job is leased, whoever's it is. One that is not the caller's own run is never cancelled
-        // here: it is given back untouched when the caller has been interrupted, and otherwise run as a shutdown would.
-        let foreign = matches!(on_stop, OnStop::Cancel(own) if own != job.run_id);
-        let on_stop = match on_stop {
-            OnStop::Cancel(_) if foreign => {
-                if stop.load(Ordering::SeqCst) {
-                    self.release(&job.job_id, worker_id)?;
-                    return Ok(true);
-                }
-                OnStop::Requeue
-            }
-            other => other,
+        let Some(job) = leased else {
+            return Ok(false);
         };
         let req = RunRequest {
             target: job.target.clone(),
@@ -548,12 +545,6 @@ impl Service {
         // the result could end the run as an error first. A run that finished on its own stands.
         let ended_early = abort.get() == Abort::Cancelled
             || !matches!(&result, Ok(Ok(o)) if o.status != RunStatus::Error);
-        // Another run's job that was cut short is given back and its result is not recorded, whatever the engine made of
-        // being interrupted: it is not this command's run to cancel or to fail.
-        if foreign && stop.load(Ordering::SeqCst) && ended_early {
-            self.release(&job.job_id, worker_id)?;
-            return Ok(true);
-        }
         let result =
             if matches!(on_stop, OnStop::Cancel(_)) && stop.load(Ordering::SeqCst) && ended_early {
                 self.cancel_keeping_trials(&job, worker_id, result)?
@@ -632,14 +623,14 @@ impl Service {
             if detail.run.state.is_terminal() {
                 return Ok(detail);
             }
-            // Interrupted before leasing anything: the job first in line may be another run's. Cancel ours and be done.
+            // Interrupted before leasing anything: cancel our run and be done.
             if stop.load(Ordering::SeqCst) {
                 self.cancel_run(run_id)?;
                 continue;
             }
             let ran = self.execute_next_cancelling(engine, &worker, stop, run_id)?;
-            // Interrupted while a job ran, or with our run still open: it may be held by another process, or another
-            // run's job came first. Cancel it now rather than wait for it.
+            // Interrupted while a job ran, or with our run still open: it may be held by another process. Cancel it now
+            // rather than wait for it.
             if stop.load(Ordering::SeqCst) {
                 self.cancel_run(run_id)?;
                 continue;

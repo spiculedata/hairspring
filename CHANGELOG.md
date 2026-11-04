@@ -23,6 +23,9 @@
   only timed-out trials whose events were read, and leaves out failures the run did not attribute to a stored per-id
   field, including ids dropped by the id cap. In a sweep the "N inconclusive" figure also includes unusable trials.
 
+- A foreground command (`hairspring test`) now leases only the job of the run it started. It no longer runs, or marks
+  as running, an older queued job of another run, such as one left behind by an earlier command that was killed with
+  `kill -9`. Such jobs are left to workers (`hairspring worker`).
 - `hairspring confirm <run-id> --json` now prints a JSON array with one entry per failure of the run. It used to print
   a single object. `hairspring confirm <failure-id> --json` and `hairspring confirm <bundle> --json` still print one
   object. Scripts that read the output for a run id need to read the first entry of the array, or loop over it.

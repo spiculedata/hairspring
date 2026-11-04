@@ -165,6 +165,15 @@ pub trait Store: Send + Sync {
     fn get_job(&self, id: &str) -> Result<Option<Job>>;
     /// Leases the oldest runnable job (queued, or running with an expired lease).
     fn lease_job(&self, worker_id: &str, lease_secs: u64, now: i64) -> Result<Option<Job>>;
+    /// Like [`Store::lease_job`], but only a job of the run `run_id` is considered: a foreground command uses it so it
+    /// never takes the jobs of other runs, which are left to workers.
+    fn lease_run_job(
+        &self,
+        run_id: &str,
+        worker_id: &str,
+        lease_secs: u64,
+        now: i64,
+    ) -> Result<Option<Job>>;
     fn heartbeat_job(&self, id: &str, worker_id: &str, lease_secs: u64, now: i64) -> Result<bool>;
     fn complete_job(&self, id: &str, worker_id: &str) -> Result<bool>;
     /// Fails running jobs whose lease expired after their last permitted attempt, and reports them

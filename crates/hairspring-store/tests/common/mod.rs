@@ -39,6 +39,7 @@ pub fn run_all(make: &dyn Fn() -> Arc<dyn Store>) {
     run_listing_and_missing(&*make());
     failures_and_blobs(&*make());
     jobs_lease_order_and_exclusivity(&*make());
+    jobs_of_one_run_can_be_leased_alone(&*make());
     jobs_expiry_retry_and_permanent_failure(&*make());
     jobs_wrong_worker_cannot_complete(&*make());
     events_are_ordered_and_paged(&*make());
@@ -133,6 +134,47 @@ pub fn failures_and_blobs(s: &dyn Store) {
     assert_eq!(s.list_failures(&r.id).unwrap().len(), 1);
     assert_eq!(s.list_recent_failures(5).unwrap()[0].id, f.id);
     assert!(s.get_failure("nope").unwrap().is_none());
+}
+
+pub fn jobs_of_one_run_can_be_leased_alone(s: &dyn Store) {
+    let older = new_run(s, "t", 1);
+    let newer = new_run(s, "t", 2);
+    let older_job = s.enqueue_job(&older.id, "run", "{}", 100).unwrap();
+    let newer_job = s.enqueue_job(&newer.id, "run", "{}", 200).unwrap();
+    let got = s
+        .lease_run_job(&newer.id, "fg", 30, 1000)
+        .unwrap()
+        .expect("the newer run's own job");
+    assert_eq!((got.id.as_str(), got.attempts), (newer_job.id.as_str(), 1));
+    assert!(
+        s.lease_run_job(&newer.id, "fg", 30, 1001)
+            .unwrap()
+            .is_none(),
+        "no other job of that run, and the older run's job is not offered"
+    );
+    let untouched = s.get_job(&older_job.id).unwrap().unwrap();
+    assert_eq!(
+        (untouched.status, untouched.attempts),
+        (JobStatus::Queued, 0)
+    );
+    let any = s
+        .lease_job("w", 30, 1002)
+        .unwrap()
+        .expect("a worker leases any run's job");
+    assert_eq!(any.id, older_job.id);
+    // A lease that ran out is taken over for its own run only.
+    assert!(s
+        .lease_run_job(&newer.id, "fg2", 30, 500_000)
+        .unwrap()
+        .is_some());
+    assert!(s
+        .lease_run_job(&older.id, "fg2", 30, 500_000)
+        .unwrap()
+        .is_some());
+    assert!(s
+        .lease_run_job("no-such-run", "fg2", 30, 900_000)
+        .unwrap()
+        .is_none());
 }
 
 pub fn jobs_lease_order_and_exclusivity(s: &dyn Store) {

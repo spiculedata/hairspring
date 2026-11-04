@@ -346,7 +346,17 @@ impl Store for SqliteStore {
     }
 
     fn lease_job(&self, worker_id: &str, lease_secs: u64, now: i64) -> Result<Option<Job>> {
-        self.jobs_lease_job(worker_id, lease_secs, now)
+        self.jobs_lease_job(None, worker_id, lease_secs, now)
+    }
+
+    fn lease_run_job(
+        &self,
+        run_id: &str,
+        worker_id: &str,
+        lease_secs: u64,
+        now: i64,
+    ) -> Result<Option<Job>> {
+        self.jobs_lease_job(Some(run_id), worker_id, lease_secs, now)
     }
 
     fn heartbeat_job(&self, id: &str, worker_id: &str, lease_secs: u64, now: i64) -> Result<bool> {
