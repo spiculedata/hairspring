@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { startPolling } from '../pollLoop';
 import { isNotFound, retryDelay, STOP_ON_UNAUTHORIZED } from '../pollPolicy';
 import { useTokenVersion } from '../useTokenVersion';
 import { seedsApi } from './api';
@@ -17,12 +18,19 @@ export interface StripModel {
   reload: () => void;
 }
 
+interface PassResult {
+  /** The pass reached the end of the run as it stood; false when it was paused or superseded. */
+  complete: boolean;
+}
+
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 /**
  * Loads the strip a page at a time until the run's end. While the run is live it then asks again, from the last trial
- * it holds, so new trials are added without reloading what is already there. A failed request keeps what was loaded
- * and retries; a 404 (the run is gone) and a 401 (the token prompt is up) stop it.
+ * it holds, so new trials are added without reloading what is already there. It polls through the shared loop
+ * (pollLoop.ts): no request while the tab is hidden, a refresh when it is shown again, failures reported to the
+ * connection banner. A failed request keeps what was loaded and retries; a 404 (the run is gone) and a 401 (the token
+ * prompt is up) stop it.
  */
 export function useStrip(runId: string, live: boolean): StripModel {
   const [strip, setStrip] = useState<StripState>(EMPTY_STRIP);
@@ -39,40 +47,41 @@ export function useStrip(runId: string, live: boolean): StripModel {
 
   useEffect(() => {
     const ctl = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
     let state = EMPTY_STRIP;
     let cursor: string | undefined;
-    const step = async () => {
-      let delay: number | undefined = live ? STRIP_LIVE_MS : undefined;
-      try {
+    const isHidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden';
+    // One pass: pages until the end of the run as it stands. A tab that is hidden part way leaves the pass unfinished,
+    // and the loop carries on from the same cursor when the tab is shown again.
+    const pass = async (): Promise<PassResult> => {
+      for (;;) {
         const page = await seedsApi.strip(runId, { cursor, limit: STRIP_PAGE }, ctl.signal);
-        if (ctl.signal.aborted) return;
+        if (ctl.signal.aborted) return { complete: false };
         state = appendStripPage(state, page);
         setStrip(state);
         setError(undefined);
-        if (page.next_cursor !== null && !state.truncated) {
-          cursor = page.next_cursor;
-          delay = 0;
-        } else {
+        if (page.next_cursor === null || state.truncated) {
           cursor = state.nextSeq > 0 ? String(state.nextSeq - 1) : undefined;
-          setLoading(false);
+          return { complete: true };
         }
-      } catch (e) {
-        if (ctl.signal.aborted) return;
-        setError(isNotFound(e) ? 'this run does not exist' : messageOf(e));
-        const wait = retryDelay(e, STRIP_LIVE_MS, STOP_ON_UNAUTHORIZED);
-        if (wait === undefined) {
-          setLoading(false);
-          return;
-        }
-        delay = wait;
+        cursor = page.next_cursor;
+        if (isHidden()) return { complete: false };
       }
-      if (delay !== undefined && !ctl.signal.aborted) timer = setTimeout(step, delay);
     };
-    void step();
+    const cancel = startPolling<PassResult>({
+      load: pass,
+      intervalMs: STRIP_LIVE_MS,
+      stop: (result) => result.complete && !live,
+      onData: (result) => {
+        if (result.complete) setLoading(false);
+      },
+      onError: (e) => {
+        setError(isNotFound(e) ? 'this run does not exist' : messageOf(e));
+        if (retryDelay(e, STRIP_LIVE_MS, STOP_ON_UNAUTHORIZED) === undefined) setLoading(false);
+      },
+    });
     return () => {
+      cancel();
       ctl.abort();
-      if (timer) clearTimeout(timer);
     };
   }, [runId, live, tokenVersion, reloads]);
 

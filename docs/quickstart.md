@@ -134,7 +134,10 @@ that starts one, is the Runs page at `/runs`. Overview shows only what the serve
   (`hairspring targets`, `hairspring init`, `hairspring test <target> --seed 1`, `hairspring replay`). A list or a count
   that could not be loaded is reported by name and is never shown as empty.
 
-The page loads again by itself every few seconds.
+The page loads again by itself every few seconds. This holds for every page that follows a live run, including the
+property table, the seed explorer's trial table and its strip: no request is made while the browser tab is hidden, the
+page refreshes as soon as the tab is shown again, and when requests keep failing a banner says the server cannot be
+reached.
 
 A Glossary page at `/glossary` defines the words the pages use (seed, trial, sweep, bundle and so on). On the failure
 page, a word with a dotted underline, such as Confirmation, opens its definition when pressed or activated from the
