@@ -67,7 +67,8 @@ queued --lease--> running --finish_job--> done            (run: passed | failed 
   usual way). The foreground run is cancelled like any other cancel, so it ends `cancelled` and keeps the trials already
   stored, and every Hermit trial in progress is killed through its process group, the kill a trial timeout uses (a child
   that calls `setsid` leaves the group and survives). No further trial starts. A foreground command leases only the
-  job of the run it started. Jobs of other runs (for example one left with an expired lease by a hard kill) are not
+  job of the run it started; so does the MCP `start_run` tool when the server runs runs inline (`hairspring mcp`).
+  Jobs of other runs (for example one left with an expired lease by a hard kill) are not
   leased, run or marked `running` by it; they are left to workers, so run `hairspring worker` if such a job must
   finish. A command that is interrupted leases nothing and cancels its own run. A command that cannot lease its own job
   because another process holds it cancels its run at once instead of waiting. The CLI says so

@@ -371,10 +371,6 @@ impl Store for SqliteStore {
         self.jobs_fail_job(id, worker_id, error, _now)
     }
 
-    fn release_job(&self, id: &str, worker_id: &str) -> Result<bool> {
-        self.jobs_release_job(id, worker_id)
-    }
-
     fn fail_expired_jobs(&self, now: i64) -> Result<Vec<ExpiredJob>> {
         self.jobs_fail_expired_jobs(now)
     }

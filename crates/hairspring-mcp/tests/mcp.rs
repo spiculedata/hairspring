@@ -1,9 +1,10 @@
 use hairspring_engine::config::Config;
 use hairspring_engine::demos::default_registry;
 use hairspring_engine::engine::Engine;
+use hairspring_engine::mode::RunMode;
 use hairspring_mcp::McpServer;
-use hairspring_service::{Role, Service};
-use hairspring_store::{SqliteStore, Store};
+use hairspring_service::{Role, Service, StartRun};
+use hairspring_store::{RunState, SqliteStore, Store};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -188,6 +189,39 @@ fn passing_target_reports_passed() {
         json!({"target": "pubsub-atomic", "seed": 1, "max_steps": 20000, "wait": true}),
     );
     assert_eq!(structured(&r)["run"]["state"], "passed");
+}
+
+#[test]
+fn an_inline_start_run_leaves_another_runs_queued_job_alone() {
+    let registry = Arc::new(default_registry());
+    let engine = Engine::new(registry.clone(), Config::from_registry(&registry));
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let queued = Service::new(store.clone())
+        .start_run_with_mode(
+            &engine,
+            &StartRun {
+                target: "pubsub-atomic".into(),
+                seed: Some(1),
+                budget: None,
+            },
+            RunMode::Sweep,
+        )
+        .unwrap()
+        .id;
+    let s = McpServer::new(Service::new(store.clone()), engine, true);
+    let r = tool(
+        &s,
+        Role::Run,
+        "start_run",
+        json!({"target": "pubsub-atomic", "seed": 1, "max_steps": 20000}),
+    );
+    assert_eq!(structured(&r)["run"]["state"], "passed");
+    let other = Service::new(store.clone())
+        .get_run(&queued)
+        .unwrap()
+        .unwrap();
+    assert_eq!(other.run.state, RunState::Queued, "{:?}", other.run);
+    assert_eq!(other.run.trials, 0);
 }
 
 #[test]

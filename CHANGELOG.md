@@ -26,6 +26,8 @@
 - A foreground command (`hairspring test`) now leases only the job of the run it started. It no longer runs, or marks
   as running, an older queued job of another run, such as one left behind by an earlier command that was killed with
   `kill -9`. Such jobs are left to workers (`hairspring worker`).
+  The same applies to the MCP `start_run` tool when the server runs runs inline (`hairspring mcp`, which runs runs in
+  its own process): it leases only the job of the run it starts, so it no longer runs other runs' queued jobs.
 - `hairspring confirm <run-id> --json` now prints a JSON array with one entry per failure of the run. It used to print
   a single object. `hairspring confirm <failure-id> --json` and `hairspring confirm <bundle> --json` still print one
   object. Scripts that read the output for a run id need to read the first entry of the array, or loop over it.
