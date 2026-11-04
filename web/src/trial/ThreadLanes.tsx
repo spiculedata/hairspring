@@ -26,6 +26,11 @@ function Lane({ marks }: { marks: readonly LaneMark[] }) {
   );
 }
 
+/** What the lane's full width stands for: that one thread's own count, so no two lanes share a scale. */
+export function scaleLabel(evals: number): string {
+  return evals > 0 ? `0 to ${formatCount(evals)} evaluations` : 'no evaluations';
+}
+
 function WitnessCell({ marks }: { marks: readonly LaneMark[] }) {
   if (marks.length === 0) return <>–</>;
   return (
@@ -85,6 +90,7 @@ export function ThreadLanes({ rows }: { rows: readonly LaneRow[] }) {
                 <td className="num">{formatCount(r.tape)} B</td>
                 <td>
                   <Lane marks={r.marks} />
+                  <span className="lane-scale muted">{scaleLabel(r.evals)}</span>
                 </td>
                 <td>
                   <WitnessCell marks={r.marks} />
