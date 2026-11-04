@@ -2,7 +2,7 @@ import { GuestText } from '../components/GuestText';
 import { Link } from '../components/Layout';
 import { TierChips } from '../components/TierChips';
 import { runPath } from '../router';
-import { NOT_A_RATE_TEXT, NOT_REPLAYED_NOTE, PERTURBING_NOTE, STOPPED_TRIAL_NOTE, trialTitle } from '../wording';
+import { trialTitle } from '../wording';
 import type { TrialRow } from './types';
 
 /** What the run this trial belongs to says about how it ended, when the page could load it. */
@@ -19,7 +19,7 @@ function exitText(t: TrialRow): string {
   return t.exit_code === null ? 'no exit status' : `exit ${t.exit_code}`;
 }
 
-/** The title, label chips, how the trial ended and what this page does and does not claim. */
+/** The title, label chips and how the trial ended. The caveats that apply are in the ranked caveat and About sections. */
 export function TrialHeader({ runId, trial, context }: { runId: string; trial: TrialRow; context: RunContext | undefined }) {
   return (
     <header className="trial-header">
@@ -37,13 +37,6 @@ export function TrialHeader({ runId, trial, context }: { runId: string; trial: T
         Trial {trial.seq} · {exitText(trial)} · {trial.rated ? 'rated' : 'not rated'} · {trial.degraded ? 'degraded' : 'not degraded'}
         {context !== undefined && ` · run: ${context.completionLabel}`}
       </p>
-      {trial.perturbing && <p className="note">{PERTURBING_NOTE}.</p>}
-      {context?.stoppedAtFirstFailure === true && (
-        <p className="note">
-          {STOPPED_TRIAL_NOTE} ({NOT_A_RATE_TEXT})
-        </p>
-      )}
-      <p className="muted">{NOT_REPLAYED_NOTE}</p>
     </header>
   );
 }

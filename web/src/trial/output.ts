@@ -22,6 +22,13 @@ export interface PreparedTail {
   readonly linesDropped: number;
 }
 
+/** Indexes of the lines that contain `query`, compared as plain text without regard to case. An empty query matches nothing. */
+export function findLines(lines: readonly string[], query: string): number[] {
+  if (query === '') return [];
+  const needle = query.toLowerCase();
+  return lines.flatMap((line, i) => (line.toLowerCase().includes(needle) ? [i] : []));
+}
+
 export function prepareTail(text: string): PreparedTail {
   const start = Math.max(0, text.length - OUTPUT_MAX_CHARS);
   let kept = text.slice(start);

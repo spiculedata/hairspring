@@ -16,10 +16,32 @@ interface Props {
   state: TailState;
   /** Bytes the capture cut from the middle of the stream (its head and tail halves were kept). */
   omittedBytes: number;
+  /** Indexes (into the lines shown) of the lines the reader's search matched. */
+  hits: ReadonlySet<number>;
+  /** Show only the matched lines, each keeping its own number. */
+  onlyHits: boolean;
   onDownload: (stream: StreamName) => void;
 }
 
-function Body({ stream, state }: { stream: StreamName; state: TailState }) {
+function Lines({ stream, lines, hits, onlyHits }: { stream: StreamName; lines: readonly string[]; hits: ReadonlySet<number>; onlyHits: boolean }) {
+  return (
+    <pre className="output-tail" tabIndex={0} aria-label={`${stream} tail`}>
+      {lines.map((line, i) =>
+        onlyHits && !hits.has(i) ? null : (
+          <span key={i} className={hits.has(i) ? 'out-line out-hit' : 'out-line'}>
+            <span className="ln" aria-hidden="true">
+              {i + 1}
+            </span>
+            <GuestText text={line} max={OUTPUT_LINE_CHARS} expandable={false} />
+            {'\n'}
+          </span>
+        ),
+      )}
+    </pre>
+  );
+}
+
+function Body({ stream, state, hits, onlyHits }: Pick<Props, 'stream' | 'state' | 'hits' | 'onlyHits'>) {
   if (state.status === 'loading') return <p className="muted">Loading output…</p>;
   if (state.status === 'absent') return <p className="muted">Nothing was kept for this stream.</p>;
   if (state.status === 'error') {
@@ -34,27 +56,19 @@ function Body({ stream, state }: { stream: StreamName; state: TailState }) {
   return (
     <>
       {(tail.charsDropped > 0 || tail.linesDropped > 0) && <p className="muted">{outputTrimmed(tail.charsDropped, tail.linesDropped)}</p>}
-      <pre className="output-tail" tabIndex={0} aria-label={`${stream} tail`}>
-        {tail.lines.map((line, i) => (
-          <span key={i}>
-            <GuestText text={line} max={OUTPUT_LINE_CHARS} expandable={false} />
-            {'\n'}
-          </span>
-        ))}
-      </pre>
+      <p className="muted">Line numbers count from the first line shown here.</p>
+      <Lines stream={stream} lines={tail.lines} hits={hits} onlyHits={onlyHits} />
     </>
   );
 }
 
 /** One kept output stream: escaped text only, bounded, with what was cut said aloud and a download for the rest. */
-export function OutputTail({ stream, state, omittedBytes, onDownload }: Props) {
+export function OutputPanel({ stream, state, omittedBytes, hits, onlyHits, onDownload }: Props) {
   return (
     <div className="output-stream">
-      <h3>
-        {stream} <span className="muted">(escaped, last 64 KiB at most)</span>
-      </h3>
+      <p className="muted">{stream} (escaped, last 64 KiB at most)</p>
       {omittedBytes > 0 && <p className="muted">{outputOmitted(omittedBytes)}.</p>}
-      <Body stream={stream} state={state} />
+      <Body stream={stream} state={state} hits={hits} onlyHits={onlyHits} />
       <button type="button" onClick={() => onDownload(stream)}>
         {`Download ${stream}`}
       </button>

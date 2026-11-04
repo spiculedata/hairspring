@@ -1,5 +1,5 @@
 import { GuestText } from '../components/GuestText';
-import { formatCount, NO_FAILING_PROPERTY, PER_THREAD_NOTE, witnessText, WITNESS_VALUES_NOTE } from '../wording';
+import { formatCount, NO_FAILING_PROPERTY, witnessText, WITNESS_VALUES_NOTE } from '../wording';
 import { ordinalOf, witnessThread, type FailingProperty } from './model';
 import type { KeptProc, Witness } from './types';
 
@@ -61,9 +61,9 @@ function Failing({ f, procs }: { f: FailingProperty; procs: readonly KeptProc[] 
 export function WitnessSection({ failing, procs }: { failing: readonly FailingProperty[]; procs: readonly KeptProc[] }) {
   return (
     <section aria-labelledby="witness-title">
-      <h2 id="witness-title">Witness</h2>
+      <h2 id="witness-title" tabIndex={-1}>Witness</h2>
       <p className="muted">
-        {PER_THREAD_NOTE} The four values are {WITNESS_VALUES_NOTE}.
+        The four values are {WITNESS_VALUES_NOTE}.
       </p>
       {failing.length === 0 ? (
         <p>{NO_FAILING_PROPERTY}</p>

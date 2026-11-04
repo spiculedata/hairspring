@@ -1,5 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { OUTPUT_MAX_CHARS, OUTPUT_MAX_LINES, prepareTail } from './output';
+import { findLines, OUTPUT_MAX_CHARS, OUTPUT_MAX_LINES, prepareTail } from './output';
+
+describe('findLines', () => {
+  it('returns the indexes of lines containing the query, ignoring case', () => {
+    expect(findLines(['Alpha', 'beta', 'ALPHA beta'], 'alpha')).toEqual([0, 2]);
+  });
+
+  it('matches nothing for an empty query', () => {
+    expect(findLines(['a', 'b'], '')).toEqual([]);
+  });
+
+  it('treats the query as plain text, not a pattern', () => {
+    expect(findLines(['a.c', 'abc'], 'a.c')).toEqual([0]);
+  });
+});
 
 describe('prepareTail', () => {
   it('keeps a short output whole, one entry per line, without the empty piece after the last newline', () => {
