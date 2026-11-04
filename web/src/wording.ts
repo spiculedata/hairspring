@@ -211,8 +211,6 @@ export function excludedText(e: { degraded: number; perturbing: number; inconclu
   return parts.length === 0 ? undefined : `Excluded from every rate: ${parts.join(', ')}.`;
 }
 
-/** The failures list is cut at its limit, and says so, so a full page is not read as the whole history. */
-export const failuresListCutOff = (shown: number): string => `Showing the newest ${formatCount(shown)} failures. There may be older ones.`;
 
 // ---- Replay of a bundle ----
 

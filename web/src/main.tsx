@@ -9,6 +9,7 @@ import './shell/shell.css';
 import './explorer/explorer.css';
 import './trial/trial.css';
 import './seeds/seeds.css';
+import './lists/lists.css';
 
 applyTheme(readStoredTheme());
 const root = document.getElementById('root');

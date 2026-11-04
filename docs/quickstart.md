@@ -139,6 +139,29 @@ property table, the seed explorer's trial table and its strip: no request is mad
 page refreshes as soon as the tab is shown again, and when requests keep failing a banner says the server cannot be
 reached.
 
+## Filtering and paging the Runs and Failures pages
+
+The Runs page and the Failures page show the newest 50 rows and load the newest page again every few seconds (two for
+runs, five for failures), so a run's state stays current. When older rows exist, **Load more** adds the next page below;
+it makes one request at a time, and if it fails the rows already shown stay, with the reason, and pressing it again tries
+again. Both pages read `GET /api/runs` and `GET /api/failures`, which page with `cursor` (see "Paging and filters on
+the runs and failures lists" in [architecture.md](architecture.md)).
+
+Each page has a filter bar. The state and run type (Runs) and the state (Failures) apply when you choose them; the
+target, the run id and the property id prefix apply when you press Enter or leave the box, and a value the server would
+refuse is explained next to the box and not sent. **Clear filters** appears while any filter is set. The filters are in
+the address (for example `/runs?state=failed&mode=sweep`), so a filtered list can be bookmarked or shared; anything in
+the address that is not a valid filter is ignored.
+
+- **Runs**: state (a run the server stores as `passed` is listed as Finished, as in the table), run type (search or
+  sweep, as stored) and an exact target name.
+- **Failures**: a run id, a property id prefix (failures of runs in which a property whose id starts with it is stored as
+  failed) and a state (Candidate, Rerun repeated, Confirmed, Verified, Not reproducible or Control failed). The state
+  is worked out from each failure's stored checks, so the server reads a bounded number of failures per request: a
+  page can hold fewer failures than usual, or none, with **Load more** still offered to read further back. When a state
+  is chosen the table has a State column.
+- There is no "mine" filter: a run does not record who started it.
+
 A Glossary page at `/glossary` defines the words the pages use (seed, trial, sweep, bundle and so on). On the failure
 page, a word with a dotted underline, such as Confirmation, opens its definition when pressed or activated from the
 keyboard, with a link to the glossary entry. The definitions are shortened from the wiki Glossary.

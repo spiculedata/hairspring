@@ -21,6 +21,11 @@
   failure row the sweep stored, once the sweep ends, and prints each result. It works on the command line only: the
   server does not confirm sweeps by itself and workers do not run confirmations. A `sim` target is skipped with a
   note, since it cannot be confirmed, and the sweep carries on to the later targets with its own exit status.
+- The Runs and Failures pages of the web UI have filter bars (runs by state, run type and target; failures by run id,
+  property id prefix and state) kept in the address, and a **Load more** button that adds older pages. The newest page
+  still refreshes by itself, a failed load keeps the rows already shown, and a list filtered by state shows a State
+  column. The "Showing the newest 50 failures" note is gone: the server now says whether older failures exist. This
+  needs the paging parameters of `GET /api/runs` and `GET /api/failures`.
 - The run page's activity panel shows each event as a titled line with labelled facts instead of raw JSON, with the raw
   event behind a "Raw event" disclosure.
 - The run page has four tabs under the run's facts: Properties, Seeds and trials, Failures (with a count) and Activity.

@@ -3,6 +3,7 @@ import type { FailureSummary } from '../types';
 import { formatCount } from '../wording';
 import { GuestText } from './GuestText';
 import { Link } from './Layout';
+import { StatusBadge } from './StatusBadge';
 import { TimeStamp } from './TimeStamp';
 
 const MESSAGE_CHARS = 140;
@@ -17,17 +18,21 @@ export function newestFirst(failures: readonly FailureSummary[]): FailureSummary
 }
 
 /**
- * Failures across runs, from `GET /api/failures`. That list carries no confirmation status and no occurrence count, so
- * none is shown: each row says what the server says (which run, which target, the message, the step counts and when it
- * was stored) and links to the run and to the failure's own page. The message is from the program under test.
+ * Failures across runs, from `GET /api/failures`. That list carries no confirmation status and no occurrence count,
+ * except that a list filtered by state carries each failure's finding, and then a State column shows it in the
+ * confirmation words. Otherwise each row says what the server says (which run, which target, the message, the step
+ * counts and when it was stored) and links to the run and to the failure's own page. The message is from the program
+ * under test.
  */
 export function FailuresTable({ failures }: { failures: readonly FailureSummary[] }) {
+  const showState = failures.some((f) => f.finding !== undefined);
   return (
     <table className="runs failures">
       <thead>
         <tr>
           <th>Failure</th>
           <th>Target</th>
+          {showState && <th>State</th>}
           <th>Message</th>
           <th>Run</th>
           <th className="num opt">Original steps</th>
@@ -42,6 +47,7 @@ export function FailuresTable({ failures }: { failures: readonly FailureSummary[
             <tr key={f.id}>
               <td>{to === undefined ? f.id : <Link to={to}>{f.id}</Link>}</td>
               <td>{f.target}</td>
+              {showState && <td>{f.finding === undefined ? null : <StatusBadge kind="finding" status={f.finding.status} />}</td>}
               <td>
                 <GuestText text={f.message} max={MESSAGE_CHARS} expandable={false} />
               </td>
