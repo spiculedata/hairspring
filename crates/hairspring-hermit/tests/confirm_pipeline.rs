@@ -279,3 +279,47 @@ fn a_confirmation_that_runs_out_of_time_skips_the_rest() {
     assert_eq!(checks[1].status, CheckStatus::Skipped);
     assert_eq!(detail(&checks[1], "skipped"), "wall budget exhausted");
 }
+
+fn with_args(args: &[&str]) -> RigOptions {
+    RigOptions {
+        hermit_args: args.iter().map(|a| a.to_string()).collect(),
+        ..RigOptions::default()
+    }
+}
+
+#[test]
+fn confirm_refuses_a_bundle_recorded_with_a_different_global_seed() {
+    let recorded = rig("pipe-seed-a", with_args(&["--seed=7"])).bundle();
+    let current = rig("pipe-seed-b", with_args(&["--seed=8"]));
+    let err = current
+        .engine
+        .confirm(&recorded, &ConfirmRequest::default(), &mut |_| true)
+        .unwrap_err();
+    assert!(
+        matches!(&err, EngineError::Backend(m) if m.contains("--seed=7") && m.contains("--seed=8")),
+        "{err}"
+    );
+    assert!(current.calls().is_empty(), "no run before the refusal");
+}
+
+#[test]
+fn confirm_refuses_a_bundle_recorded_under_a_different_scheduler() {
+    let chaos = RigOptions {
+        scheduler: hairspring_engine::scheduler::SchedulerSpec {
+            chaos: true,
+            ..Default::default()
+        },
+        ..RigOptions::default()
+    };
+    let recorded = rig("pipe-sched-a", chaos).bundle();
+    let current = rig("pipe-sched-b", RigOptions::default());
+    let err = current
+        .engine
+        .confirm(&recorded, &ConfirmRequest::default(), &mut |_| true)
+        .unwrap_err();
+    assert!(
+        matches!(&err, EngineError::Backend(m) if m.contains("--chaos") && m.contains("scheduler flags")),
+        "{err}"
+    );
+    assert!(current.calls().is_empty(), "no run before the refusal");
+}
