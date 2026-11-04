@@ -1,6 +1,6 @@
 import { parseSse, type SseEvent } from './sse';
 import type { StartRunBody } from './startRun';
-import type { FailureChecks, FailureDetail, FailureSummary, PropertyPage, PropertyQuery, ReplayResult, Run, RunDetail, Target, Worker } from './types';
+import type { Coverage, FailureChecks, FailureDetail, FailureSummary, PropertyPage, PropertyQuery, ReplayResult, Run, RunDetail, Target, Worker } from './types';
 
 const TOKEN_KEY = 'hairspring.token';
 
@@ -36,6 +36,15 @@ export function isPropertyPage(v: unknown): v is PropertyPage {
   if (typeof v.headline !== 'string' || !isObject(v.header) || !isObject(v.claim) || !isObject(v.counts_by_status)) return false;
   if (!Array.isArray(v.notes) || typeof v.total !== 'number' || !Array.isArray(v.properties)) return false;
   return v.properties.every((p) => isObject(p) && isObject(p.guest) && isObject(p.rate) && typeof p.status === 'string');
+}
+
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+
+/** Checks the parts of a coverage response the chart reads, so a wrong-shaped body is an error and not a crash. */
+export function isCoverage(v: unknown): v is Coverage {
+  if (!isObject(v) || typeof v.run_id !== 'string' || !isCount(v.trials) || typeof v.downsampled !== 'boolean') return false;
+  if (!Array.isArray(v.points)) return false;
+  return v.points.every((p) => isObject(p) && isCount(p.seq) && isCount(p.ids_hit) && isCount(p.ids_true) && isCount(p.schedules));
 }
 
 type Listener = () => void;
@@ -135,6 +144,11 @@ export const api = {
   properties: async (runId: string, query: PropertyQuery = {}, signal?: AbortSignal): Promise<PropertyPage> => {
     const body = await request<unknown>(propertiesUrl(runId, query), { signal });
     if (!isPropertyPage(body)) throw new ApiError(502, 'the server sent a properties response in an unexpected shape');
+    return body;
+  },
+  coverage: async (runId: string, signal?: AbortSignal): Promise<Coverage> => {
+    const body = await request<unknown>(`/api/runs/${encodeURIComponent(runId)}/coverage`, { signal });
+    if (!isCoverage(body)) throw new ApiError(502, 'the server sent a coverage response in an unexpected shape');
     return body;
   },
   health: () => request<{ status: string; version: string }>('/api/health'),

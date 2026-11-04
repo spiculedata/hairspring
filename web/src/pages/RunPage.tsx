@@ -4,6 +4,7 @@ import { ActivityLog } from '../components/ActivityLog';
 import { Link } from '../components/Layout';
 import { StatusBadge } from '../components/StatusBadge';
 import { ErrorBoundary } from '../components/ErrorBoundary';
+import { CoveragePanel } from '../coverage/CoveragePanel';
 import { FirstFailingSeed } from '../explorer/FirstFailingSeed';
 import { PropertyOverviewPanel } from '../explorer/PropertyOverviewPanel';
 import { usePropertyOverview } from '../explorer/usePropertyOverview';
@@ -98,6 +99,9 @@ export function RunPage({ id }: { id: string }) {
       )}
       <ErrorBoundary label="Property table" onRetry={properties.reload}>
         <PropertyOverviewPanel model={properties} />
+      </ErrorBoundary>
+      <ErrorBoundary label="Coverage chart">
+        <CoveragePanel runId={run.id} live={live} />
       </ErrorBoundary>
       <p>
         <Link to={seedsPath(run.id, {}) ?? '/'}>{BROWSE_SEEDS}</Link>
