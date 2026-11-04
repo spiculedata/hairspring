@@ -32,6 +32,30 @@ describe('formatCount / formatPct', () => {
   });
 });
 
+describe('rateText rounds outward, as the CLI report does', () => {
+  const zero = (n: number): RateCellData => ({ kind: 'zero_events', basis: 'trials_false', n, upper_bound: 1 - 0.05 ** (1 / n) });
+
+  it('n=300, k=0: the upper bound 0.9936% is shown as 1.00%, not 0.99%', () => {
+    expect(rateText(zero(300))).toContain('upper bound 1.00% ');
+    expect(rateParts(zero(300)).qualifier).toContain('upper bound 1.00% ');
+  });
+
+  it('n=600000, k=0: a bound below 0.01% is shown as <0.01%', () => {
+    expect(rateText(zero(600000))).toContain('upper bound <0.01% ');
+  });
+
+  it('k=N: the point is 100.00% and the lower bound is rounded down', () => {
+    const cell: RateCellData = { kind: 'rate', basis: 'trials_true', k: 300, n: 300, point: 1, lower: 0.990063918, upper: 1 };
+    expect(rateText(cell)).toBe('300/300 · 100.00% · [99.00%–100.00%]');
+    expect(rateParts(cell).qualifier).toBe('[99.00%–100.00%]');
+  });
+
+  it('a rate rounds its lower bound down and its upper bound up', () => {
+    const cell: RateCellData = { kind: 'rate', basis: 'trials_false', k: 5, n: 1000, point: 0.005, lower: 0.001634, upper: 0.0116701 };
+    expect(rateText(cell)).toBe('5/1,000 · 0.50% · [0.16%–1.17%]');
+  });
+});
+
 describe('rateText truth table', () => {
   const rate = (k: number, n: number, lo: number, hi: number): RateCellData => ({
     kind: 'rate',
@@ -51,7 +75,7 @@ describe('rateText truth table', () => {
   });
   it('k = 0: the exact bound the server sent, worded as the server words it, with 3/n only as a note', () => {
     const cell: RateCellData = { kind: 'zero_events', basis: 'trials_false', n: 4790, upper_bound: 1 - 0.05 ** (1 / 4790) };
-    expect(rateText(cell)).toBe('0/4,790, exact one-sided 95% upper bound 0.06% (binomial, 0 of 4,790); about 3/4,790');
+    expect(rateText(cell)).toBe('0/4,790, exact one-sided 95% upper bound 0.07% (binomial, 0 of 4,790); about 3/4,790');
   });
   it('k = 0 with few trials: no 3/n note below 30 trials, and never "at most"', () => {
     const cell: RateCellData = { kind: 'zero_events', basis: 'trials_false', n: 10, upper_bound: 1 - 0.05 ** (1 / 10) };

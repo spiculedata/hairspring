@@ -6,6 +6,7 @@
  * server's numbers, and the empty states. The words "found", "discovered", "unassisted" and "flaky" are never
  * generated, and a test fails if one is written into this file or a component.
  */
+import { lowerPct, nearestPct, upperPct } from './percent';
 import { STRIP_CODES, type CodeCounts, type StripCode } from './seeds/strip';
 import type { TrialClass, TrialRow } from './trial/types';
 import type { PropertyStatus, RateBasis, RateCellData, RunCompletion } from './types';
@@ -17,11 +18,8 @@ export function formatCount(n: number): string {
   return Math.round(n).toString().replace(THOUSANDS, ',');
 }
 
-/** A fraction in 0..1 as a percentage with two decimals; out-of-range and NaN are clamped. */
-export function formatPct(fraction: number): string {
-  const clamped = Number.isFinite(fraction) ? Math.min(1, Math.max(0, fraction)) : 0;
-  return `${(clamped * 100).toFixed(2)}%`;
-}
+/** A point estimate in 0..1 as a percentage, rounded to nearest. Bounds use `lowerPct` and `upperPct` (percent.ts). */
+export const formatPct = nearestPct;
 
 export function plural(n: number, one: string, many: string): string {
   return `${formatCount(n)} ${n === 1 ? one : many}`;
@@ -60,11 +58,11 @@ export function rateText(cell: RateCellData): string {
       // The server's wording (hairspring-props honesty.rs): the bound is exact, and 3/n is only a note from 30 trials.
       const n = formatCount(cell.n);
       const note = cell.n >= THREE_OVER_N_NOTE_FROM ? `; about 3/${n}` : '';
-      return `0/${n}, exact one-sided 95% upper bound ${formatPct(cell.upper_bound)} (binomial, 0 of ${n})${note}`;
+      return `0/${n}, exact one-sided 95% upper bound ${upperPct(cell.upper_bound)} (binomial, 0 of ${n})${note}`;
     }
     case 'rate':
       if (cell.n === 0) return UNRATED_TEXT;
-      return `${formatCount(cell.k)}/${formatCount(cell.n)}${SEP}${formatPct(cell.point)}${SEP}[${formatPct(cell.lower)}–${formatPct(cell.upper)}]`;
+      return `${formatCount(cell.k)}/${formatCount(cell.n)}${SEP}${nearestPct(cell.point)}${SEP}[${lowerPct(cell.lower)}–${upperPct(cell.upper)}]`;
   }
 }
 
@@ -88,13 +86,13 @@ export function rateParts(cell: RateCellData): RateParts {
     case 'zero_events': {
       const n = formatCount(cell.n);
       const note = cell.n >= THREE_OVER_N_NOTE_FROM ? `; about 3/${n}` : '';
-      return { figure: `0/${n}`, qualifier: `exact one-sided 95% upper bound ${formatPct(cell.upper_bound)} (binomial, 0 of ${n})${note}` };
+      return { figure: `0/${n}`, qualifier: `exact one-sided 95% upper bound ${upperPct(cell.upper_bound)} (binomial, 0 of ${n})${note}` };
     }
     case 'rate':
       if (cell.n === 0) return { figure: UNRATED_TEXT, qualifier: undefined };
       return {
-        figure: `${formatCount(cell.k)}/${formatCount(cell.n)}${SEP}${formatPct(cell.point)}`,
-        qualifier: `[${formatPct(cell.lower)}–${formatPct(cell.upper)}]`,
+        figure: `${formatCount(cell.k)}/${formatCount(cell.n)}${SEP}${nearestPct(cell.point)}`,
+        qualifier: `[${lowerPct(cell.lower)}–${upperPct(cell.upper)}]`,
       };
   }
 }

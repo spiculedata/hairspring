@@ -29,7 +29,7 @@ describe('RateCell', () => {
   it('zero failures: 0/n and the 3/n bound, no interval bar', () => {
     const html = renderToString(<RateCell cell={{ kind: 'zero_events', basis: 'trials_false', n: 4790, upper_bound: 1 - 0.05 ** (1 / 4790) }} />);
     expect(html).toContain('0/4,790');
-    expect(html).toContain('exact one-sided 95% upper bound 0.06% (binomial, 0 of 4,790)');
+    expect(html).toContain('exact one-sided 95% upper bound 0.07% (binomial, 0 of 4,790)');
     expect(html).not.toContain('at most');
     expect(html).not.toContain('role="img"');
   });
@@ -70,5 +70,21 @@ describe('RateCell', () => {
     expect(html).toContain('1 failure in 16 rated trials');
     expect(html).not.toContain('%');
     expect(html).not.toContain('role="img"');
+  });
+});
+
+describe('RateCell interval bar', () => {
+  it('labels the interval with the lower bound rounded down and the upper bound up, as the text does', () => {
+    const cell: RateCellData = { kind: 'rate', basis: 'trials_false', k: 5, n: 1000, point: 0.005, lower: 0.001634, upper: 0.0116701 };
+    expect(renderToString(<RateCell cell={cell} />)).toContain('aria-label="interval 0.16% to 1.17%"');
+  });
+
+  it('is never drawn for a zero-event, not-a-rate or unrated cell, which is all an UNMET row can have, so the bar never adds to the UNMET note height', () => {
+    const cells: RateCellData[] = [
+      { kind: 'zero_events', basis: 'trials_hit', n: 40, upper_bound: 0.07 },
+      { kind: 'not_a_rate', basis: 'trials_hit', k: 0, n: 3 },
+      { kind: 'unrated' },
+    ];
+    for (const cell of cells) expect(renderToString(<RateCell cell={cell} />)).not.toContain('rate-bar');
   });
 });

@@ -199,7 +199,8 @@ front end can print the same lines.
 * Zero hits print one bound: the exact one-sided 95% upper bound, with the rule of three (about 3/N) as a note from 30
   rated trials, where it is close. Below that the exact bound alone is shown, because 3/N overshoots. The two-sided
   Wilson interval is shown only when there is at least one hit.
-* Upper bounds are rounded up and lower bounds down; a figure below 0.01% is written `<0.01%`.
+* Upper bounds are rounded up and lower bounds down; a figure below 0.01% is written `<0.01%`. The web explorer uses the
+  same rule, so the report and the page show the same bounds for the same run.
 * A run that stopped at its first hit prints its counts and "not a rate": the stop decided how many trials it ran.
   A failed run is treated this way even if an older stored record lacks the stopped flag.
 * If a stored inconclusive count is larger than the trial count, it is capped and a `note:` line says so.
