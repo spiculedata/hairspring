@@ -12,6 +12,7 @@ use crate::pg_run_end as run_end;
 use crate::pg_schema;
 use crate::pg_tree_query as query;
 use crate::pg_trials as trials;
+use crate::run_mode::mode_of_config;
 use crate::trials::*;
 use crate::types::*;
 use crate::{new_id, sha256_hex, Store, MAX_JOB_ATTEMPTS};
@@ -220,8 +221,8 @@ impl Store for PgStore {
         let id = new_id("run");
         let mut c = self.client()?;
         let row = c.query_one(
-            "INSERT INTO runs(id,target,backend,state,seed,config_json,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *",
-            &[&id, &new.target, &new.backend, &RunState::Queued.as_str(), &(new.seed as i64), &new.config_json, &now],
+            "INSERT INTO runs(id,target,backend,state,seed,config_json,created_at,mode) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *",
+            &[&id, &new.target, &new.backend, &RunState::Queued.as_str(), &(new.seed as i64), &new.config_json, &now, &mode_of_config(&new.config_json)],
         )?;
         Ok(run_from_row(&row))
     }

@@ -30,6 +30,7 @@ mod pg_tree_query;
 #[cfg(feature = "postgres")]
 mod pg_trials;
 mod reporters;
+mod run_mode;
 mod sqlite;
 mod sqlite_checks;
 mod sqlite_downgrade;

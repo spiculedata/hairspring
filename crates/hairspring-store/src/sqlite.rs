@@ -1,6 +1,7 @@
 use crate::checks::{CheckRecord, ConfirmationOutcome, NewConfirmation};
 use crate::digest_allowance::DigestUse;
 use crate::lineage::*;
+use crate::run_mode::mode_of_config;
 use crate::sqlite_checks as checks;
 use crate::sqlite_explorer as explorer;
 use crate::sqlite_lineage as lineage;
@@ -210,8 +211,8 @@ impl Store for SqliteStore {
         let id = new_id("run");
         let conn = self.conn();
         conn.execute(
-            "INSERT INTO runs(id,target,backend,state,seed,config_json,created_at) VALUES (?,?,?,?,?,?,?)",
-            params![id, new.target, new.backend, RunState::Queued.as_str(), new.seed as i64, new.config_json, now],
+            "INSERT INTO runs(id,target,backend,state,seed,config_json,created_at,mode) VALUES (?,?,?,?,?,?,?,?)",
+            params![id, new.target, new.backend, RunState::Queued.as_str(), new.seed as i64, new.config_json, now, mode_of_config(&new.config_json)],
         )?;
         Ok(conn.query_row("SELECT * FROM runs WHERE id=?", [&id], run_from_row)?)
     }

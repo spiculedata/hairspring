@@ -1,13 +1,13 @@
-//! Types of the offline downgrade from schema version 3, 4 or 5 back to version 2 (a release note tells operators to
+//! Types of the offline downgrade from schema version 3, 4, 5 or 6 back to version 2 (a release note tells operators to
 //! back up first; nothing is downgraded automatically). Branch runs, which only exist because of version 3, are kept
 //! by default as ordinary runs that no tree refers to; `drop_branch_runs` deletes them in the same transaction.
 //! Version 4 only added the digest allowance and coverage tables, and version 5 the stored confirmation checks, which
-//! a downgrade drops with the tree tables.
+//! a downgrade drops with the tree tables. Version 6 only corrects stored data (`runs.mode`), so it has nothing to drop.
 
 /// The version a downgrade leads to.
 pub const DOWNGRADE_TARGET_VERSION: i64 = 2;
 /// The versions a downgrade can start from.
-pub(crate) const DOWNGRADE_SOURCE_VERSIONS: [i64; 3] = [3, 4, 5];
+pub(crate) const DOWNGRADE_SOURCE_VERSIONS: [i64; 4] = [3, 4, 5, 6];
 /// The first version that has the tables of [`V4_TABLES_DROP_ORDER`].
 pub(crate) const FIRST_VERSION_WITH_V4_TABLES: i64 = 4;
 /// The first version that has the tables of [`V5_TABLES_DROP_ORDER`].

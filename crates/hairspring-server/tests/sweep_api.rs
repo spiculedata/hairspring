@@ -138,3 +138,40 @@ fn an_unknown_mode_is_a_bad_request() {
         assert_eq!(status, expected, "{mode}: {reply}");
     }
 }
+
+/// The run's `mode` field, read from the list and from the detail.
+fn listed_and_detailed_mode(c: &Client, id: &str) -> (Value, Value) {
+    let (_, list) = c.get("/api/runs");
+    let listed = list["runs"]
+        .as_array()
+        .or_else(|| list.as_array())
+        .unwrap_or_else(|| panic!("unexpected list shape: {list}"))
+        .iter()
+        .find(|r| r["id"] == id)
+        .unwrap_or_else(|| panic!("run {id} is not listed: {list}"))["mode"]
+        .clone();
+    let (_, detail) = c.get(&format!("/api/runs/{id}"));
+    (listed, detail["run"]["mode"].clone())
+}
+
+#[test]
+fn a_sweep_is_listed_and_shown_as_a_sweep_and_a_search_as_a_search() {
+    let srv = boot();
+    let c = Client::new(&srv);
+    let sweep = start_run(
+        &c,
+        json!({"target": "lock-lease", "seed": 7, "mode": "sweep",
+               "budget": {"max_steps": 10000000, "max_trials": 3, "wall_secs": 60}}),
+    );
+    let search = start_run(&c, json!({"target": "lock-lease", "seed": 7}));
+    c.finished(&sweep);
+    c.finished(&search);
+    assert_eq!(
+        listed_and_detailed_mode(&c, &sweep),
+        (json!("sweep"), json!("sweep"))
+    );
+    assert_eq!(
+        listed_and_detailed_mode(&c, &search),
+        (json!("search"), json!("search"))
+    );
+}

@@ -7,7 +7,7 @@ use common::pg_support::*;
 use hairspring_store::*;
 use postgres::Client;
 
-const CURRENT_VERSION: i32 = 5;
+const CURRENT_VERSION: i32 = 6;
 
 fn recorded_version(c: &mut Client, schema: &str) -> i32 {
     c.query_one(
@@ -257,13 +257,13 @@ fn downgrading_a_version_five_schema_drops_the_checks_and_the_version_four_table
         },
     )
     .unwrap();
-    assert_eq!((dry.from_version, dry.applied), (5, false));
+    assert_eq!((dry.from_version, dry.applied), (6, false));
     let mut c = admin(&url);
     assert_eq!(recorded_version(&mut c, &schema), CURRENT_VERSION);
     assert!(table_exists(&mut c, &schema, "failure_checks"));
 
     let report = downgrade_postgres(&url, &schema, &DowngradeOptions::default()).unwrap();
-    assert_eq!((report.from_version, report.to_version), (5, 2));
+    assert_eq!((report.from_version, report.to_version), (6, 2));
     assert_eq!(recorded_version(&mut c, &schema), 2);
     for t in ["failure_checks", "run_digest_use", "run_coverage"] {
         assert!(!table_exists(&mut c, &schema, t), "{t} is dropped");

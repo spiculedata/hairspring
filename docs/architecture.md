@@ -329,8 +329,19 @@ Opening a version 4 database adds the table and its index in the same transactio
 database that lost one of its own tables or indexes is refused rather than repaired, on both backends, and a current
 database is only looked at (no DDL). An older release refuses a version 5 database. **Back up first; stop every older
 server and worker before upgrading.** The offline downgrade (`hairspring_store::downgrade_sqlite` and
-`downgrade_postgres`, also `cargo run -p hairspring-store --example store_downgrade`) now accepts versions 3, 4 and 5 and
-drops the version 5 table first, so stored checks are lost by a downgrade.
+`downgrade_postgres`, also `cargo run -p hairspring-store --example store_downgrade`) now accepts versions 3, 4, 5 and 6
+and drops the version 5 table first, so stored checks are lost by a downgrade.
+
+## Stored run mode (schema version 6)
+
+Version 6 adds no table or column. `runs.mode` has existed since version 2 but no insert ever set it, so every run read
+back as `search`, sweeps included (`GET /api/runs` and `GET /api/runs/{id}`). A new run now stores its mode: the store
+reads it from the run's `config_json` (the same text that becomes the job payload), `sweep` only when that is a JSON
+object whose `mode` is exactly `sweep`, and `search` for anything else, including text that is not JSON. Opening a
+version 5 database sets `mode` to `sweep` on the runs whose `config_json` says so and which still hold the default
+`search`, in the same transaction as the version bump, on both backends. A run whose `config_json` cannot be read stays
+`search`, and a run holding any other mode is left alone. The migration changes only that column. An older release
+refuses a version 6 database; a downgrade from version 6 to 2 keeps the corrected modes.
 
 ## Bundles
 
