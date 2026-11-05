@@ -128,9 +128,12 @@ toolchain for you if you pass `--install-toolchain`; remove it with `rustup tool
 if you no longer need it (not run here). Delete the checkout you built from if you do not need it. If you added the
 folder holding `hairspring` to your `PATH` or exported `HAIRSPRING_HERMIT` in a shell profile, remove those lines.
 
-A server set up as in [deploy.md](deploy.md): stop and disable the systemd units and remove them
-(`systemctl disable --now hairspring`, `rm /etc/systemd/system/hairspring.service`, `systemctl daemon-reload`; not run
-here), and delete the database, tokens file and configuration you created. For Docker Compose, `docker compose down`
+A server or worker set up as in [deploy.md](deploy.md): stop and disable the systemd units and remove them
+(`systemctl disable --now hairspring`, and `hairspring-worker` on a worker host; `rm /etc/systemd/system/hairspring.service`
+and `hairspring-worker.service`; `systemctl daemon-reload`; not run here). What else you created is yours to keep or
+remove, and nothing here deletes it for you: the `hairspring` system user (`userdel hairspring`), `/etc/hairspring` (tokens
+and configuration), and `/var/lib/hairspring` and `/var/lib/hairspring-worker` (the database, bundles and working
+directories; take a backup first if you may want the results). Not run here. For Docker Compose, `docker compose down`
 stops the stack, and `docker compose down -v` also deletes the PostgreSQL volume with all results (not run here).
 
 ### The SDKs

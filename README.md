@@ -76,7 +76,7 @@ which is ahead of the pre-release: [docs/upgrading.md](docs/upgrading.md) lists 
 tell which build you have. To run a server for a team, see [docs/deploy.md](docs/deploy.md).
 
 Questions and bugs: [open an issue](https://github.com/spiculedata/hairspring/issues/new/choose) and include the output of
-`hairspring --version`, `uname -a` and `hairspring doctor --process-backend`. Security problems: do not open an issue; see
+`hairspring --version`, `uname -a` and, if you use the process backend, `hairspring doctor --process-backend`. Security problems: do not open an issue; see
 [SECURITY.md](SECURITY.md).
 
 ## Quick start

@@ -18,7 +18,11 @@ Hairspring is experimental. Before you expose a server beyond one machine, read 
   Hermit. Not every machine can do this, and only one bare-metal host has been measured: see
   [Is my machine suitable?](guides/is-my-machine-suitable.md) and the [support matrix](support-matrix.md).
 - The server and the machines that run process targets do not have to be the same machine: a server on any host can
-  queue work for remote workers on suitable hosts (see [Remote workers](#5-remote-workers)).
+  queue runs for remote workers on suitable hosts (see [Remote workers](#5-remote-workers)). One exception: a **replay**
+  of a process-target bundle (`POST /api/replay`, the MCP replay tool, the UI's Replay button) runs on the server itself,
+  using the server's `hairspring.toml`. If you want replays of process bundles, the server host must also qualify:
+  Linux x86-64, Hermit installed, `HAIRSPRING_HERMIT` set in the server's environment, and the same loader and kernel as
+  the recording.
 
 ## 2. Install
 
@@ -80,7 +84,7 @@ install -d -m 755 /etc/hairspring
 install -m 600 -o hairspring -g hairspring /dev/null /etc/hairspring/tokens
 printf '%s:admin\n%s:run\n%s:read\n' "$ADMIN" "$RUN" "$READ" > /etc/hairspring/tokens
 
-# The worker's file, on each worker host: only the run token, same way.
+# The worker's file, on each worker host (run the useradd above there first): only the run token, same way.
 install -m 600 -o hairspring -g hairspring /dev/null /etc/hairspring/worker-token
 printf '%s\n' "$RUN" > /etc/hairspring/worker-token
 ```
@@ -219,7 +223,10 @@ warnings; it was not started, so treat the behaviour as not run here. The server
 (`NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, and write access only to the data directory),
 which keep the process from writing anywhere else. It uses `--workers 0`, so the server itself runs no queued jobs and
 workers on other hosts do the work; leave `--workers 0` out to run jobs inside the server (the default is one thread).
-A replay still runs target code on the server in either case, using the server's `hairspring.toml`.
+A replay still runs target code on the server in either case, using the server's `hairspring.toml`. The server unit sets
+no `HAIRSPRING_HERMIT`, and under `ProtectSystem=strict` and `ProtectHome=yes` a replay of a **process** bundle was not tested:
+if you want such replays on the server, add `Environment=HAIRSPRING_HERMIT=...` and expect to loosen the hardening
+(Hermit may need paths the options restrict). Simulation and `wasm` replays do not involve Hermit.
 
 ```ini
 # /etc/systemd/system/hairspring.service
