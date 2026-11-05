@@ -191,7 +191,7 @@ impl HermitBackend {
     /// The target's process settings, after checking that its program can be started (see [`crate::program`]).
     pub(crate) fn process<'a>(&self, spec: &'a TargetSpec) -> Result<ProcessSpec<'a>, EngineError> {
         let p = Self::process_spec(spec)?;
-        crate::program::check(&spec.name, &p)?;
+        crate::program::check(&p)?;
         Ok(p)
     }
 
@@ -207,6 +207,7 @@ impl HermitBackend {
                 hang_is_violation,
                 parallelism,
             } => Ok(ProcessSpec {
+                target: &spec.name,
                 command,
                 env,
                 cwd: cwd.as_deref(),
@@ -227,8 +228,12 @@ impl HermitBackend {
             .unwrap_or(self.settings.trial_timeout)
     }
 
-    /// Classifies a trial. A timeout is only a violation when the target says a hang is the bug.
+    /// Classifies a trial. A timeout is only a violation when the target says a hang is the bug. Hermit's own refusal to
+    /// start the program is a configuration error, whatever else the trial printed.
     pub(crate) fn verdict(&self, p: &ProcessSpec, t: &Trial, timeout: Duration) -> Verdict {
+        if let Some(line) = crate::program::hermit_refused_program(t) {
+            return Verdict::Infra(crate::program::refused_program_message(p, &line));
+        }
         match classify(t, timeout.as_secs()) {
             Verdict::Hang(reason) if p.hang_is_violation => Verdict::Violation(reason),
             other => other,

@@ -82,12 +82,15 @@ pub fn classify_perf_errno(errno: i32) -> PerfFact {
     }
 }
 
-/// Whether a hardware CPU PMU is registered below `sys_root` (normally `/sys`).
-pub fn hardware_pmu_registered(sys_root: &Path) -> bool {
+/// Whether a hardware CPU PMU is registered below `sys_root` (normally `/sys`). `None` when the kernel's list of PMUs
+/// is not there at all (a chroot or sandbox without `/sys`), which says nothing either way.
+pub fn hardware_pmu_registered(sys_root: &Path) -> Option<bool> {
     let devices = sys_root.join(PMU_DEVICES);
-    HARDWARE_PMU_NAMES
-        .iter()
-        .any(|name| devices.join(name).exists())
+    devices.is_dir().then(|| {
+        HARDWARE_PMU_NAMES
+            .iter()
+            .any(|name| devices.join(name).exists())
+    })
 }
 
 /// `docker` or `podman` when the usual marker files exist below `root`.
@@ -229,7 +232,8 @@ pub fn probe() -> ProcessBackendFacts {
         perf_event_paranoid: read_trimmed(Path::new(PERF_EVENT_PARANOID_FILE))
             .and_then(|t| parse_int(&t)),
         pmu_registered: (std::env::consts::OS == "linux")
-            .then(|| hardware_pmu_registered(Path::new(SYS_ROOT))),
+            .then(|| hardware_pmu_registered(Path::new(SYS_ROOT)))
+            .flatten(),
         ptrace_scope: read_trimmed(Path::new(PTRACE_SCOPE_FILE)).and_then(|t| parse_int(&t)),
         is_root: effective_uid_is_root(),
         container: detect_container(Path::new("/")),
@@ -348,14 +352,23 @@ mod tests {
     #[test]
     fn a_hardware_pmu_is_recognised_by_its_sysfs_entry() {
         let root = scratch("pmu-none");
-        assert!(!hardware_pmu_registered(&root));
         std::fs::create_dir_all(root.join("bus/event_source/devices/software")).unwrap();
-        assert!(!hardware_pmu_registered(&root), "a software PMU is not one");
+        assert_eq!(
+            hardware_pmu_registered(&root),
+            Some(false),
+            "a software PMU is not one"
+        );
         for name in ["cpu", "cpu_core"] {
             let with = scratch(&format!("pmu-{name}"));
             std::fs::create_dir_all(with.join("bus/event_source/devices").join(name)).unwrap();
-            assert!(hardware_pmu_registered(&with), "{name}");
+            assert_eq!(hardware_pmu_registered(&with), Some(true), "{name}");
         }
+    }
+
+    #[test]
+    fn a_root_without_the_pmu_list_leaves_the_pmu_unknown() {
+        let root = scratch("pmu-no-sys");
+        assert_eq!(hardware_pmu_registered(&root), None);
     }
 
     #[test]

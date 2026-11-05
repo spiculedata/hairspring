@@ -17,7 +17,7 @@ fast a run is: both depend on your machine and your program. What was measured, 
 | `kernel.yama.ptrace_scope` of 0 or 1 (or run as root; 2 needs root, 3 disables tracing) | Hermit traces the program | same |
 | Linux 6.9 or newer (recommended) | Older kernels take a slower ptrace path. Schedules are not affected, timeouts may be | same (reported as a note) |
 | To build Hermit: `git`, a C compiler, `pkg-config`, `libunwind` and `liblzma` development files, and [rustup](https://rustup.rs) | Hermit is built from source from a pinned fork and commit; there is no binary download | `bash scripts/install-hermit.sh install --dry-run` |
-| To build the `hairspring` CLI from source: a stable Rust toolchain. Or download a release binary | | |
+| To build the `hairspring` CLI from source: a stable Rust toolchain and a C compiler and linker (`build-essential` on Debian/Ubuntu, the Xcode command line tools on macOS). Or download a release binary | | `bash scripts/install.sh --dry-run` |
 
 The scripts never use `sudo`, never change a kernel setting and never install system packages. When a setting is in
 the way they name it and leave the decision to you; lowering a security setting is a trade-off for the owner of the
@@ -43,7 +43,7 @@ bash scripts/install.sh
 
 # Or, instead of 3 and once a release has been published, download its binary. The sha256 is checked against the
 # release's SHA256SUMS before anything is installed.
-bash scripts/install.sh --version v0.1.0
+bash scripts/install.sh --version v0.1-RC1
 
 # 4. Tell Hairspring which Hermit to use, and check the whole picture in one place.
 export HAIRSPRING_HERMIT="$HOME/.local/share/hairspring/hermit/bin/hermit"
@@ -725,6 +725,9 @@ An SDK adds named properties (`always`, `sometimes`, `reachable`) that are track
 | `result: CANNOT RUN ... performance counters (PMU)` | A VM or container that does not expose counters. Use bare metal or a VM that passes the PMU through |
 | `perf_event_paranoid is N` | Your kernel denies counters to unprivileged users. Run as root, or change the setting if your policy allows. The scripts never do |
 | `ptrace_scope is N` | Yama restricts tracing. 2 needs root; 3 disables it until reboot |
+| `no hardware PMU registered: ... lowering perf_event_paranoid will not help` | The kernel lists no hardware performance monitoring unit: a virtual machine or container that does not pass the counters through, or an emulated machine. Changing `perf_event_paranoid` does not add one. Use bare metal or a VM that exposes the PMU |
+| `target NAME: program PATH not found or not executable` | The target's `command[0]` is not an executable file where Hermit looks: relative to the target's `cwd` for a path, on the guest `PATH` (`/usr/local/bin:/usr/bin:/bin` unless the target sets `PATH`) for a bare name. Fix the path or build the program first. Exit 2, nothing was tested |
+| `the worker token file must contain one bare token` | The file given to `hairspring worker --token-file` holds a `token:role` line or several lines, as the server's tokens file does. Put only the token itself in the worker's file |
 | `Hermit was not found` | `HAIRSPRING_HERMIT` is unset and `hermit` is not on `PATH`. Export the path the installer printed |
 | `Inherited descriptor cleanup failed ... close_range` | The environment (an emulated or restricted container) does not implement `close_range`. Run on a native Linux host |
 | `environment mismatch` on replay | The loader changed since the bundle was recorded. See determinism.md |

@@ -699,6 +699,60 @@ fn a_process_target_whose_program_is_missing_is_a_configuration_error_not_a_fail
 }
 
 #[test]
+fn hermits_own_program_not_found_is_a_configuration_error() {
+    let (d, _) = process_project("hermit-127");
+    // Says what the pinned Hermit says when a program is missing inside the guest (for example under a --mount).
+    let fake = d.join("refusing-hermit");
+    write_exe(
+        &fake,
+        "#!/bin/sh\necho 'Error: Program /opt/app/svc does not exist or is not accessible. Check the path and any --mount or --bind target.' >&2\nexit 127\n",
+    );
+    std::fs::write(
+        d.join("hairspring.toml"),
+        "[target.svc]\nkind = \"process\"\ncommand = [\"/opt/app/svc\"]\nhermit_args = [\"--mount=type=bind,source=/srv/app,target=/opt/app\"]\n[target.svc.budget]\nmax_trials = 3\n",
+    )
+    .unwrap();
+    let o = hairspring_env(&d, &["test", "svc"], fake.to_str().unwrap());
+    let both = format!("{}{}", out(&o), err(&o));
+    assert_eq!(o.status.code(), Some(2), "{both}");
+    assert!(
+        both.contains("target svc: program /opt/app/svc not found or not executable"),
+        "{both}"
+    );
+    assert!(!both.contains("FAILED"), "{both}");
+}
+
+#[test]
+fn a_program_that_exits_127_itself_is_still_a_failure() {
+    let (d, hermit) = process_project("guest-127");
+    std::fs::write(
+        d.join("hairspring.toml"),
+        "[target.svc]\nkind = \"process\"\ncommand = [\"/bin/sh\", \"-c\", \"echo 'sh: helper: not found' >&2; exit 127\"]\n[target.svc.budget]\nmax_trials = 2\n",
+    )
+    .unwrap();
+    let o = hairspring_env(&d, &["test", "svc"], &hermit);
+    assert_eq!(o.status.code(), Some(1), "{}{}", out(&o), err(&o));
+    assert!(out(&o).contains("FAILED"), "{}", out(&o));
+}
+
+#[test]
+fn hermit_args_that_change_the_guest_view_only_warn_about_a_program_missing_on_the_host() {
+    let (d, _) = process_project("guest-view");
+    // Hermit would find the program through the PATH it is given; this one just passes.
+    let fake = d.join("passing-hermit");
+    write_exe(&fake, "#!/bin/sh\necho ok\n");
+    std::fs::write(
+        d.join("hairspring.toml"),
+        "[target.svc]\nkind = \"process\"\ncommand = [\"mytool-not-on-this-host\"]\nhermit_args = [\"--env=PATH=/opt/tools\"]\n[target.svc.budget]\nmax_trials = 2\n",
+    )
+    .unwrap();
+    let o = hairspring_env(&d, &["test", "svc"], fake.to_str().unwrap());
+    assert_eq!(o.status.code(), Some(0), "{}{}", out(&o), err(&o));
+    let warning = "could not find mytool-not-on-this-host on the host; Hermit's arguments change what the guest sees, so continuing";
+    assert_eq!(err(&o).matches(warning).count(), 1, "{}", err(&o));
+}
+
+#[test]
 fn a_process_target_with_a_relative_program_in_its_cwd_still_runs() {
     let (d, hermit) = process_project("relprog");
     std::fs::create_dir_all(d.join("app")).unwrap();

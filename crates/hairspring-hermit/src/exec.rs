@@ -26,6 +26,8 @@ const READER_GRACE: Duration = Duration::from_secs(2);
 
 /// What to run, taken from the target definition.
 pub struct ProcessSpec<'a> {
+    /// The target's name, for messages.
+    pub target: &'a str,
     pub command: &'a [String],
     pub env: &'a BTreeMap<String, String>,
     pub cwd: Option<&'a str>,
