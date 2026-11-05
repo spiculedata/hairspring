@@ -12,11 +12,11 @@ fast a run is: both depend on your machine and your program. What was measured, 
 
 | Need | Why | How to check |
 |---|---|---|
-| Linux on x86-64, bare metal or a VM that passes the CPU's performance counters through | Hermit counts hardware events to schedule threads deterministically. Apple silicon and macOS cannot run it. Ordinary cloud VMs and containers were not tested here and often do not expose the counters | `scripts/install-hermit.sh check` |
+| Linux on x86-64, bare metal or a VM that passes the CPU's performance counters through | Hermit counts hardware events to schedule threads deterministically. Apple silicon and macOS cannot run it. Ordinary cloud VMs and containers were not tested here and often do not expose the counters | `bash scripts/install-hermit.sh check` |
 | `kernel.perf_event_paranoid` low enough for your user (or run as root) | Opening a hardware counter | same |
 | `kernel.yama.ptrace_scope` of 0 or 1 (or run as root; 2 needs root, 3 disables tracing) | Hermit traces the program | same |
 | Linux 6.9 or newer (recommended) | Older kernels take a slower ptrace path. Schedules are not affected, timeouts may be | same (reported as a note) |
-| To build Hermit: `git`, a C compiler, `pkg-config`, `libunwind` and `liblzma` development files, and [rustup](https://rustup.rs) | Hermit is built from source from a pinned fork and commit; there is no binary download | `scripts/install-hermit.sh install --dry-run` |
+| To build Hermit: `git`, a C compiler, `pkg-config`, `libunwind` and `liblzma` development files, and [rustup](https://rustup.rs) | Hermit is built from source from a pinned fork and commit; there is no binary download | `bash scripts/install-hermit.sh install --dry-run` |
 | To build the `hairspring` CLI from source: a stable Rust toolchain. Or download a release binary | | |
 
 The scripts never use `sudo`, never change a kernel setting and never install system packages. When a setting is in
@@ -31,19 +31,19 @@ From a checkout of this repository:
 
 ```bash
 # 1. Can this machine run Hermit at all? Read-only; exit 0 = yes, 1 = no, with the reasons listed.
-scripts/install-hermit.sh check
+bash scripts/install-hermit.sh check
 
 # 2. Build the pinned Hermit from source and install it (default prefix ~/.local/share/hairspring/hermit).
 #    --install-toolchain lets the script run 'rustup toolchain install nightly-2026-07-12' for you; without it a missing
 #    toolchain is an error that prints the command.
-scripts/install-hermit.sh install --install-toolchain
+bash scripts/install-hermit.sh install --install-toolchain
 
 # 3. Build the hairspring CLI from this checkout (cargo build --release --locked) and install it to ~/.local/bin.
-scripts/install.sh
+bash scripts/install.sh
 
 # Or, instead of 3 and once a release has been published, download its binary. The sha256 is checked against the
 # release's SHA256SUMS before anything is installed.
-scripts/install.sh --version v0.1.0
+bash scripts/install.sh --version v0.1.0
 
 # 4. Tell Hairspring which Hermit to use, and check the whole picture in one place.
 export HAIRSPRING_HERMIT="$HOME/.local/share/hairspring/hermit/bin/hermit"
@@ -297,7 +297,7 @@ from for 24 hours is removed when the table is full. A trimmed example:
 {
   "workers": [
     {
-      "id": "wrk-…",
+      "id": "wrk_…",
       "name": "remote-1",
       "caps_json": "{\"backends\":[\"sim\"]}",
       "registered_at": 1730000000000,
@@ -306,7 +306,7 @@ from for 24 hours is removed when the table is full. A trimmed example:
       "state": "busy",
       "capabilities": { "backends": ["sim"] },
       "current_jobs": [
-        { "run_id": "run-…", "kind": "run", "lease_until": 1730000180000, "attempts": 1 }
+        { "run_id": "run_…", "kind": "run", "lease_until": 1730000180000, "attempts": 1 }
       ],
       "leased_jobs": 1
     }

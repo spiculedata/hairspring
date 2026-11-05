@@ -174,7 +174,8 @@ to 0, while the CLI refuses such a sweep. Without a mode a run is a search, as b
 
 `hairspring mcp` (stdio) or `POST /mcp` (HTTP) expose the loop an agent needs: `list_targets`, `start_run`,
 `get_failure` (minimal trace plus plain-language explanation), `replay_bundle`, `get_failure_checks` (the stored
-confirmation checks of a failure), `cancel_run`.
+confirmation checks of a failure), `cancel_run`. It also has read tools for looking around: `get_run`, `list_runs`,
+`list_failures`, `get_properties`, `get_property`, `list_trials` and `get_trial` (13 tools in all).
 
 ```bash
 claude mcp add hairspring -- hairspring mcp
