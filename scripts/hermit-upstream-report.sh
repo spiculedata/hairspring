@@ -25,6 +25,8 @@ readonly DEFAULT_ISSUE_KEYWORDS="skid hang timeout tmp kernel aarch64 java dotne
 readonly DEFAULT_WATCH="skid|overshoot|pmu|rcb|preempt|timeslice|chaos|timeout|tmp|temporar|summary|cpuid|rdtsc|vdso|mountinfo|/proc|base-env|epoch|kernel"
 readonly ISSUES_PER_KEYWORD=10
 readonly FORK_REF="refs/hairspring-report/fork"
+# Defence in depth for every git call: only https, plus file:// for the self-test fixtures (a real run uses https).
+export GIT_ALLOW_PROTOCOL="https:file"
 
 # Subject patterns, tried in this order on the lower-cased subject; the first match wins.
 readonly GROUPS_IN_ORDER="deps build perf fix feat"
@@ -99,21 +101,47 @@ PIN_PATCH_SHA256=""
 PIN_PATCH_REL=""
 PIN_TOOLCHAIN=""
 
+# Prints at most 40 characters of $1 with every control character as \xNN, so a hostile pin cannot write to the terminal.
+snippet() {
+  local text="$1" out="" ch i hex
+  local LC_ALL=C
+  for ((i = 0; i < ${#text} && i < 40; i++)); do
+    ch="${text:i:1}"
+    case "$ch" in
+      [[:cntrl:]])
+        printf -v hex '%02x' "'$ch"
+        out="$out\\x$hex"
+        ;;
+      *) out="$out$ch" ;;
+    esac
+  done
+  [ "${#text}" -le 40 ] || out="$out..."
+  printf '%s' "$out"
+}
+
 load_pin() {
   [ -f "$PIN_FILE" ] && [ -r "$PIN_FILE" ] || die "the pin file $PIN_FILE is missing or unreadable"
-  local line key value
+  local line key value number=0 trimmed
+  local cr=$'\r'
   while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in '' | '#'*) continue ;; esac
-    case "$line" in *=*) ;; *) die "pin file $PIN_FILE: '$line' is not a KEY=VALUE line" ;; esac
+    number=$((number + 1))
+    case "$line" in *"$cr"*) die "pin file $PIN_FILE line $number has a carriage return (use LF line endings)" ;; esac
+    trimmed="${line#"${line%%[![:space:]]*}"}"
+    case "$trimmed" in '' | '#'*) continue ;; esac
+    case "$line" in *=*) ;; *) die "pin file $PIN_FILE line $number: '$(snippet "$line")' is not a KEY=VALUE line" ;; esac
     key="${line%%=*}"
     value="${line#*=}"
+    case "$value" in *'#'*) die "pin file $PIN_FILE line $number: trailing comments are not allowed (put the comment on its own line)" ;; esac
+    case "$value" in \"* | \'*) die "pin file $PIN_FILE line $number: values must not be quoted" ;; esac
     case "$key" in
       HERMIT_REPO) PIN_REPO="$value" ;;
       HERMIT_BASE_COMMIT) PIN_COMMIT="$value" ;;
       HERMIT_PATCH_SHA256) PIN_PATCH_SHA256="$value" ;;
       HERMIT_PATCH_REL) PIN_PATCH_REL="$value" ;;
       RUST_TOOLCHAIN) PIN_TOOLCHAIN="$value" ;;
-      *) die "pin file $PIN_FILE: $key is not a known pin" ;;
+      # Strict on purpose: an unknown key is fatal, so a typo cannot pass silently. A new pin key needs a case here
+      # (and a validation line below) before this script will accept it.
+      *) die "pin file $PIN_FILE line $number: '$(snippet "$key")' is not a known pin" ;;
     esac
   done <"$PIN_FILE"
   [[ "$PIN_REPO" =~ ^(https|file)://[A-Za-z0-9._/-]+$ ]] || die "pin file: HERMIT_REPO is missing or malformed"
@@ -128,12 +156,12 @@ load_pin() {
 G() { git -C "$WORK/repo.git" "$@"; }
 
 fetch_sources() {
-  git clone --quiet --bare --filter=blob:none --single-branch --branch "$UPSTREAM_BRANCH" "$UPSTREAM" "$WORK/repo.git" ||
+  git clone --quiet --bare --filter=blob:none --single-branch --branch "$UPSTREAM_BRANCH" -- "$UPSTREAM" "$WORK/repo.git" ||
     die "could not clone $UPSTREAM (branch $UPSTREAM_BRANCH)"
-  G fetch --quiet --no-tags --filter=blob:none "$PIN_REPO" "+refs/heads/$FORK_BRANCH:$FORK_REF" ||
+  G fetch --quiet --no-tags --filter=blob:none -- "$PIN_REPO" "+refs/heads/$FORK_BRANCH:$FORK_REF" ||
     die "could not fetch $PIN_REPO (branch $FORK_BRANCH)"
   if ! G cat-file -e "$PIN_COMMIT^{commit}" 2>/dev/null; then
-    G fetch --quiet --no-tags --filter=blob:none "$PIN_REPO" "$PIN_COMMIT" 2>/dev/null ||
+    G fetch --quiet --no-tags --filter=blob:none -- "$PIN_REPO" "$PIN_COMMIT" 2>/dev/null ||
       die "the pinned commit $PIN_COMMIT is in neither $UPSTREAM ($UPSTREAM_BRANCH) nor $PIN_REPO ($FORK_BRANCH)"
   fi
 }
@@ -158,10 +186,10 @@ latest_version_tag() {
   # The highest v<number> tag anywhere in the upstream (release tags need not be on the compared branch), its date,
   # and whether the compared branch contains it.
   local tag where="not on $UPSTREAM_BRANCH"
-  tag="$(git ls-remote --tags --refs "$UPSTREAM" 'v[0-9]*' 2>/dev/null | sed 's#.*refs/tags/##' | sort -V | tail -n 1)"
+  tag="$(git ls-remote --tags --refs -- "$UPSTREAM" 'v[0-9]*' 2>/dev/null | sed 's#.*refs/tags/##' | sort -V | tail -n 1)"
   [ -n "$tag" ] || return 0
   [[ "$tag" =~ ^v[0-9A-Za-z._-]+$ ]] || return 0
-  G fetch --quiet --no-tags --filter=blob:none "$UPSTREAM" "+refs/tags/$tag:refs/tags/$tag" 2>/dev/null || {
+  G fetch --quiet --no-tags --filter=blob:none -- "$UPSTREAM" "+refs/tags/$tag:refs/tags/$tag" 2>/dev/null || {
     printf '%s (could not fetch it)' "$tag"
     return 0
   }
@@ -293,6 +321,15 @@ github_slug() {
   [[ "$rest" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] && printf '%s' "$rest"
 }
 
+# Splits ISSUE_KEYWORDS on whitespace into KEYWORDS with globbing off, so a keyword such as * stays a literal word.
+KEYWORDS=()
+read_issue_keywords() {
+  set -f
+  # shellcheck disable=SC2206
+  KEYWORDS=($ISSUE_KEYWORDS)
+  set +f
+}
+
 report_issues() {
   local slug keyword pushed
   printf '## Open upstream issues\n\n'
@@ -307,7 +344,8 @@ report_issues() {
   fi
   pushed="$(gh api "repos/$slug" --jq '.pushed_at' 2>/dev/null || true)"
   printf 'Upstream last push (GitHub): %s\n\n' "${pushed:-unknown}"
-  for keyword in $ISSUE_KEYWORDS; do
+  read_issue_keywords
+  for keyword in ${KEYWORDS[@]+"${KEYWORDS[@]}"}; do
     printf '### "%s" in the title\n\n' "$keyword"
     if ! gh issue list -R "$slug" --state open --search "$keyword in:title" --limit "$ISSUES_PER_KEYWORD" \
       --json number,title,updatedAt --jq '.[] | "- #\(.number) (updated \(.updatedAt[0:10])) \(.title)"' >"$WORK/issues.txt" 2>/dev/null; then
@@ -339,18 +377,22 @@ run_report() {
 
 # ---- self-test (offline) ------------------------------------------------------------------------------------------
 ST_FAILS=0
+ST_TOTAL=0
+st_ok() {
+  ST_TOTAL=$((ST_TOTAL + 1))
+  printf 'ok   %s\n' "$1"
+}
+st_fail() {
+  ST_TOTAL=$((ST_TOTAL + 1))
+  ST_FAILS=$((ST_FAILS + 1))
+  printf 'FAIL %s\n' "$1"
+}
 st_expect() {
   # $1 description, $2 fixed string expected in $3 (file)
-  if grep -qF -- "$2" "$3"; then printf 'ok   %s\n' "$1"; else
-    printf 'FAIL %s: missing "%s"\n' "$1" "$2"
-    ST_FAILS=$((ST_FAILS + 1))
-  fi
+  if grep -qF -- "$2" "$3"; then st_ok "$1"; else st_fail "$1: missing \"$2\""; fi
 }
 st_reject() {
-  if grep -qF -- "$2" "$3"; then
-    printf 'FAIL %s: unexpected "%s"\n' "$1" "$2"
-    ST_FAILS=$((ST_FAILS + 1))
-  else printf 'ok   %s\n' "$1"; fi
+  if grep -qF -- "$2" "$3"; then st_fail "$1: unexpected \"$2\""; else st_ok "$1"; fi
 }
 
 st_commit() {
@@ -402,12 +444,79 @@ build_fixture() {
   } >"$f/hermit.pin"
 }
 
+# Runs this script against a pin file ($1); stdout to $ST_DIR/run.out, stderr to $ST_DIR/run.err.
+st_run_pin() {
+  bash "$SELF_PATH" --pin "$1" --repo-root "$ST_DIR/root" --upstream "file://$ST_DIR/upstream" --no-issues \
+    >"$ST_DIR/run.out" 2>"$ST_DIR/run.err"
+}
+
+# $1 description, $2 pin file, $3 fixed string expected on stderr; the run must fail.
+st_pin_refused() {
+  if st_run_pin "$2"; then st_fail "$1: the pin was accepted"; else st_expect "$1" "$3" "$ST_DIR/run.err"; fi
+}
+
+self_test_pin_parsing() {
+  local f="$1" long
+  ST_DIR="$f"
+  awk '{ printf "%s\r\n", $0 }' "$f/hermit.pin" >"$f/crlf.pin"
+  st_pin_refused "a CRLF pin names the carriage return" "$f/crlf.pin" "line 1 has a carriage return"
+  sed 's/^RUST_TOOLCHAIN=.*/RUST_TOOLCHAIN="nightly-2000-01-01"/' "$f/hermit.pin" >"$f/quoted.pin"
+  st_pin_refused "a quoted value is named" "$f/quoted.pin" "line 5: values must not be quoted"
+  sed "s/^RUST_TOOLCHAIN=.*/RUST_TOOLCHAIN='nightly-2000-01-01'/" "$f/hermit.pin" >"$f/squoted.pin"
+  st_pin_refused "a single-quoted value is named" "$f/squoted.pin" "line 5: values must not be quoted"
+  sed 's/^RUST_TOOLCHAIN=.*/& # a note/' "$f/hermit.pin" >"$f/comment.pin"
+  st_pin_refused "a trailing comment is named" "$f/comment.pin" "line 5: trailing comments are not allowed"
+  { printf '  # an indented comment\n\t# and a tabbed one\n   \n'; cat "$f/hermit.pin"; } >"$f/indented.pin"
+  if st_run_pin "$f/indented.pin"; then st_ok "indented comment lines are accepted"; else st_fail "indented comment lines were refused"; fi
+  long="$(printf 'X%.0s' $(seq 1 100))"
+  printf '%s=1\n' "$long" >"$f/long.pin"
+  st_pin_refused "an unknown key is fatal" "$f/long.pin" "is not a known pin"
+  st_reject "an offending line is truncated" "$long" "$f/run.err"
+  st_expect "a truncated line is marked" "..." "$f/run.err"
+  printf 'A\033[31mB=1\n' >"$f/ctl.pin"
+  st_pin_refused "control characters are escaped" "$f/ctl.pin" '\x1b'
+  st_reject "no raw escape reaches the terminal" "$(printf '\033')" "$f/run.err"
+  printf 'no equals sign here\n' >"$f/noeq.pin"
+  st_pin_refused "a line without = is named" "$f/noeq.pin" "line 1: 'no equals sign here' is not a KEY=VALUE line"
+}
+
+# $1 description, $2 fixed string expected on stderr, rest: arguments. The run must exit 2.
+st_arg_refused() {
+  local desc="$1" want="$2" status=0
+  shift 2
+  bash "$SELF_PATH" --no-issues "$@" >/dev/null 2>"$ST_DIR/arg.err" || status=$?
+  if [ "$status" -eq 2 ]; then st_expect "$desc" "$want" "$ST_DIR/arg.err"; else st_fail "$desc: exit status $status, not 2"; fi
+}
+
+self_test_arguments() {
+  ST_DIR="$1"
+  st_arg_refused "a branch with a leading dash is refused" "must not start with '-'" --upstream-branch -x
+  st_arg_refused "an option-shaped branch is refused" "must not start with '-'" --upstream-branch --upload-pack=evil
+  st_arg_refused "a fork branch with a leading dash is refused" "must not start with '-'" --fork-branch -x
+  st_arg_refused "a branch with shell syntax is refused" "is not a branch name" --upstream-branch '$(id)'
+}
+
+self_test_keywords() {
+  local dir="$1/globdir"
+  mkdir -p "$dir"
+  : >"$dir/alpha"
+  : >"$dir/beta"
+  ISSUE_KEYWORDS='* skid'
+  if (cd "$dir" && read_issue_keywords && [ "${#KEYWORDS[@]}" -eq 2 ] && [ "${KEYWORDS[0]}" = "*" ] && [ "${KEYWORDS[1]}" = "skid" ]); then
+    st_ok "a glob keyword stays literal"
+  else
+    st_fail "a glob keyword was expanded"
+  fi
+  ISSUE_KEYWORDS="$DEFAULT_ISSUE_KEYWORDS"
+}
+
 self_test() {
   local f out pin_before pin
   # A fixed, minimal git configuration: the user's own (signing, URL rewrites) must not change the result.
   export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
   export GIT_AUTHOR_NAME=fixture GIT_AUTHOR_EMAIL=fixture@example.invalid
   export GIT_COMMITTER_NAME=fixture GIT_COMMITTER_EMAIL=fixture@example.invalid
+  SELF_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
   f="$(mktemp -d "${TMPDIR:-/tmp}/hermit-upstream-selftest.XXXXXX")"
   WORK="$f"
   trap cleanup EXIT
@@ -442,10 +551,7 @@ self_test() {
   st_expect "watch list catches the chaos flag and the summary field" "### watch list (2)" "$out"
   st_expect "issues skipped offline" "Not checked (--no-issues)." "$out"
   st_reject "pre-pin commits are not listed" "Initial import" "$out"
-  if [ "$(sha256_of "$f/hermit.pin")" = "$pin_before" ]; then printf 'ok   pin file unchanged\n'; else
-    printf 'FAIL pin file changed\n'
-    ST_FAILS=$((ST_FAILS + 1))
-  fi
+  if [ "$(sha256_of "$f/hermit.pin")" = "$pin_before" ]; then st_ok "pin file unchanged"; else st_fail "pin file changed"; fi
 
   # An upstream change to the patched line: the patch must be reported as not applying.
   printf 'line one\nline two, rewritten upstream\nline three\n' >"$f/upstream/detcore/src/lib.rs"
@@ -458,14 +564,17 @@ self_test() {
   sed 's/^HERMIT_BASE_COMMIT=.*/HERMIT_BASE_COMMIT=not-a-sha/' "$f/hermit.pin" >"$f/bad.pin"
   if bash "$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")" --pin "$f/bad.pin" --repo-root "$f/root" \
     --upstream "file://$f/upstream" --no-issues >/dev/null 2>"$f/bad.err"; then
-    printf 'FAIL a malformed pin was accepted\n'
-    ST_FAILS=$((ST_FAILS + 1))
+    st_fail "a malformed pin was accepted"
   else
     st_expect "a malformed pin is refused" "HERMIT_BASE_COMMIT is missing or malformed" "$f/bad.err"
   fi
 
+  self_test_pin_parsing "$f"
+  self_test_arguments "$f"
+  self_test_keywords "$f"
+
   if [ "$ST_FAILS" -ne 0 ]; then die "self-test: $ST_FAILS check(s) failed"; fi
-  printf 'self-test passed\n'
+  printf 'self-test passed: %s assertions\n' "$ST_TOTAL"
 }
 
 # ---- main ---------------------------------------------------------------------------------------------------------
@@ -503,6 +612,8 @@ while [ "$#" -gt 0 ]; do
 done
 case "$LIMIT" in '' | *[!0-9]* | 0) usage_error "--limit needs a positive number" ;; esac
 [[ "$UPSTREAM" =~ ^(https|file)://[A-Za-z0-9._/-]+$ ]] || usage_error "--upstream must be an https:// or file:// URL"
+case "$UPSTREAM_BRANCH" in -*) usage_error "--upstream-branch must not start with '-'" ;; esac
+case "$FORK_BRANCH" in -*) usage_error "--fork-branch must not start with '-'" ;; esac
 [[ "$UPSTREAM_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] || usage_error "--upstream-branch is not a branch name"
 [[ "$FORK_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]] || usage_error "--fork-branch is not a branch name"
 

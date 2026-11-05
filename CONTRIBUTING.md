@@ -75,6 +75,8 @@ bash scripts/hermit-upstream-report.sh --no-issues --limit 50    # skip the issu
 bash scripts/hermit-upstream-report.sh --self-test               # offline check against a local fixture (CI runs it)
 ```
 
+The self-test prints one `ok` line per assertion and ends with `self-test passed: N assertions`; any `FAIL` line fails it.
+
 The report is Markdown. It gives the pinned commit and the upstream commit it is based on, how far the pin and the
 fork are behind (or ahead of) the upstream, whether the replay patch still applies to the upstream head (`git apply
 --check` only: nothing is built or run), the Rust toolchain on each side, the newest version tag, the new upstream
@@ -84,7 +86,8 @@ upstream issues by title keyword (through `gh`, when it is installed and signed 
 groups come from commit subjects alone, so read a commit before relying on its group.
 
 The script is read-only. It works in a temporary directory that it deletes on exit and never changes the repository,
-the pin or the patch. A bump is a separate change, and it needs the Hermit-backed results re-run on the new build.
+the pin or the patch. It parses `scripts/hermit.pin` strictly and never sources it, so a new key in the pin needs the
+script updated too. A bump is a separate change, and it needs the Hermit-backed results re-run on the new build.
 
 ## Licence of contributions and sign-off
 
