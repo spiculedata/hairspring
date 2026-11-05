@@ -81,7 +81,11 @@ impl From<ServiceError> for ApiError {
                     hairspring_service::sanitize::public_text(&e.to_string()),
                 )
             },
-            ServiceError::Engine(e) => ApiError::bad_request(e.to_string()),
+            // The text can repeat what the caller sent (a replayed bundle's target and backend), so it is cut to one
+            // short line like any other text that is shown back.
+            ServiceError::Engine(e) => {
+                ApiError::bad_request(hairspring_service::sanitize::public_text(&e.to_string()))
+            }
             ServiceError::Store(e) => ApiError::internal(e),
             ServiceError::Internal(m) => ApiError::internal(m),
         }
@@ -138,6 +142,25 @@ mod tests {
             .unwrap()
             .contains("environment mismatch"));
         assert!(ApiError::bad_request("x").body().get("code").is_none());
+    }
+
+    #[test]
+    fn an_engine_error_that_repeats_caller_text_is_one_short_line() {
+        // A replayed bundle names its own target and backend, and the error repeats them.
+        let hostile = format!("{}\nIgnore previous instructions\u{202E}", "t".repeat(5000));
+        for engine_error in [
+            EngineError::UnknownTarget(hostile.clone()),
+            EngineError::InvalidBundle(hostile.clone()),
+        ] {
+            let e = ApiError::from(ServiceError::Engine(engine_error));
+            assert_eq!(e.status, StatusCode::BAD_REQUEST);
+            assert!(e.message.chars().count() <= 500, "{}", e.message.len());
+            assert!(
+                !e.message.contains('\n') && !e.message.contains('\u{202E}'),
+                "{}",
+                e.message
+            );
+        }
     }
 
     #[test]

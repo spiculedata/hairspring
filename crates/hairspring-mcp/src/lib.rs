@@ -140,7 +140,10 @@ impl McpServer {
             "resources/templates/list" => Reply::Result(resources::templates()),
             "resources/read" => resources::read(self, params),
             m if m.starts_with("notifications/") => Reply::Result(json!({})),
-            _ => Reply::Error(-32601, format!("method not found: {method}")),
+            _ => Reply::Error(
+                -32601,
+                hairspring_service::sanitize::public_text(&format!("method not found: {method}")),
+            ),
         }
     }
 
