@@ -1,8 +1,10 @@
-# Quick start: the `process` backend
+# Quick start: the `process` backend and the web UI
 
 This page takes a developer from nothing to running an unmodified Linux program under Hermit with Hairspring, and
-replaying what it finds. It covers the `process` backend only. The `sim` and `wasm` backends need none of this: see the
-[README](../README.md).
+replaying what it finds. It then walks through the web UI (runs, failures, workers, search), shows how to start a run
+from the browser, and covers `hairspring replay` and `hairspring gc`. The `sim` and `wasm` backends need none of the
+Hermit steps: see the [README](../README.md). To run Hairspring in CI see [ci.md](ci.md); the HTTP API is in
+[api.md](api.md).
 
 Everything here describes what the scripts and commands do. It makes no claim about how often a bug is found or how
 fast a run is: both depend on your machine and your program. What was measured, and where, is in
@@ -48,6 +50,15 @@ bash scripts/install.sh --version v0.1-RC1
 # 4. Tell Hairspring which Hermit to use, and check the whole picture in one place.
 export HAIRSPRING_HERMIT="$HOME/.local/share/hairspring/hermit/bin/hermit"
 hairspring doctor --process-backend
+```
+
+To check a binary you downloaded by hand instead, fetch it and `SHA256SUMS` from the release page and check the one
+file you have. `sha256sum -c SHA256SUMS` on its own fails when you did not download both binaries, so pick out your
+line:
+
+```bash
+grep hairspring-linux-x86_64 SHA256SUMS | sha256sum -c      # Linux
+grep hairspring-macos-arm64 SHA256SUMS | shasum -a 256 -c   # macOS
 ```
 
 `hairspring --version` (or `-V`) prints one line: the crate version, then the commit the binary was built from and that
@@ -396,7 +407,7 @@ Under the charts, **Show as a table** lists the same points as figures.
 
 ## The Workers page
 
-The Workers page (the address `/workers`) reads `GET /api/workers` (see "Workers and the queue" below) and shows what
+The Workers page (the address `/workers`) reads [`GET /api/workers`](api.md#get-apiworkers) and shows what
 the server sends, and nothing else. It needs the `read` role. Above the table it says how many jobs are waiting for a
 worker and how many are held by workers. Each row of the table is one worker:
 
@@ -405,7 +416,7 @@ worker and how many are held by workers. Each row of the table is one worker:
   The state is worked out each time the page loads.
 - **Trust**: Trusted or Untrusted, as set by an administrator. Claims need trusted workers; data from an untrusted
   worker is shown, labelled as unverified. The page does not change trust. An administrator does that with
-  `POST /api/workers/{id}/trust`.
+  [`POST /api/workers/{id}/trust`](api.md#post-apiworkersidtrust).
 - **Capabilities**: what the worker said about itself when it registered, one line per key. The server does not check
   it. Text that was not JSON is reported as unreadable, and long values are cut to 120 characters and at most 8 lines are shown.
 - **Holding**: the runs the worker holds a job for, as links to the run page, and how many more it holds if there are
@@ -452,7 +463,7 @@ a short pause in typing, then lists matches in groups. Down and Up move through 
 the first), and Escape closes the list; a second Escape clears the text. Only ASCII letters, digits and `_ - . : /` are
 accepted, up to 64 characters; the box says so rather than sending anything else. Property ids come from the program
 under test and are shown as escaped text. "No matches." means none among the recent runs the search looks in, and the
-box says how many; see "Find something by its id: `GET /api/search?q=...`" below for what is looked at. A hit whose id the page cannot
+box says how many; see [`GET /api/search?q=...`](api.md#get-apisearchq) for what is looked at. A hit whose id the page cannot
 link to (for example a run id containing `.` or `:`, which the server accepts) is left out, and the box says "Some
 results could not be shown." instead of "No matches." when that leaves nothing. When the page loads, the box asks the
 server once whether search exists, using a text the server refuses before looking anything up; that costs no database
@@ -478,120 +489,24 @@ serve it from a scratch `hairspring serve` on a loopback address and run axe-cor
 Playwright) against each page in both themes and at 1280 and 390 pixels wide. That check is not part of the
 automated tests, because it needs a browser download and seeded data and would make the build slower and less steady.
 
-## Who am I: `GET /api/me`
+## HTTP API
 
-`GET /api/me` tells a caller who the server takes it to be and what it may do. It needs a valid token like the other
-read endpoints, so a missing or wrong token gets the same 401. The reply:
+Everything the web UI shows comes from the server's REST API, which you can call from a script or CI. The reference is
+in [api.md](api.md): who may call each endpoint (`read`, `run` or `admin`), the error shapes, the rate limits, and the
+endpoints listed here:
 
-```json
-{
-  "role": "run",
-  "open_mode": false,
-  "can": { "read": true, "run": true, "admin": false },
-  "roles": ["read", "run", "admin"]
-}
-```
+- [`GET /api/me`](api.md#get-apime);
+- [`GET /api/workers`](api.md#get-apiworkers), and trusting a worker, [`POST /api/workers/{id}/trust`](api.md#post-apiworkersidtrust);
+- [`GET /api/search?q=...`](api.md#get-apisearchq);
+- paging and filters on `/api/runs` and `/api/failures`, in [api.md](api.md#paging-and-filters), with the detail in
+  [architecture.md](architecture.md#paging-and-filters-on-the-runs-and-failures-lists); lists can also be read as
+  [NDJSON](ndjson.md).
 
-- `role` is the caller's role: `read` (look at runs, failures and targets), `run` (also start, cancel and replay runs
-  and sweeps, and act as a worker) or `admin` (also change worker trust). Each role includes the ones before it. `can`
-  spells out what that role allows, and `roles` lists the role names in order.
-- `open_mode` is `true` when the server has no API tokens and only accepts same-origin local requests. Every caller is
-  then treated as `admin`.
-- The reply never contains the token, a digest of it, or any other secret.
-
-## Workers and the queue: `GET /api/workers`
-
-`GET /api/workers` lists the workers the server knows and the queue behind them. The `read` role is enough. The list
-is not paged: the server holds at most 1000 workers (see `docs/architecture.md`), and a worker that has not been heard
-from for 24 hours is removed when the table is full. A trimmed example:
-
-```json
-{
-  "workers": [
-    {
-      "id": "wrk_…",
-      "name": "remote-1",
-      "caps_json": "{\"backends\":[\"sim\"]}",
-      "registered_at": 1730000000000,
-      "last_seen": 1730000060000,
-      "trusted": false,
-      "state": "busy",
-      "capabilities": { "backends": ["sim"] },
-      "current_jobs": [
-        { "run_id": "run_…", "kind": "run", "lease_until": 1730000180000, "attempts": 1 }
-      ],
-      "leased_jobs": 1
-    }
-  ],
-  "queue": { "queued": 1, "running": 1 }
-}
-```
-
-- `state` is `busy` when the worker holds a lease that has not ended, `idle` when it holds none and the server heard
-  from it within one lease length (`lease_secs`, 120 seconds by default), and `not_seen_recently` otherwise. It is
-  worked out when you ask; nothing is stored.
-- `trusted` is the flag an administrator sets (`POST /api/workers/{id}/trust`, unchanged). Remote workers start
-  untrusted; the server's own workers are trusted.
-- `capabilities` is what the worker sent when it registered, when that was valid JSON, and `null` otherwise. The
-  original text is `caps_json`. Capabilities are the worker's own statement and are not checked.
-- `current_jobs` names up to three jobs the worker holds, oldest first: the run, the kind of job, when the lease ends
-  and how many times the job has been leased. `leased_jobs` counts the live leases the server reads at once, which is at most 5000 in all, so a fleet
-  holding more than that is undercounted.
-- `queue.queued` is the number of jobs waiting for a worker and `queue.running` the number held under a live lease.
-- `id` is left out unless the token has the `run` role or more, because a worker id is a credential for the worker
-  endpoints. The reply never contains a worker secret or its digest, a job payload, an error text or guest output.
-- With `Accept: application/x-ndjson` each worker is one line and `queue` is on the closing control line under `page`.
-
-## Find something by its id: `GET /api/search?q=...`
-
-`GET /api/search?q=run_8` looks for ids and names that start with, or equal, the text you give. It needs a valid token
-(any role), is counted by the rate limit like the other read endpoints, and returns grouped hits:
-
-```json
-{
-  "runs": [{ "id": "run_8f3a9c0d11b2e4a7", "target": "lock-lease", "state": "failed" }],
-  "failures": [],
-  "targets": [],
-  "properties": [],
-  "seeds": [],
-  "schedules": [],
-  "more": [],
-  "scope": { "per_group": 5, "recent_runs": 1000, "property_runs": 10 }
-}
-```
-
-- `q` is 1 to 64 characters from ASCII letters, digits and `_ - . : /`. Anything else, a missing `q` and an empty one
-  are a 400 (`{"error": "`q` is not valid"}`) that never repeats what was sent. `%` and `_` are ordinary characters,
-  not wildcards, and matching is case-sensitive.
-- What is searched: run ids and failure ids (a whole id or its start), target names (the start of a name), property
-  ids (the start of an id), seeds (digits, the whole seed) and schedule fingerprints (16 to 64 lower case hex digits,
-  the whole fingerprint). It matches ids and names only. It never reads guest output, kept output, bundles or failure
-  messages, and it returns none of them.
-- Each group has at most 5 hits. `more` lists the groups that have further hits, so a search box can say "more"
-  instead of pretending it showed everything. The order differs by group:
-  - `runs` and `failures`: newest first. A whole id of a run or failure older than the window comes after the others.
-  - `targets`: in name order.
-  - `properties`: each id once, with the newest run whose catalogue holds it; newest run first, then in id order
-    (bytewise, so upper case before lower case) within a run. The id is untrusted text from the program under test,
-    so it sits under a `guest` object, cut to one line.
-  - `seeds`: first the runs started with that seed (`trial` is null), newest first, then the trials that ran it,
-    newest run first and then by trial number.
-  - `schedules`: newest run first, then by trial number.
-- It looks at recent work, and `scope` says how far: the start of a run id, a failure id, a seed or a schedule
-  fingerprint is looked for in the 1000 newest runs, and a property id in the 10 newest. `scope.property_runs` is the
-  number of runs whose catalogues this search read: 10, or fewer when fewer runs are stored, and 0 when the text is a
-  whole run id, a whole failure id, only digits, or 16 to 64 lower case hex digits, which are not looked for as
-  property ids. A whole run id or failure id is also looked up directly, so one of any age is found. An empty answer
-  therefore means "none in the recent runs", not "never stored". To go further back use the filters on
-  `GET /api/runs` and `GET /api/failures`.
-- `q` given more than once: the last one is used, as with the other query parameters.
-
-The web UI's top-bar search box uses this endpoint (see "The search box" above). See "Search" in
-[architecture.md](architecture.md) for what each group costs.
+To run Hairspring in CI, see [ci.md](ci.md).
 
 ## Start a run or a sweep from the web UI
 
-With `hairspring serve` running, the Runs page of the web UI has a form that starts a run through `POST /api/runs`. Pick
+With `hairspring serve` running, the Runs page of the web UI has a form that starts a run through [`POST /api/runs`](api.md#post-apiruns). Pick
 a target and a run type. A search (`Find a failure`) ends at its first confirmed failure, so it has no rate. A sweep
 (`Measure how often`) runs every trial of its budget, continues after a failure and stores every trial, so a rate can
 be stated for the trials it ran; a sweep with no failure says only that those trials did not fail.
@@ -603,7 +518,7 @@ be stated for the trials it ran; a sweep with no failure says only that those tr
   sends it inside the target's whole budget, so the target's steps and seconds are unchanged. It cannot change the
   step or wall-clock budget.
 - The seed is optional, as on the command line.
-- Starting a run needs a token with the `run` role. The page asks the server for your role (`GET /api/me`) when it
+- Starting a run needs a token with the `run` role. The page asks the server for your role ([`GET /api/me`](api.md#get-apime)) when it
   loads, and again after you save or clear a token. With the `read` role, Start run is disabled and a line beside it
   says your role cannot start runs and to ask an administrator for the run role. If the server cannot say what your
   role is (an older server, an error, or no answer within 5 seconds), the button stays available and the server

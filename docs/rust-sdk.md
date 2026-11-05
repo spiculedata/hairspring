@@ -20,6 +20,22 @@ let _ = thread("writer", 0);      // stable thread key "writer-0"
 Add it to a workspace member or a path dependency: `hairspring-sdk = { path = "sdks/rust" }`. A runnable example is in
 `sdks/rust/examples/quickstart.rs`.
 
+For a project of your own outside this repository, give it a package and point the dependency at your clone:
+
+```toml
+[package]
+name = "demo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hairspring-sdk = { path = "../hairspring/sdks/rust" }
+```
+
+With that `Cargo.toml` and the snippet from the [wiki's SDK page](https://github.com/spiculedata/hairspring/wiki/Guest-SDKs-by-Language#rust)
+in `src/main.rs`, `cargo run` prints the `assert` line for the property. (If the project directory is inside another
+Cargo workspace, add an empty `[workspace]` table to keep it standalone.)
+
 ## API
 
 | Macro | Meaning | Trial-level failure | Run-level UNMET |

@@ -48,8 +48,11 @@ Your repository needs a `hairspring.toml` (or pass `config:`).
 `hairspring test` takes a single `--format`, so the action makes one run and writes one report. Set `format` to
 `sarif` (the default; the only format that is uploaded as code-scanning alerts), `junit` or `text`. The report is
 written to `hairspring.sarif`, `hairspring-junit.xml` or `hairspring.txt` and attached to the `hairspring-results`
-artifact. If you want both SARIF and JUnit, call the action twice with the same `seed`; each call runs the tests
-again.
+artifact. The action cannot give you both from one call, and calling it twice in one job does not work: it always uploads an
+artifact named `hairspring-results`, a second upload under that name is refused by `actions/upload-artifact` v4, and
+the first call already fails the job on a violation so a second step would not run. If you want both SARIF and
+JUnit, use the workflow in [docs/ci.md](../../docs/ci.md#the-same-job-without-the-action), which runs
+`hairspring test` once per format with the same `--seed`. (Not run on GitHub.)
 
 The report goes to a file, so the seed is printed to the job log as `hairspring seed: N`. The default `seed` is the
 workflow run number, so each run explores a different seed and a rerun of the same run repeats it. Set `seed: ""` for a
