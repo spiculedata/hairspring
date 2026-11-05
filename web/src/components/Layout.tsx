@@ -26,12 +26,10 @@ export function Link({ to, children, current }: { to: string; children: ReactNod
   );
 }
 
-/** Whether the navigation link `to` is the section the current path belongs to. Overview is the home address only. Runs covers the list, a run, its seeds, trials and one failure's page; Failures is the list. */
+/** Whether the navigation link `to` is the section the current path belongs to. Overview is the home address only. Runs covers the list, a run, its seeds and its trials; Failures covers the list and one failure's page, which is reached from it. */
 export function isNavActive(to: string, path: string): boolean {
   const within = (base: string): boolean => path === base || path.startsWith(`${base}/`);
   if (to === '/') return path === '/';
-  if (to === '/runs') return within('/runs') || path.startsWith('/failures/');
-  if (to === '/failures') return path === '/failures';
   return within(to);
 }
 

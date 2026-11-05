@@ -43,7 +43,7 @@ function RunsList({ filters }: { filters: RunFilters }) {
   const rows = list.rows;
   return (
     <>
-      {list.error && <LoadFailed what="runs" message={list.error} />}
+      {list.error && <LoadFailed what="runs" message={list.error} network={list.networkError} />}
       <UpdatedAt at={list.updatedAt} />
       {rows === undefined && list.error === undefined && <Loading what="runs" />}
       {rows !== undefined && <RunsTable runs={rows} filtered={hasRunFilters(filters)} />}

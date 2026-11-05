@@ -32,7 +32,7 @@ function FailuresList({ filters }: { filters: FailureFilters }) {
   const filtered = hasFailureFilters(filters);
   return (
     <>
-      {list.error && <LoadFailed what="failures" message={list.error} />}
+      {list.error && <LoadFailed what="failures" message={list.error} network={list.networkError} />}
       <UpdatedAt at={list.updatedAt} />
       {rows === undefined && list.error === undefined && <Loading what="failures" />}
       {rows?.length === 0 && !list.hasMore && <p className="muted">{filtered ? FAILURES_FILTERED_EMPTY : NO_FAILURES_YET}</p>}
