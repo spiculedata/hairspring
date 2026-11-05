@@ -75,6 +75,12 @@ bash scripts/hermit-upstream-report.sh --no-issues --limit 50    # skip the issu
 bash scripts/hermit-upstream-report.sh --self-test               # offline check against a local fixture (CI runs it)
 ```
 
+The report also runs weekly in GitHub Actions (`.github/workflows/hermit-upstream.yml`, Mondays at 06:23 UTC, or on demand
+from the Actions tab with "Run workflow"). Open the run and read the job summary, or download the
+`hermit-upstream-report` artifact (kept for 30 days). The run is read-only: it does not change the repository or open
+issues or pull requests, and it is separate from the CI checks, so it never fails a pull request. It goes red only if the
+script itself fails. Scheduled runs start from the default branch, so a change to the workflow takes effect once merged.
+
 The self-test prints one `ok` line per assertion and ends with `self-test passed: N assertions`; any `FAIL` line fails it.
 
 The report is Markdown. It gives the pinned commit and the upstream commit it is based on, how far the pin and the
