@@ -435,13 +435,13 @@ runs holding 100000 failures.
 The cost is now set by the window and by the violations its runs hold, not by how many failures or runs are stored. The
 worst case is a window whose runs each hold many violations and no match: every violation of every run in the window is
 read once. On the store below, where the newest 100 runs each hold 16384 properties and 169 violations, a prefix that
-matches nothing reads about 17000 violations: 38 to 49 ms on SQLite and 198 to 225 ms on PostgreSQL. The bound is honest but
+matches nothing reads about 17000 violations: 38 to 49 ms on SQLite and 198 to 225 ms on PostgreSQL. The bound is
 large: a run's catalogue holds at most 16384 properties, so a window of 1000 runs can hold up to 16.4 million
 violation rows if a guest reports every property violated in every run. At the rates measured here that would take
 roughly 40 s on SQLite and 3 to 4 minutes on PostgreSQL per request (extrapolated, not measured). No such store has been
 seen; a cap on the violation rows read is possible later, and `cut_short` would then report it.
 
-Measured on the generated store of the survey (100000 runs, 300000 failures, 60000 stored checks, 100 runs with 16384
+Measured on a generated store (100000 runs, 300000 failures, 60000 stored checks, 100 runs with 16384
 properties, one run of 200000 trials and one of 50000), release builds of the previous `main` and of this change, same
 machine and data, server started fresh, median of 15 warm requests (5 for those over 0.5 s), two runs each; your figures will differ:
 
@@ -494,11 +494,11 @@ rebuilt. An older release refuses a version 7 database ("database schema version
   migration then finds them and only sets the version. A `CREATE INDEX CONCURRENTLY` that fails or is cancelled leaves
   an invalid index behind: drop it (`DROP INDEX failures_created`, say) before upgrading.
 - *Checked, not trusted.* `IF NOT EXISTS` goes by name, so after creating them the migration, and every later open,
-  checks that each index is on the right table, not unique, with the same columns and (for the partial index) the same
-  predicate, and on PostgreSQL that it is valid and ready. Otherwise the open is refused with "index NAME exists but is
+  checks that each index is on the right table, not unique, with the same columns (in order, with the default
+  collation and direction) and (for the partial index) the same predicate, and on PostgreSQL that it is valid and ready. Otherwise the open is refused with "index NAME exists but is
   invalid or has a different definition: drop it and open the database again", and a version 6 database stays at 6.
 - *Rights.* Creating an index needs ownership of the table on PostgreSQL. The migration must therefore be run, once,
-  by the role that owns the schema's tables (or by one with rights to create indexes on them). Opening a current
+  by the role that owns the schema's tables (or a member of that role, or a superuser). Opening a current
   (version 7) schema issues no DDL, so a role that may only read and write rows can open it, as before; such a role
   opening a version 6 schema gets the database's refusal ("must be owner of table ...") and the schema stays at
   version 6.
