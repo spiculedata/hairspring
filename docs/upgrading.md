@@ -18,7 +18,7 @@ Since the version-string change, `hairspring --version` (or `-V`) prints the cra
 built from and that commit's date. The v0.1-RC1 pre-release binary was built before that change and prints only
 `hairspring 0.1.0`, so a bare `hairspring 0.1.0` with no commit means the pre-release (or another build older than the
 change); it also means you cannot tell two such builds apart from the version alone. The release notes for v0.1-RC1 name
-its commit: `f819c1a` (25 October 2026). A build from a source archive, or any build that had no git history, prints
+its commit: `f819c1a`, committed on 24 October 2026. A build from a source archive, or any build that had no git history, prints
 `hairspring 0.1.0 (unknown)`. When you report a problem, quote the whole line (see
 [Getting started and getting help](../README.md#getting-started-and-getting-help)).
 
@@ -44,8 +44,8 @@ first, and if it is in the table above, build from source to use it:
 
 ```bash
 git clone https://github.com/spiculedata/hairspring && cd hairspring
-make ui                                # needs Node.js and npm; skip it for a server without the web UI
-bash scripts/install.sh --with-ui      # builds with cargo and installs to ~/.local/bin
+bash scripts/install.sh --with-ui      # builds the web UI (needs Node.js and npm) and the CLI, installs to ~/.local/bin
+# Leave --with-ui out for a build without the web UI: the server then shows a placeholder page.
 ```
 
 You need Rust and a C compiler and linker for that (see [quickstart.md](quickstart.md#what-you-need)). A pre-release
@@ -63,11 +63,17 @@ $ hairspring results
 error: storage error: database schema version 6 is not supported (expected 5)
 ```
 
-(exit status 2). That is what the v0.1-RC1 binary printed when run on a copy of a database that a build of `main` had
-created. The number after "version" is the database's; the number after "expected" is the highest your binary knows. The
-database is not damaged: the binary you are running is older than the one that last opened it. Schema 6 was the current
-schema on `main` when this page was written; a newer schema can be added later, and the table of what each version adds is
-in [architecture.md](architecture.md).
+(exit status 2). That text was printed by the v0.1-RC1 binary for a copy of a database made by a build of `main` when `main`
+was at schema 6. `main` has since moved to schema 7, so the same binary on a database made by a current `main` build gives
+
+```text
+error: storage error: database schema version 7 is not supported (expected 5)
+```
+
+(derived from the code, not run). The numbers change as schemas are added; the meaning does not. The number after
+"version" is the database's; the number after "expected" is the highest your binary knows. The database is not damaged: the
+binary you are running is older than the one that last opened it. The table of what each version adds is in
+[architecture.md](architecture.md).
 
 What to do:
 
@@ -86,11 +92,12 @@ results you want to keep, and restore a backup instead.
 1. **Take a backup first.** For SQLite:
 
    ```bash
-   sqlite3 .hairspring/hairspring.db ".backup 'hairspring-backup.db'"
+   (umask 077; sqlite3 .hairspring/hairspring.db ".backup 'hairspring-backup.db'")
    ```
 
    This was run and the copy read back with `hairspring --db hairspring-backup.db results`. For PostgreSQL use
-   `pg_dump "$HAIRSPRING_DATABASE_URL" > hairspring-backup.sql` (not run here). Copy `.hairspring/bundles` as well if
+   `pg_dump -h db.internal -U hairspring hairspring > hairspring-backup.sql` with the password in `~/.pgpass` (mode 600) or a
+   `PGPASSFILE`, not on the command line (not run here). Copy `.hairspring/bundles` as well if
    you keep bundle files there, and keep your `hairspring.toml` and tokens file.
 2. **Stop every server and worker** that uses the database. A process left running on the old build can keep writing in
    the old way after the database has moved on (architecture.md gives an example for sweeps).
@@ -117,7 +124,7 @@ What Hairspring writes outside a project directory, from `scripts/install.sh` an
 The installers never use `sudo` and, by their own description, write only below their prefix and into a scratch
 directory they remove. Building from source also fills cargo's own caches (`~/.cargo`), which are not specific to
 Hairspring. Hermit's installer can also install a Rust
-toolchain for you if you pass `--install-toolchain`; remove it with `rustup toolchain uninstall nightly-2026-07-12`
+toolchain for you if you pass `--install-toolchain`; remove it with `rustup toolchain uninstall <toolchain>`, using the `RUST_TOOLCHAIN` named in `scripts/hermit.pin`
 if you no longer need it (not run here). Delete the checkout you built from if you do not need it. If you added the
 folder holding `hairspring` to your `PATH` or exported `HAIRSPRING_HERMIT` in a shell profile, remove those lines.
 

@@ -28,8 +28,8 @@ a build of `main`. Several options on this page exist only in builds newer than 
 "newer than v0.1-RC1".
 
 ```bash
-# From a checkout (needs Rust, a C compiler and linker; `make ui` also needs Node.js and npm):
-make ui
+# From a checkout (needs Rust, a C compiler and linker; --with-ui also builds the web UI, which needs Node.js and npm.
+# Leave --with-ui out for a server without the UI):
 bash scripts/install.sh --with-ui      # builds, installs to ~/.local/bin, then runs `hairspring doctor`
 
 # Or a pre-release binary, checked against the release's SHA256SUMS:
@@ -69,20 +69,30 @@ The server and a worker read tokens in different formats. Mixing them up is the 
 | The server | `HAIRSPRING_TOKENS` | The same entries joined by commas: `token1:admin,token2:run,token3:read` |
 | A worker | `HAIRSPRING_TOKEN`, or `--token-file FILE` | One **bare** token, no `:role`, nothing else in the file |
 
-```bash
-# The server's file: one token:role per line.
-printf '%s:admin\n%s:run\n%s:read\n' "$ADMIN" "$RUN" "$READ" > /etc/hairspring/tokens
-chmod 600 /etc/hairspring/tokens
+Create the account the service runs as, and the files, so that the file is never readable by others and is owned by the
+service user (as root; the commands were run in a Ubuntu 24.04 container, see [the systemd section](#7-keep-it-running-a-systemd-unit)):
 
-# The worker's file: only the run token.
+```bash
+useradd --system --home-dir /var/lib/hairspring --shell /usr/sbin/nologin hairspring
+install -d -m 755 /etc/hairspring
+
+# The server's file: one token:role per line. Create it empty with the right owner and mode, then write into it.
+install -m 600 -o hairspring -g hairspring /dev/null /etc/hairspring/tokens
+printf '%s:admin\n%s:run\n%s:read\n' "$ADMIN" "$RUN" "$READ" > /etc/hairspring/tokens
+
+# The worker's file, on each worker host: only the run token, same way.
+install -m 600 -o hairspring -g hairspring /dev/null /etc/hairspring/worker-token
 printf '%s\n' "$RUN" > /etc/hairspring/worker-token
-chmod 600 /etc/hairspring/worker-token
 ```
+
+The service user must own both files, or the service cannot read them. (Under a unit with `StateDirectory=`, systemd
+creates the data directory for that user; the `--home-dir` above is only where the account's home would be.)
 
 A server tokens file with a mode that other users can read starts, with this warning on standard error:
 `hairspring: warning: tokens is readable by other users (mode 644); run `chmod 600` on it`. A worker token file in
 the wrong form is refused before it connects:
-`error: multi: the worker token file must contain one bare token (the server's tokens file has token:role lines)`. A
+`error: /etc/hairspring/tokens: the worker token file must contain one bare token (the server's tokens file has token:role lines)`
+(the path is the one you gave). A
 worker with no token, or with a `read` token, stops with `error: the server rejected this worker's token`. Do not pass
 tokens on a command line, where other users can see them in the process list; use the file or the environment.
 
@@ -99,8 +109,10 @@ hairspring serve --addr 0.0.0.0:7878 --tokens-file /etc/hairspring/tokens --work
   `error: cannot start the server: refusing to listen on a non-loopback address without API tokens; configure at least one token`
   (exit status 2).
 - With no tokens configured the server runs in "open mode": it accepts only loopback connections.
-- `--workers N` is the number of worker threads inside the server process (default 1). `--workers 0` means runs are
-  executed only by remote workers.
+- `--workers N` is the number of worker threads inside the server process (default 1). `--workers 0` means queued runs
+  are executed only by remote workers. It does **not** stop the server running target code: a replay
+  (`POST /api/replay`, or the MCP replay tool; `run` role, at most `--max-replays` at once) runs the target on the server,
+  using the server's `hairspring.toml`, whatever `--workers` says.
 - `--config` names the `hairspring.toml` that defines the targets (default `./hairspring.toml`; without one the
   built-in demo targets are offered). Callers of the API choose a target by name only; the commands behind a name
   come from this file, on whichever machine runs the job.
@@ -119,8 +131,13 @@ A worker pulls jobs from a server over HTTP, runs them with its own copy of the 
 
 ```bash
 export HAIRSPRING_TOKEN=...            # or: --token-file /etc/hairspring/worker-token
-hairspring worker --server http://server.example:7878 --token-file /etc/hairspring/worker-token --name host-a
+hairspring worker --server https://hairspring.example.com --token-file /etc/hairspring/worker-token --name host-a
 ```
+
+Use `https://`, through the TLS-terminating proxy described [below](#9-reverse-proxy-and-tls), so the token is not sent in
+the clear. Given a plain `http://` address that is not loopback, the worker prints
+`hairspring-worker: warning: the API token is sent over plain http to a non-local server; use https or a private network`
+and carries on (this warning is from the code; it was not seen here, because the runs here used `127.0.0.1`).
 
 Run against a local server, a worker with a valid `run` token prints
 `hairspring: worker `host-a` serving http://127.0.0.1:7899` once the server has accepted its registration, and then
@@ -152,7 +169,8 @@ there. So that host needs (Linux x86-64 parts: not run here):
 
 ### Trusting a remote worker
 
-A remote worker starts **untrusted**: its results are shown, labelled as unverified, and cannot back a claim. An `admin`
+A remote worker starts **untrusted**: its results are shown, labelled as unverified, and cannot back a claim. Trusting a
+worker changes only how its results are labelled and whether they can back a claim; it sends the worker no code. An `admin`
 token marks a worker trusted with the API; there is no command-line subcommand for it. Find the worker's id with a `run`
 or `admin` token (a `read` token is not shown ids), then post to `/api/workers/<id>/trust` with the JSON body
 `{"trusted":true}`:
@@ -197,7 +215,11 @@ Workers do not need the database: they talk to the server over HTTP.
 ## 7. Keep it running: a systemd unit
 
 A unit for the server. `systemd-analyze verify` (systemd 255, in a container, with a stub executable) accepted it with no
-warnings; it was not started, so treat the behaviour as not run here.
+warnings; it was not started, so treat the behaviour as not run here. The server unit uses systemd's sandboxing options
+(`NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`, and write access only to the data directory),
+which keep the process from writing anywhere else. It uses `--workers 0`, so the server itself runs no queued jobs and
+workers on other hosts do the work; leave `--workers 0` out to run jobs inside the server (the default is one thread).
+A replay still runs target code on the server in either case, using the server's `hairspring.toml`.
 
 ```ini
 # /etc/systemd/system/hairspring.service
@@ -216,20 +238,35 @@ ExecStart=/usr/local/bin/hairspring serve \
     --addr 127.0.0.1:7878 \
     --tokens-file /etc/hairspring/tokens \
     --config /etc/hairspring/hairspring.toml \
-    --db /var/lib/hairspring/hairspring.db
+    --db /var/lib/hairspring/hairspring.db \
+    --workers 0
 Restart=on-failure
 RestartSec=5
 # Well above --max-connections (512 by default) plus 128.
 LimitNOFILE=4096
+# Sandboxing: the process may write only to its data directory.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/hairspring
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-`/etc/hairspring/tokens` must be readable by the `hairspring` user and by nobody else (mode 600). For PostgreSQL add
+`/etc/hairspring/tokens` must be owned by the `hairspring` user and readable by nobody else (mode 600), as created in
+[the token section](#3-create-tokens). The server listens on loopback; the worker's `--server` address is the proxy's
+public `https://` name, which forwards to that port ([reverse proxy](#9-reverse-proxy-and-tls)). A worker sends its results to the
+server and does not use `--db` (the code does not open the database), so the unit omits it. For PostgreSQL add
 `EnvironmentFile=/etc/hairspring/server.env` with a `HAIRSPRING_DATABASE_URL=...` line in it, mode 600, and drop `--db`.
 
-A unit for a worker (checked the same way):
+A unit for a worker (checked the same way). It has **no** sandboxing options on purpose: for process targets, Hermit
+traces the program under test and may need things those options take away (a writable temporary directory, other
+paths, ptrace itself). Whether a sandboxed worker still runs process targets was not tested, so the worker unit is left
+as the minimum. If you want to limit what a worker can touch, which is what [SECURITY.md](../SECURITY.md#hardening-checklist-for-a-deployment)
+asks for ("give workers only the filesystem access their targets need"), start from this unit, add options one at a
+time, and run `hairspring doctor --process-backend` and a real run after each:
 
 ```ini
 # /etc/systemd/system/hairspring-worker.service
@@ -247,10 +284,9 @@ WorkingDirectory=/var/lib/hairspring-worker
 # Only for workers that run process targets.
 Environment=HAIRSPRING_HERMIT=/opt/hermit/bin/hermit
 ExecStart=/usr/local/bin/hairspring worker \
-    --server http://server.example:7878 \
+    --server https://hairspring.example.com \
     --token-file /etc/hairspring/worker-token \
     --config /etc/hairspring/hairspring.toml \
-    --db /var/lib/hairspring-worker/hairspring.db \
     --name %H
 Restart=on-failure
 RestartSec=5
@@ -273,18 +309,19 @@ here). Internal errors are logged on the server and reported to callers generica
 
 ```bash
 # SQLite: SQLite's online backup (made for a database that is in use; not tried here against a busy server).
-sqlite3 .hairspring/hairspring.db ".backup 'hairspring-backup.db'"
+(umask 077; sqlite3 .hairspring/hairspring.db ".backup 'hairspring-backup.db'")
 
-# PostgreSQL (not run here):
-pg_dump "$HAIRSPRING_DATABASE_URL" > hairspring-backup.sql
+# PostgreSQL (not run here). Keep the password out of the process list: put it in ~/.pgpass (mode 600) or a file named by
+# PGPASSFILE, then pass no password on the command line.
+(umask 077; pg_dump -h db.internal -U hairspring hairspring > hairspring-backup.sql)
 ```
 
-The SQLite command was run: it produced a database that `hairspring --db hairspring-backup.db results` reads back. Copy
-the backup off the machine. Bundle files that `hairspring test` writes to `.hairspring/bundles` are separate files; copy
+The SQLite command was run: it produced a database that `hairspring --db hairspring-backup.db results` reads back. The
+backup holds your results, so it is created readable by its owner only (`umask 077`); copy it off the machine the same way. Bundle files that `hairspring test` writes to `.hairspring/bundles` are separate files; copy
 that directory too if you rely on them. Tokens and `hairspring.toml` are not in the database: back those up separately.
 
 **Upgrades.** Back up first, stop every server and worker, upgrade them all, then start them. A newer build migrates the
-database in place and an older build then refuses it. There is no downgrade: to go back, restore the backup. Details and
+database in place and an older build then refuses it. The CLI has no downgrade command: to go back, restore the backup. Details and
 the exact error are in [upgrading.md](upgrading.md#the-schema-version-error).
 
 **Retention.** Stored runs accumulate. `hairspring gc` (newer than v0.1-RC1) reports what it would remove and removes
@@ -322,17 +359,23 @@ The documentation says two things that do not fit together, and this page does n
   says "Run the server and workers as unprivileged users". The provided Docker image runs as an unprivileged user
   (uid 10001), and it contains no Hermit.
 
-So for the server itself (which runs no process targets when started with `--workers 0`) the advice is to run it
-unprivileged. For a worker that runs `process` targets under Hermit, the unprivileged case has not been tested, and
-whether to run it as root is your decision as the machine's owner. The example worker unit above uses an unprivileged
-user as the checklist says; change `User=` knowing it is untested.
+The server runs target code in two ways: its own worker threads (`--workers`, default 1) and replays (`POST /api/replay`
+and the MCP replay tool, `run` role, at most `--max-replays` at once), which use the server's `hairspring.toml`. So the
+advice to run the server unprivileged applies in every case, including `--workers 0`.
+
+For a worker that runs `process` targets under Hermit, the unprivileged case has not been tested, and whether to run it
+as root is your decision as the machine's owner. Know the consequence: a worker run as root runs every command in its
+`hairspring.toml` as root whenever anyone holding a `run` token queues a run of that target. The example worker unit above
+uses an unprivileged user as the checklist says; change `User=` knowing it is untested.
 
 ## 11. Security checklist
 
 [SECURITY.md](../SECURITY.md#hardening-checklist-for-a-deployment) has the list. In short: generate tokens with
 `hairspring token`, keep them out of command lines, terminate TLS in front of the server, keep PostgreSQL private, give
-`read` tokens to anything that only analyses, keep `hairspring.toml` under review, raise the file-descriptor limit above
-`--max-connections` plus 128, and name your reverse proxy with `--trusted-proxy`.
+`read` tokens to anything that only analyses, keep `hairspring.toml` under review, give workers only the filesystem access
+their targets need (the worker unit above is deliberately not sandboxed, see [section 7](#7-keep-it-running-a-systemd-unit)),
+raise the file-descriptor limit above `--max-connections` plus 128, give the proxy its own per-client connection and rate
+limits, and name your reverse proxy with `--trusted-proxy`.
 
 ## 12. Docker Compose
 
