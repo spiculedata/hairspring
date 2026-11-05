@@ -1,6 +1,7 @@
 //! Filtered, paged lists of runs and failures on PostgreSQL. See [`crate::listing`].
 use crate::listing::{
-    failure_clause, run_clause, window, Clause, FailureDialect, FailureFilter, RunFilter,
+    failure_clause, failure_order, run_clause, window, Clause, FailureDialect, FailureFilter,
+    RunFilter,
 };
 use crate::pg::{failure_from_row, run_from_row};
 use crate::types::{FailureRecord, Result, RunRecord};
@@ -47,8 +48,9 @@ pub(crate) fn list_runs(
 fn failures_statement(filter: &FailureFilter, offset: u64, limit: u32) -> (String, Clause) {
     let clause = failure_clause(filter, &DIALECT);
     let sql = format!(
-        "SELECT * FROM failures{} ORDER BY created_at DESC, {ORDER} DESC{}",
+        "SELECT * FROM failures{}{}{}",
         clause.sql,
+        failure_order(filter, ORDER),
         window(offset, limit)
     );
     (sql, clause)

@@ -408,7 +408,7 @@ Version 7 adds two indexes and nothing else: no table, no column, no row is rewr
 
 **The bounded `property` filter.** A failure holds no property id, so the filter looks for runs that store a matching
 violation. It used to look at every failure ever stored and, for each, at its run's catalogue, so its cost grew with the
-history the database keeps: about 0.8 s on SQLite for any prefix, and 44 ms to 5.4 s on PostgreSQL depending on the
+history the database keeps: 0.8 to 1.9 s on SQLite for any prefix, and 44 ms to 5.4 s on PostgreSQL depending on the
 prefix, on the store measured below. It now looks only at the newest `FAILURE_PROPERTY_RUNS` runs (1000; exported by
 `hairspring_store`), by the order of the runs list (stored time, then the order of storing), whatever their
 state. Each of those runs is one range of `run_properties_violation`, each violation one primary-key read of
@@ -418,36 +418,48 @@ it matches. The answer says so: with a `property` filter it carries
 `"scope": {"recent_runs": 1000, "cut_short": <bool>}`, where `cut_short` is true when older runs are stored than the
 ones the filter looked at (always false with `run`). Without a `property` filter there is no `scope` and the answer is
 unchanged. In NDJSON the `scope` is under `page` on the control line. To find failures of an older run, give its run id.
-On PostgreSQL the plan is pinned: each run of the window is looked at in a `LATERAL` subquery with a `LIMIT`, and the
-matched runs are handed to the failures as an array, so the planner cannot choose a scan of every catalogue row or every
-failure, which it did on small tables when it was free to.
+`cut_short` is worked out by a separate read of the runs index just before the list, so a run stored between the two
+can make it one run out of date. The window is the newest runs at the time of each request, so while new runs arrive a
+client paging with `next_cursor` can see later pages shift, as it can on any list here.
+
+The plan is pinned so that the failures read are those of the matched runs and no others. On both backends the list is
+ordered by `created_at + 0` and the storing order `+ 0` when a `property` filter is given: the same order, written so
+that no index can serve it, so the failures come through `failures_run` for the matched runs alone and are then sorted.
+Without that, a planner can walk `failures_created` backwards and test each failure against the matched runs; on a
+store where a few runs hold most failures, PostgreSQL chose that after `ANALYZE` and, for a prefix that matched little
+or nothing, read every failure. On PostgreSQL, also, each run of the window is looked at in a `LATERAL` subquery with a
+`LIMIT` and the matched runs are handed to the failures as an array, because on small tables it otherwise chose a scan
+of every catalogue row. Tests assert these plans on SQLite and PostgreSQL, on uniform data and on a skewed store of 50
+runs holding 100000 failures.
 
 The cost is now set by the window and by the violations its runs hold, not by how many failures or runs are stored. The
 worst case is a window whose runs each hold many violations and no match: every violation of every run in the window is
 read once. On the store below, where the newest 100 runs each hold 16384 properties and 169 violations, a prefix that
-matches nothing reads about 17000 violations: 36 to 39 ms on SQLite and 144 to 152 ms on PostgreSQL.
+matches nothing reads about 17000 violations: 38 to 49 ms on SQLite and 198 to 225 ms on PostgreSQL. The bound is honest but
+large: a run's catalogue holds at most 16384 properties, so a window of 1000 runs can hold up to 16.4 million
+violation rows if a guest reports every property violated in every run. At the rates measured here that would take
+roughly 40 s on SQLite and 3 to 4 minutes on PostgreSQL per request (extrapolated, not measured). No such store has been
+seen; a cap on the violation rows read is possible later, and `cut_short` would then report it.
 
 Measured on the generated store of the survey (100000 runs, 300000 failures, 60000 stored checks, 100 runs with 16384
 properties, one run of 200000 trials and one of 50000), release builds of the previous `main` and of this change, same
 machine and data, server started fresh, median of 15 warm requests (5 for those over 0.5 s), two runs each; your figures will differ:
 
-| Request | SQLite before | SQLite after | PostgreSQL before | PostgreSQL after |
-|---|---:|---:|---:|---:|
 | Request (ms, two runs each) | SQLite before | SQLite after | PostgreSQL before | PostgreSQL after |
 |---|---:|---:|---:|---:|
-| no filter (first page) | 100 / 106 | 0.3 / 0.3 | 17 / 16 | 0.5 / 0.5 |
-| `limit=500` | 183 / 178 | 1.2 / 1.1 | 21 / 19 | 1.3 / 1.2 |
-| `cursor=50000` | 274 / 266 | 1.1 / 0.8 | 67 / 46 | 2.4 / 2.3 |
-| `cursor=100000` (deepest allowed) | 281 / 287 | 3.7 / 1.4 | 65 / 52 | 4.5 / 5.2 |
-| `run=` (a run with 3 failures) | 0.2 / 0.2 | 0.3 / 0.2 | 0.5 / 0.5 | 0.5 / 0.5 |
-| `property=db.p0` (840 matches in the window) | 803 / 832 | 2.9 / 2.4 | 49 / 44 | 10 / 11 |
-| `property=db.p1` (300 matches in the window) | 871 / 882 | 3.2 / 2.2 | 5369 / 4944 | 9.6 / 9.0 |
-| `property=zzz` (no match) | 831 / 800 | 36 / 39 | 3008 / 2855 | 152 / 144 |
-| `property=db.p0&limit=500` | 883 / 835 | 3.5 / 3.2 | 70 / 61 | 11 / 12 |
-| `status=candidate` | 175 / 177 | 1.0 / 1.0 | 29 / 26 | 6.5 / 6.4 |
-| `status=confirmed` (reads 1000) | 371 / 364 | 1.9 / 1.9 | 56 / 55 | 14 / 14 |
-| `status=verified` (none; reads 1000) | 426 / 358 | 1.9 / 1.9 | 58 / 54 | 12 / 14 |
-| `status=confirmed&property=db.p0` | 2695 / 1719 | 6.4 / 6.3 | 475 / 456 | 28 / 27 |
+| no filter (first page) | 109 / 109 | 0.3 / 0.3 | 15 / 16 | 0.5 / 0.5 |
+| `limit=500` | 181 / 181 | 1.2 / 1.1 | 20 / 18 | 1.4 / 1.3 |
+| `cursor=50000` | 307 / 268 | 0.9 / 0.9 | 53 / 57 | 2.5 / 2.5 |
+| `cursor=100000` (deepest allowed) | 296 / 292 | 1.6 / 1.4 | 53 / 54 | 4.7 / 4.8 |
+| `run=` (a run with 3 failures) | 0.2 / 0.3 | 0.2 / 0.2 | 0.4 / 0.4 | 0.5 / 0.6 |
+| `property=db.p0` (840 matches in the window) | 863 / 897 | 2.6 / 2.3 | 45 / 46 | 11 / 12 |
+| `property=db.p1` (300 matches in the window) | 1160 / 1936 | 2.6 / 2.7 | 4967 / 5010 | 10 / 10 |
+| `property=zzz` (no match) | 1017 / 856 | 49 / 38 | 2929 / 2959 | 225 / 198 |
+| `property=db.p0&limit=500` | 883 / 884 | 4.2 / 3.3 | 62 / 65 | 12 / 13 |
+| `status=candidate` | 182 / 183 | 1.1 / 1.0 | 27 / 27 | 7.0 / 6.9 |
+| `status=confirmed` (reads 1000) | 362 / 365 | 2.1 / 2.2 | 55 / 54 | 13 / 13 |
+| `status=verified` (none; reads 1000) | 367 / 368 | 1.9 / 1.9 | 53 / 55 | 13 / 13 |
+| `status=confirmed&property=db.p0` | 1747 / 1712 | 7.3 / 7.9 | 461 / 472 | 30 / 31 |
 
 Every other list read the same before and after: the bodies of 139 requests (the whole list, run, status and cursor
 combinations up to position 100000, and `property` pages that lie inside the window) were identical apart from the
@@ -478,7 +490,13 @@ rebuilt. An older release refuses a version 7 database ("database schema version
   lock on `failures` and on `run_properties` until the migration commits: reads carry on, and every insert, update or
   delete of failures or property rows waits. Upgrade at a quiet time; on a large table, or to avoid that wait, an
   operator can build the two indexes beforehand with `CREATE INDEX CONCURRENTLY` under the same names and
-  definitions, and the migration then finds them and only sets the version.
+  definitions (`failures(created_at, seq)`; `run_properties(run_id, idx) WHERE status = 'violation'`), and the
+  migration then finds them and only sets the version. A `CREATE INDEX CONCURRENTLY` that fails or is cancelled leaves
+  an invalid index behind: drop it (`DROP INDEX failures_created`, say) before upgrading.
+- *Checked, not trusted.* `IF NOT EXISTS` goes by name, so after creating them the migration, and every later open,
+  checks that each index is on the right table, not unique, with the same columns and (for the partial index) the same
+  predicate, and on PostgreSQL that it is valid and ready. Otherwise the open is refused with "index NAME exists but is
+  invalid or has a different definition: drop it and open the database again", and a version 6 database stays at 6.
 - *Rights.* Creating an index needs ownership of the table on PostgreSQL. The migration must therefore be run, once,
   by the role that owns the schema's tables (or by one with rights to create indexes on them). Opening a current
   (version 7) schema issues no DDL, so a role that may only read and write rows can open it, as before; such a role

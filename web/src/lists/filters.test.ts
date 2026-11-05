@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   MAX_PROPERTY_PREFIX_BYTES,
+  PROPERTY_FILTER_RUNS,
   MAX_TARGET_BYTES,
   checkPropertyPrefix,
   checkRunId,
@@ -108,5 +109,12 @@ describe('checking typed text', () => {
     const tooLong = '研'.repeat(Math.floor(MAX_TARGET_BYTES / 3) + 1);
     expect(checkTarget(tooLong)).toEqual({ problem: 'target' });
     expect(runFiltersFromSearch(`?target=${encodeURIComponent(tooLong)}`)).toEqual({});
+  });
+});
+
+describe('the property filter window', () => {
+  it('is the server’s FAILURE_PROPERTY_RUNS, which the store tests pin at 1000', () => {
+    // The server answers with the same number in `scope.recent_runs`; if it changes, change this constant and test.
+    expect(PROPERTY_FILTER_RUNS).toBe(1000);
   });
 });

@@ -158,6 +158,19 @@ pub(crate) fn failure_clause(filter: &FailureFilter, dialect: &FailureDialect) -
     b.finish()
 }
 
+/// The `ORDER BY` of the failures list: newest first, then the order of storing. With a property filter the same order
+/// is written as expressions (`created_at + 0`), which no index can serve. Otherwise a planner may walk
+/// `failures_created` backwards and filter on the matched runs, which on a store where a few runs hold most failures
+/// reads every failure when the prefix matches little or nothing. As expressions, the only way to the rows is
+/// `failures_run`, for the matched runs' failures alone, which are then sorted: a cost bounded by the window.
+pub(crate) fn failure_order(filter: &FailureFilter, order: &str) -> String {
+    if filter.property_prefix.is_some() {
+        format!(" ORDER BY created_at + 0 DESC, {order} + 0 DESC")
+    } else {
+        format!(" ORDER BY created_at DESC, {order} DESC")
+    }
+}
+
 /// `LIMIT` and `OFFSET` as integer literals: both are numbers made here, never text from a caller.
 pub(crate) fn window(offset: u64, limit: u32) -> String {
     format!(" LIMIT {limit} OFFSET {}", offset.min(i64::MAX as u64))

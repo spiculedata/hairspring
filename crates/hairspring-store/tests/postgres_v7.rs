@@ -209,6 +209,79 @@ fn indexes_built_beforehand_concurrently_are_kept_and_the_schema_becomes_current
     );
 }
 
+/// `IF NOT EXISTS` goes by name. An index of the right name but another definition, or one left invalid by a failed
+/// `CREATE INDEX CONCURRENTLY`, must not pass for the version 7 index: the open is refused and the schema stays at 6.
+#[test]
+fn an_index_of_the_same_name_but_another_definition_or_invalid_is_refused() {
+    let Some(url) = url() else { return };
+    let cases = [
+        "CREATE INDEX failures_created ON failures(target)",
+        "CREATE INDEX failures_created ON failures(created_at)",
+        "CREATE UNIQUE INDEX failures_created ON failures(created_at, seq)",
+        "CREATE INDEX failures_created ON run_properties(run_id, idx)",
+        "CREATE INDEX run_properties_violation ON run_properties(run_id, idx)",
+        "CREATE INDEX run_properties_violation ON run_properties(run_id, idx) WHERE status = 'pass'",
+    ];
+    for sql in cases {
+        let schema = new_schema("v7w");
+        drop(PgStore::connect_in_schema(&url, &schema, 1).unwrap());
+        make_v6(&url, &schema);
+        raw(&url, &schema).batch_execute(sql).unwrap();
+        let err = PgStore::connect_in_schema(&url, &schema, 1)
+            .err()
+            .unwrap_or_else(|| panic!("{sql}: must refuse"));
+        assert!(
+            err.to_string()
+                .contains("has a different definition: drop it"),
+            "{sql}: {err}"
+        );
+        assert_eq!(recorded_version(&mut admin(&url), &schema), 6, "{sql}");
+    }
+}
+
+/// A failed `CREATE INDEX CONCURRENTLY` leaves the index in the catalogue with `indisvalid` false. Such an index serves
+/// no query, so neither the migration nor a later open may take it for the version 7 index. (The test marks a good
+/// index invalid in the catalogue, which needs a superuser, as the test servers have.)
+#[test]
+fn an_invalid_index_is_refused_by_the_migration_and_by_later_opens() {
+    let Some(url) = url() else { return };
+    let invalidate = |schema: &str| {
+        admin(&url)
+            .batch_execute(&format!(
+                "UPDATE pg_index SET indisvalid = false WHERE indexrelid = '\"{schema}\".failures_created'::regclass"
+            ))
+            .unwrap();
+    };
+    let schema = new_schema("v7v");
+    drop(PgStore::connect_in_schema(&url, &schema, 1).unwrap());
+    make_v6(&url, &schema);
+    raw(&url, &schema)
+        .batch_execute("CREATE INDEX failures_created ON failures(created_at, seq)")
+        .unwrap();
+    invalidate(&schema);
+    let err = PgStore::connect_in_schema(&url, &schema, 1)
+        .err()
+        .expect("an invalid index must not count");
+    assert!(
+        err.to_string()
+            .contains("failures_created exists but is invalid"),
+        "{err}"
+    );
+    assert_eq!(recorded_version(&mut admin(&url), &schema), 6);
+
+    let current = new_schema("v7v");
+    drop(PgStore::connect_in_schema(&url, &current, 1).unwrap());
+    invalidate(&current);
+    let err = PgStore::connect_in_schema(&url, &current, 1)
+        .err()
+        .expect("a current schema with an invalid index must be refused");
+    assert!(
+        err.to_string()
+            .contains("failures_created exists but is invalid"),
+        "{err}"
+    );
+}
+
 #[test]
 fn a_current_schema_that_lost_a_version_seven_index_is_reported_not_repaired() {
     let Some(url) = url() else { return };
@@ -376,6 +449,76 @@ fn the_failures_list_reads_the_created_index_and_the_property_filter_the_violati
         .explain_failures_page(&FailureFilter::default(), 0, 51)
         .unwrap();
     assert!(plan.iter().any(|p| p.contains("Sort")), "{plan:?}");
+}
+
+/// A skewed store: 50 runs holding 100000 failures between them, one run in ten with a violation of `db.p0`. With
+/// the order of the list free to come from `failures_created`, PostgreSQL walked that index backwards and filtered on
+/// the matched runs, reading every failure when the prefix matched little or nothing. The property filter's failures
+/// must be read through `failures_run` (only the matched runs' failures) and sorted.
+fn skewed(url: &str, schema: &str) {
+    raw(url, schema)
+        .batch_execute(
+            "INSERT INTO runs(id,target,backend,state,seed,config_json,created_at)
+               SELECT 'run_' || lpad(to_hex(n), 16, '0'), 't', 'sim', 'failed', n, '{}', n
+               FROM generate_series(1, 50) n;
+             INSERT INTO run_catalog(run_id,idx,prop_id,kind,must_hit,msg,decided)
+               SELECT 'run_' || lpad(to_hex(n), 16, '0'), i, 'db.p' || i, 'always', TRUE, 'm', TRUE
+               FROM generate_series(1, 50) n, generate_series(0, 7) i;
+             INSERT INTO run_properties(run_id,idx,status,trials,trials_rated,trials_unreported,trials_degraded,
+                 trials_perturbing,trials_conflicted,trials_inconclusive_with_failures,trials_claimable,trials_hit,
+                 trials_true,trials_false,evals,evals_true,evals_false)
+               SELECT 'run_' || lpad(to_hex(n), 16, '0'), i,
+                      CASE WHEN i = 0 AND n % 10 = 0 THEN 'violation' ELSE 'pass' END,
+                      1,1,0,0,0,0,0,1,1,1,0,1,1,0
+               FROM generate_series(1, 50) n, generate_series(0, 7) i;
+             INSERT INTO failures(id,run_id,target,message,original_len,shrunk_len,bundle_hash,steps_json,created_at)
+               SELECT 'fail_' || lpad(to_hex(f), 16, '0'), 'run_' || lpad(to_hex(f % 50 + 1), 16, '0'), 't', 'm',
+                      2, 1, repeat('0', 64), '[]', f
+               FROM generate_series(1, 100000) f;
+             ANALYZE runs; ANALYZE run_catalog; ANALYZE run_properties; ANALYZE failures;",
+        )
+        .unwrap();
+}
+
+#[test]
+fn on_a_skewed_store_the_property_filter_reads_the_matched_runs_failures_not_the_created_index() {
+    let Some(url) = url() else { return };
+    let schema = new_schema("v7s");
+    let s = PgStore::connect_in_schema(&url, &schema, 1).unwrap();
+    skewed(&url, &schema);
+    for prefix in ["db.p0", "db.p1", "zz"] {
+        for (offset, limit) in [(0, 51), (500, 501)] {
+            let plan = s
+                .explain_failures_page(&property(prefix), offset, limit)
+                .unwrap();
+            assert!(
+                !plan.iter().any(|p| p.contains("failures_created")),
+                "{prefix}: {plan:?}"
+            );
+            assert!(
+                plan.iter().any(|p| p.contains("on failures_run")),
+                "{prefix}: {plan:?}"
+            );
+            assert!(
+                !plan.iter().any(|p| p.contains("Seq Scan on failures")),
+                "{prefix}: {plan:?}"
+            );
+        }
+    }
+    // The answer is still newest first, then by storing order: the matched runs' failures, all 10000 of them.
+    let all = s.list_failures_page(&property("db.p0"), 0, 20000).unwrap();
+    assert_eq!(all.len(), 10000);
+    assert!(all
+        .windows(2)
+        .all(|w| (w[0].created_at, &w[0].id) > (w[1].created_at, &w[1].id)));
+    // The list without a property filter still reads the created index.
+    let plan = s
+        .explain_failures_page(&FailureFilter::default(), 0, 51)
+        .unwrap();
+    assert!(
+        plan.iter().any(|p| p.contains("failures_created")),
+        "{plan:?}"
+    );
 }
 
 #[test]

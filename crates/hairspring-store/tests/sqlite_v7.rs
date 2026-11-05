@@ -176,6 +176,81 @@ fn a_version_six_database_that_already_has_one_index_still_migrates() {
     cleanup(&path);
 }
 
+/// `IF NOT EXISTS` goes by name. An index of the right name but another definition must not pass for the version 7
+/// index, whether it was there before the migration or replaced one afterwards.
+#[test]
+fn an_index_of_the_same_name_but_another_definition_is_refused() {
+    let cases = [
+        ("failures_created", "CREATE INDEX failures_created ON failures(target)"),
+        ("failures_created", "CREATE INDEX failures_created ON failures(created_at, id)"),
+        ("failures_created", "CREATE UNIQUE INDEX failures_created ON failures(created_at, id)"),
+        ("failures_created", "CREATE INDEX failures_created ON failures(created_at) WHERE run_id <> ''"),
+        ("run_properties_violation", "CREATE INDEX run_properties_violation ON run_properties(run_id, idx)"),
+        (
+            "run_properties_violation",
+            "CREATE INDEX run_properties_violation ON run_properties(run_id, idx) WHERE status = 'pass'",
+        ),
+        (
+            "run_properties_violation",
+            "CREATE INDEX run_properties_violation ON run_properties(idx, run_id) WHERE status = 'violation'",
+        ),
+        (
+            "run_properties_violation",
+            "CREATE UNIQUE INDEX run_properties_violation ON run_properties(run_id, idx) WHERE status = 'violation'",
+        ),
+    ];
+    for (index, sql) in cases {
+        let path = temp_db("wrong");
+        drop(SqliteStore::open(&path).unwrap());
+        make_v6(&path);
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(sql).unwrap();
+        let err = SqliteStore::open(&path)
+            .err()
+            .unwrap_or_else(|| panic!("{sql}: must refuse"));
+        assert!(
+            err.to_string().contains(&format!(
+                "index {index} exists but is invalid or has a different definition: drop it"
+            )),
+            "{sql}: {err}"
+        );
+        assert_eq!(user_version(&conn), 6, "{sql}: no half upgrade");
+        drop(conn);
+        cleanup(&path);
+
+        let path = temp_db("replaced");
+        drop(SqliteStore::open(&path).unwrap());
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(&format!("DROP INDEX {index}; {sql}"))
+            .unwrap();
+        let err = SqliteStore::open(&path)
+            .err()
+            .unwrap_or_else(|| panic!("{sql}: must refuse"));
+        assert!(
+            err.to_string().contains("different definition"),
+            "{sql}: {err}"
+        );
+        drop(conn);
+        cleanup(&path);
+    }
+    // The same index written differently (case, spacing) is the same index.
+    let path = temp_db("spelled");
+    drop(SqliteStore::open(&path).unwrap());
+    make_v6(&path);
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "create index run_properties_violation on run_properties ( run_id , idx )  where status='violation'",
+        )
+        .unwrap();
+    drop(SqliteStore::open(&path).unwrap());
+    assert_eq!(
+        user_version(&Connection::open(&path).unwrap()),
+        CURRENT_VERSION
+    );
+    cleanup(&path);
+}
+
 #[test]
 fn a_current_database_that_lost_a_version_seven_index_is_reported_not_repaired() {
     for index in V7_INDEXES {
@@ -265,6 +340,69 @@ fn the_property_filter_reads_the_window_violations_and_the_matched_runs_failures
         "{plan:?}"
     );
     assert!(!plan.iter().any(|p| p.starts_with("SCAN")), "{plan:?}");
+    drop(s);
+    cleanup(&path);
+}
+
+/// A skewed store, as in the PostgreSQL test of the same name: 50 runs holding 100000 failures, one run in ten with a
+/// violation of `db.p0`, then `ANALYZE`. The property filter's failures must come through `failures_run` and be
+/// sorted, never from a walk of `failures_created` filtered on the matched runs.
+#[test]
+fn on_a_skewed_store_the_property_filter_reads_the_matched_runs_failures_not_the_created_index() {
+    let path = temp_db("skewed");
+    let s = SqliteStore::open(&path).unwrap();
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 50)
+               INSERT INTO runs(id,target,backend,state,seed,config_json,created_at)
+               SELECT printf('run_%016x', x), 't', 'sim', 'failed', x, '{}', x FROM n;
+             WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 50),
+                            i(y) AS (SELECT 0 UNION ALL SELECT y + 1 FROM i WHERE y < 7)
+               INSERT INTO run_catalog(run_id,idx,prop_id,kind,must_hit,msg,decided)
+               SELECT printf('run_%016x', x), y, 'db.p' || y, 'always', 1, 'm', 1 FROM n, i;
+             WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 50),
+                            i(y) AS (SELECT 0 UNION ALL SELECT y + 1 FROM i WHERE y < 7)
+               INSERT INTO run_properties(run_id,idx,status,trials,trials_rated,trials_unreported,trials_degraded,
+                   trials_perturbing,trials_conflicted,trials_inconclusive_with_failures,trials_claimable,trials_hit,
+                   trials_true,trials_false,evals,evals_true,evals_false)
+               SELECT printf('run_%016x', x), y, CASE WHEN y = 0 AND x % 10 = 0 THEN 'violation' ELSE 'pass' END,
+                      1,1,0,0,0,0,0,1,1,1,0,1,1,0 FROM n, i;
+             WITH RECURSIVE f(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM f WHERE x < 100000)
+               INSERT INTO failures(id,run_id,target,message,original_len,shrunk_len,bundle_hash,steps_json,created_at)
+               SELECT printf('fail_%016x', x), printf('run_%016x', x % 50 + 1), 't', 'm', 2, 1,
+                      printf('%064d', 0), '[]', x FROM f;
+             ANALYZE;",
+        )
+        .unwrap();
+    for prefix in ["db.p0", "db.p1", "zz"] {
+        for (offset, limit) in [(0, 51), (500, 501)] {
+            let plan = s
+                .explain_failures_page(&property(prefix), offset, limit)
+                .unwrap();
+            assert!(
+                !plan.iter().any(|p| p.contains("failures_created")),
+                "{prefix}: {plan:?}"
+            );
+            assert!(
+                plan.iter()
+                    .any(|p| p.contains("SEARCH failures USING INDEX failures_run (run_id=?)")),
+                "{prefix}: {plan:?}"
+            );
+        }
+    }
+    let all = s.list_failures_page(&property("db.p0"), 0, 20000).unwrap();
+    assert_eq!(all.len(), 10000);
+    assert!(all
+        .windows(2)
+        .all(|w| (w[0].created_at, &w[0].id) > (w[1].created_at, &w[1].id)));
+    let plan = s
+        .explain_failures_page(&FailureFilter::default(), 0, 51)
+        .unwrap();
+    assert!(
+        plan.iter().any(|p| p.contains("failures_created")),
+        "{plan:?}"
+    );
     drop(s);
     cleanup(&path);
 }

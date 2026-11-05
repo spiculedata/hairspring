@@ -129,6 +129,20 @@ describe('FailuresPage', () => {
     expect(container.querySelector('tbody tr')?.textContent).toContain('Confirmed');
   });
 
+  it('says when a property filter left older runs out, and not otherwise', async () => {
+    window.history.replaceState({}, '', '/failures?property=db.');
+    vi.stubGlobal('fetch', vi.fn(async () => json({ failures: [row('f_a', 1)], scope: { recent_runs: 1000, cut_short: true } })));
+    const { container } = render(<FailuresPage />);
+    await waitFor(() =>
+      expect(container.textContent).toContain('Results are limited to the newest 1,000 runs; add a run id to search an older run.'),
+    );
+    cleanup();
+    vi.stubGlobal('fetch', vi.fn(async () => json({ failures: [row('f_a', 1)], scope: { recent_runs: 1000, cut_short: false } })));
+    const second = render(<FailuresPage />);
+    await waitFor(() => expect(second.container.querySelectorAll('tbody tr')).toHaveLength(1));
+    expect(second.container.textContent).not.toContain('Results are limited');
+  });
+
   it('starts from the filters in the address, and leaves out any the server would refuse', async () => {
     window.history.replaceState({}, '', `/failures?run=${RUN}&status=verified&property=db.&junk=1&status2=x`);
     const fetchMock = vi.fn(async () => json({ failures: [] }));

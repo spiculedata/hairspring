@@ -178,7 +178,7 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             tx.batch_execute(MIGRATE_V3_TO_V4)?;
             tx.batch_execute(MIGRATE_V4_TO_V5)?;
             backfill_run_modes(tx)?;
-            tx.batch_execute(MIGRATE_V6_TO_V7)?;
+            migrate_v6_to_v7(tx)?;
             tx.execute(
                 "INSERT INTO schema_version(version) VALUES ($1)",
                 &[&SCHEMA_VERSION],
@@ -190,7 +190,7 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             tx.batch_execute(MIGRATE_V3_TO_V4)?;
             tx.batch_execute(MIGRATE_V4_TO_V5)?;
             backfill_run_modes(tx)?;
-            tx.batch_execute(MIGRATE_V6_TO_V7)?;
+            migrate_v6_to_v7(tx)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(2) => {
@@ -203,7 +203,7 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             tx.batch_execute(MIGRATE_V3_TO_V4)?;
             tx.batch_execute(MIGRATE_V4_TO_V5)?;
             backfill_run_modes(tx)?;
-            tx.batch_execute(MIGRATE_V6_TO_V7)?;
+            migrate_v6_to_v7(tx)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(3) => {
@@ -212,7 +212,7 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             tx.batch_execute(MIGRATE_V3_TO_V4)?;
             tx.batch_execute(MIGRATE_V4_TO_V5)?;
             backfill_run_modes(tx)?;
-            tx.batch_execute(MIGRATE_V6_TO_V7)?;
+            migrate_v6_to_v7(tx)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(4) => {
@@ -220,18 +220,18 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             verify_objects(tx, 4, &tables, &V3_INDEXES)?;
             tx.batch_execute(MIGRATE_V4_TO_V5)?;
             backfill_run_modes(tx)?;
-            tx.batch_execute(MIGRATE_V6_TO_V7)?;
+            migrate_v6_to_v7(tx)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(5) => {
             verify_v5_schema(tx, 5)?;
             backfill_run_modes(tx)?;
-            tx.batch_execute(MIGRATE_V6_TO_V7)?;
+            migrate_v6_to_v7(tx)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(6) => {
             verify_v5_schema(tx, 6)?;
-            tx.batch_execute(MIGRATE_V6_TO_V7)?;
+            migrate_v6_to_v7(tx)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(v) if v == SCHEMA_VERSION => verify_current(tx)?,
@@ -268,7 +268,56 @@ fn backfill_run_modes(tx: &mut Transaction<'_>) -> Result<()> {
 /// Reports a current schema that lost one of its tables or a version 3 index instead of repairing it.
 fn verify_current(tx: &mut Transaction<'_>) -> Result<()> {
     verify_v5_schema(tx, SCHEMA_VERSION)?;
-    verify_objects(tx, SCHEMA_VERSION, &[], &V7_INDEXES)
+    verify_objects(tx, SCHEMA_VERSION, &[], &V7_INDEXES)?;
+    verify_v7_definitions(tx)
+}
+
+/// Creates the version 7 indexes and checks what is there afterwards. `IF NOT EXISTS` goes by name, so an index an
+/// operator built beforehand (with `CREATE INDEX CONCURRENTLY`, say) is kept, and one with the same name but another
+/// definition, or one left invalid by a failed concurrent build, would be kept too: the check refuses both.
+fn migrate_v6_to_v7(tx: &mut Transaction<'_>) -> Result<()> {
+    tx.batch_execute(MIGRATE_V6_TO_V7)?;
+    verify_v7_definitions(tx)
+}
+
+/// What each version 7 index must be: its table, and how `pg_get_indexdef` ends for it.
+const V7_DEFINITIONS: [(&str, &str, &str); 2] = [
+    (
+        "failures_created",
+        "failures",
+        " USING btree (created_at, seq)",
+    ),
+    (
+        "run_properties_violation",
+        "run_properties",
+        " USING btree (run_id, idx) WHERE (status = 'violation'::text)",
+    ),
+];
+
+/// Each version 7 index must be valid and ready (a failed `CREATE INDEX CONCURRENTLY` leaves one that is neither), on
+/// its table, not unique, and with the columns and predicate the migration creates.
+fn verify_v7_definitions(tx: &mut Transaction<'_>) -> Result<()> {
+    for (index, table, ending) in V7_DEFINITIONS {
+        let row = tx.query_opt(
+            "SELECT i.indisvalid AND i.indisready, i.indisunique, t.relname::text, pg_get_indexdef(i.indexrelid) \
+             FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_class t ON t.oid = i.indrelid \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = current_schema() AND c.relname = $1",
+            &[&index],
+        )?;
+        let fits = row.is_some_and(|r| {
+            r.get::<_, bool>(0)
+                && !r.get::<_, bool>(1)
+                && r.get::<_, String>(2) == table
+                && r.get::<_, String>(3).ends_with(ending)
+        });
+        if !fits {
+            return Err(StoreError::Backend(format!(
+                "index {index} exists but is invalid or has a different definition: drop it and open the database again"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Versions 5 and 6 have the same tables and indexes (version 6 only rewrites data); version 7 adds indexes to them.

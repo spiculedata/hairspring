@@ -219,7 +219,76 @@ fn ensure_secret_column(conn: &Connection) -> Result<()> {
 /// index, so a missing one would otherwise fail later, at the first read).
 fn verify_current(conn: &Connection) -> Result<()> {
     verify_v5_objects(conn, SCHEMA_VERSION)?;
-    verify_objects(conn, SCHEMA_VERSION, &[], &V7_INDEXES)
+    verify_objects(conn, SCHEMA_VERSION, &[], &V7_INDEXES)?;
+    verify_v7_definitions(conn)
+}
+
+/// What each version 7 index must be: its table, its columns, and the predicate of a partial index (lower case, with
+/// no white space), as the migration creates it.
+const V7_DEFINITIONS: [(&str, &str, &[&str], Option<&str>); 2] = [
+    ("failures_created", "failures", &["created_at"], None),
+    (
+        "run_properties_violation",
+        "run_properties",
+        &["run_id", "idx"],
+        Some("status='violation'"),
+    ),
+];
+
+/// `IF NOT EXISTS` goes by name, so an index of that name built beforehand is kept. It must be the index the migration
+/// would create: on its table, not unique, the same columns in order, and the same predicate.
+fn verify_v7_definitions(conn: &Connection) -> Result<()> {
+    for (index, table, columns, predicate) in V7_DEFINITIONS {
+        let fits = sqlite_index_fits(conn, index, table, columns, predicate)?;
+        if !fits {
+            return Err(StoreError::Backend(format!(
+                "index {index} exists but is invalid or has a different definition: drop it and open the database again"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn sqlite_index_fits(
+    conn: &Connection,
+    index: &str,
+    table: &str,
+    columns: &[&str],
+    predicate: Option<&str>,
+) -> Result<bool> {
+    let Some((on, sql)) = conn
+        .query_row(
+            "SELECT tbl_name, sql FROM sqlite_master WHERE type='index' AND name=?",
+            [index],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+        )
+        .ok()
+    else {
+        return Ok(false);
+    };
+    let unique: i64 = conn.query_row(
+        "SELECT \"unique\" FROM pragma_index_list(?1) WHERE name=?2",
+        [table, index],
+        |r| r.get(0),
+    )?;
+    let mut stmt = conn.prepare("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")?;
+    let names = stmt
+        .query_map([index], |r| r.get::<_, Option<String>>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let squeezed: String = sql
+        .unwrap_or_default()
+        .to_lowercase()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let where_clause = squeezed.split_once(")where").map(|(_, w)| w.to_owned());
+    Ok(on == table
+        && unique == 0
+        && names
+            .iter()
+            .map(|n| n.as_deref())
+            .eq(columns.iter().map(|c| Some(*c)))
+        && where_clause.as_deref() == predicate)
 }
 
 /// Versions 5 and 6 have the same tables and indexes (version 6 only rewrites data); version 7 adds indexes to them.
@@ -296,6 +365,7 @@ fn upgrade(conn: &Connection, from: i64) -> Result<()> {
         backfill_run_modes(conn)?;
     }
     conn.execute_batch(MIGRATE_V6_TO_V7)?;
+    verify_v7_definitions(conn)?;
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }
