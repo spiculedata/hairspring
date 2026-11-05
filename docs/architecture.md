@@ -430,6 +430,45 @@ one the list leaves `finding` out, as before.
 
 There is no `mine` filter: a run does not record who started it.
 
+## Search
+
+`GET /api/search?q=...` (any valid token, rate limited like every `/api/` route except health) answers "where is this
+id?" and nothing larger. The text, the groups and the answer are described in the quickstart; this section is about what
+a request costs, because a search box sends a request for every pause in typing.
+
+The service checks the text (1 to 64 characters from ASCII letters, digits and `_ - . : /`) before any query runs, and
+decides which probes apply: a seed probe only for digits that fit in 53 bits, a fingerprint probe only for 16 to 64
+lower case hex digits, a run-id probe only for text that can start `run_`, a failure-id probe only for text that can
+start `fail_`. Both stores then run the same statements, built from fixed text (`crates/hairspring-store/src/search.rs`).
+The text is a bound parameter. A prefix is compared with `substr(column, 1, n) = ?`, never `LIKE`, so `%` and `_` mean
+themselves, and the comparison is by characters on SQLite and on PostgreSQL alike. The group limit is 5 and the store
+is asked for 6, to learn whether `more` is true.
+
+No statement reads a table end to end. Each is an equality on a key, or a look at the **recent window**: the newest 1000
+runs, read backwards through `runs_created` (`created_at`, then insertion order), joined run by run to the rows of those
+runs through an index that starts with the run id. The join order is fixed: `CROSS JOIN` on SQLite, and
+`CROSS JOIN LATERAL (... OFFSET 0)` on PostgreSQL, so the planner cannot choose to read all of `failures` or `trials`
+and hash it against the window (it did, on a million failures, before the statements were written this way).
+
+| Group | Looks for | Cost per request |
+|---|---|---|
+| runs | The whole id: one primary-key lookup, any age. The start of an id: the 1000-run window, filtered by `substr`. | 1 key lookup + at most 1000 rows from `runs_created`. |
+| failures | The whole id: one primary-key lookup, any age. The start of an id: the failures of the window's runs through `failures_run`. | 1 key lookup + 1000 index probes (and the failures each run holds). |
+| targets | The start of a name, among the targets in the server's configuration. | In memory; no store read. |
+| properties | The start of an id in the catalogs of the newest 100 runs through the primary key of `run_catalog`. A run holds at most 16384 catalog rows, so this is the one group with a smaller window. | 100 index probes + at most 100 x 16384 catalog rows (a few dozen per run in practice). |
+| seeds | The whole seed as a run's seed (window) and as a trial's seed (`trials_seed`). | 1000 rows from `runs_created` + 1000 index probes. |
+| schedules | The whole fingerprint (`trials_schedule`). | 1000 index probes. |
+
+So the number of rows a request can touch is set by the window sizes and the 16384-row catalog limit, not by how much
+has been stored. No statement needed a new index, and the search changed no table. The prefix probes pay for a
+`substr` over the rows they reach because a text index that served a prefix would need a byte-order collation on
+PostgreSQL, which the existing indexes do not have. If the windows prove too small, a prefix index per column is the
+way to widen them; that is a schema change and is not part of this endpoint.
+
+The answer never contains guest output, kept output, bundle text or a failure message. A property id comes from the
+program under test, so it is cut to one line of at most 500 characters and sits under a `guest` object. An error names
+`q` and never repeats the text, including text that was not valid UTF-8 once unescaped.
+
 ## Bundles
 
 A bundle is a small text file: `seed`, `build`, `target`, `backend`, `param.*` and `path` (hex action ids or
