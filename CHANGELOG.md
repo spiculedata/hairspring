@@ -9,6 +9,24 @@
   `queue` with the number of jobs waiting and the number held. The `read` role is enough; `id` is still left out for
   that role, and no secret, digest, job payload, error text or guest output is returned. Existing fields are unchanged.
   Both stores answer the same way (two new read-only queries on the job table; no schema change).
+- `hairspring gc --older-than 30d` reports what retention would remove and removes nothing by default: runs by state,
+  failures, stored check results, trials, events, jobs, trial trees, stored blobs and bytes, and bundle files in
+  `--bundle-dir`. The report ends with `--apply --cutoff T --expect-runs N --expect-digest D`: the report's cutoff
+  (milliseconds since 1970, from this computer's clock), the number of runs and a digest of their ids. With those, the
+  apply looks at the runs that were old at that cutoff and removes them only if they are the runs the report showed;
+  otherwise nothing is removed. A run that stops qualifying while it is being removed is kept and listed with its
+  reason. Queued and running runs and runs with a queued or running job are never removed; failed runs are kept
+  unless `--state failed` is given; a trial tree is removed whole or kept whole; blobs go only when nothing refers to
+  them; a symbolic link is never followed, and a bundle file is removed only if the bundle directory and the file are
+  still the ones that were read and hashed. `--json` prints one JSON document; exit 2 for an error, a refused
+  `--apply`, an apply that removed fewer runs than the report showed, or a removal that stopped part-way. Run
+  `--apply` when no worker is running jobs: a new failure whose bundle text is identical to one being removed can be
+  left without its stored bundle. The report takes no lock that a worker or the server waits for (its counts are an
+  estimate as of one snapshot, which the apply checks again); the apply works in short batches, each checking the
+  blobs of its runs together, but each batch reads the whole trials table, so run it off-peak on a large store. Only
+  one `gc` runs against a database at a time; a second one says another is running and exits 2. No schema
+  change; SQLite and PostgreSQL behave the same. The database file does not shrink, and the UI still shows a removed
+  run as "may have been removed" (no "expired" state yet). See "Retention" in `docs/architecture.md`.
 - `GET /api/me` returns the caller's role (`read`, `run` or `admin`), what that role may do, and whether the server is
   in open mode. It needs a valid token like the other read endpoints (401 otherwise) and never includes the token or a
   digest of it.

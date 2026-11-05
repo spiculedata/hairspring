@@ -1,6 +1,9 @@
 pub mod confirm;
 mod confirm_text;
 pub mod doctor;
+pub mod gc;
+mod gc_files;
+mod gc_report;
 pub mod init;
 pub mod inspect;
 pub mod json_out;
@@ -45,6 +48,7 @@ pub fn dispatch(
         Command::Replay(a) => replay::run(&ctx, &a, out),
         Command::Confirm(a) => confirm::run(&ctx, &a, out, err),
         Command::Doctor(a) => doctor::run(&ctx, &a, out),
+        Command::Gc(a) => gc::run(&ctx, &a, out, err),
         Command::Results(a) => inspect::results(&ctx, &a, out),
         Command::Show(a) => inspect::show(&ctx, &a, out),
         Command::Bundle { command } => inspect::bundle(&ctx, &command, out),

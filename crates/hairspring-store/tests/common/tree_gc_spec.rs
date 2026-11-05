@@ -1,6 +1,5 @@
-//! Specification of the retention command that does not exist yet (`hairspring gc`, RX D6). Nothing deletes runs or
-//! trials today, and this change does not add it. The scenarios here state what it must do with trial trees, so the
-//! rule is written down and runs the day a deletion routine exists: wire `gc` to it and remove the `#[ignore]`.
+//! What retention (`hairspring gc`) must do with trial trees, run against the store's `retention_delete` (see
+//! `retention.rs`) on every backend.
 //!
 //! A tree is one unit. It is kept while any of its runs is kept, and deleted in one transaction otherwise, in the
 //! order lineage, branches, trees, runs, with a report. No node may be left pointing at a deleted parent.
@@ -20,11 +19,6 @@ pub struct GcReport {
 /// The routine under specification: delete the given expired runs, honouring the tree rule.
 pub type Gc<'a> = &'a dyn Fn(&dyn Store, &[String]) -> GcReport;
 
-/// Stand-in until the routine exists.
-pub fn gc_is_not_built(_: &dyn Store, _: &[String]) -> GcReport {
-    unimplemented!("hairspring gc (RX D6) is not built; this test is its specification")
-}
-
 struct Fixture {
     tree: String,
     root: String,
@@ -40,6 +34,7 @@ fn build(s: &dyn Store) -> Fixture {
     add(s, &tree.id, &child(&root_run.id, 1, 0, 1));
     add(s, &tree.id, &child(&root_run.id, 2, 1, 1));
     finish(s, &root_run.id);
+    close_jobs(s, &root_run.id);
     let mut branches = Vec::new();
     for (i, source) in [(0u64, 2u64), (1, 1)] {
         let b = run_with_identity(s, "a\n");
@@ -51,10 +46,14 @@ fn build(s: &dyn Store) -> Fixture {
         .unwrap();
         let first = add(s, &tree.id, &child(&b.id, 0, source, 3));
         add(s, &tree.id, &child(&b.id, 1, first.node, 4));
+        finish(s, &b.id);
+        close_jobs(s, &b.id);
         branches.push(b.id);
     }
     let other = new_run(s, "sim");
     ingest_verdicts(s, &other.id, &passes(2));
+    finish(s, &other.id);
+    close_jobs(s, &other.id);
     Fixture {
         tree: tree.id,
         root: root_run.id,

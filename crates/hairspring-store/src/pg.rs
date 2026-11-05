@@ -27,8 +27,17 @@ pub(crate) const MIGRATION_LOCK: i64 = 727_274;
 const MAX_SCHEMA_NAME: usize = 63;
 
 impl From<postgres::Error> for StoreError {
+    /// An error the database raised carries its message and SQLSTATE (a deadlock is 40P01, a foreign key violation
+    /// 23503), not only "db error". The detail and hint are left out: they can quote row values.
     fn from(e: postgres::Error) -> Self {
-        StoreError::Backend(e.to_string())
+        match e.as_db_error() {
+            Some(db) => StoreError::Backend(format!(
+                "{e}: {} (SQLSTATE {})",
+                db.message(),
+                db.code().code()
+            )),
+            None => StoreError::Backend(e.to_string()),
+        }
     }
 }
 
@@ -385,6 +394,23 @@ impl Store for PgStore {
         limit: u32,
     ) -> Result<Vec<FailureRecord>> {
         crate::pg_listing::list_failures(&mut *self.client()?, filter, offset, limit)
+    }
+
+    fn retention_scan(&self, cutoff_ms: i64) -> Result<Vec<crate::RetentionCandidate>> {
+        crate::pg_retention::scan(&mut *self.client()?, cutoff_ms)
+    }
+
+    fn retention_lock(&self) -> Result<Option<crate::RetentionLock>> {
+        crate::pg_retention::try_lock(self.client()?)
+    }
+
+    fn retention_delete(
+        &self,
+        run_ids: &[String],
+        cutoff_ms: i64,
+        dry_run: bool,
+    ) -> Result<crate::RetentionReport> {
+        crate::pg_retention::delete(&mut *self.client()?, run_ids, cutoff_ms, dry_run)
     }
 
     fn put_blob(&self, data: &[u8]) -> Result<String> {

@@ -450,6 +450,57 @@ CPU flags, loader files, Hermit executable hash, the target program's hash). The
 
 See [Recorded environment](determinism.md#recorded-environment) for the fields and what they mean.
 
+## Remove old runs: `hairspring gc`
+
+Stored runs accumulate. `hairspring gc` reports what could be removed and removes nothing unless you ask:
+
+```bash
+hairspring gc --older-than 30d
+```
+
+The report lists the runs (by state), failures, stored check results, trials, events, jobs, trial trees, stored blobs
+with their size, and the bundle files in `.hairspring/bundles` that it would delete. It also says what it is leaving
+alone and why. Nothing has changed after this command. Its last line gives the arguments that remove exactly what it
+showed, for example:
+
+```text
+nothing was removed. To remove exactly these 2 runs, run again with --apply --cutoff 1791256734719 --expect-runs 2 --expect-digest 5def881df86a09f0.
+```
+
+Repeat the command with those arguments:
+
+```bash
+hairspring gc --older-than 30d --apply --cutoff 1791256734719 --expect-runs 2 --expect-digest 5def881df86a09f0
+```
+
+`--cutoff` is the report's cutoff (milliseconds since 1970, UTC), so the same runs count as old; `--expect-runs` and
+`--expect-digest` are the number of runs and a digest of their ids. If any of the three is missing, or the runs found are
+not the runs the report showed, nothing is removed and the exit status is 2. If a run stops qualifying while it is
+being removed (a job was queued for it, say), it is kept, the output says why under "kept when removing", and the exit
+status is 2. Other options:
+
+| Option | Meaning |
+|---|---|
+| `--older-than 30d` | Required. A whole number and `h`, `d` or `w`. Measured from when the run finished (from its creation, if it never did), by this computer's clock |
+| `--cutoff T` | Use the cutoff a report printed instead of taking the time again. It may not be later than `--older-than` allows |
+| `--state passed,error,cancelled` | The states to remove. The default leaves failed runs alone, because they hold the evidence; add `failed` to include them |
+| `--bundle-dir DIR` | Where bundle files are looked for (default `.hairspring/bundles`, as for `hairspring test`) |
+| `--json` | One JSON document instead of text |
+
+Queued and running runs, and runs with a queued or running job, are never removed. A trial tree is removed whole or kept
+whole. The command works the same on SQLite and PostgreSQL (`HAIRSPRING_DATABASE_URL`).
+
+What it does not do: the database file does not shrink (SQLite reuses the space; run `VACUUM` to give it back), files
+outside the bundle directory are never touched, and a symbolic link is never followed. Run `--apply` when no worker is
+running jobs: a failure found while `gc` runs, whose bundle text is identical to one being removed, can be left
+without its stored bundle. The report takes no lock that a server or worker waits for: its counts are an estimate as of
+the moment it read them, and `--apply` checks everything again. An apply holds its locks in short batches, but each
+batch reads the whole trials table, so on a large store run it off-peak. Only one `gc` runs against a database at a
+time: a second one says "another hairspring gc is running against this database", changes nothing and exits with
+status 2. After a removal, the web UI and API answer 404 for that run, and the UI says "This run does not exist
+here. It may have been removed."; it does not yet say that retention removed it. See
+[Retention](architecture.md#retention-hairspring-gc) for the rules and the failure cases.
+
 ## What is supported
 
 | Language | SDK | Fixture | Status under Hermit |
@@ -499,3 +550,4 @@ An SDK adds named properties (`always`, `sometimes`, `reachable`) that are track
 | `Hermit was not found` | `HAIRSPRING_HERMIT` is unset and `hermit` is not on `PATH`. Export the path the installer printed |
 | `Inherited descriptor cleanup failed ... close_range` | The environment (an emulated or restricted container) does not implement `close_range`. Run on a native Linux host |
 | `environment mismatch` on replay | The loader changed since the bundle was recorded. See determinism.md |
+| `no stored run` or a 404 for a run you had a link to | The run may have been removed by `hairspring gc`. The UI does not yet say so; check with whoever runs it |

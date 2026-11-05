@@ -614,25 +614,3 @@ fn the_downgrade_refuses_versions_it_does_not_know() {
         downgrade_postgres(&url, "x; DROP SCHEMA public", &DowngradeOptions::default()).is_err()
     );
 }
-
-#[test]
-#[ignore = "hairspring gc does not exist yet (RX D6); this is its specification"]
-fn gc_spec_a_tree_is_kept_while_any_of_its_runs_is_kept() {
-    let url = url().expect("HAIRSPRING_TEST_PG_URL");
-    let s = PgStore::connect_in_schema(&url, &new_schema("g1"), 2).unwrap();
-    common::tree_gc_spec::a_tree_is_kept_while_any_of_its_runs_is_kept(
-        &s,
-        &common::tree_gc_spec::gc_is_not_built,
-    );
-}
-
-#[test]
-#[ignore = "hairspring gc does not exist yet (RX D6); this is its specification"]
-fn gc_spec_a_tree_is_deleted_in_one_unit_when_every_run_has_expired() {
-    let url = url().expect("HAIRSPRING_TEST_PG_URL");
-    let s = PgStore::connect_in_schema(&url, &new_schema("g2"), 2).unwrap();
-    common::tree_gc_spec::a_tree_is_deleted_in_one_unit_when_every_run_has_expired(
-        &s,
-        &common::tree_gc_spec::gc_is_not_built,
-    );
-}

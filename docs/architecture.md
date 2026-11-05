@@ -497,6 +497,162 @@ program under test, so it is cut to one line of at most 500 characters (ending i
 under a `guest` object. An error names `q` and never repeats the text, including text that was not valid UTF-8 once
 unescaped.
 
+## Retention (`hairspring gc`)
+
+`hairspring gc` removes old runs and what only they refer to. It adds no table or column (the schema stays at
+version 6) and works the same on SQLite and PostgreSQL: both stores implement `Store::retention_scan` and
+`Store::retention_delete`, and one conformance suite runs against both.
+
+**Report first.** Without `--apply` the command changes nothing and prints what it would remove: runs (by state),
+failures, stored check results, trials, events, jobs, trial trees and nodes, stored blobs and their bytes (and which of
+those are failure bundles), and the bundle files it would delete from `--bundle-dir`. It ends with the arguments that
+remove exactly what it shows: `--apply --cutoff T --expect-runs N --expect-digest D`. `T` is the cutoff the report
+used, in milliseconds since 1970 (UTC), printed next to the same time in words; `N` is the number of runs; `D` is a
+digest of their ids. With `--cutoff` the apply looks at the runs that were old at the report's cutoff instead of
+taking the time again, and it goes ahead only if the runs it finds are the runs the report showed: the same number and
+the same digest. A run that has become old since the report is therefore not removed, and a run that has gone is not
+silently replaced by another. The report is printed first; if any of the three is missing or the runs differ, nothing
+is removed and the exit status is 2. `--cutoff` may not be later than `--older-than` allows at the time of the apply,
+so it can never make younger runs old. `--json` prints the same report as one JSON document (`cutoff`, `runs_digest`,
+`apply_args`, `would_remove`, `kept`, `removed`, `kept_when_removing`, `refused`, `problems`, `not_deleted`).
+
+**The clock.** The cutoff is worked out from the clock of the computer that runs `gc`. A run's finish time was written
+by the clock of the process that finished it (the server, when the database is a remote PostgreSQL). If the two clocks
+disagree, runs look older or younger by the difference.
+
+**What qualifies.** A run is removed only if all of these hold, and the store checks each one again inside the
+transaction that deletes the run:
+
+- it is `passed`, `failed`, `error` or `cancelled` (never `queued` or `running`), and is among the states chosen with
+  `--state` (default `passed`, `error` and `cancelled`: failed runs hold the evidence, so they are kept unless
+  `--state failed` is given);
+- it has no job that is queued or running (including a job whose lease has expired, which another worker may still
+  take);
+- it finished before the cutoff, `--older-than` ago (`30d`, `12h`, `2w`). A run that never finished is aged from its
+  creation. The age is required: there is no default.
+
+**Trial trees are one unit.** A tree is removed whole, and only if its root run and every branch run qualify and were
+selected; otherwise every run of the tree is kept (reported as `tree_kept`). A tree goes in one transaction in the
+order the foreign keys need: stored check results, nodes, branches, the tree, then each run's own rows (coverage,
+digest use, property rows, catalog, identity, trials, failures, jobs, events) and the run. A run outside any tree is its
+own unit. An apply puts whole units into batches of about 20 runs (a tree is never split, so a batch can hold more), one
+transaction per batch. If a batch fails, its transaction is rolled back, the command stops, and the report says what
+earlier batches had committed (exit 2). An error from PostgreSQL is reported with the database's message and SQLSTATE
+(for example `40P01` for a deadlock, `23503` for a foreign key that kept a row), never the row values.
+
+On PostgreSQL the tree's row is locked (`FOR NO KEY UPDATE`, which conflicts with the lock that adding a branch or a
+node takes) before its runs are read, so a branch cannot be added to a tree while `gc` is deciding about it: the branch
+is either added first, and then judged with the tree (and keeps it), or refused because the tree is gone. As a last
+line of defence, tree rows are deleted only for the runs that were judged, and if the tree still has a row for any
+other run, the unit is rolled back and reported as an error; nothing of it is removed. A run outside any tree is asked
+again, once it is locked, whether it has joined a tree since; if it has, it is kept (`tree_kept`). SQLite has one writer
+at a time and an apply holds the write lock for each batch, so none of this can interleave there.
+
+**Blobs are shared, so they are removed last and only when nothing refers to them.** A bundle, trial output or detail,
+or tree edge is deleted only if no remaining trial row, failure or tree node refers to its hash, and no remaining stored
+check names the hash in its artefact list. A bundle that another failure also uses stays. Storing a trial's kept output
+writes the blob and the trial that names it in one transaction; on PostgreSQL an apply takes `LOCK TABLE blobs IN SHARE
+ROW EXCLUSIVE MODE` before its reference checks, which waits for every transaction that is storing a blob and holds new
+ones until the batch commits, so it always sees the trial. It takes that lock only after the batch's rows are deleted,
+so it is held for the reference checks and the blob deletes alone. On SQLite the single write lock does the same.
+
+The reference checks are set based. A batch gathers the hashes its runs referred to and then reads each referring table
+once for all of them: `trials` (output and detail), `failures`, tree nodes, and the stored checks' artefact lists (each
+list is read once and every hash-length window of it looked up in the set). Nothing indexes `trials.output_ref`,
+`trials.detail_ref` or `failures.bundle_hash`, so the `trials` read is a whole-table read: each batch still costs
+O(trials), but once per batch rather than once per blob. An index on those columns would make it proportional to the
+batch instead; that is a schema change and is not part of `gc`. Run `--apply` off-peak on a large store. The candidate
+hashes are checked at most 5000 to a statement, so a large dry run does not need more query memory than the database
+gives one statement.
+
+Measured on a laptop (Apple M3 Max), release build, PostgreSQL 16.6 in a local container with its default settings.
+Each store held N finished runs of 50 trials, each trial with its own stored output (so N x 50 blobs, none shared),
+and `gc` was asked about all N. Meanwhile a second connection stored a new blob every 10 ms; "writer waited" is the
+longest any one of those writes took.
+
+| | N | Before: time | Before: writer waited | Now: time | Now: writer waited |
+|---|---|---|---|---|---|
+| PostgreSQL report (dry run) | 200 | 52.4 s | 52.2 s | 2.5 s | 0.01 s |
+| PostgreSQL apply | 200 | 198.4 s | 5.3 s | 2.9 s | 0.01 s |
+| SQLite report (dry run) | 200 | 12.4 s | 5.4 s, 2 writes failed (busy) | 0.03 s | 0.0002 s |
+| SQLite apply | 200 | 22.8 s | 5.4 s, 1 write failed (busy) | 0.3 s | 0.2 s |
+| PostgreSQL report (dry run) | 2000 | not run (see below) | | 41.1 s | 0.3 s |
+| PostgreSQL apply | 2000 | not run (see below) | | 31.8 s | 0.04 s |
+| SQLite report (dry run) | 2000 | not run (see below) | | 0.7 s | 0.0003 s |
+| SQLite apply | 2000 | not run (see below) | | 6.4 s | 0.2 s |
+
+At N = 2000 the earlier version was measured on parts only: removing one run took 0.85 s on PostgreSQL (a writer
+waited 0.81 s) and 0.39 s on SQLite; a report on 20 runs took 15.6 s on PostgreSQL (a writer waited all of it) and 7.4 s
+on SQLite (one write failed after the 5 second busy timeout). Its cost grew with blobs times trials, so whole runs at
+that size would have taken hours. The report is now slower on PostgreSQL than the apply because it counts each run's
+rows with its own statements; it holds nothing a writer waits for while it does. The SQLite apply's writer waits are
+the batch transactions (about 3 ms of work per run judged) plus SQLite's busy-wait back-off.
+
+**A dry run is an estimate that blocks nobody.** It reads one consistent snapshot (on PostgreSQL a `REPEATABLE READ
+READ ONLY` transaction; on SQLite a read transaction, which in WAL mode never takes the write lock) and takes no row or
+table lock, so workers and the server write as usual meanwhile. It applies the same rules to that snapshot, counts the
+rows each unit would lose, and counts the blobs that nothing outside the runs it would remove refers to, in one pass per
+table for the whole report. Its counts are what an apply of the same runs would remove if nothing changed in between;
+the apply checks every run and every blob again under its locks, and says so when it removes less. An apply removes
+only runs the report listed; it never selects new runs.
+
+**One `gc` at a time.** Before it reads anything, `gc` takes the database's retention lock and holds it until it exits:
+on PostgreSQL a session advisory lock (`pg_try_advisory_lock`, keyed by the schema), on SQLite an exclusive lock on the
+file `<database>-gc.lock` beside the database, which is created if needed and left in place. A second `gc` (a report or
+an apply) does not wait: it prints "another hairspring gc is running against this database", changes nothing and exits
+with status 2. The operating system or the database releases the lock if the process dies.
+
+**A run that stopped qualifying between the check and the removal.** The apply checks every run again as it removes
+it. A run that no longer qualifies (a job was queued for it, for example) is kept, and the output lists it under "kept
+when removing" with the reason (`kept_when_removing` in JSON). If the apply removed fewer runs than the report showed,
+it says so and the exit status is 2.
+
+**Bundle files, and the order of removal.** The store commits first; then the command deletes bundle files. A bundle
+file is `<target>-<first 8 digits of the bundle hash>.hairspring` in `--bundle-dir` (default `.hairspring/bundles`).
+The command removes a file only if it is a direct child of that directory, is a regular file and not a symbolic link,
+is named like a bundle file for a bundle it just deleted, and the contents read from the opened file hash to that
+bundle's hash. A symbolic link is never followed or removed, and a bundle directory that is itself a symbolic link is
+not entered. Just before each removal the command checks again that the bundle directory is the same directory it read
+(not a symbolic link, same device and inode) and that the path still names the same file (same device and inode),
+which it opens and hashes again; anything else is left alone and named in the output. One gap remains: the command
+removes the file by its path, so between that last check and the removal there is a short window in which someone who
+can rename the bundle directory (that needs write access to the directory above it) could swap it for another
+directory, and a file of the same name there would be removed. Keep the directory above the bundle directory writable
+only by you. The failure cases:
+
+- A bundle file cannot be removed (for example, a read-only directory): the file stays, the output names it, and the
+  exit status is 2. The run, its failures and its stored bundle are already gone together, so nothing refers to the
+  file. A later `gc` cannot find it, because the stored bundle that identified it is gone: delete it by hand.
+- The process stops between the commit and the file removal: same result, with the same remedy.
+- The process stops before the commit: nothing changed for that batch. Run it again.
+
+**What is not deleted.** The database file does not shrink: SQLite reuses the freed pages (run `VACUUM` to return the
+space) and PostgreSQL reclaims it by vacuuming. Bundle files outside `--bundle-dir`, exported or copied bundles,
+workers, tokens, runs that were not selected, and runs that are not old enough are not touched. There is no stored
+record that a run was removed. Runs and failures that were exported (SARIF, JUnit, bundles in CI) still carry their
+ids.
+
+**Run it when no worker is running jobs.** When a run finds a failure, its bundle is stored first, on its own, and the
+failure row that refers to it is written afterwards, in a separate step. On both SQLite and PostgreSQL, if `gc` removes
+a bundle between those two steps, and the new failure's bundle text is identical to one `gc` is deleting, the new
+failure is left pointing at a bundle that is no longer stored. Nothing in `gc` closes this gap; it needs identical
+bundle text, but it is not ruled out. Stop the workers (or wait until no job is queued or running) before `--apply`.
+
+**How a removed run looks today.** The UI has no "expired" state yet. A removed run, failure, trial or bundle looks like
+one that never existed:
+
+- `GET /api/runs/{id}`, `GET /api/failures/{id}`, trial and bundle requests answer 404 with `{"error":"not found"}`.
+- The web UI run, failure and trial pages show "This run does not exist here. It may have been removed." (or
+  "failure", "trial") with a link to Runs; the page title is "No such page". Polling stops on the 404.
+- `hairspring show <run>` and `hairspring confirm <run>` print `no stored run`, and `hairspring replay <hash>` says the
+  input is not a readable bundle file or a stored bundle hash (exit 2).
+- Run and failure lists, counts and the Overview simply stop including the removed rows.
+
+Gaps for a later slice: the UI cannot tell "removed by retention" from "never existed", so a shared link says only
+"may have been removed"; there is no retention setting on the server or a scheduled run (the command is run by hand);
+there is no audit entry for a removal; and `--older-than` is the only age rule (nothing keeps the most recent N runs per
+target, or exempts a run).
+
 ## Bundles
 
 A bundle is a small text file: `seed`, `build`, `target`, `backend`, `param.*` and `path` (hex action ids or
