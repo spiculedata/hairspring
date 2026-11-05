@@ -41,8 +41,8 @@ fn run_with_host(
         match report.divergence {
             None => writeln!(
                 out,
-                "{name}: deterministic over {} seeds x {} steps",
-                report.seeds_checked, report.steps_per_seed
+                "{}",
+                deterministic_line(&name, report.seeds_checked, report.steps_per_seed)
             )?,
             Some(d) => {
                 code = crate::EXIT_VIOLATION;
@@ -51,6 +51,19 @@ fn run_with_host(
         }
     }
     Ok(code)
+}
+
+/// The line for a target that behaved the same on every seed. Wasm and process targets have no step count (their
+/// doctor reruns whole trials), so the steps are named only when there are some.
+fn deterministic_line(name: &str, seeds: u32, steps: usize) -> String {
+    let seeds = match seeds {
+        1 => "1 seed".to_string(),
+        n => format!("{n} seeds"),
+    };
+    match steps {
+        0 => format!("{name}: deterministic over {seeds}"),
+        n => format!("{name}: deterministic over {seeds} x {n} steps"),
+    }
 }
 
 /// Prints the process backend's prerequisites for `facts`; exits `EXIT_UNSUPPORTED_HOST` when any is unmet.
@@ -152,12 +165,29 @@ mod tests {
             },
             perf: PerfFact::Usable,
             perf_event_paranoid: Some(2),
+            pmu_registered: Some(true),
             ptrace_scope: Some(1),
             is_root: false,
             container: None,
             libc: None,
             loader: Default::default(),
         }
+    }
+
+    #[test]
+    fn the_deterministic_line_names_steps_only_when_there_are_some() {
+        assert_eq!(
+            deterministic_line("lock-lease", 8, 200),
+            "lock-lease: deterministic over 8 seeds x 200 steps"
+        );
+        assert_eq!(
+            deterministic_line("wasm-demo", 8, 0),
+            "wasm-demo: deterministic over 8 seeds"
+        );
+        assert_eq!(
+            deterministic_line("svc", 1, 0),
+            "svc: deterministic over 1 seed"
+        );
     }
 
     #[test]

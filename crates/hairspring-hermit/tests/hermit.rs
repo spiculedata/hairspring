@@ -254,7 +254,7 @@ fn doctor_detects_nondeterministic_programs() {
 fn hermit_internal_failures_are_errors_not_findings() {
     let d = scratch("infra");
     let broken = write_exe(&d, "broken-hermit", "#!/bin/sh\necho 'HERMIT_INTERNAL_FAILURE class=cli-error' >&2\necho 'Error: failed to initialize ptrace' >&2\nexit 1\n");
-    let e = engine_for(broken, "svc", &["/bin/true"], &[], budget(3));
+    let e = engine_for(broken, "svc", &["/bin/sh"], &[], budget(3));
     let out = e.run(&RunRequest::new("svc", 1), &mut |_| true).unwrap();
     assert_eq!(out.status, RunStatus::Error, "{out:?}");
     assert!(out.failure.is_none());
@@ -266,7 +266,7 @@ fn a_missing_hermit_binary_is_a_clear_error() {
     let e = engine_for(
         PathBuf::from("/definitely/not/hermit"),
         "svc",
-        &["/bin/true"],
+        &["/bin/sh"],
         &[],
         budget(1),
     );
@@ -381,7 +381,7 @@ fn hermit_is_invoked_with_a_pinned_epoch_random_scheduling_and_user_args() {
         name: "svc".into(),
         description: String::new(),
         kind: TargetKind::Process {
-            command: vec!["/bin/true".into()],
+            command: vec!["/bin/sh".into()],
             env: BTreeMap::new(),
             cwd: None,
             hermit_args: vec!["--tmp=/x".into()],
@@ -409,7 +409,7 @@ fn hermit_is_invoked_with_a_pinned_epoch_random_scheduling_and_user_args() {
         "--sched-heuristic=random",
         "--sched-seed=42",
         "--tmp=/x",
-        "-- /bin/true",
+        "-- /bin/sh",
         "HAIRSPRING_SEED=42",
     ] {
         assert!(line.contains(needle), "missing `{needle}` in `{line}`");

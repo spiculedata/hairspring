@@ -103,7 +103,7 @@ fn chaos_spec() -> SchedulerSpec {
 #[test]
 fn the_default_scheduler_is_seeded_random() {
     let d = scratch("default");
-    let (e, log) = engine(&d, &["/bin/true"], SchedulerSpec::default(), &[]);
+    let (e, log) = engine(&d, &["/bin/sh"], SchedulerSpec::default(), &[]);
     e.run(&RunRequest::new("svc", 7), &mut |_| true).unwrap();
     let argv = first_argv(&log);
     assert!(
@@ -119,7 +119,7 @@ fn the_default_scheduler_is_seeded_random() {
 #[test]
 fn chaos_options_become_flags_and_no_heuristic_is_passed() {
     let d = scratch("chaos");
-    let (e, log) = engine(&d, &["/bin/true"], chaos_spec(), &[]);
+    let (e, log) = engine(&d, &["/bin/sh"], chaos_spec(), &[]);
     e.run(&RunRequest::new("svc", 3), &mut |_| true).unwrap();
     let argv = first_argv(&log);
     for needle in [
@@ -141,7 +141,7 @@ fn sticky_random_passes_the_heuristic_and_its_probability() {
         sticky_permille: Some(900),
         ..SchedulerSpec::default()
     };
-    let (e, log) = engine(&d, &["/bin/true"], spec, &[]);
+    let (e, log) = engine(&d, &["/bin/sh"], spec, &[]);
     e.run(&RunRequest::new("svc", 1), &mut |_| true).unwrap();
     let argv = first_argv(&log);
     assert!(argv.contains("--sched-heuristic=stickyrandom"), "{argv}");
@@ -151,7 +151,7 @@ fn sticky_random_passes_the_heuristic_and_its_probability() {
 #[test]
 fn user_hermit_args_come_after_the_scheduler_flags_and_before_the_command() {
     let d = scratch("order");
-    let (e, log) = engine(&d, &["/bin/true"], chaos_spec(), &["--tmp=/x"]);
+    let (e, log) = engine(&d, &["/bin/sh"], chaos_spec(), &["--tmp=/x"]);
     e.run(&RunRequest::new("svc", 1), &mut |_| true).unwrap();
     let argv = first_argv(&log);
     let at = |needle: &str| {
@@ -159,7 +159,7 @@ fn user_hermit_args_come_after_the_scheduler_flags_and_before_the_command() {
             .unwrap_or_else(|| panic!("missing `{needle}` in `{argv}`"))
     };
     assert!(
-        at("--skid-margin=25") < at("--tmp=/x") && at("--tmp=/x") < at("-- /bin/true"),
+        at("--skid-margin=25") < at("--tmp=/x") && at("--tmp=/x") < at("-- /bin/sh"),
         "{argv}"
     );
 }
@@ -196,7 +196,7 @@ fn replay_refuses_a_bundle_recorded_under_a_different_scheduler() {
     let (_, bundle) = failing(&d, chaos_spec());
     let (other, _) = engine(
         &scratch("mismatch2"),
-        &["/bin/true"],
+        &["/bin/sh"],
         SchedulerSpec::default(),
         &[],
     );

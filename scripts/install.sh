@@ -2,7 +2,7 @@
 # Install the `hairspring` command line, from a release asset (checked against its sha256 first) or from source.
 #
 #   scripts/install.sh                         build this checkout with 'cargo build --release --locked' and install it
-#   scripts/install.sh --version v0.1.0        download that GitHub release's binary, verify it, install it
+#   scripts/install.sh --version v0.1-RC1      download that GitHub release's binary, verify it, install it
 #
 # After installing it checks `hairspring --version`, runs `hairspring doctor`, and then reports whether this machine
 # can run the `process` backend (`hairspring doctor --process-backend`). That last check is information, not a failure,
@@ -20,6 +20,9 @@ readonly EXIT_UNSUPPORTED_HOST=4
 readonly LINUX_ASSET="hairspring-linux-x86_64"
 readonly MACOS_ASSET="hairspring-macos-arm64"
 readonly SUMS_ASSET="SHA256SUMS"
+# curl exit status for a file:// URL whose file cannot be read: the test hook's 'not found'.
+readonly CURL_FILE_UNREADABLE=37
+readonly RELEASE_CHECK_TIMEOUT_SECS=20
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -53,14 +56,15 @@ Without --version the checkout this script lives in is built with 'cargo build -
 With --version the release asset for this platform is downloaded and verified before it is installed.
 
   --prefix DIR                Install to DIR/bin/hairspring. Default: \$HOME/.local
-  --version TAG               Download release TAG (for example v0.1.0) from GitHub instead of building.
+  --version TAG               Download release TAG (for example v0.1-RC1) from GitHub instead of building.
   --from-source               Build from the checkout (the default without --version).
   --repo OWNER/REPO           GitHub repository to download from. Default: $DEFAULT_REPO
   --sha256 HEX                Also require the downloaded binary to have exactly this sha256 (obtained out of band).
   --with-ui                   From source only: build the web UI first (needs node and npm), so 'hairspring serve'
                               embeds it. Without it the server shows a placeholder page.
   --require-process-backend   Exit 1 if this machine cannot run the process backend (default: report it and succeed).
-  --dry-run                   Check the arguments, the platform and the tools; download and build nothing.
+  --dry-run                   Check the arguments, the platform and the tools (and, with --version, that the
+                              release exists); download and build nothing.
 
 Release assets: $LINUX_ASSET (Linux x86-64), $MACOS_ASSET (macOS arm64) and $SUMS_ASSET.
 Exit codes: 0 success, 1 a check or verification failed, 2 usage error.
@@ -117,6 +121,23 @@ fetch() {
     die "download failed: $1"
 }
 
+# Dry run: asks for the headers of the release's SHA256SUMS (status code only, no redirect followed). Not found means
+# exit 1; no answer (offline, DNS, a proxy) is a warning, so a dry run never fails for want of a network.
+check_release_exists() {
+  local url code rc=0
+  url="$(base_url)/$SUMS_ASSET"
+  local protocols="=https"
+  [ -z "${HAIRSPRING_RELEASE_BASE_URL:-}" ] || protocols="=https,file"
+  code="$(curl --silent --head --output /dev/null --write-out '%{http_code}' --proto "$protocols" --tlsv1.2 \
+    --max-time "$RELEASE_CHECK_TIMEOUT_SECS" "$url")" || rc=$?
+  case "$rc/$code" in
+    0/2?? | 0/3?? | 0/000) say "release $VERSION found: $url" ;;
+    0/404 | 0/410 | "$CURL_FILE_UNREADABLE"/*) die "release $VERSION not found: there is no $url (check the tag on https://github.com/$REPO/releases)" ;;
+    0/*) warn "could not check that release $VERSION exists: $url answered HTTP $code" ;;
+    *) warn "could not check that release $VERSION exists (no answer from $url; offline?). The real install will find out." ;;
+  esac
+}
+
 expected_hash_from_sums() {
   # $1 SHA256SUMS file, $2 asset name: prints the one hash listed for it
   local found count
@@ -169,17 +190,39 @@ stage_download() {
   STAGED="$SCRATCH/$asset"
 }
 
-stage_source_build() {
+# Everything a source build needs, checked before anything is built; every missing piece is named at once.
+check_source_prerequisites() {
+  local missing=""
   [ -f "$REPO_ROOT/Cargo.toml" ] && [ -d "$REPO_ROOT/crates/hairspring-cli" ] ||
     die "this script is not inside a Hairspring checkout; pass --version TAG to download a release instead"
-  command -v cargo >/dev/null 2>&1 || die "cargo is required to build from source (https://rustup.rs), or pass --version TAG to download a release"
+  command -v cargo >/dev/null 2>&1 ||
+    missing="$missing
+  - cargo (the Rust toolchain): install it from https://rustup.rs"
+  if ! command -v cc >/dev/null 2>&1 || ! cc --version >/dev/null 2>&1; then
+    missing="$missing
+  - a C compiler and linker (cc), which Rust needs to link: on Debian/Ubuntu run 'sudo apt-get install -y build-essential'; on macOS run 'xcode-select --install'"
+  fi
   if [ "$WITH_UI" = "yes" ]; then
-    command -v npm >/dev/null 2>&1 || die "--with-ui needs node and npm"
+    command -v node >/dev/null 2>&1 || missing="$missing
+  - node, which --with-ui needs to build the web UI (install Node.js, which includes npm)"
+    command -v npm >/dev/null 2>&1 || missing="$missing
+  - npm, which --with-ui needs to build the web UI (it comes with Node.js)"
+  fi
+  [ -z "$missing" ] ||
+    die "cannot build from source; missing:$missing
+Nothing was built. Or pass --version TAG to download a release instead."
+}
+
+stage_source_build() {
+  local rc=0
+  check_source_prerequisites
+  if [ "$WITH_UI" = "yes" ]; then
     say "building the web UI"
-    (cd "$REPO_ROOT/web" && npm ci && npm run build)
+    (cd "$REPO_ROOT/web" && npm ci && npm run build) || die "building the web UI failed (see the npm output above). Nothing was installed."
   fi
   say "building hairspring (cargo build --release --locked)"
-  (cd "$REPO_ROOT" && cargo build --release --locked -p hairspring-cli)
+  (cd "$REPO_ROOT" && cargo build --release --locked -p hairspring-cli) || rc=$?
+  [ "$rc" -eq 0 ] || die "the build failed (cargo exited $rc; its output above says why). Nothing was installed."
   STAGED="${CARGO_TARGET_DIR:-$REPO_ROOT/target}/release/hairspring"
   [ -x "$STAGED" ] || die "the build finished but $STAGED does not exist"
 }
@@ -267,7 +310,7 @@ validate_args() {
   if [ -n "$VERSION" ]; then
     case "$VERSION" in
       v[0-9]*) ;;
-      *) usage_error "--version must be a release tag such as v0.1.0" ;;
+      *) usage_error "--version must be a release tag such as v0.1-RC1" ;;
     esac
     case "$VERSION" in
       *[!0-9A-Za-z._-]*) usage_error "--version contains characters a tag cannot have" ;;
@@ -303,8 +346,9 @@ main() {
   if [ "$DRY_RUN" = "yes" ]; then
     if [ -n "$VERSION" ]; then
       command -v curl >/dev/null 2>&1 || die "curl is required to download a release"
+      check_release_exists
     else
-      command -v cargo >/dev/null 2>&1 || die "cargo is required to build from source"
+      check_source_prerequisites
     fi
     say "dry run: nothing was downloaded, built or written."
     exit 0

@@ -13,6 +13,12 @@ use std::path::{Path, PathBuf};
 const PERF_EVENT_PARANOID_FILE: &str = "/proc/sys/kernel/perf_event_paranoid";
 const PTRACE_SCOPE_FILE: &str = "/proc/sys/kernel/yama/ptrace_scope";
 const KERNEL_RELEASE_FILE: &str = "/proc/sys/kernel/osrelease";
+const SYS_ROOT: &str = "/sys";
+/// Where the kernel lists its performance monitoring units, below the sysfs root.
+const PMU_DEVICES: &str = "bus/event_source/devices";
+/// The names a hardware CPU PMU registers under: `cpu`, or `cpu_core` (and `cpu_atom`) on hybrid Intel CPUs. The same
+/// test as `scripts/install-hermit.sh check`.
+const HARDWARE_PMU_NAMES: [&str; 2] = ["cpu", "cpu_core"];
 /// Where `scripts/install-hermit.sh` puts Hermit when no prefix is given, below `$HOME`.
 const DEFAULT_INSTALL_SUFFIX: &str = ".local/share/hairspring/hermit/bin/hermit";
 
@@ -74,6 +80,14 @@ pub fn classify_perf_errno(errno: i32) -> PerfFact {
         ENOENT | ENXIO | ENODEV | ENOSYS | EOPNOTSUPP => PerfFact::NoCounters,
         other => PerfFact::Failed(other),
     }
+}
+
+/// Whether a hardware CPU PMU is registered below `sys_root` (normally `/sys`).
+pub fn hardware_pmu_registered(sys_root: &Path) -> bool {
+    let devices = sys_root.join(PMU_DEVICES);
+    HARDWARE_PMU_NAMES
+        .iter()
+        .any(|name| devices.join(name).exists())
 }
 
 /// `docker` or `podman` when the usual marker files exist below `root`.
@@ -214,6 +228,8 @@ pub fn probe() -> ProcessBackendFacts {
         perf: probe_perf(),
         perf_event_paranoid: read_trimmed(Path::new(PERF_EVENT_PARANOID_FILE))
             .and_then(|t| parse_int(&t)),
+        pmu_registered: (std::env::consts::OS == "linux")
+            .then(|| hardware_pmu_registered(Path::new(SYS_ROOT))),
         ptrace_scope: read_trimmed(Path::new(PTRACE_SCOPE_FILE)).and_then(|t| parse_int(&t)),
         is_root: effective_uid_is_root(),
         container: detect_container(Path::new("/")),
@@ -327,6 +343,19 @@ mod tests {
             );
         }
         assert_eq!(classify_perf_errno(24), PerfFact::Failed(24));
+    }
+
+    #[test]
+    fn a_hardware_pmu_is_recognised_by_its_sysfs_entry() {
+        let root = scratch("pmu-none");
+        assert!(!hardware_pmu_registered(&root));
+        std::fs::create_dir_all(root.join("bus/event_source/devices/software")).unwrap();
+        assert!(!hardware_pmu_registered(&root), "a software PMU is not one");
+        for name in ["cpu", "cpu_core"] {
+            let with = scratch(&format!("pmu-{name}"));
+            std::fs::create_dir_all(with.join("bus/event_source/devices").join(name)).unwrap();
+            assert!(hardware_pmu_registered(&with), "{name}");
+        }
     }
 
     #[test]

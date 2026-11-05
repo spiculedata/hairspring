@@ -188,7 +188,14 @@ impl HermitBackend {
         HermitBackend::new(HermitSettings::default())
     }
 
+    /// The target's process settings, after checking that its program can be started (see [`crate::program`]).
     pub(crate) fn process<'a>(&self, spec: &'a TargetSpec) -> Result<ProcessSpec<'a>, EngineError> {
+        let p = Self::process_spec(spec)?;
+        crate::program::check(&spec.name, &p)?;
+        Ok(p)
+    }
+
+    fn process_spec(spec: &TargetSpec) -> Result<ProcessSpec<'_>, EngineError> {
         match &spec.kind {
             TargetKind::Process {
                 command,

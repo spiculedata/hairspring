@@ -35,6 +35,7 @@ wall_secs = 60
 #
 # [target.my-service.budget]
 # max_trials = 100
+# wall_secs = 600            # the whole run's limit (at most 600); the default of 60 s allows few Hermit trials
 "#;
 
 pub fn run(path: &Path, out: &mut dyn Write) -> CmdResult<i32> {
@@ -48,4 +49,44 @@ pub fn run(path: &Path, out: &mut dyn Write) -> CmdResult<i32> {
     std::fs::write(path, SAMPLE).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
     writeln!(out, "wrote {}", path.display())?;
     Ok(crate::EXIT_OK)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SAMPLE;
+    use hairspring_engine::config::{Config, TargetKind};
+
+    /// The process example with its leading `# ` removed, as a user who uncomments it gets it (the prose lines and the
+    /// scheduling alternatives stay commented).
+    fn uncommented_process_example() -> String {
+        let start = SAMPLE
+            .find("# [target.my-service]")
+            .expect("process example");
+        SAMPLE[start..]
+            .lines()
+            .filter_map(|line| line.strip_prefix("# "))
+            .filter(|line| !line.starts_with("How threads") && !line.starts_with("Races inside"))
+            .filter(|line| !line.starts_with("chaos") && !line.starts_with("heuristic"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_uncommented_process_example_parses_with_the_run_limit_it_suggests() {
+        let config = Config::parse(&uncommented_process_example()).expect("valid config");
+        let target = &config.targets["my-service"];
+        assert!(matches!(target.kind, TargetKind::Process { .. }));
+        assert_eq!(target.budget.wall_secs, 600);
+        assert_eq!(target.budget.max_trials, 100);
+    }
+
+    #[test]
+    fn the_run_limit_line_says_what_the_default_allows() {
+        let line = SAMPLE
+            .lines()
+            .find(|l| l.starts_with("# wall_secs"))
+            .expect("a wall_secs line");
+        assert!(line.contains("default of 60 s"), "{line}");
+        assert!(line.contains("at most 600"), "{line}");
+    }
 }
