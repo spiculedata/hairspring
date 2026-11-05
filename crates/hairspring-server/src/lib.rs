@@ -1,7 +1,9 @@
 //! Hairspring server: REST API, SSE, MCP endpoint, bearer-token auth and the embedded web UI.
 mod api;
 mod auth;
+mod conn;
 mod error;
+mod limits;
 mod ndjson;
 mod organisation;
 mod ratelimit;
@@ -20,8 +22,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use hairspring_engine::engine::Engine;
-use hairspring_mcp::McpServer;
+use hairspring_mcp::{McpServer, ReplaySlots, DEFAULT_MAX_REPLAYS};
 use hairspring_service::Service;
+use limits::CallerStreams;
 use ratelimit::RateLimiter;
 use sha2::{Digest, Sha256};
 use std::io;
@@ -32,9 +35,21 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// Request bodies larger than this are rejected with 413.
-const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 /// Default cap on concurrent event streams.
 const DEFAULT_MAX_SSE_STREAMS: usize = 64;
+/// Default cap on concurrent event streams for one caller (one token, or one client address without tokens).
+const DEFAULT_MAX_SSE_STREAMS_PER_CALLER: usize = 16;
+/// Default time a client has to send a request head, on a new connection and between requests on a kept-alive one.
+const DEFAULT_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
+/// Default time a client has to send a whole request body once its head has arrived.
+const DEFAULT_BODY_READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// Default cap on open connections. Leaves room under a 1024 file-descriptor limit for the store and workers.
+pub const DEFAULT_MAX_CONNECTIONS: usize = 512;
+/// Largest connection cap accepted.
+const MAX_MAX_CONNECTIONS: usize = 1_000_000;
+/// Content-Security-Policy for API and MCP responses that do not set their own: nothing may load, nothing may frame.
+const API_CSP: &str = "default-src 'none'; frame-ancestors 'none'";
 /// Default registrations per token per window: far above a fleet restarting, far below the worker cap.
 const DEFAULT_REGISTER_LIMIT: u32 = 100;
 const DEFAULT_REGISTER_WINDOW: Duration = Duration::from_secs(3600);
@@ -60,6 +75,20 @@ pub struct ServerConfig {
     /// The span `register_limit` is counted over. Counts are held in memory, so they start again when the server
     /// restarts.
     pub register_window: Duration,
+    /// Concurrent event streams one caller may hold: one token, or one client address (IPv4 address, IPv6 /64) when
+    /// there are no tokens. Keyed the same way as the rate limit.
+    pub max_sse_streams_per_caller: usize,
+    /// Time a client has to send a request head, on a new connection and between requests on a kept-alive one.
+    /// The connection is closed when it runs out. It does not apply while a response is being sent.
+    pub header_read_timeout: Duration,
+    /// Time a client has to send a whole request body once its head has arrived; 408 and the connection is closed
+    /// when it runs out.
+    pub body_read_timeout: Duration,
+    /// Open connections allowed at once; a connection beyond it is answered 503 and closed.
+    pub max_connections: usize,
+    /// Replays (REST `/api/replay` and MCP `replay_bundle` together) allowed to run at once. A replay runs target
+    /// code on the server, so one beyond this is refused with 429 and `Retry-After` rather than queued.
+    pub max_replays: usize,
     /// Shut down on Ctrl-C (for the CLI).
     pub handle_ctrl_c: bool,
     /// The organisation's name, shown in the web UI's top bar when set. Plain text of at most
@@ -78,6 +107,11 @@ impl ServerConfig {
             max_sse_streams: DEFAULT_MAX_SSE_STREAMS,
             register_limit: DEFAULT_REGISTER_LIMIT,
             register_window: DEFAULT_REGISTER_WINDOW,
+            max_sse_streams_per_caller: DEFAULT_MAX_SSE_STREAMS_PER_CALLER,
+            header_read_timeout: DEFAULT_HEADER_READ_TIMEOUT,
+            body_read_timeout: DEFAULT_BODY_READ_TIMEOUT,
+            max_connections: DEFAULT_MAX_CONNECTIONS,
+            max_replays: DEFAULT_MAX_REPLAYS,
             handle_ctrl_c: false,
             organisation: None,
         }
@@ -95,6 +129,16 @@ impl ServerConfig {
 
     fn validate(&self) -> io::Result<()> {
         self.organisation_name()?;
+        let invalid = |m: &str| io::Error::new(io::ErrorKind::InvalidInput, m.to_string());
+        if !(1..=MAX_MAX_CONNECTIONS).contains(&self.max_connections) {
+            return Err(invalid("the connection cap must be between 1 and 1000000"));
+        }
+        if self.max_replays == 0 {
+            return Err(invalid("the replay cap must be at least 1"));
+        }
+        if self.header_read_timeout.is_zero() || self.body_read_timeout.is_zero() {
+            return Err(invalid("read timeouts must be longer than zero"));
+        }
         if !self.addr.ip().is_loopback() && self.auth.is_open() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -118,6 +162,12 @@ pub struct AppState {
     /// What a refused registration is told to wait: the whole window, the longest it can take to clear.
     pub register_retry_after_secs: u64,
     pub sse_slots: Arc<tokio::sync::Semaphore>,
+    /// Event streams open per caller.
+    pub caller_streams: Arc<CallerStreams>,
+    /// Replays running now; shared with the MCP endpoint.
+    pub replays: ReplaySlots,
+    /// Time allowed for reading a request body.
+    pub body_read_timeout: Duration,
     /// The checked organisation name, if one is configured.
     pub organisation: Option<Arc<str>>,
 }
@@ -276,6 +326,9 @@ async fn harden(req: Request, next: Next) -> Response {
     );
     if api {
         h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        // A response that sets its own policy (program output is `sandbox`) keeps it.
+        h.entry(header::CONTENT_SECURITY_POLICY)
+            .or_insert(HeaderValue::from_static(API_CSP));
     }
     res
 }
@@ -326,6 +379,11 @@ fn router(state: AppState) -> Router {
         .route("/mcp", post(api::mcp))
         .fallback(ui::handler)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        // Below the open-mode guard and the rate limit, so a refused request is not read first.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            limits::read_body_in_time,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             guard_open_mode,
@@ -386,10 +444,13 @@ pub fn start(config: ServerConfig, svc: Service, engine: Engine) -> io::Result<R
     listener.set_nonblocking(true)?;
     let addr = listener.local_addr()?;
     let stopping = Arc::new(AtomicBool::new(false));
+    let replays = ReplaySlots::new(config.max_replays);
     let state = AppState {
         svc: svc.clone(),
         engine: engine.clone(),
-        mcp: Arc::new(McpServer::new(svc.clone(), engine.clone(), false)),
+        mcp: Arc::new(
+            McpServer::new(svc.clone(), engine.clone(), false).with_replay_slots(replays.clone()),
+        ),
         auth: Arc::new(config.auth.clone()),
         stopping: stopping.clone(),
         limiter: Arc::new(RateLimiter::new(config.rate_limit_per_min)),
@@ -399,7 +460,14 @@ pub fn start(config: ServerConfig, svc: Service, engine: Engine) -> io::Result<R
         )),
         register_retry_after_secs: config.register_window.as_secs().max(1),
         sse_slots: Arc::new(tokio::sync::Semaphore::new(config.max_sse_streams)),
+        caller_streams: Arc::new(CallerStreams::new(config.max_sse_streams_per_caller)),
+        replays,
+        body_read_timeout: config.body_read_timeout,
         organisation: config.organisation_name()?,
+    };
+    let limits = conn::ConnLimits {
+        header_read_timeout: config.header_read_timeout,
+        max_connections: config.max_connections,
     };
     let workers = spawn_workers(config.embedded_workers, &svc, &engine, &stopping);
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
@@ -420,16 +488,14 @@ pub fn start(config: ServerConfig, svc: Service, engine: Engine) -> io::Result<R
                     return;
                 }
             };
-            let app = router(state).into_make_service_with_connect_info::<SocketAddr>();
+            let app = router(state);
             let shutdown = async move {
                 tokio::select! {
                     _ = rx => {}
                     _ = async { if ctrl_c { let _ = tokio::signal::ctrl_c().await; } else { std::future::pending::<()>().await } } => {}
                 }
             };
-            if let Err(e) = axum::serve(listener, app).with_graceful_shutdown(shutdown).await {
-                eprintln!("hairspring-server: server error: {e}");
-            }
+            conn::serve(listener, app, limits, shutdown).await;
         });
     })?;
     Ok(RunningServer {
@@ -453,6 +519,10 @@ mod tests {
     const WINDOW: Duration = Duration::from_millis(600);
 
     fn state_with_window(window: Duration) -> AppState {
+        state_with(window, Auth::from_spec(&format!("{TOKEN}:read")).unwrap())
+    }
+
+    fn state_with(window: Duration, auth: Auth) -> AppState {
         let registry = Arc::new(default_registry());
         let engine = Engine::new(registry.clone(), Config::from_registry(&registry));
         let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
@@ -461,12 +531,15 @@ mod tests {
             svc: svc.clone(),
             engine: engine.clone(),
             mcp: Arc::new(McpServer::new(svc, engine, false)),
-            auth: Arc::new(Auth::from_spec(&format!("{TOKEN}:read")).unwrap()),
+            auth: Arc::new(auth),
             stopping: Arc::new(AtomicBool::new(false)),
             limiter: Arc::new(RateLimiter::with_window(LIMIT, window)),
             register_limiter: Arc::new(RateLimiter::new(0)),
             register_retry_after_secs: 1,
             sse_slots: Arc::new(tokio::sync::Semaphore::new(1)),
+            caller_streams: Arc::new(CallerStreams::new(1)),
+            replays: ReplaySlots::new(1),
+            body_read_timeout: Duration::from_secs(5),
             organisation: None,
         }
     }
@@ -498,5 +571,41 @@ mod tests {
 
         // Assert: the refused requests did not spend the token's own allowance.
         assert_eq!(allowed, LIMIT as usize);
+    }
+
+    #[tokio::test]
+    async fn a_replay_over_the_limit_is_refused_with_retry_after_and_not_queued() {
+        use axum::body::Body;
+        use tower::ServiceExt;
+
+        // Arrange: the only replay slot is taken (a replay already running).
+        let state = state_with(WINDOW, Auth::open());
+        let held = state.replays.try_acquire().expect("free");
+        let app = router(state.clone());
+        let replay = || {
+            let mut req = axum::http::Request::post("/api/replay")
+                .header(header::HOST, "127.0.0.1")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{\"bundle\":\"garbage\"}"))
+                .unwrap();
+            let peer: SocketAddr = "127.0.0.1:4000".parse().unwrap();
+            req.extensions_mut().insert(ConnectInfo(peer));
+            req
+        };
+
+        // Act
+        let busy = app.clone().oneshot(replay()).await.unwrap();
+
+        // Assert
+        assert_eq!(busy.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            busy.headers().get(header::RETRY_AFTER).unwrap(),
+            &hairspring_mcp::REPLAY_RETRY_AFTER_SECS.to_string()
+        );
+        // With the slot free the same request reaches the bundle (and is refused for it), and gives the slot back.
+        drop(held);
+        let after = app.oneshot(replay()).await.unwrap();
+        assert_eq!(after.status(), StatusCode::BAD_REQUEST);
+        assert!(state.replays.try_acquire().is_some());
     }
 }

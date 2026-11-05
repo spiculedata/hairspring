@@ -2,7 +2,7 @@ use hairspring_engine::config::Config;
 use hairspring_engine::demos::default_registry;
 use hairspring_engine::engine::Engine;
 use hairspring_engine::mode::RunMode;
-use hairspring_mcp::McpServer;
+use hairspring_mcp::{McpServer, ReplaySlots};
 use hairspring_service::{Role, Service, StartRun};
 use hairspring_store::{RunState, SqliteStore, Store};
 use serde_json::{json, Value};
@@ -585,4 +585,40 @@ fn replay_bundle_takes_an_explicit_environment_override_and_checks_its_type() {
         json!({"bundle": bundle, "allow_environment_change": "yes"}),
     );
     assert!(!bad["error"].is_null(), "{bad}");
+}
+
+#[test]
+fn replays_beyond_the_shared_limit_are_refused_at_once_and_not_queued() {
+    // Arrange: one replay slot, shared with whatever else runs replays, and already held.
+    let slots = ReplaySlots::new(1);
+    let s = server().with_replay_slots(slots.clone());
+    let held = slots.try_acquire().expect("the only slot is free");
+    assert!(slots.try_acquire().is_none(), "a second permit is refused");
+
+    // Act
+    let busy = tool(&s, Role::Run, "replay_bundle", json!({"bundle": "garbage"}));
+
+    // Assert: refused with a code a client can branch on, before the bundle is even looked at.
+    assert_eq!(busy["result"]["isError"], json!(true), "{busy}");
+    assert_eq!(
+        busy["result"]["structuredContent"]["code"], "replay_busy",
+        "{busy}"
+    );
+    assert!(busy["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("try again"));
+
+    // Once the slot is free the same call reaches the bundle (and fails on it, as garbage should).
+    drop(held);
+    let after = tool(&s, Role::Run, "replay_bundle", json!({"bundle": "garbage"}));
+    assert_eq!(after["result"]["isError"], json!(true), "{after}");
+    assert!(
+        after["result"]["structuredContent"]["code"].is_null(),
+        "{after}"
+    );
+    assert!(
+        slots.try_acquire().is_some(),
+        "the replay gave its slot back"
+    );
 }

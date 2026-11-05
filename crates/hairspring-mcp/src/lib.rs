@@ -8,6 +8,7 @@
 mod read_tools;
 mod resources;
 mod rpc;
+mod slots;
 mod tools;
 pub mod validate;
 
@@ -15,6 +16,7 @@ use hairspring_engine::engine::Engine;
 use hairspring_service::{Role, Service};
 use rpc::{error_response, ok_response, Reply};
 use serde_json::{json, Value};
+pub use slots::{ReplayPermit, ReplaySlots, DEFAULT_MAX_REPLAYS, REPLAY_RETRY_AFTER_SECS};
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -38,6 +40,8 @@ pub struct McpServer {
     inline: bool,
     waits: AtomicUsize,
     max_waits: usize,
+    /// Caps replays running at once; shared with the REST API when served over HTTP.
+    replays: ReplaySlots,
 }
 
 impl McpServer {
@@ -48,7 +52,17 @@ impl McpServer {
             inline: inline_execution,
             waits: AtomicUsize::new(0),
             max_waits: DEFAULT_MAX_WAITS,
+            replays: ReplaySlots::new(DEFAULT_MAX_REPLAYS),
         }
+    }
+
+    /// Draws `replay_bundle` calls from these slots, so another caller (the REST API) can share one limit.
+    pub fn with_replay_slots(self, replays: ReplaySlots) -> McpServer {
+        McpServer { replays, ..self }
+    }
+
+    pub(crate) fn replay_slots(&self) -> &ReplaySlots {
+        &self.replays
     }
 
     /// Caps how many `start_run` calls may block waiting for completion at once.

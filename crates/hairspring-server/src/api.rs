@@ -7,7 +7,8 @@ use crate::ndjson::list_response;
 use crate::read_api::{limit, param, Params};
 use crate::AppState;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{ConnectInfo, FromRequest, Path, Query, Request, State};
+use axum::extract::{ConnectInfo, FromRequest, FromRequestParts, Path, Query, Request, State};
+use axum::http::request::Parts;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -41,6 +42,21 @@ impl<T: DeserializeOwned> FromRequest<AppState> for ApiJson<T> {
             Ok(Json(v)) => Ok(ApiJson(v)),
             Err(rej) => Err(reject(rej)),
         }
+    }
+}
+
+/// Query-string extractor that reports a string it cannot parse as a 400 in the usual JSON error shape, with a fixed
+/// message that does not repeat the caller's text.
+pub struct ApiQuery<T>(pub T);
+
+impl<T: DeserializeOwned, S: Send + Sync> FromRequestParts<S> for ApiQuery<T> {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
+        Query::<T>::from_request_parts(parts, state)
+            .await
+            .map(|Query(v)| ApiQuery(v))
+            .map_err(|_| ApiError::bad_request("invalid query string"))
     }
 }
 
@@ -129,7 +145,7 @@ pub async fn list_runs(
     State(s): State<AppState>,
     caller: Caller,
     headers: HeaderMap,
-    Query(p): Query<Params>,
+    ApiQuery(p): ApiQuery<Params>,
 ) -> Result<Response, ApiError> {
     caller.need(Role::Read)?;
     let q = RunListQuery {
@@ -152,7 +168,7 @@ pub async fn list_runs(
 pub async fn search(
     State(s): State<AppState>,
     caller: Caller,
-    Query(p): Query<Params>,
+    ApiQuery(p): ApiQuery<Params>,
 ) -> Result<Json<Value>, ApiError> {
     caller.need(Role::Read)?;
     let q = param(&p, "q");
@@ -222,7 +238,7 @@ pub async fn list_failures(
     State(s): State<AppState>,
     caller: Caller,
     headers: HeaderMap,
-    Query(p): Query<Params>,
+    ApiQuery(p): ApiQuery<Params>,
 ) -> Result<Response, ApiError> {
     caller.need(Role::Read)?;
     let q = FailureListQuery {
@@ -284,10 +300,23 @@ pub async fn replay(
     ApiJson(body): ApiJson<ReplayBody>,
 ) -> Result<Json<Value>, ApiError> {
     caller.need(Role::Run)?; // replay executes target code, so it needs more than read access
+                             // A replay holds a blocking thread for as long as the target runs, so only a few may run at once; the rest are
+                             // refused now rather than queued. The permit moves into the task, so the slot stays taken until the replay ends
+                             // even if the client goes away.
+    let permit = s.replays.try_acquire().ok_or_else(|| {
+        ApiError::too_many_requests(
+            "too many replays are running; try again shortly",
+            hairspring_mcp::REPLAY_RETRY_AFTER_SECS,
+        )
+    })?;
     let options = hairspring_service::ReplayOptions {
         allow_environment_change: body.allow_environment_change,
     };
-    let out = blocking(move || s.svc.replay_bundle_with(&s.engine, &body.bundle, options)).await?;
+    let out = blocking(move || {
+        let _permit = permit;
+        s.svc.replay_bundle_with(&s.engine, &body.bundle, options)
+    })
+    .await?;
     Ok(Json(serde_json::to_value(out).unwrap_or_default()))
 }
 

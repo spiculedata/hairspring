@@ -1,10 +1,11 @@
 //! Server-sent events for a run: stored events are replayed, then new ones follow
 //! until the run is finished (or the server stops).
-use crate::api::blocking;
+use crate::api::{blocking, ApiQuery};
 use crate::auth::Caller;
 use crate::error::ApiError;
+use crate::limits::CallerStreamSlot;
 use crate::AppState;
-use axum::extract::{Path, Query, State};
+use axum::extract::{ConnectInfo, Path, State};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures_util::stream::{self, Stream, StreamExt};
 use hairspring_mcp::validate;
@@ -12,6 +13,7 @@ use hairspring_service::Role;
 use hairspring_store::EventRecord;
 use serde::Deserialize;
 use std::convert::Infallible;
+use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use tokio::sync::OwnedSemaphorePermit;
@@ -31,15 +33,20 @@ struct Cursor {
     last_id: i64,
     started: Instant,
     done: bool,
+    /// Whether the caller may see worker ids (`run` and above).
+    reveal_workers: bool,
     /// Held for the life of the stream; released when it ends.
     _slot: OwnedSemaphorePermit,
+    /// This caller's share of the slots, held and released the same way.
+    _caller_slot: CallerStreamSlot,
 }
 
 pub async fn events(
     State(s): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     caller: Caller,
     Path(run_id): Path<String>,
-    Query(q): Query<After>,
+    ApiQuery(q): ApiQuery<After>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     caller.need(Role::Read)?;
     if !validate::run_id(&run_id) {
@@ -49,6 +56,18 @@ pub async fn events(
     blocking(move || svc.get_run(&id))
         .await?
         .ok_or_else(ApiError::not_found)?;
+    // Keyed like the rate limit: the token, or the client address when there are no tokens.
+    let caller_key = if s.auth.is_open() {
+        crate::ratelimit::anonymous_key(peer.ip())
+    } else {
+        caller.key.clone()
+    };
+    let caller_slot = s.caller_streams.try_acquire(caller_key).ok_or_else(|| {
+        ApiError::new(
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "too many open event streams for this caller",
+        )
+    })?;
     let slot = s.sse_slots.clone().try_acquire_owned().map_err(|_| {
         ApiError::new(
             axum::http::StatusCode::TOO_MANY_REQUESTS,
@@ -62,7 +81,9 @@ pub async fn events(
         last_id: q.after.unwrap_or(0).max(0),
         started: Instant::now(),
         done: false,
+        reveal_workers: caller.role.allows(Role::Run),
         _slot: slot,
+        _caller_slot: caller_slot,
     };
     let stream = stream::unfold(cursor, |mut c| async move {
         if c.done {
@@ -93,13 +114,15 @@ pub async fn events(
                 }
             };
             c.last_id = batch.last().map(|e| e.id).unwrap_or(c.last_id);
+            let reveal = c.reveal_workers;
             let events: Vec<Result<Event, Infallible>> = batch
                 .into_iter()
                 .map(|e| {
+                    let data = payload_for(&e.payload_json, reveal);
                     Ok(Event::default()
                         .id(e.id.to_string())
                         .event(e.kind)
-                        .data(e.payload_json))
+                        .data(data))
                 })
                 .collect();
             return Some((stream::iter(events), c));
@@ -107,6 +130,23 @@ pub async fn events(
     })
     .flatten();
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+/// Worker ids act as lease credentials, so callers below `run` do not see them (as in `GET /api/workers`). An
+/// event's payload is a JSON object; the `worker` key is removed from it for those callers.
+fn payload_for(payload_json: &str, reveal_workers: bool) -> String {
+    if reveal_workers {
+        return payload_json.to_string();
+    }
+    match serde_json::from_str::<serde_json::Value>(payload_json) {
+        Ok(serde_json::Value::Object(mut fields)) => {
+            if fields.remove("worker").is_none() {
+                return payload_json.to_string();
+            }
+            serde_json::Value::Object(fields).to_string()
+        }
+        _ => payload_json.to_string(),
+    }
 }
 
 /// What one look at a run's stored state found.
@@ -216,6 +256,18 @@ mod tests {
             }
         }
         panic!("stream never ended: {kinds:?}");
+    }
+
+    #[test]
+    fn worker_ids_are_left_out_of_event_payloads_for_callers_below_run() {
+        let started = r#"{"worker":"wrk_0123456789abcdef"}"#;
+        assert_eq!(payload_for(started, true), started);
+        assert_eq!(payload_for(started, false), "{}");
+        let progress = r#"{"steps":5,"worker":"wrk_0123456789abcdef"}"#;
+        assert_eq!(payload_for(progress, false), r#"{"steps":5}"#);
+        let plain = r#"{"steps":5}"#;
+        assert_eq!(payload_for(plain, false), plain);
+        assert_eq!(payload_for("not json", false), "not json");
     }
 
     #[test]

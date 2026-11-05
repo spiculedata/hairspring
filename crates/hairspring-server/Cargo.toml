@@ -13,11 +13,15 @@ hairspring-service = { path = "../hairspring-service" }
 hairspring-store = { path = "../hairspring-store" }
 axum = "0.8.9"
 futures-util = "0.3.34"
+http-body-util = "0.1.5"
+hyper = { version = "1.12.0", features = ["server", "http1"] }
+hyper-util = { version = "0.1.21", features = ["tokio"] }
 rust-embed = "8.13.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "net", "time", "signal", "sync"] }
+tower = { version = "0.5.3", features = ["util"] }
 
 [dev-dependencies]
 hairspring-hermit = { path = "../hairspring-hermit" }

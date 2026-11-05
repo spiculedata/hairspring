@@ -98,6 +98,23 @@
 
 ### Changed
 
+- Server hardening. The server now closes a connection that has not sent a complete request head within 10 seconds
+  (this is also the idle time allowed between requests on a kept-alive connection), answers `408` and closes the
+  connection when a request body has not arrived within 30 seconds, and allows at most 512 open connections
+  (`hairspring serve --max-connections N`); a connection beyond that is answered `503` and closed. These deadlines do
+  not apply while a response is being produced or sent, so event streams and long replays are unaffected. The server
+  speaks HTTP/1.1 only; cleartext HTTP/2 is no longer accepted.
+- At most 2 replays run on the server at once, REST `/api/replay` and MCP `replay_bundle` together
+  (`hairspring serve --max-replays N`). A replay over the limit is refused at once: REST answers `429` with
+  `Retry-After: 5`, and the MCP tool returns a tool error with the code `replay_busy`.
+- One caller (a token, or a client address when the server has no tokens) may hold at most 16 of the 64 event-stream
+  slots; past that the stream request is answered `429`.
+- The run event stream no longer shows worker ids to `read` tokens: the `worker` key is left out of event payloads
+  for that role, as `GET /api/workers` already did.
+- API and MCP responses carry `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` (program output
+  downloads keep `sandbox`), and the web UI's policy adds `base-uri 'none'` and `form-action 'self'`.
+- A query string that does not parse (for example `?after=abc` on the event stream) is answered with the JSON error
+  `{"error": "invalid query string"}` instead of a plain-text message.
 - The per-client rate limit now also applies to valid tokens from an address that has used up its budget. Once
   requests without a valid token (no token, or a wrong one) from a client address (an IPv4 address or an IPv6 /64)
   go past `--rate-limit` in a minute, a request with a valid token from that address is answered `429` too. The

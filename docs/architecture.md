@@ -653,6 +653,42 @@ Gaps for a later slice: the UI cannot tell "removed by retention" from "never ex
 there is no audit entry for a removal; and `--older-than` is the only age rule (nothing keeps the most recent N runs per
 target, or exempts a run).
 
+## Connection and request limits
+
+The server speaks HTTP/1.1 (cleartext HTTP/2 is not accepted) and applies these limits before any token is checked:
+
+| Limit | Default | Set by | Beyond it |
+|---|---|---|---|
+| Open connections | 512 | `hairspring serve --max-connections N` (1 to 1000000) | `503` with `Retry-After: 1`, written only if the socket takes it at once, then the connection is closed |
+| Time to send a request head | 10 s | `ServerConfig::header_read_timeout` | the connection is closed |
+| Time to send a request body, once the head has arrived | 30 s | `ServerConfig::body_read_timeout` | `408` with a JSON error, then the connection is closed |
+
+The head deadline runs whenever the server is waiting for a request: from the moment a connection is accepted, and
+again after each response on a kept-alive connection. So a connection that sends nothing, sends half a head, or sits
+idle between requests is closed after 10 seconds. It does not run while a handler works or a response is being sent,
+so a long replay or an event stream is not cut off by it. The body is read in full (at most 2 MiB, `413` beyond) before
+the handler runs; this happens after the open-mode checks and the rate limit, so a refused request's body is not read.
+The connection cap is one count for the whole server, not per address: a client that opens many connections can fill
+it, and others are refused until those connections end, which for a connection that sends nothing is at most 10
+seconds. Keep the process's file-descriptor limit (`LimitNOFILE` under systemd) comfortably above the cap.
+
+Replays run target code synchronously on the server's blocking threads, so they have their own small cap:
+`hairspring serve --max-replays N` (default 2, at least 1) counts REST `/api/replay` and MCP `replay_bundle` together.
+A replay over the cap is refused at once, never queued: REST answers `429` with `Retry-After: 5`, and the MCP tool
+returns a tool error with `structuredContent.code` set to `replay_busy`. A replay keeps its slot until it finishes,
+even if the client has gone away. Other handlers therefore always have blocking threads left.
+
+Event streams (`GET /api/runs/{id}/events`) are capped at 64 open in total and 16 per caller, where a caller is one
+token, or, when the server has no tokens, one client address (IPv4 address or IPv6 /64), as for the rate limit. Either
+cap answers `429` with a JSON error. A stream ends when its run ends, when the server stops, or after 10 minutes. For a
+`read` caller the `worker` key is removed from event payloads (it is in the `started` event), as `GET /api/workers`
+leaves out worker ids for that role.
+
+A query string that does not parse (for example `?after=abc` on the event stream) is a `400` with the JSON error
+`{"error": "invalid query string"}`, which does not repeat the caller's text. API and MCP responses carry
+`Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` unless the response sets its own (program output
+downloads use `sandbox`); the web UI's policy also sets `base-uri 'none'` and `form-action 'self'`.
+
 ## Bundles
 
 A bundle is a small text file: `seed`, `build`, `target`, `backend`, `param.*` and `path` (hex action ids or

@@ -5,11 +5,12 @@
 //! MCP accept the same inputs. Path indexes that are not plain numbers are a 404, like an id of the wrong shape.
 //! Nothing here builds a response from guest text; the service puts it under a `guest` object.
 use crate::api::blocking;
+use crate::api::ApiQuery;
 use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::ndjson::list_response;
 use crate::AppState;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::{header, HeaderMap};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -80,7 +81,7 @@ pub async fn properties(
     caller: Caller,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Query(p): Query<Params>,
+    ApiQuery(p): ApiQuery<Params>,
 ) -> Result<Response, ApiError> {
     read_run_id(&caller, &id)?;
     let q = PropertyQuery {
@@ -100,7 +101,7 @@ pub async fn property(
     State(s): State<AppState>,
     caller: Caller,
     Path((id, idx)): Path<(String, String)>,
-    Query(p): Query<Params>,
+    ApiQuery(p): ApiQuery<Params>,
 ) -> Result<Json<Value>, ApiError> {
     read_run_id(&caller, &id)?;
     let idx: u32 = path_number(&idx, 10)?;
@@ -117,7 +118,7 @@ pub async fn trials(
     caller: Caller,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Query(p): Query<Params>,
+    ApiQuery(p): ApiQuery<Params>,
 ) -> Result<Response, ApiError> {
     read_run_id(&caller, &id)?;
     let q = TrialQuery {
@@ -180,7 +181,7 @@ pub async fn strip(
     State(s): State<AppState>,
     caller: Caller,
     Path(id): Path<String>,
-    Query(p): Query<Params>,
+    ApiQuery(p): ApiQuery<Params>,
 ) -> Result<Json<Value>, ApiError> {
     read_run_id(&caller, &id)?;
     let q = StripQuery {
