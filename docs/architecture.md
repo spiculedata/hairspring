@@ -479,16 +479,17 @@ scan nothing; a new trial or a new attempt is scanned again. While trials keep a
 in after the count and is then not kept, so the next poll scans again.
 
 **Bound.** At most 32 finished runs' figures and about 64 MiB of them by estimate, and at most 64 coverage series and
-about 16 MiB of them. A run with the largest catalog, 16384 ids, holds about 7 MB with short ids and messages, and
+about 16 MiB of them. A run with the largest catalogue, 16384 ids, holds about 7 MB with short ids and messages, and
 about 23 MB when every id, message and location is as long as allowed, so two such runs fit. The least recently used
 entry goes first, and a value larger than the whole bound is not kept.
 
 **Concurrent requests.** The first request for an entry works it out without holding a lock, and other requests for
 the same run with the same validity token wait for it and are handed its outcome, so concurrent first requests work a
 run's figures out once. If that work fails, every waiting request gets the same error; it is not repeated once per
-waiting request. An open run's series that could not be kept because trials arrived during the scan is still handed
-to the requests that waited for it, since each of them counted the same rows before the scan finished; if a new
-attempt started during the scan, each waiting request scans for itself, side by side rather than one after another.
+waiting request. An open run's series that could not be kept is handed to the requests that waited for it only if the
+attempt read after the scan is the one read before it and the scan saw at least as many trial rows as were counted
+before it. Otherwise (a new attempt started during the scan, or the count was taken under an earlier attempt and the
+scan saw fewer rows), each waiting request scans for itself, side by side rather than one after another.
 
 **Lifetime.** The cache belongs to one server process. Restarting the server clears it, and two servers on one
 database each keep their own; the validity rule is checked against the store, so neither can serve the other's stale

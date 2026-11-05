@@ -73,6 +73,10 @@ impl<V> Clone for Outcome<V> {
     }
 }
 
+/// How long a test lets a caller wait for a flight before failing.
+#[cfg(test)]
+const TEST_WAIT_BOUND: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// One working out of a value, and the callers waiting for it.
 struct Flight<V> {
     outcome: Mutex<Option<Outcome<V>>>,
@@ -90,14 +94,43 @@ impl<V> Flight<V> {
     }
 
     fn wait(&self) -> Outcome<V> {
-        self.waiting.fetch_add(1, Ordering::SeqCst);
         let mut outcome = lock(&self.outcome);
+        // Counted while holding the lock, so a caller that sees the count knows this waiter is asleep on `landed` or
+        // will see the outcome: the flight cannot land in between.
+        self.waiting.fetch_add(1, Ordering::SeqCst);
         loop {
             if let Some(o) = outcome.as_ref() {
                 return o.clone();
             }
-            outcome = self.landed.wait(outcome).unwrap_or_else(|e| e.into_inner());
+            outcome = self.sleep(outcome);
         }
+    }
+
+    #[cfg(not(test))]
+    fn sleep<'a>(
+        &self,
+        outcome: MutexGuard<'a, Option<Outcome<V>>>,
+    ) -> MutexGuard<'a, Option<Outcome<V>>> {
+        self.landed.wait(outcome).unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// In tests a waiter not woken within [`TEST_WAIT_BOUND`] fails, so a flight that never lands, or lands without
+    /// waking its waiters, fails the test instead of hanging it.
+    #[cfg(test)]
+    fn sleep<'a>(
+        &self,
+        outcome: MutexGuard<'a, Option<Outcome<V>>>,
+    ) -> MutexGuard<'a, Option<Outcome<V>>> {
+        let (outcome, timeout) = self
+            .landed
+            .wait_timeout(outcome, TEST_WAIT_BOUND)
+            .unwrap_or_else(|e| e.into_inner());
+        assert!(
+            !timeout.timed_out(),
+            "a caller waiting for a flight was not woken within {TEST_WAIT_BOUND:?}: the flight never landed, or \
+             landed without waking it"
+        );
+        outcome
     }
 
     fn land(&self, outcome: Outcome<V>) {
@@ -353,8 +386,7 @@ impl<T: PartialEq + Clone, V: Weigh> ResultCache<T, V> {
         (inner.entries.len(), inner.bytes)
     }
 
-    /// How many callers are waiting for the flight working out `key`.
-    #[cfg(test)]
+    /// How many callers are waiting for the flight working out `key`. For tests.
     pub(crate) fn waiting(&self, key: &str) -> usize {
         let Some(slot) = lock(&self.inner).entries.get(key).map(|e| e.slot.clone()) else {
             return 0;
@@ -509,6 +541,27 @@ mod tests {
         assert_eq!(c.held(), (1, 40));
         put(&c, "small", 1, 40);
         assert_eq!(c.computed(), 2, "the small entry stayed");
+    }
+
+    #[test]
+    fn a_value_whose_entry_was_replaced_while_it_was_worked_out_adds_no_bytes_to_the_new_entry() {
+        let c = cache(4, 1000);
+        let got = c
+            .get_or_compute("r", &1, || {
+                // While this flight runs, a caller with another token replaces its entry and keeps a value of 20.
+                assert_eq!(put(&c, "r", 2, 20), 20);
+                Ok(Computed::kept(Blob(10)))
+            })
+            .unwrap();
+        assert_eq!(got.0, 10, "the orphaned caller still gets its own value");
+        assert_eq!(
+            c.held(),
+            (1, 20),
+            "the orphaned value's bytes are not counted"
+        );
+        assert_eq!(put(&c, "r", 2, 99), 20, "the newer entry is still served");
+        c.forget("r");
+        assert_eq!(c.held(), (0, 0));
     }
 
     #[test]

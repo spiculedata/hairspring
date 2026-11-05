@@ -20,11 +20,12 @@ use std::sync::Arc;
 
 /// Most finished runs whose figures are held at once.
 pub(crate) const RUN_FACTS_MAX_ENTRIES: usize = 32;
-/// Most estimated bytes of figures held at once. A run with the largest catalog (16384 ids) holds about 7 MB with short
-/// ids and messages, and about 23 MB when every id, message and location is as long as allowed, so two such runs fit.
+/// Most estimated bytes of figures held at once. A run with the largest catalogue (16384 ids) holds about 7 MB with
+/// short ids and messages, and about 23 MB when every id, message and location is as long as allowed, so two such runs
+/// fit.
 pub(crate) const RUN_FACTS_MAX_BYTES: usize = 64 * 1024 * 1024;
 
-/// A run's statistics paired with their catalog index, sorted by id.
+/// A run's statistics paired with their catalogue index, sorted by id.
 pub(crate) type IndexedStats = Arc<Vec<(u32, PropertyStat)>>;
 
 pub(crate) struct RunFacts {
@@ -110,7 +111,7 @@ impl Service {
         }
     }
 
-    /// The run's statistics with their catalog index, sorted by id.
+    /// The run's statistics with their catalogue index, sorted by id.
     pub(crate) fn stats_of(&self, run: &RunRecord) -> Result<IndexedStats> {
         match self.finished_facts(run)? {
             Some(f) => Ok(f.stats.clone()),

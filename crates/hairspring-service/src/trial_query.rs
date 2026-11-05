@@ -304,7 +304,7 @@ impl Service {
         // The count is read before the run row, so the attempt read after it is the one the counted rows belong to:
         // attempts only go up, and a new one removes the rows of the old one in the same transaction.
         let trials = self.store.count_trials(run_id)?;
-        self.coverage_cache.after_count();
+        self.coverage_cache.race_point();
         // A run that finished in between is still scanned correctly here; its next read takes the finished path.
         let Some(run) = self.stored_run(run_id)? else {
             return Ok(None);
@@ -322,6 +322,7 @@ impl Service {
             .series
             .get_or_compute(run_id, &token, || {
                 let series = self.scan_coverage(run_id)?;
+                self.coverage_cache.race_point();
                 let after = OpenRows {
                     trials: self.store.count_trials(run_id)?,
                     attempt: self.store.get_run(run_id)?.map(|r| r.ingest_attempt),
@@ -382,11 +383,18 @@ impl Service {
     }
 
     /// Runs `hook` in every coverage read of an open run, just after it has counted the run's trial rows and before
-    /// it reads the run row and scans. For tests that race a write against the read.
+    /// it reads the run row and scans, and again just after each scan of an open run, before the rows are counted a
+    /// second time. For tests that race a write against the read.
     #[doc(hidden)]
-    pub fn set_coverage_count_hook(&self, hook: impl Fn() + Send + Sync + 'static) {
+    pub fn set_coverage_race_hook(&self, hook: impl Fn() + Send + Sync + 'static) {
         self.coverage_cache
             .set_count_hook(std::sync::Arc::new(hook));
+    }
+
+    /// How many coverage reads of `run_id` are waiting for another read's scan of it to land. For tests.
+    #[doc(hidden)]
+    pub fn coverage_waiters(&self, run_id: &str) -> usize {
+        self.coverage_cache.series.waiting(run_id)
     }
 
     fn scan_coverage(&self, run_id: &str) -> Result<Coverage> {

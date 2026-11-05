@@ -11,7 +11,8 @@ use hairspring_store::RunRecord;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// A test's hook, run by a coverage read of an open run just after it has counted the run's trial rows.
+/// A test's hook, run by a coverage read of an open run just after it has counted the run's trial rows, and again just
+/// after each scan of them.
 pub(crate) type CountHook = Arc<dyn Fn() + Send + Sync>;
 
 /// Most series held at once. A series is at most [`crate::query::MAX_COVERAGE_POINTS`] small points (about 64 KB).
@@ -42,14 +43,20 @@ pub(crate) fn held_still(before: OpenRows, after: OpenRows, scanned: u64) -> boo
     before.attempt.is_some() && before == after && scanned == before.trials
 }
 
-/// What may be done with a series scanned from an open run. Kept when the rows [`held_still`]. Otherwise, while the
-/// attempt is unchanged, the scan saw every row counted `before` it, plus rows added while it ran, all of which callers
-/// holding the same count were waiting through: they are given it, as the scanning caller is. A new attempt (or a run
-/// that went) may have changed the rows under the scan, so the waiting callers scan for themselves.
+/// What may be done with a series scanned from an open run. Kept when the rows [`held_still`]. Otherwise it is handed
+/// to the callers waiting with the same attempt and count only if the attempt is unchanged after the scan and the scan
+/// saw at least the rows counted `before` it: those callers counted that many rows, and within one attempt rows are
+/// only added, so the series holds at least what they counted. The count can belong to an earlier attempt than the one
+/// read after it (a new attempt can start between the two reads), and the new attempt can then hold fewer rows than
+/// were counted when it is scanned; a waiting caller that later counted that many rows of the new attempt must not be
+/// given the shorter series. In every other case the waiting callers scan for themselves.
 pub(crate) fn open_scan_keep(before: OpenRows, after: OpenRows, scanned: u64) -> Keep {
     if held_still(before, after, scanned) {
         Keep::Yes
-    } else if before.attempt.is_some() && before.attempt == after.attempt {
+    } else if before.attempt.is_some()
+        && before.attempt == after.attempt
+        && scanned >= before.trials
+    {
         Keep::Share
     } else {
         Keep::No
@@ -89,7 +96,7 @@ impl CoverageCache {
     }
 
     /// Runs the test's hook, if one is set; not while holding the lock, so the hook may read coverage itself.
-    pub(crate) fn after_count(&self) {
+    pub(crate) fn race_point(&self) {
         let hook = self
             .count_hook
             .lock()
@@ -147,6 +154,13 @@ mod tests {
         assert_eq!(open_scan_keep(rows(5, 1), rows(5, 1), 5), Keep::Yes);
         assert_eq!(open_scan_keep(rows(5, 1), rows(7, 1), 7), Keep::Share);
         assert_eq!(open_scan_keep(rows(5, 1), rows(2, 2), 2), Keep::No);
+        // Three rows of an earlier attempt counted, then read under the new one, which held one row when scanned.
+        assert_eq!(
+            open_scan_keep(rows(3, 2), rows(3, 2), 1),
+            Keep::No,
+            "the scan saw fewer rows than were counted"
+        );
+        assert_eq!(open_scan_keep(rows(3, 2), rows(4, 2), 3), Keep::Share);
         let gone = OpenRows {
             trials: 0,
             attempt: None,

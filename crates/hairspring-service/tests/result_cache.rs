@@ -14,8 +14,9 @@ use hairspring_props::trial::failure_basis;
 use hairspring_props::AssertKind;
 use hairspring_service::{PropertyQuery, SeedQuery, Service};
 use hairspring_store::{NewFailure, Store};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
+use std::time::{Duration, Instant};
 
 fn declared() -> Label {
     Label {
@@ -278,7 +279,7 @@ fn a_scan_that_races_an_ingest_answers_what_it_saw_and_is_not_kept() {
             fired.clone(),
             p.clone(),
         );
-        svc.set_coverage_count_hook(move || {
+        svc.set_coverage_race_hook(move || {
             if !fired.swap(true, Ordering::SeqCst) {
                 let late = rec.lock().unwrap().pass(2, &p);
                 svc2.ingest_trials(&job_id, &local(), &[late]).unwrap();
@@ -315,7 +316,7 @@ fn a_scan_that_races_a_new_attempt_is_not_kept_under_the_old_count() {
     {
         let (svc2, job_id, new_job) = (svc.clone(), job.job_id.clone(), new_job.clone());
         let new_trial = new_trial.clone();
-        svc.set_coverage_count_hook(move || {
+        svc.set_coverage_race_hook(move || {
             let mut slot = new_job.lock().unwrap();
             if slot.is_none() {
                 // Between the count (three rows of the first attempt) and the scan, a new attempt starts and reports
@@ -335,6 +336,76 @@ fn a_scan_that_races_a_new_attempt_is_not_kept_under_the_old_count() {
         .unwrap();
     assert_eq!(store.count_trials(&job.run_id).unwrap(), 3);
     assert_eq!(svc.coverage(&job.run_id).unwrap().unwrap().trials, 3);
+    assert_current(&svc, &store, &job.run_id);
+}
+
+#[test]
+fn a_waiter_is_not_handed_a_scan_that_saw_fewer_rows_than_it_counted() {
+    let (svc, store, engine) = setup();
+    let job = lease_with_budget(&svc, &engine, &local(), 3);
+    let mut rec = Recorder::new();
+    let old: Vec<_> = (0..3)
+        .map(|i| rec.pass(i, &props("old.id", AssertKind::Always, 1, 0)))
+        .collect();
+    svc.ingest_trials(&job.job_id, &local(), &old).unwrap();
+    let new_rec = Arc::new(Mutex::new(Recorder::new()));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let new_job = Arc::new(Mutex::new(None));
+    let waiter = Arc::new(Mutex::new(None));
+    {
+        let (svc2, job_id, run_id) = (svc.clone(), job.job_id.clone(), job.run_id.clone());
+        let (new_rec, calls, new_job, waiter, store2) = (
+            new_rec.clone(),
+            calls.clone(),
+            new_job.clone(),
+            waiter.clone(),
+            store.clone(),
+        );
+        svc.set_coverage_race_hook(move || {
+            let trial = |s: u64| {
+                let p = props("new.id", AssertKind::Sometimes, 0, 1);
+                new_rec.lock().unwrap().pass(s, &p)
+            };
+            match calls.fetch_add(1, Ordering::SeqCst) {
+                0 => {
+                    // The first read, after its count (three rows of the first attempt): a new attempt starts and
+                    // reports one trial, so the read is made under the new attempt with a count of three.
+                    svc2.fail(&job_id, &local(), "interrupted").unwrap();
+                    let again = svc2.lease(&local()).unwrap().expect("requeued");
+                    svc2.ingest_trials(&again.job_id, &local(), &[trial(3)])
+                        .unwrap();
+                    *new_job.lock().unwrap() = Some(again);
+                }
+                1 => {
+                    // The first read, after its scan (one row) and before its outcome lands: the new attempt reaches
+                    // three rows, and a second read counts them and joins the first read's flight.
+                    let again = new_job.lock().unwrap().clone().unwrap();
+                    svc2.ingest_trials(&again.job_id, &local(), &[trial(6), trial(9)])
+                        .unwrap();
+                    let (svc3, run3, store3) = (svc2.clone(), run_id.clone(), store2.clone());
+                    let h = std::thread::spawn(move || {
+                        let counted = store3.count_trials(&run3).unwrap();
+                        let got = svc3.coverage(&run3).unwrap().unwrap().trials;
+                        (counted, got)
+                    });
+                    *waiter.lock().unwrap() = Some(h);
+                    let deadline = Instant::now() + Duration::from_secs(10);
+                    while svc2.coverage_waiters(&run_id) == 0 {
+                        assert!(Instant::now() < deadline, "the second read never joined");
+                        std::thread::yield_now();
+                    }
+                }
+                _ => {}
+            }
+        });
+    }
+    assert_eq!(svc.coverage(&job.run_id).unwrap().unwrap().trials, 1);
+    let (counted, got) = waiter.lock().unwrap().take().unwrap().join().unwrap();
+    assert_eq!(counted, 3);
+    assert_eq!(
+        got, 3,
+        "the second read counted three rows of this attempt before it asked"
+    );
     assert_current(&svc, &store, &job.run_id);
 }
 
