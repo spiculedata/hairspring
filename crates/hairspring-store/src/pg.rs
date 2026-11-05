@@ -283,6 +283,10 @@ impl Store for PgStore {
         crate::pg_listing::list_runs(&mut *self.client()?, filter, offset, limit)
     }
 
+    fn search(&self, q: &crate::SearchQuery) -> Result<crate::SearchHits> {
+        crate::pg_search::run(&mut *self.client()?, q)
+    }
+
     fn mark_running(&self, id: &str, now: i64) -> Result<()> {
         let n = self.client()?.execute(
             "UPDATE runs SET state=$1, started_at=COALESCE(started_at,$2) WHERE id=$3 AND state IN ('queued','running')",
