@@ -12,13 +12,16 @@ export function Loading({ what }: { what: string }) {
 /** What a page shows when the thing it is about is not there: what is missing, why that may be, and where to go next. */
 export function NotFound({ what }: { what: 'run' | 'trial' | 'failure' | 'page' }) {
   return (
-    <p className="error" role="alert">
-      {what === 'page' ? (
-        <>There is no page at this address. Check the address, or go to <Link to="/runs">Runs</Link>.</>
-      ) : (
-        <>{`This ${what} does not exist here. It may have been removed.`} Go back to <Link to="/runs">Runs</Link>.</>
-      )}
-    </p>
+    <>
+      <h1>{`No such ${what}`}</h1>
+      <p className="error" role="alert">
+        {what === 'page' ? (
+          <>There is no page at this address. Check the address, or go to <Link to="/runs">Runs</Link>.</>
+        ) : (
+          <>{`This ${what} does not exist here. It may have been removed.`} Go back to <Link to="/runs">Runs</Link>.</>
+        )}
+      </p>
+    </>
   );
 }
 

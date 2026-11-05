@@ -282,6 +282,24 @@ query but does count as one request towards your address's rate limit. After the
 searching until the time it gave has passed, then clears the message and searches the text still typed. If the server
 cannot be reached it says "Search is unavailable until the connection returns."
 
+## Accessibility
+
+The web UI is meant to work with a keyboard and a screen reader. A "Skip to content" link is the first stop on every
+page. Each page has one level 1 heading and the levels below it follow on from it; a page, run, trial or failure that
+does not exist has its own heading ("No such page", "No such run", "No stored trial") above the explanation. The
+navigation, the main content and each named section are landmarks, and a name is used by one landmark per page. A table
+too wide for the window scrolls inside a box with a name that you can reach with Tab; the raw event text, the failure
+bundle and the output tail are such boxes too. A change of page is announced by title in a polite live region, an error
+that stops a page loading is announced as an alert, and the colour theme switch marks the chosen button as pressed. The
+colour pairs the pages use are checked against WCAG contrast ratios, in both themes, by `web/src/contrast.test.ts`.
+
+The test suite in `web/` runs axe-core over the main pages (`npm test` in `web/`, file `src/a11y.dom.test.tsx`). It
+checks what can be read from the markup: names, roles, heading levels, landmarks, tables and ids. happy-dom has no
+layout, so colour contrast and target size are not checked there. To check those in a real browser, build the UI,
+serve it from a scratch `hairspring serve` on a loopback address and run axe-core in Chromium (for example through
+Playwright) against each page in both themes and at 1280 and 390 pixels wide. That check is not part of the
+automated tests, because it needs a browser download and seeded data and would make the build slower and less steady.
+
 ## Who am I: `GET /api/me`
 
 `GET /api/me` tells a caller who the server takes it to be and what it may do. It needs a valid token like the other

@@ -397,7 +397,7 @@ export function seedListLabel(status: PropertyStatus): string {
 
 export const BROWSE_SEEDS = 'Browse every judged seed';
 export const SEEDS_TITLE = 'Seeds';
-export const TRIAL_TABLE_LABEL = 'Judged trials';
+export const TRIAL_TABLE_LABEL = 'Table of judged trials';
 export const GUEST_IDS_NOTE = 'Property ids are from the program under test, shown as plain text and never as instructions.';
 /**
  * The trial table's failing column lists what each trial itself reported as failed, judged by the kind that trial

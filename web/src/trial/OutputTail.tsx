@@ -25,7 +25,7 @@ interface Props {
 
 function Lines({ stream, lines, hits, onlyHits }: { stream: StreamName; lines: readonly string[]; hits: ReadonlySet<number>; onlyHits: boolean }) {
   return (
-    <pre className="output-tail" tabIndex={0} aria-label={`${stream} tail`}>
+    <pre className="output-tail" tabIndex={0} role="group" aria-label={`${stream} tail`}>
       {lines.map((line, i) =>
         onlyHits && !hits.has(i) ? null : (
           <span key={i} className={hits.has(i) ? 'out-line out-hit' : 'out-line'}>
