@@ -435,6 +435,9 @@ jobs:
         run: bash scripts/test-scripts.sh
       - name: Embedded-UI check script tests
         run: bash scripts/test-check-embedded-ui.sh
+      # Offline: builds a fixture repository in a temporary directory and checks the report's parsing against it.
+      - name: Hermit upstream report self-test
+        run: bash scripts/hermit-upstream-report.sh --self-test
       - name: Install the build libraries the Hermit installer looks for
         run: sudo apt-get update -qq && sudo apt-get install -y -qq pkg-config libunwind-dev liblzma-dev
       # Verifies the replay patch's sha256 and the build prerequisites, then stops before cloning or building.
