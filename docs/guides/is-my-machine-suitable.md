@@ -159,7 +159,7 @@ page had a PMU. The text comes from the source.
 counters` line) says `no hardware PMU registered`, the kernel lists no performance monitoring unit at all, so there is
 nothing to open whatever the setting. The kernel can even refuse with a permission error before it finds there is no
 hardware, which is why older builds of `hairspring doctor` suggested lowering the setting on such a machine. The
-current `doctor` checks for a registered PMU first and says so (this was fixed in #198).
+current `doctor` checks for a registered PMU first and says so.
 
 If `check` says the PMU exists but `doctor` says the counter was refused, then the setting, a container profile or a
 security module may be in the way. Whether and how to change it is the machine owner's decision. To see the setting:

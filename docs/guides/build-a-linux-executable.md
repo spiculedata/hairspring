@@ -150,7 +150,9 @@ status for Java is specific:
   directory. Keep them fixed.
 
 The SDK builds with `make -C sdks/java jar` (it writes `sdks/java/build/hairspring-sdk.jar`) and is pure Java 21. The
-shape of a target, from the matrix configuration (not run here, because it needs Hermit; the paths are placeholders):
+settings the matrix records for the configuration that passed are `chaos = true`, `max_timeslice_ns = 100000`,
+`skid_margin = 35` (Java's value; the other languages used 25) and the JVM flags above. Put together, the shape of a
+target (not run here, because it needs Hermit; the paths are placeholders):
 
 ```toml
 [target.my-java]
@@ -159,8 +161,16 @@ command = [
   "/opt/jdk-21/bin/java", "-Xint", "-XX:+UseSerialGC", "-XX:ActiveProcessorCount=1", "-XX:-UsePerfData", "-Xshare:auto",
   "-cp", "/opt/app/app.jar:/opt/app/hairspring-sdk.jar", "com.example.Main",
 ]
+chaos = true
+max_timeslice_ns = 100000
 skid_margin = 35
+# Also set trial_timeout_secs, and wall_secs in [target.my-java.budget]; see below.
 ```
+
+The matrix does not record the trial timeout or the wall-clock budget that were used, so no value is given here. You
+must set both, and well above the trial time: the matrix says a Java trial takes about 105 s alone and about 210 s as
+run (up to three at once), while the defaults are 60 s for one trial and 60 s for the whole run, which a Java trial
+would exceed. A trial that times out is inconclusive, never a pass.
 
 See the matrix for the configuration that was measured, and [java-sdk.md](../java-sdk.md).
 

@@ -32,7 +32,9 @@ It exports `run() -> i32` and a `memory`. `run` returning 0 is success. Beyond t
 - a call to `fail` is a failure that carries your message, so it is the way to say what went wrong;
 - a trap is a failure;
 - a run that executes more than the step budget of instructions is a failure that says `possible infinite loop`;
-- a missing `run` export is reported as a trap.
+- a module with no `run` export is refused before any run: `hairspring test` prints
+  ``ERROR   norun: module must export a function named `run` `` and exits 2 (run here with a module that exports only
+  `other`).
 
 Import only what you use. The `choose`, `rand_u64`, `now_ms`, `sleep_ms`, `log` and `fail` functions are the only
 things the guest can ask the host for; everything else in WebAssembly is deterministic, and it has no threads. Your
@@ -290,9 +292,12 @@ FAILED  counter (wasm)
   lost update; shrunk from 4 to 1 choices
   ...
   sweep: 20 trials: 9 pass, 11 violation, 0 inconclusive, 0 unusable, 0 infra
+  failing seeds: 1, 4, 10, 12, 13, 14, 15, 16, 18, 19 (first 10 of 11 violations)
+  hits: 11/20 rated trials (55.00%), Wilson 95% interval [34.20%, 74.19%]
+  bundle written: .hairspring/bundles/counter-2727de2a.hairspring  (replay with `hairspring replay .hairspring/bundles/counter-2727de2a.hairspring`)
 ```
 
-That is 11 of the 20 seeds from 1 up to but not including 21. The seeds that passed are runs where the interleaving did
+That is 11 of the 20 seeds from 1 up to but not including 21 (the `...` stands for the bundle block shown earlier). The seeds that passed are runs where the interleaving did
 not lose an update. A pass says only that the seeds tried did not fail. How a sweep is read, and `confirm`, are in
 [Sweeps and confirmation](https://github.com/spiculedata/hairspring/wiki/Sweeps-and-Confirmation); `confirm` of a wasm
 target was not tried here.

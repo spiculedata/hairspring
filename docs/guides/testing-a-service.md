@@ -54,7 +54,8 @@ Otherwise an infrastructure problem looks like a bug in your service.
 - **Configuration comes from the target's `env`, not your shell.** Hairspring starts the program from a minimal pinned
   environment (`PATH=/usr/local/bin:/usr/bin:/bin`, `LANG=C`, `LC_ALL=C`, `TZ=UTC`) plus what you put in `env`, with an
   empty standard input. Anything you exported in your terminal does not reach the driver. The driver passes its own
-  environment to the service (`os.Environ()` below), so a variable set in `env` reaches both.
+  environment to the service (`os.Environ()` below), so a variable set in `env` reaches both. Hairspring also sets `HAIRSPRING_SEED` to the trial's seed; the driver can
+  read it if it wants to derive its workload from the seed, and it reaches the service the same way.
 - **Wait for readiness by connecting, with a bound.** Poll the port for a short, fixed total time and give up with an
   infrastructure exit code. Do not sleep for a guessed duration.
 - **Stop the service on every exit path.** In the first version of the driver written for this page, one error path
@@ -283,7 +284,7 @@ HAIRSPRING_VIOLATION: lost updates: counter is 86, expected 200
 $ echo $?
 1
 $ SERVICE_PORT=7391 ./driver-bin ./service-bin       # two more runs: counters 147 and 146, exit 1 each time
-$ SERVICE_FIXED=1 SERVICE_PORT=7391 ./driver-bin ./service-bin
+$ SERVICE_FIXED=1 SERVICE_PORT=7391 ./driver-bin ./service-bin     # three runs, identical
 ok: counter is 200
 $ echo $?
 0
@@ -344,7 +345,12 @@ Check that the file parses (run here on the Mac; it needs no Hermit):
 $ hairspring targets
 counter-service          process  TCP counter service, started and exercised by a driver
 counter-service-fixed    process
+lock-lease               sim      Lease-based lock service; a paused client writes after its lease expired (split brain)
+pubsub-atomic            sim      Same consumer with atomic check+apply+record (the fix; should pass)
+pubsub-buggy             sim      At-least-once consumer; check, apply and record are separate steps (duplicate effect)
 ```
+
+(The three `sim` targets are the built-in demos; `hairspring targets` lists them with yours.)
 
 On the Linux machine, with Hermit installed ([quickstart](../quickstart.md#install)), the next steps are the same as for
 any program. They were **not run here**:

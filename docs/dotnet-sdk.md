@@ -46,7 +46,8 @@ For a project of your own outside this repository, a complete `demo.csproj` is:
 `net10.0` is the SDK's own target framework, so your project must target it and the machine needs a .NET 10 SDK. With
 this file and the snippet from the [wiki's SDK page](https://github.com/spiculedata/hairspring/wiki/Guest-SDKs-by-Language#net)
 as `Program.cs`, `dotnet run` prints the `assert` line (run natively on a Mac with SDK 10.0.400). `ImplicitUsings` makes
-`Thread` available without a `using System.Threading;`.
+`Thread` available without a `using System.Threading;`. Building through the `ProjectReference` writes `bin/` and
+`obj/` into `sdks/dotnet/src` (ignored by the repository).
 
 > **A site that never runs is invisible, not unmet.** .NET cannot see a call site before it executes, so a `Reachable`,
 > `Sometimes` or `Always` in code the run never reaches is simply absent from the report, and the run cannot flag it as
