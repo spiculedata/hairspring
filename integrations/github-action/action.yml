@@ -11,19 +11,39 @@ inputs:
     required: false
     default: ""
   seed:
-    description: "Exploration seed. Empty = random (the seed is printed so failures can be reproduced)."
+    description: "Exploration seed. Empty = random (the seed is printed so failures can be reproduced). A sweep runs consecutive seeds from this one."
     required: false
     default: ""
   config:
     description: "Path to hairspring.toml"
     required: false
     default: "hairspring.toml"
-  hairspring-bin:
-    description: "Path to the hairspring executable. Build or download it in an earlier step."
+  format:
+    description: "Report format from the single run: sarif, junit or text. Only sarif can be uploaded as code-scanning alerts."
     required: false
-    default: "hairspring"
+    default: "sarif"
+  sweep:
+    description: "Set to true to run a sweep (hairspring test --sweep) instead of stopping at the first failure."
+    required: false
+    default: "false"
+  seeds:
+    description: "Seed range for a sweep, FIRST..END with END left out (for example 100..200 is 100 trials). Needs sweep: true."
+    required: false
+    default: ""
+  version:
+    description: "Release tag to download the hairspring binary from. Default: the newest pre-release this action was tested with."
+    required: false
+    default: "v0.1-RC1"
+  from-source:
+    description: "Set to true to build the CLI with cargo from this action's own checkout instead of downloading a release binary."
+    required: false
+    default: "false"
+  hairspring-bin:
+    description: "Path to a hairspring executable you installed yourself. When set, nothing is downloaded or built."
+    required: false
+    default: ""
   upload-sarif:
-    description: "Upload findings as code-scanning alerts (needs security-events: write)"
+    description: "Upload findings as code-scanning alerts (needs security-events: write). Applies only when format is sarif."
     required: false
     default: "true"
 
@@ -35,6 +55,55 @@ outputs:
 runs:
   using: "composite"
   steps:
+    - name: Install hairspring
+      id: install
+      shell: bash
+      env:
+        INPUT_BIN: ${{ inputs.hairspring-bin }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_FROM_SOURCE: ${{ inputs.from-source }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        if [ -n "$INPUT_BIN" ]; then
+          echo "bin=$INPUT_BIN" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        dest="$RUNNER_TEMP/hairspring-bin"
+        mkdir -p "$dest"
+        if [ "$INPUT_FROM_SOURCE" = "true" ]; then
+          cargo install --locked --path "$ACTION_PATH/../../crates/hairspring-cli" --root "$dest/cargo"
+          echo "bin=$dest/cargo/bin/hairspring" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Linux-X64) asset=hairspring-linux-x86_64 ;;
+          macOS-ARM64) asset=hairspring-macos-arm64 ;;
+          *)
+            echo "No release binary for $RUNNER_OS-$RUNNER_ARCH. Use from-source: true, or install hairspring yourself and pass hairspring-bin." >&2
+            exit 2
+            ;;
+        esac
+        base="https://github.com/spiculedata/hairspring/releases/download/$INPUT_VERSION"
+        curl --fail --silent --show-error --location --output "$dest/$asset" "$base/$asset"
+        curl --fail --silent --show-error --location --output "$dest/SHA256SUMS" "$base/SHA256SUMS"
+        expected="$(awk -v a="$asset" '$2 == a { print $1 }' "$dest/SHA256SUMS")"
+        if [ -z "$expected" ]; then
+          echo "SHA256SUMS for $INPUT_VERSION has no entry for $asset." >&2
+          exit 2
+        fi
+        if command -v sha256sum >/dev/null 2>&1; then
+          actual="$(sha256sum "$dest/$asset" | awk '{ print $1 }')"
+        else
+          actual="$(shasum -a 256 "$dest/$asset" | awk '{ print $1 }')"
+        fi
+        if [ "$expected" != "$actual" ]; then
+          echo "sha256 mismatch for $asset: expected $expected, got $actual." >&2
+          exit 2
+        fi
+        chmod +x "$dest/$asset"
+        echo "bin=$dest/$asset" >> "$GITHUB_OUTPUT"
+
     - name: Run hairspring
       id: run
       shell: bash
@@ -42,24 +111,40 @@ runs:
         INPUT_TARGETS: ${{ inputs.targets }}
         INPUT_SEED: ${{ inputs.seed }}
         INPUT_CONFIG: ${{ inputs.config }}
-        INPUT_BIN: ${{ inputs.hairspring-bin }}
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_SWEEP: ${{ inputs.sweep }}
+        INPUT_SEEDS: ${{ inputs.seeds }}
+        BIN: ${{ steps.install.outputs.bin }}
       run: |
         # Inputs arrive through the environment, never interpolated into the script, so a hostile
         # target name or seed cannot inject shell commands.
+        # hairspring test takes one --format, so there is one run and one report. Running it twice
+        # would pick two random seeds and double the time.
         set +e
+        case "$INPUT_FORMAT" in
+          sarif) report=hairspring.sarif ;;
+          junit) report=hairspring-junit.xml ;;
+          text) report=hairspring.txt ;;
+          *)
+            echo "format must be sarif, junit or text (got: $INPUT_FORMAT)" >&2
+            echo "exit-code=2" >> "$GITHUB_OUTPUT"
+            exit 0
+            ;;
+        esac
         args=(test)
         read -r -a targets <<< "$INPUT_TARGETS"
         [ ${#targets[@]} -gt 0 ] && args+=("${targets[@]}")
         [ -n "$INPUT_SEED" ] && args+=(--seed "$INPUT_SEED")
-        args+=(--config "$INPUT_CONFIG" --db .hairspring/hairspring.db --bundle-dir .hairspring/bundles)
-        "$INPUT_BIN" "${args[@]}" --format sarif > hairspring.sarif
+        [ "$INPUT_SWEEP" = "true" ] && args+=(--sweep)
+        [ -n "$INPUT_SEEDS" ] && args+=(--seeds "$INPUT_SEEDS")
+        args+=(--config "$INPUT_CONFIG" --db .hairspring/hairspring.db --bundle-dir .hairspring/bundles --format "$INPUT_FORMAT")
+        "$BIN" "${args[@]}" > "$report"
         code=$?
-        "$INPUT_BIN" "${args[@]}" --format junit > hairspring-junit.xml 2>/dev/null || true
         echo "exit-code=$code" >> "$GITHUB_OUTPUT"
         exit 0
 
     - name: Upload findings to code scanning
-      if: ${{ inputs.upload-sarif == 'true' && always() }}
+      if: ${{ inputs.upload-sarif == 'true' && inputs.format == 'sarif' && always() }}
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: hairspring.sarif
@@ -74,6 +159,7 @@ runs:
           .hairspring/bundles/
           hairspring.sarif
           hairspring-junit.xml
+          hairspring.txt
         if-no-files-found: ignore
 
     - name: Fail if a property was violated
