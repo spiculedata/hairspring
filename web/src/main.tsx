@@ -11,6 +11,7 @@ import './trial/trial.css';
 import './seeds/seeds.css';
 import './lists/lists.css';
 import './workers/workers.css';
+import './search/search.css';
 
 applyTheme(readStoredTheme());
 const root = document.getElementById('root');
