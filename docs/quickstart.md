@@ -266,6 +266,22 @@ token against your address's allowance. The `organisation` field is left out (th
 token's own allowance is used up, or while your address's allowance is, so health cannot be used to guess tokens. A
 request without a token is never limited.
 
+## The search box
+
+The top bar of the web UI has a search box (shown only when the server has `GET /api/search`; an older server hides it).
+Type at least 2 characters of a run id, failure id, target name, property id, seed or schedule fingerprint. It waits for
+a short pause in typing, then lists matches in groups. Down and Up move through them, Enter opens the highlighted one (or
+the first), and Escape closes the list; a second Escape clears the text. Only ASCII letters, digits and `_ - . : /` are
+accepted, up to 64 characters; the box says so rather than sending anything else. Property ids come from the program
+under test and are shown as escaped text. "No matches." means none among the recent runs the search looks in, and the
+box says how many; see "Find something by its id: `GET /api/search?q=...`" below for what is looked at. A hit whose id the page cannot
+link to (for example a run id containing `.` or `:`, which the server accepts) is left out, and the box says "Some
+results could not be shown." instead of "No matches." when that leaves nothing. When the page loads, the box asks the
+server once whether search exists, using a text the server refuses before looking anything up; that costs no database
+query but does count as one request towards your address's rate limit. After the server answers 429 the box stops
+searching until the time it gave has passed, then clears the message and searches the text still typed. If the server
+cannot be reached it says "Search is unavailable until the connection returns."
+
 ## Who am I: `GET /api/me`
 
 `GET /api/me` tells a caller who the server takes it to be and what it may do. It needs a valid token like the other

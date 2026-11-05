@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { navigate } from '../router';
+import { SearchBox } from '../search/SearchBox';
 import { ThemeSwitch } from '../shell/ThemeSwitch';
 
 const LINKS: Array<[string, string]> = [
@@ -55,6 +56,7 @@ export function Layout({
           <span className="brand">Hairspring</span>
           {organisation !== undefined && organisation !== '' && <span className="org-name">{organisation}</span>}
         </div>
+        <SearchBox />
         <ThemeSwitch />
       </header>
       <div className="sr-only" role="status" aria-live="polite">

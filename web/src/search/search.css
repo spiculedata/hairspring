@@ -1,0 +1,20 @@
+/* The search box in the top bar. Colours come from the tokens in styles.css only. */
+.search { position: relative; flex: 1 1 14rem; min-width: 0; max-width: 28rem; }
+.search-input { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; }
+.search-input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.search-popup { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + .25rem); max-height: min(24rem, 70vh); overflow-y: auto; box-sizing: border-box; padding: .25rem; background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); border-radius: 6px; box-shadow: 0 6px 18px var(--scroll-shadow); }
+.search-note, .search-scope { margin: 0; padding: .4rem .5rem; overflow-wrap: anywhere; }
+.search-scope { color: var(--text-muted); font-size: .85rem; }
+.search-note-plain { color: var(--text-muted); }
+.search-group + .search-group { margin-top: .25rem; border-top: 1px solid var(--border); padding-top: .25rem; }
+.search-group-title { padding: .25rem .5rem; font-size: .8rem; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; color: var(--text-muted); }
+.search-more { text-transform: none; font-weight: 400; }
+.search-option { display: grid; gap: .1rem; padding: .4rem .5rem; border-radius: 4px; cursor: pointer; border-left: 3px solid transparent; }
+.search-option-active, .search-option[aria-selected="true"] { background: var(--accent-soft); border-left-color: var(--accent); }
+.search-hit-main { min-width: 0; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9rem; }
+.search-hit-detail { min-width: 0; overflow-wrap: anywhere; color: var(--text-muted); font-size: .85rem; }
+.search-popup [aria-busy="true"] { opacity: .6; }
+/* A phone: the box takes the whole row under the brand, and the list is as wide as the box. */
+@media (max-width: 640px) {
+  .search { flex-basis: 100%; max-width: none; order: 3; }
+}
