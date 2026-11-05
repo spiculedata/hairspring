@@ -79,10 +79,28 @@ pub fn hold_readers(
     (handles, release_tx)
 }
 
+/// The longest a thread may take to finish before `join_within` calls it a hang. It covers the stress tests, whose
+/// threads do real work, so it is longer than [`HANG_LIMIT`].
+pub const JOIN_LIMIT: Duration = Duration::from_secs(60);
+
+/// Joins `handle`, failing the test if the thread has not finished within [`JOIN_LIMIT`] instead of hanging with it.
+/// A thread that is still stuck is left behind, and the test process exits without it once the tests are done.
+pub fn join_within<T>(handle: thread::JoinHandle<T>) -> T {
+    let deadline = Instant::now() + JOIN_LIMIT;
+    while !handle.is_finished() {
+        assert!(
+            Instant::now() < deadline,
+            "a thread had not finished after {JOIN_LIMIT:?}"
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
+    handle.join().unwrap()
+}
+
 pub fn release(handles: Vec<thread::JoinHandle<()>>, release_tx: mpsc::Sender<()>) {
     drop(release_tx);
     for h in handles {
-        h.join().unwrap();
+        join_within(h);
     }
 }
 
@@ -128,6 +146,6 @@ pub fn runs_on_a_reader<R: Send + 'static>(
     let on_reader = finished.is_none();
     release(handles, release_tx);
     let out = finished.unwrap_or_else(|| done_rx.recv_timeout(HANG_LIMIT).unwrap());
-    caller.join().unwrap();
+    join_within(caller);
     (on_reader, out)
 }

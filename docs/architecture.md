@@ -720,18 +720,30 @@ sends reads to the writer). There is no command-line setting. PostgreSQL is unch
     read is using it, but `RESTART` leaves the file at its largest size until a later commit cuts it.
   - The wait is bounded: if the reads in progress have not finished within `WAL_DRAIN_WAIT` (250 ms), the writer
     skips the checkpoint, reads resume, and it tries again no sooner than `WAL_CHECKPOINT_RETRY` (2 s) later. A read
-    that arrives during a pause therefore waits at most 250 ms plus the `TRUNCATE` checkpoint, which after the
-    `PASSIVE` pass copies only what was written since the reads in progress began; in the measurements below the
-    longest pause was 6.9 ms. Writes from the same process wait for the same pause, since the writer holds its mutex.
+    that arrives during a pause therefore waits at most 250 ms plus the time the `TRUNCATE` checkpoint takes to copy
+    the backlog. The `PASSIVE` pass before the pause copies most of it, but whatever was written since still has to be
+    copied while reads are held, and a larger backlog takes longer. In the measurements below the longest recorded
+    pause was 417 ms, 734 ms and 17.5 ms in three runs with 8 readers and an unthrottled writer, and 217 ms and 26 ms
+    with 2 readers; the `TRUNCATE` checkpoint itself took up to about 480 ms. With a backlog forced to 300 MiB a
+    pause was 161 ms, and with 1000 MiB it was 506 ms. These were measured on a busy machine, so read them as a
+    range, not a guarantee.
+  - The `PASSIVE` pass runs under the writer's mutex and is not part of the recorded pause, so writes from the same
+    process can wait for it as well: in one run the recorded pause was 17.5 ms and the longest write 643 ms. Writes
+    from the same process also wait for the pause itself, since the writer holds its mutex.
   - The `TRUNCATE` checkpoint runs with no busy handler, so a read held by another process makes it give up at once
     (counted as a skip) instead of waiting 5 seconds; no caller sees `SQLITE_BUSY` from it. Retention holds the
-    writer while it runs; the check happens when it gives the writer back, so the two never wait for each other.
+    writer while it runs and the size check happens when it gives the writer back, so the two cannot deadlock. But
+    during a long `gc --apply` the WAL can grow with the limit not acting at all, because the writer is held for the
+    whole pass; the `TRUNCATE` checkpoint after it then copies the whole backlog while reads are paused, so the pause
+    is as long as that copy (see the figures above for how the time grows with the backlog).
   - The writer sets `PRAGMA journal_size_limit` to `JOURNAL_SIZE_LIMIT` (4 MiB), so whenever the WAL starts again
     (by the automatic checkpoint or the limit), the next commit cuts a larger file back to 4 MiB.
   - What does not hold: the limit only acts when the writer is used, so after a burst the file stays at its last
-    size (at most the threshold) until the next write or close; a single read that lasts longer than 250 ms on every
-    attempt (or a reader in another process) makes every attempt skip, and the WAL then grows as before until that
-    read ends.
+    size (at most the threshold) until the next write or close; any read that is still running 250 ms into each
+    attempt (or a reader in another process) makes that attempt skip, and the WAL then grows as before until the
+    attempts stop meeting such a read. The heavy status filter (about 1.7 s), looped by clients, is exactly such a
+    read. With a held 1.7 s read and 600 writes/s the WAL reached 182.5 MiB in 15 s, with 7 skips and no completed
+    checkpoint. Each skip stalls every read and every in-process write for about 260 ms, once every 2 s.
 - **Memory statistics.** By default SQLite counts every allocation under one process-wide mutex. With several read
   connections busy at once that mutex dominated: three heavy reads side by side took longer than the same three one
   after another. The `hairspring` binary turns the statistics off as its first statement
@@ -771,10 +783,11 @@ on the store directly (release build, same machine; one run each without the lim
 | 2 readers looping, writer unthrottled, 15 s | 4.0 | 146.5 / 146.5 | 16.0 / 6.1–13.2 |
 
 With the limit, the unthrottled writer managed 8553–10292 writes/s with 8 readers and 10211–11851 with 2 (two runs),
-against 10623 and 14825 without it: each checkpoint copies the WAL into the database while the writer waits. Read
-times were about the same with and without the limit (8 readers unthrottled: p50 8.2–10.3 ms, p99 13.6–17.0 ms, against
-8.3 / 12.8 ms); the longest single read, 469–529 ms with 2 readers, was not a pause (in the run that recorded pauses the
-longest was 4.0 ms) and reads without the limit also had outliers of 84–338 ms. The single connection kept the WAL small only
+against 10623 and 14825 without it: each checkpoint copies the WAL into the database while the writer waits. Typical
+read times were about the same with and without the limit (8 readers unthrottled: p50 8.2–10.3 ms, p99 13.6–17.0 ms,
+against 8.3 / 12.8 ms), but the slowest reads were not: in two further runs the slowest fast read was 742 ms and
+984 ms with the limit against 174 ms and 67 ms without it, and the longest pauses are given above. The limit trades
+an occasional stall of a few hundred milliseconds for a bounded file. The single connection kept the WAL small only
 because every read waited for every write: with the writer unthrottled its reads took 167–183 ms at the median. With
 lighter reads (`list_events` of 100) the unthrottled cases without the limit reached 170 MiB and 43 MiB, and 16.0 MiB
 with it.

@@ -141,9 +141,14 @@
   Reads that overlap without a gap stop SQLite starting its WAL file again, so the store now limits it: when the WAL
   reaches 16 MiB the writer pauses the read connections, waits up to 250 ms for the reads in progress to finish,
   checkpoints with `TRUNCATE` (the file goes to zero bytes) and lends the connections again. A read that arrives
-  during a pause waits at most 250 ms plus that checkpoint (the longest pause measured was 6.9 ms); if the reads in
-  progress do not finish in time the checkpoint is skipped and tried again after 2 s, so a read that keeps running
-  past every attempt still lets the WAL grow until it ends. `journal_size_limit` is 4 MiB, and closing the store
+  during a pause waits at most 250 ms plus the time the checkpoint takes to copy the backlog, which was up to a few
+  hundred milliseconds in the measurements (longest recorded pause 17.5 to 734 ms across runs, on a busy machine) and
+  grows with a larger backlog; writes from the same process can also wait for the `PASSIVE` pass that comes first.
+  If the reads in progress do not finish in time the checkpoint is skipped and tried again after 2 s. Any read still
+  running 250 ms into each attempt causes a skip, so clients looping the heavy status filter (about 1.7 s) can keep
+  the WAL growing, and each skip stalls reads and in-process writes for about 260 ms; during a long `gc --apply` the
+  limit does not act until the writer is released, and the checkpoint after it copies the whole backlog while reads
+  are paused. `journal_size_limit` is 4 MiB, and closing the store
   checkpoints. With 8 readers looping and an unthrottled writer of 2 KB events for 15 s, the WAL reached 3280 MiB
   without the limit and 16 MiB with it; the writer managed 8553 to 10292 writes/s instead of 10623.
 - Server hardening. The server now closes a connection that has not sent a complete request head within 10 seconds

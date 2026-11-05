@@ -102,10 +102,10 @@ fn the_wal_stays_bounded_while_reads_overlap_without_a_gap() {
         largest = largest.max(wal_len(&path));
         written.store(i + 1, Ordering::SeqCst);
     }
-    gc.join().unwrap();
+    join_within(gc);
     stop.store(true, Ordering::SeqCst);
     for r in readers {
-        r.join().unwrap();
+        join_within(r);
     }
     let (done, _skipped) = s.wal_checkpoints();
     assert!(done > 0, "the writer never checkpointed");
@@ -142,9 +142,9 @@ fn a_checkpoint_waits_for_the_reads_in_progress_and_holds_new_ones_until_it_is_d
     });
     assert!(wal_len(&path) > 0);
     release(handles, release_tx);
-    assert_eq!(checkpoint.join().unwrap(), WalCheckpoint::Done);
+    assert_eq!(join_within(checkpoint), WalCheckpoint::Done);
     assert_eq!(done_rx.recv_timeout(HANG_LIMIT).unwrap(), 1);
-    late.join().unwrap();
+    join_within(late);
     assert_eq!(wal_len(&path), 0, "the checkpoint left the WAL file");
     assert!(!s.reads_paused());
     cleanup(&path);

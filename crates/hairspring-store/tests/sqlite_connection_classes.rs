@@ -77,8 +77,12 @@ fn methods(src: &str, impl_line: &str) -> Vec<(String, String)> {
     out
 }
 
+/// The ways a method body can reach the writer: `self.conn()`, `self.with_connection(..)` (which runs on the writer)
+/// and the writer's mutex taken directly.
+const WRITER_USES: &[&str] = &[".conn()", "self.with_connection(", "self.conn.lock()"];
+
 fn uses_writer(body: &str) -> bool {
-    body.contains(".conn()")
+    WRITER_USES.iter().any(|pattern| body.contains(pattern))
 }
 
 #[test]
@@ -126,4 +130,42 @@ fn every_store_method_that_only_reads_uses_a_read_connection() {
             "{read} is not on a read connection"
         );
     }
+}
+
+#[test]
+fn the_scanner_sees_every_way_to_reach_the_writer() {
+    for body in [
+        "    fn a(&self) {\n        self.conn().execute(\"x\", [])\n    }\n",
+        "    fn b(&self) {\n        self.with_connection(|c| c.execute(\"x\", []))\n    }\n",
+        "    fn c(&self) {\n        let g = self.conn.lock().unwrap();\n    }\n",
+    ] {
+        assert!(uses_writer(body), "not seen: {body}");
+    }
+    for body in [
+        "    fn d(&self) {\n        self.read(|c| c.query_row(\"x\", [], |_| Ok(())))\n    }\n",
+        "    fn e(&self) {\n        self.read_with(|c| run_count(c))\n    }\n",
+    ] {
+        assert!(!uses_writer(body), "wrongly seen: {body}");
+    }
+}
+
+#[test]
+fn methods_splits_an_impl_block_into_named_bodies() {
+    let src = [
+        "impl Store for X {",
+        "    fn one(&self) {",
+        "        self.with_connection(|c| ());",
+        "    }",
+        "    fn two(&self) {",
+        "        self.read(|c| ());",
+        "    }",
+        "}",
+        "",
+    ]
+    .join("\n");
+    let found = methods(&src, "impl Store for X {");
+    let names: Vec<&str> = found.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["one", "two"]);
+    assert!(uses_writer(&found[0].1));
+    assert!(!uses_writer(&found[1].1));
 }

@@ -46,7 +46,7 @@ fn a_slow_read_does_not_hold_up_another_read() {
         .recv_timeout(HANG_LIMIT)
         .expect("a read waited for another read to finish");
     assert_eq!((got, listed), (Some(run.id), 1));
-    reader.join().unwrap();
+    join_within(reader);
     release(handles, release_tx);
     cleanup(&path);
 }
@@ -74,7 +74,7 @@ fn every_read_connection_can_be_in_use_at_once_and_the_next_read_queues() {
     new_run(&*s, 2);
     release(handles, release_tx);
     assert_eq!(done_rx.recv_timeout(HANG_LIMIT).unwrap(), 2);
-    queued.join().unwrap();
+    join_within(queued);
     assert_eq!(s.readers_waiting(), 0);
     cleanup(&path);
 }
@@ -100,7 +100,7 @@ fn queued_reads_are_served_in_arrival_order() {
         .collect();
     assert_eq!(order, vec![0, 1, 2, 3]);
     for q in queued {
-        q.join().unwrap();
+        join_within(q);
     }
     cleanup(&path);
 }
@@ -153,7 +153,7 @@ fn a_read_connection_opened_before_a_write_sees_it_in_its_next_read() {
         0,
         "one read call must see one snapshot"
     );
-    held.join().unwrap();
+    join_within(held);
     // The same connection, in a new read call, sees the write.
     assert_eq!(s.get_run(&run.id).unwrap().unwrap().id, run.id);
     assert_eq!(s.read_with(run_count).unwrap(), 1);
@@ -314,7 +314,7 @@ fn the_conformance_reads_and_writes_mixed_with_gc_never_surface_busy_or_stale_re
         }));
     }
     for h in handles {
-        h.join().unwrap();
+        join_within(h);
     }
     for id in &old {
         assert!(s.get_run(id).unwrap().is_none(), "retention kept {id}");
@@ -355,12 +355,12 @@ fn a_queued_read_is_woken_when_the_read_ahead_of_it_takes_one_of_two_returned_co
         };
         spin_until("the reads to pause", || s.reads_paused());
         release(handles, release_tx);
-        assert_eq!(pause.join().unwrap(), WalCheckpoint::Done);
+        assert_eq!(join_within(pause), WalCheckpoint::Done);
         assert!(
-            first.join().unwrap(),
+            join_within(first),
             "round {round}: a read slept while a connection was idle"
         );
-        second.join().unwrap();
+        join_within(second);
     }
     cleanup(&path);
 }
