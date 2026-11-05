@@ -147,6 +147,19 @@ pub async fn list_runs(
     )
 }
 
+/// A bounded lookup of ids and names for the web UI's search box: `q` only, no paging. The service decides what text
+/// may be searched and what is looked at; an error names `q` and never repeats it.
+pub async fn search(
+    State(s): State<AppState>,
+    caller: Caller,
+    Query(p): Query<Params>,
+) -> Result<Json<Value>, ApiError> {
+    caller.need(Role::Read)?;
+    let q = param(&p, "q");
+    let results = blocking(move || s.svc.search(&s.engine, q.as_deref())).await?;
+    Ok(Json(serde_json::to_value(results).unwrap_or_default()))
+}
+
 #[derive(Deserialize)]
 pub struct CreateRun {
     target: String,

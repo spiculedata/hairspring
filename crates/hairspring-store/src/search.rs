@@ -40,14 +40,14 @@ pub struct SearchQuery {
     pub property_runs: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct RunHit {
     pub id: String,
     pub target: String,
     pub state: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct FailureHit {
     pub id: String,
     pub run_id: String,
@@ -61,7 +61,7 @@ pub struct PropertyHit {
     pub run_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SeedHit {
     pub run_id: String,
     pub seed: u64,
@@ -69,7 +69,7 @@ pub struct SeedHit {
     pub trial: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ScheduleHit {
     pub fingerprint: String,
     pub run_id: String,
