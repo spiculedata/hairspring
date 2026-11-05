@@ -14,6 +14,11 @@
   note, since it cannot be confirmed, and the sweep carries on to the later targets with its own exit status.
 - The run page's activity panel shows each event as a titled line with labelled facts instead of raw JSON, with the raw
   event behind a "Raw event" disclosure.
+- The run page has four tabs under the run's facts: Properties, Seeds and trials, Failures (with a count) and Activity.
+  The chosen tab is kept in the address as `?tab=...`, and the plain run address opens Properties. The tab row scrolls
+  sideways on a phone. The run page now also shows the coverage chart, on the Properties tab, so it makes a new request,
+  `GET /api/runs/{id}/coverage`, which is repeated while the run is live. The page's event stream stays open for the
+  whole page, whichever tab is showing.
 - `scripts/check-embedded-ui.sh` checks that a release binary serves the web UI built from the repository's `web/`
   source, and fails on an older UI. The release workflow runs it after each binary is built, `make release` runs it
   after the build, and `make check-ui` runs it on its own.

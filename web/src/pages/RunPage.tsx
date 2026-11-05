@@ -16,7 +16,7 @@ import { UpdatedAt } from '../components/UpdatedAt';
 import { formatDuration } from '../format';
 import { seedsPath } from '../seeds/filters';
 import { BROWSE_SEEDS, noFailuresText } from '../wording';
-import { navigate, useSearch } from '../router';
+import { navigate, runPath, useSearch } from '../router';
 import { usePolling } from '../usePolling';
 import { Tabs } from '../components/Tabs';
 import { RUN_TABS, runTabFromSearch, runTabSearch, type RunTabId } from './runTabs';
@@ -90,7 +90,7 @@ export function RunPage({ id }: { id: string }) {
         idPrefix="run"
         tabs={RUN_TABS.map((t) => (t.id === 'failures' ? { ...t, count: failures.length } : t))}
         selected={tab}
-        onSelect={(next: string) => navigate(`${window.location.pathname}${runTabSearch(next as RunTabId)}`)}
+        onSelect={(next: string) => navigate(`${runPath(run.id)}${runTabSearch(next as RunTabId)}`)}
       >
         {tab === 'properties' && (
           <>

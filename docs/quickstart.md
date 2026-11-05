@@ -152,7 +152,14 @@ arrive). The chosen tab is kept in the address as `?tab=seeds`, `?tab=failures` 
 is the plain address `/runs/<run id>`, which also opens on it. An address with an unknown tab name opens Properties.
 Following a tab adds a history entry, so Back returns to the tab before. With the keyboard, Left and Right (wrapping),
 Home and End move between the tabs and select the one reached; Tab then moves into the tab's content. The seed explorer
-keeps its own address, `/runs/<run id>/seeds`, with its filters.
+keeps its own address, `/runs/<run id>/seeds`, with its filters. The selected tab is marked by a bold label and a thicker
+underline as well as by colour, and on a phone the tab row scrolls sideways instead of wrapping.
+
+The run page also shows the coverage chart (below), so opening a run page makes a request to
+`GET /api/runs/{id}/coverage`; it is repeated while the run is live and only while the Properties tab is showing. The
+page's event stream (`/api/runs/{id}/events`) stays open for as long as the page is, whichever tab is selected, so the
+lines that arrive while another tab is showing are there when Activity is opened. It does not pause while the browser
+tab is hidden.
 
 ## Coverage chart on the run page
 

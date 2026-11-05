@@ -95,6 +95,14 @@ describe('RunPage tabs', () => {
     expect(window.location.search).toBe('');
   });
 
+  it('builds the tab address from the run id, not from whatever the address bar holds', async () => {
+    await mount('');
+    window.history.replaceState({}, '', '/runs/run_1/');
+    fireEvent.click(tab(/^Activity/));
+    expect(window.location.pathname).toBe('/runs/run_1');
+    expect(window.location.search).toBe('?tab=activity');
+  });
+
   it('follows the address when the reader goes back', async () => {
     await mount('');
     fireEvent.click(tab(/^Failures/));

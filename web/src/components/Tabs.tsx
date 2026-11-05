@@ -1,4 +1,5 @@
 import { useRef, type KeyboardEvent, type ReactNode } from 'react';
+import './tabs.css';
 
 export interface TabSpec {
   id: string;

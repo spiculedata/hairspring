@@ -182,6 +182,7 @@ describe('every stylesheet and the canvas code use the tokens', () => {
       expect.arrayContaining([
         'components/confirmation.css',
         'components/connection.css',
+        'components/tabs.css',
         'explorer/explorer.css',
         'overview/overview.css',
         'runPanel/runPanel.css',
