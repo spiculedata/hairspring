@@ -1,6 +1,6 @@
 import { runOutcome } from '../runOutcome';
 import type { Tone } from '../statusMap';
-import { checkStatusEntry, findingEntry, propertyStatusEntry, replayEntry } from '../statusMap';
+import { checkStatusEntry, findingEntry, propertyStatusEntry, replayEntry, workerStateEntry, workerTrustEntry } from '../statusMap';
 import type { RunCompletion } from '../types';
 
 export type StatusBadgeProps =
@@ -13,7 +13,11 @@ export type StatusBadgeProps =
   /** Where a failure stands, as the server derives it from its stored checks. */
   | { readonly kind: 'finding'; readonly status: string }
   /** One stored check's result. */
-  | { readonly kind: 'check'; readonly status: string };
+  | { readonly kind: 'check'; readonly status: string }
+  /** What a worker is doing, as the server works it out. */
+  | { readonly kind: 'workerState'; readonly state: string }
+  /** Whether an administrator has marked a worker trusted. */
+  | { readonly kind: 'workerTrust'; readonly trusted: boolean };
 
 interface BadgeView {
   readonly label: string;
@@ -36,6 +40,10 @@ function viewOf(props: StatusBadgeProps): BadgeView {
       return { ...findingEntry(props.status), title: `Server state: ${props.status}` };
     case 'check':
       return { ...checkStatusEntry(props.status), title: `Server status: ${props.status}` };
+    case 'workerState':
+      return { ...workerStateEntry(props.state), title: `Server state: ${props.state}` };
+    case 'workerTrust':
+      return workerTrustEntry(props.trusted);
   }
 }
 

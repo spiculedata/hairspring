@@ -129,7 +129,8 @@ that starts one, is the Runs page at `/runs`. Overview shows only what the serve
 - **Needs attention**: runs whose state is `failed` or `error` among the newest 20 runs, and the newest stored failures.
   When neither list has an entry it says which runs it looked at; it does not say that anything is fine.
 - **Recent runs**: the newest five runs, each with its status badge.
-- **Workers**: how many workers the server lists and when one was last heard from. It does not say what they are doing.
+- **Workers**: how many workers the server lists and when one was last heard from. It does not say what they are doing;
+  the Workers page (see "The Workers page" below) does.
 - **No runs yet**: when the server has no stored runs, the page lists the next steps from this guide
   (`hairspring targets`, `hairspring init`, `hairspring test <target> --seed 1`, `hairspring replay`). A list or a count
   that could not be loaded is reported by name and is never shown as empty.
@@ -214,6 +215,32 @@ Under the charts, **Show as a table** lists the same points as figures.
 - A run whose three counts all stayed at zero shows one sentence instead of three flat charts: "Every count stayed at
   zero over N trials: no property ids reached, no property ids seen true and no distinct schedules. This records that
   none were counted, not that none exist."
+
+## The Workers page
+
+The Workers page (the address `/workers`) reads `GET /api/workers` (see "Workers and the queue" below) and shows what
+the server sends, and nothing else. It needs the `read` role. Above the table it says how many jobs are waiting for a
+worker and how many are held by workers. Each row of the table is one worker:
+
+- **State**: Busy when the worker holds a job lease that has not ended, Idle when it holds none and the server heard
+  from it within one lease length (two minutes by default), Not seen recently when it was last heard from longer ago.
+  The state is worked out each time the page loads.
+- **Trust**: Trusted or Untrusted, as set by an administrator. Claims need trusted workers; data from an untrusted
+  worker is shown, labelled as unverified. The page does not change trust. An administrator does that with
+  `POST /api/workers/{id}/trust`.
+- **Capabilities**: what the worker said about itself when it registered, one line per key. The server does not check
+  it. Text that was not JSON is reported as unreadable, and long values are cut.
+- **Holding**: the runs the worker holds a job for, as links to the run page, and how many more it holds if there are
+  more than three.
+- **Last seen**: when the server last heard from the worker.
+- **Id**: the worker's id, shown only when the server sent it, which is from the `run` role. The id is a credential for
+  the worker endpoints, so a `read` caller sees no Id column, and the page says so.
+
+The page loads again every three seconds, stops while the browser tab is hidden, and says when a load fails while
+keeping the rows it already has. With no workers it says so and says how one starts: `hairspring serve` runs one inside
+the server unless given `--workers 0`, and `hairspring worker` registers a remote one. Against an older server that does
+not send state, trust or capabilities, those cells read "Not reported by this server" and there is no queue line. The
+table is inside a scroll region, so on a narrow screen it scrolls sideways and the page does not.
 
 ## Side navigation and colour theme
 

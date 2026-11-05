@@ -1,7 +1,7 @@
 import { isMe, type Me } from './me';
 import { parseSse, type SseEvent } from './sse';
 import type { StartRunBody } from './startRun';
-import type { Coverage, FailureChecks, FailureDetail, FailureSummary, PropertyPage, PropertyQuery, ReplayResult, Run, RunDetail, Target, Worker } from './types';
+import type { Coverage, FailureChecks, FailureDetail, FailureSummary, PropertyPage, PropertyQuery, ReplayResult, Run, RunDetail, Target, Worker, WorkersOverview } from './types';
 
 const TOKEN_KEY = 'hairspring.token';
 
@@ -178,6 +178,8 @@ export const api = {
   failure: (id: string) => request<FailureDetail>(`/api/failures/${encodeURIComponent(id)}`),
   replay: (bundle: string) => request<ReplayResult>('/api/replay', { method: 'POST', body: JSON.stringify({ bundle }) }),
   workers: async () => (await request<{ workers: Worker[] }>('/api/workers')).workers,
+  /** The workers and, from a server that reports it, the queue behind them. */
+  workersOverview: () => request<WorkersOverview>('/api/workers'),
 };
 
 /** Streams run events with fetch (EventSource cannot send an Authorization header). */

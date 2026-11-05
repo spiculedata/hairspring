@@ -74,3 +74,19 @@ export const CHECK_STATUSES: Readonly<Record<string, StatusEntry>> = Object.free
 
 export const findingEntry = (status: string): StatusEntry => lookup(FINDING_STATES, status);
 export const checkStatusEntry = (status: string): StatusEntry => lookup(CHECK_STATUSES, status);
+
+/**
+ * What a worker is doing, by the three words the server works out. Busy takes the live tone, a worker that has gone
+ * quiet takes the caution tone, and a word this table does not have is a neutral "Unknown".
+ */
+export const WORKER_STATES: Readonly<Record<string, StatusEntry>> = Object.freeze({
+  busy: { label: 'Busy', tone: 'busy' },
+  idle: { label: 'Idle', tone: 'idle' },
+  not_seen_recently: { label: 'Not seen recently', tone: 'gap' },
+});
+
+export const workerStateEntry = (state: string): StatusEntry => lookup(WORKER_STATES, state);
+
+/** The administrator-set trust flag. An untrusted worker's data is shown labelled, so it takes the caution tone. */
+export const workerTrustEntry = (trusted: boolean): StatusEntry =>
+  trusted ? { label: 'Trusted', tone: 'good' } : { label: 'Untrusted', tone: 'gap' };
