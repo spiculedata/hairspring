@@ -63,6 +63,29 @@ Tests against the real Hermit need x86-64 Linux with performance counters:
 `HAIRSPRING_HERMIT=/path/to/hermit HAIRSPRING_HERMIT_REAL=1 cargo test -p hairspring-hermit --test real_hermit`.
 CI does not run these.
 
+### Checking what changed in upstream Hermit
+
+The Hermit build is pinned in `scripts/hermit.pin`: a fork, one commit, a replay patch checked by sha256 and a dated Rust
+toolchain. Everything we say about which languages work under Hermit was measured with that build, so moving the pin
+means measuring again. Check what changed upstream before deciding to bump the pin:
+
+```bash
+bash scripts/hermit-upstream-report.sh > hermit-upstream.md      # needs git and network access; gh is optional
+bash scripts/hermit-upstream-report.sh --no-issues --limit 50    # skip the issue search, list more commits per group
+bash scripts/hermit-upstream-report.sh --self-test               # offline check against a local fixture (CI runs it)
+```
+
+The report is Markdown. It gives the pinned commit and the upstream commit it is based on, how far the pin and the
+fork are behind (or ahead of) the upstream, whether the replay patch still applies to the upstream head (`git apply
+--check` only: nothing is built or run), the Rust toolchain on each side, the newest version tag, the new upstream
+commits grouped by keywords in their subjects (fix, feat, perf, build, deps), a watch list of commits in areas the
+Hermit backend depends on (preemption and skid, timeouts, temporary files, the summary, CPUID and time, `/proc`), open
+upstream issues by title keyword (through `gh`, when it is installed and signed in) and the last-activity dates. The
+groups come from commit subjects alone, so read a commit before relying on its group.
+
+The script is read-only. It works in a temporary directory that it deletes on exit and never changes the repository,
+the pin or the patch. A bump is a separate change, and it needs the Hermit-backed results re-run on the new build.
+
 ## Licence of contributions and sign-off
 
 Hairspring is licensed under the Apache License, Version 2.0 (see `LICENSE`). By submitting a pull request you agree
