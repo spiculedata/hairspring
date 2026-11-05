@@ -15,7 +15,7 @@ use crate::pg_trials as trials;
 use crate::run_mode::mode_of_config;
 use crate::trials::*;
 use crate::types::*;
-use crate::{new_id, sha256_hex, Store, MAX_JOB_ATTEMPTS};
+use crate::{new_id, sha256_hex, FailureFilter, RunFilter, Store, MAX_JOB_ATTEMPTS};
 use postgres::{Client, Config, NoTls, Row};
 use r2d2_postgres::{r2d2, PostgresConnectionManager};
 use std::collections::BTreeMap;
@@ -64,7 +64,7 @@ pub(crate) fn valid_schema(name: &str) -> bool {
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-fn run_from_row(r: &Row) -> RunRecord {
+pub(crate) fn run_from_row(r: &Row) -> RunRecord {
     let state: String = r.get("state");
     RunRecord {
         id: r.get("id"),
@@ -92,7 +92,7 @@ fn run_from_row(r: &Row) -> RunRecord {
     }
 }
 
-fn failure_from_row(r: &Row) -> FailureRecord {
+pub(crate) fn failure_from_row(r: &Row) -> FailureRecord {
     FailureRecord {
         id: r.get("id"),
         run_id: r.get("run_id"),
@@ -274,6 +274,15 @@ impl Store for PgStore {
         )
     }
 
+    fn list_runs_page(
+        &self,
+        filter: &RunFilter,
+        offset: u64,
+        limit: u32,
+    ) -> Result<Vec<RunRecord>> {
+        crate::pg_listing::list_runs(&mut *self.client()?, filter, offset, limit)
+    }
+
     fn mark_running(&self, id: &str, now: i64) -> Result<()> {
         let n = self.client()?.execute(
             "UPDATE runs SET state=$1, started_at=COALESCE(started_at,$2) WHERE id=$3 AND state IN ('queued','running')",
@@ -363,6 +372,15 @@ impl Store for PgStore {
             &[&i64::from(limit)],
             failure_from_row,
         )
+    }
+
+    fn list_failures_page(
+        &self,
+        filter: &FailureFilter,
+        offset: u64,
+        limit: u32,
+    ) -> Result<Vec<FailureRecord>> {
+        crate::pg_listing::list_failures(&mut *self.client()?, filter, offset, limit)
     }
 
     fn put_blob(&self, data: &[u8]) -> Result<String> {

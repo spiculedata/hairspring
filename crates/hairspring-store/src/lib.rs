@@ -11,6 +11,7 @@ mod downgrade;
 #[macro_use]
 mod lineage;
 mod lineage_fields;
+mod listing;
 #[cfg(feature = "postgres")]
 mod pg;
 #[cfg(feature = "postgres")]
@@ -21,6 +22,8 @@ mod pg_downgrade;
 mod pg_explorer;
 #[cfg(feature = "postgres")]
 mod pg_lineage;
+#[cfg(feature = "postgres")]
+mod pg_listing;
 #[cfg(feature = "postgres")]
 mod pg_run_end;
 #[cfg(feature = "postgres")]
@@ -37,6 +40,7 @@ mod sqlite_downgrade;
 mod sqlite_explorer;
 mod sqlite_jobs;
 mod sqlite_lineage;
+mod sqlite_listing;
 mod sqlite_run_end;
 mod sqlite_schema;
 mod sqlite_tree_query;
@@ -49,6 +53,7 @@ pub use digest_allowance::*;
 pub use downgrade::*;
 pub use lineage::*;
 pub use lineage_fields::{is_bounded_json, is_sha256_hex, nesting_depth};
+pub use listing::{FailureFilter, RunFilter};
 #[cfg(feature = "postgres")]
 pub use pg::PgStore;
 #[cfg(feature = "postgres")]
@@ -112,6 +117,10 @@ pub trait Store: Send + Sync {
     fn create_run(&self, new: &NewRun, now: i64) -> Result<RunRecord>;
     fn get_run(&self, id: &str) -> Result<Option<RunRecord>>;
     fn list_runs(&self, limit: u32) -> Result<Vec<RunRecord>>;
+    /// Runs matching `filter`, newest first (stored time, then the order they were created), from row `offset`. Both
+    /// backends give the same rows in the same order.
+    fn list_runs_page(&self, filter: &RunFilter, offset: u64, limit: u32)
+        -> Result<Vec<RunRecord>>;
     fn mark_running(&self, id: &str, now: i64) -> Result<()>;
     fn update_progress(&self, id: &str, steps: u64, trials: u64) -> Result<()>;
     /// Moves a queued or running run to a final state. Returns false (changing nothing) if it was already final.
@@ -147,6 +156,13 @@ pub trait Store: Send + Sync {
     fn get_failure(&self, id: &str) -> Result<Option<FailureRecord>>;
     fn list_failures(&self, run_id: &str) -> Result<Vec<FailureRecord>>;
     fn list_recent_failures(&self, limit: u32) -> Result<Vec<FailureRecord>>;
+    /// Failures matching `filter`, newest first (stored time, then the order they were stored), from row `offset`.
+    fn list_failures_page(
+        &self,
+        filter: &FailureFilter,
+        offset: u64,
+        limit: u32,
+    ) -> Result<Vec<FailureRecord>>;
     fn put_blob(&self, data: &[u8]) -> Result<String>;
     fn get_blob(&self, hash: &str) -> Result<Option<Vec<u8>>>;
 

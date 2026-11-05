@@ -5,6 +5,7 @@ use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::ndjson::list_response;
 use crate::ratelimit::anonymous_key;
+use crate::read_api::{limit, param, Params};
 use crate::AppState;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{ConnectInfo, FromRequest, Path, Query, Request, State};
@@ -14,7 +15,7 @@ use axum::Json;
 use hairspring_engine::config::Budget;
 use hairspring_engine::mode::RunMode;
 use hairspring_mcp::validate;
-use hairspring_service::{Role, ServiceError, StartRun};
+use hairspring_service::{FailureListQuery, Role, RunListQuery, ServiceError, StartRun};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -122,21 +123,28 @@ pub async fn targets(
     list_response(&headers, value, "targets")
 }
 
-#[derive(Deserialize)]
-pub struct ListQuery {
-    limit: Option<u32>,
-}
-
+/// Runs, newest first, in pages. Every parameter is optional and checked by the service, which is the one place that
+/// decides what a value may be: `state`, `target`, `mode`, `cursor`, `limit`.
 pub async fn list_runs(
     State(s): State<AppState>,
     caller: Caller,
     headers: HeaderMap,
-    Query(q): Query<ListQuery>,
+    Query(p): Query<Params>,
 ) -> Result<Response, ApiError> {
     caller.need(Role::Read)?;
-    let limit = q.limit.unwrap_or(50);
-    let runs = blocking(move || s.svc.list_runs(limit)).await?;
-    list_response(&headers, json!({ "runs": runs }), "runs")
+    let q = RunListQuery {
+        state: param(&p, "state"),
+        target: param(&p, "target"),
+        mode: param(&p, "mode"),
+        cursor: param(&p, "cursor"),
+        limit: limit(&p)?,
+    };
+    let page = blocking(move || s.svc.run_page(&q)).await?;
+    list_response(
+        &headers,
+        serde_json::to_value(page).unwrap_or_default(),
+        "runs",
+    )
 }
 
 #[derive(Deserialize)]
@@ -201,12 +209,22 @@ pub async fn list_failures(
     State(s): State<AppState>,
     caller: Caller,
     headers: HeaderMap,
-    Query(q): Query<ListQuery>,
+    Query(p): Query<Params>,
 ) -> Result<Response, ApiError> {
     caller.need(Role::Read)?;
-    let limit = q.limit.unwrap_or(50);
-    let failures = blocking(move || s.svc.recent_failures(limit)).await?;
-    list_response(&headers, json!({ "failures": failures }), "failures")
+    let q = FailureListQuery {
+        run: param(&p, "run"),
+        property: param(&p, "property"),
+        status: param(&p, "status"),
+        cursor: param(&p, "cursor"),
+        limit: limit(&p)?,
+    };
+    let page = blocking(move || s.svc.failure_page(&q)).await?;
+    list_response(
+        &headers,
+        serde_json::to_value(page).unwrap_or_default(),
+        "failures",
+    )
 }
 
 pub async fn get_failure(

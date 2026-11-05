@@ -375,6 +375,46 @@ older server and worker before upgrading.** A version 5 server left running afte
 `search`, and the backfill does not run again to correct them. Version 6 has the same tables and columns as version 5,
 so there is no offline downgrade from 6 to 5: that step is resetting the stored schema version to 5 by hand.
 
+## Paging and filters on the runs and failures lists
+
+`GET /api/runs` and `GET /api/failures` need the `read` role and list newest first. Both take the same paging
+parameters as the property and trial lists, and the same answer fields:
+
+| Parameter | Meaning |
+|---|---|
+| `limit` | Rows per page. Default 50, at most 500. A larger value is lowered to 500 and 0 is raised to 1. A value that is not a whole number is a 400. |
+| `cursor` | The `next_cursor` of the previous page: a position in the filtered list, a plain number from 0 to 100000. Anything else, or a larger number, is a 400. |
+
+The answer is `{"runs": [...]}` or `{"failures": [...]}`, with `"next_cursor": "<position>"` added when more rows
+follow. The last page has no `next_cursor` (in NDJSON, `{"_next":null}`). Rows are ordered by the time they were stored,
+newest first, and by the order they were created within one millisecond, so a page never holds a row twice and the order
+is the same on SQLite and PostgreSQL. A cursor is a position, so a run stored while a client pages moves later rows down
+by one: a client that keeps loading further pages should drop ids it already has.
+
+A list can be read down to position 100000. A page that would continue past that has no `next_cursor`, the same as the
+last page, so a client that follows `next_cursor` never receives one the server then refuses. To reach further down, narrow
+the list with a filter.
+
+Filters (all optional, all must match; a value that is not valid is a 400 whose message names the parameter and never
+repeats the value, as `{"error": "`state` is not valid"}`):
+
+| Endpoint | Parameter | Meaning |
+|---|---|---|
+| `/api/runs` | `state` | `queued`, `running`, `passed`, `failed`, `error` or `cancelled`. |
+| `/api/runs` | `target` | The exact target name (1 to 64 bytes, no control characters; a non-ASCII name takes more than one byte per character). |
+| `/api/runs` | `mode` | The mode the run was stored with: `search` or `sweep`. |
+| `/api/failures` | `run` | A run id: only that run's failures. |
+| `/api/failures` | `property` | A property id prefix (1 to 128 bytes). A failure holds no property id of its own, so this matches failures of runs in which a property with such an id is stored as a violation. Matching is exact and case-sensitive; `%` and `_` are ordinary characters. |
+| `/api/failures` | `status` | `candidate`, `rerun_repeated`, `confirmed`, `verified`, `not_reproducible` or `control_failed`: where the stored checks leave the failure. |
+
+A failure's state is worked out from its stored checks, not kept on its row, so a `status` filter reads the checks of
+the failures it passes over. One request reads at most 1000 failures. If that is not enough to fill a page, the page
+comes back short (it can even be empty) with a `next_cursor` to carry on from, so keep following `next_cursor` until it
+is absent. With a `status` filter each failure carries its `finding` (`status`, `checks`, `environment_pinned`); without
+one the list leaves `finding` out, as before.
+
+There is no `mine` filter: a run does not record who started it.
+
 ## Bundles
 
 A bundle is a small text file: `seed`, `build`, `target`, `backend`, `param.*` and `path` (hex action ids or

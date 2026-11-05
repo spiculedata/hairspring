@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 pub mod checks;
 pub mod explorer;
+pub mod listing;
 #[cfg(feature = "postgres")]
 pub mod pg_support;
 pub mod terminal_events;
@@ -59,6 +60,7 @@ pub fn run_all(make: &dyn Fn() -> Arc<dyn Store>) {
     explorer::run_all_explorer(make);
     tree::run_all_trees(make);
     checks::run_all_checks(make);
+    listing::run_all_listing(make);
 }
 
 pub fn runs_lifecycle(s: &dyn Store) {

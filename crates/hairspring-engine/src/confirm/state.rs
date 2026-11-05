@@ -38,6 +38,20 @@ impl FindingStatus {
         }
     }
 
+    /// The state named by its wire text (the text `as_str` gives), and nothing else.
+    pub fn parse(text: &str) -> Option<FindingStatus> {
+        [
+            FindingStatus::Candidate,
+            FindingStatus::RerunRepeated,
+            FindingStatus::Confirmed,
+            FindingStatus::Verified,
+            FindingStatus::NotReproducible,
+            FindingStatus::ControlFailed,
+        ]
+        .into_iter()
+        .find(|s| s.as_str() == text)
+    }
+
     /// The rung the claim wording sees: only a confirmed or verified finding is one it may call reproduced. `rerun_repeated` is not.
     pub fn claim_state(self) -> FindingState {
         match self {
@@ -153,5 +167,40 @@ pub fn standing(confirmations: &[Vec<CheckResult>]) -> Standing {
             pinned: false,
             confirmation: None,
         },
+    }
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::FindingStatus;
+
+    const ALL: [FindingStatus; 6] = [
+        FindingStatus::Candidate,
+        FindingStatus::RerunRepeated,
+        FindingStatus::Confirmed,
+        FindingStatus::Verified,
+        FindingStatus::NotReproducible,
+        FindingStatus::ControlFailed,
+    ];
+
+    #[test]
+    fn every_status_parses_from_its_own_wire_text() {
+        for status in ALL {
+            assert_eq!(FindingStatus::parse(status.as_str()), Some(status));
+        }
+    }
+
+    #[test]
+    fn anything_else_is_not_a_status() {
+        for text in [
+            "",
+            "Confirmed",
+            "confirmed ",
+            "reproduced",
+            "rerun-repeated",
+            "pass",
+        ] {
+            assert_eq!(FindingStatus::parse(text), None, "{text:?}");
+        }
     }
 }

@@ -11,7 +11,7 @@ use crate::sqlite_tree_query as query;
 use crate::sqlite_trials as trials;
 use crate::trials::*;
 use crate::types::*;
-use crate::{new_id, sha256_hex, Store};
+use crate::{new_id, sha256_hex, FailureFilter, RunFilter, Store};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -78,7 +78,7 @@ pub struct SqliteStore {
     query_rule: Mutex<TreeQueryRule>,
 }
 
-fn run_from_row(r: &Row<'_>) -> rusqlite::Result<RunRecord> {
+pub(crate) fn run_from_row(r: &Row<'_>) -> rusqlite::Result<RunRecord> {
     let state: String = r.get("state")?;
     Ok(RunRecord {
         id: r.get("id")?,
@@ -106,7 +106,7 @@ fn run_from_row(r: &Row<'_>) -> rusqlite::Result<RunRecord> {
     })
 }
 
-fn failure_from_row(r: &Row<'_>) -> rusqlite::Result<FailureRecord> {
+pub(crate) fn failure_from_row(r: &Row<'_>) -> rusqlite::Result<FailureRecord> {
     Ok(FailureRecord {
         id: r.get("id")?,
         run_id: r.get("run_id")?,
@@ -234,6 +234,15 @@ impl Store for SqliteStore {
         Ok(rows)
     }
 
+    fn list_runs_page(
+        &self,
+        filter: &RunFilter,
+        offset: u64,
+        limit: u32,
+    ) -> Result<Vec<RunRecord>> {
+        crate::sqlite_listing::list_runs(&self.conn(), filter, offset, limit)
+    }
+
     fn mark_running(&self, id: &str, now: i64) -> Result<()> {
         let n = self.conn().execute("UPDATE runs SET state=?, started_at=COALESCE(started_at,?) WHERE id=? AND state IN ('queued','running')", params![RunState::Running.as_str(), now, id])?;
         expect_changed(n, "run", id)
@@ -319,6 +328,15 @@ impl Store for SqliteStore {
             .query_map([limit], failure_from_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
+    }
+
+    fn list_failures_page(
+        &self,
+        filter: &FailureFilter,
+        offset: u64,
+        limit: u32,
+    ) -> Result<Vec<FailureRecord>> {
+        crate::sqlite_listing::list_failures(&self.conn(), filter, offset, limit)
     }
 
     fn put_blob(&self, data: &[u8]) -> Result<String> {

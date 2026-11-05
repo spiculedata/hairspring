@@ -45,8 +45,9 @@ The **last line is always the control line**, which has the key `_next`:
 | `{"_next":null}` | The list is complete. |
 
 A body that does not end in a control line was cut short and should be treated as incomplete. No item line has an
-`_next` key. Lists with no cursor (runs, failures, workers, targets, coverage) always end `{"_next":null}`; they are
-bounded by `limit` (at most 500) like the JSON form.
+`_next` key. Lists with no cursor (workers, targets, coverage) always end `{"_next":null}`; they are bounded by
+`limit` (at most 500) like the JSON form. The runs and failures lists page with a cursor; see
+[Paging and filters on the runs and failures lists](architecture.md#paging-and-filters-on-the-runs-and-failures-lists).
 
 Fields of the JSON form that describe the page rather than an item (a property table's `claim`, `notes`, `headline`,
 `counts_by_status`, `total`, `guest_note`; a trial page's `run_id` and `scanned_trials`; a coverage report's `trials` and
