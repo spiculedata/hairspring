@@ -45,6 +45,13 @@
 
 ### Changed
 
+- The per-client rate limit now also applies to valid tokens from an address that has used up its budget. Once
+  requests without a valid token (no token, or a wrong one) from a client address (an IPv4 address or an IPv6 /64)
+  go past `--rate-limit` in a minute, a request with a valid token from that address is answered `429` too, until the
+  minute is over. A legitimate caller sharing an address with such traffic can be refused for up to a minute. A valid
+  token from any other address works as before, and its requests do not count against the address's allowance.
+  `/api/health` without a token is still never limited.
+
 - The `not rated trials:` line in the text report of a search run or a sweep now says how many inconclusive trials
   showed a failure, counted once per trial. Those failures stay out of the hits and the rate. The count is stored
   with the run's property summary. A run with no stored property summary has an unknown count, and the line says

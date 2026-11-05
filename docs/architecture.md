@@ -115,6 +115,16 @@ and `fail`) requires `worker_secret` and refuses a request that names a worker w
 nor a worker's lease can be borrowed by naming a worker's id; no endpoint identifies a worker by id alone. Only
 `register` is open to any `run` token, and it returns the new worker's own secret.
 
+Requests to `/api/` (except `/api/health`) and `/mcp` are limited per caller. `hairspring serve --rate-limit N`
+(default 1200, `0` disables) allows `N` requests in a fixed one-minute window and answers `429 Too Many Requests` with
+`Retry-After: 60` past it. A request with a valid token counts against that token's own allowance. Every other
+request (no token, or a wrong one) counts against one allowance per client address: the IPv4 address, or the /64 for
+IPv6, taken from the connection and never from forwarding headers. While an address's anonymous allowance is used
+up, a valid token from that address is refused as well, without counting against either allowance, until the window
+ends; otherwise the right token would be told apart from wrong guesses by its `200`. A caller sharing an address with
+someone guessing can therefore be refused for up to a minute. The windows are kept in server memory in a bounded
+table (see SECURITY.md for how it is evicted).
+
 Registration is limited per token. `hairspring serve --register-limit N` (default 100, `0` disables) makes `register`
 answer `429 Too Many Requests` with a `Retry-After` header once a token has made `N` registration attempts in a fixed
 one-hour window. The window starts at the token's first counted attempt, so up to `2N` attempts can pass either side of

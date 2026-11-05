@@ -64,6 +64,19 @@ impl RateLimiter {
         entry.1 += 1;
         entry.1 <= self.limit
     }
+
+    /// True if `key` has gone past the limit in its current window. Looking neither counts a request nor stores
+    /// anything, so it cannot grow the table or spend anyone's budget.
+    pub fn is_over(&self, key: &str) -> bool {
+        if self.limit == 0 {
+            return false;
+        }
+        let now = Instant::now();
+        let map = self.windows.lock().unwrap_or_else(|e| e.into_inner());
+        map.get(key).is_some_and(|(start, count)| {
+            now.duration_since(*start) < self.window && *count > self.limit
+        })
+    }
 }
 
 const ANONYMOUS_PREFIX: &str = "ip:";
@@ -177,6 +190,72 @@ mod tests {
         assert!(limiter.check(&key));
         assert!(limiter.check(&key));
         assert!(!limiter.check(&key));
+    }
+
+    #[test]
+    fn is_over_is_false_for_an_unknown_caller_and_one_within_the_limit() {
+        let limiter = RateLimiter::with_capacity(2, LONG, 100);
+        assert!(!limiter.is_over("ip:192.0.2.1"));
+        assert!(limiter.check("ip:192.0.2.1"));
+        assert!(limiter.check("ip:192.0.2.1"));
+        assert!(
+            !limiter.is_over("ip:192.0.2.1"),
+            "at the limit is not over it"
+        );
+    }
+
+    #[test]
+    fn is_over_is_true_once_a_caller_has_gone_past_the_limit() {
+        let limiter = RateLimiter::with_capacity(2, LONG, 100);
+        for _ in 0..3 {
+            limiter.check("ip:192.0.2.1");
+        }
+        assert!(limiter.is_over("ip:192.0.2.1"));
+        assert!(!limiter.is_over("ip:192.0.2.2"));
+    }
+
+    #[test]
+    fn is_over_does_not_count_or_store_anything() {
+        let limiter = RateLimiter::with_capacity(2, LONG, 100);
+        for i in 0..1_000u32 {
+            assert!(!limiter.is_over(&anonymous_key(IpAddr::V4(Ipv4Addr::from(i)))));
+        }
+        assert_eq!(limiter.len(), 0);
+        assert!(limiter.check("ip:192.0.2.1"));
+        for _ in 0..10 {
+            limiter.is_over("ip:192.0.2.1");
+        }
+        assert!(
+            limiter.check("ip:192.0.2.1"),
+            "looking did not spend the budget"
+        );
+    }
+
+    #[test]
+    fn is_over_clears_when_the_window_expires() {
+        let limiter = RateLimiter::with_capacity(1, Duration::from_millis(20), 100);
+        limiter.check("ip:192.0.2.1");
+        limiter.check("ip:192.0.2.1");
+        assert!(limiter.is_over("ip:192.0.2.1"));
+        std::thread::sleep(Duration::from_millis(40));
+        assert!(!limiter.is_over("ip:192.0.2.1"));
+    }
+
+    #[test]
+    fn is_over_is_never_true_when_limiting_is_off() {
+        let limiter = RateLimiter::with_capacity(0, LONG, 100);
+        for _ in 0..10 {
+            limiter.check("ip:192.0.2.1");
+        }
+        assert!(!limiter.is_over("ip:192.0.2.1"));
+    }
+
+    #[test]
+    fn is_over_applies_to_a_whole_ipv6_64() {
+        let limiter = RateLimiter::with_capacity(1, LONG, 100);
+        limiter.check(&anonymous_key(v6(1, 1)));
+        limiter.check(&anonymous_key(v6(1, 2)));
+        assert!(limiter.is_over(&anonymous_key(v6(9, 77))));
     }
 
     #[test]

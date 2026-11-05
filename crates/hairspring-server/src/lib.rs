@@ -176,15 +176,26 @@ fn digest_prefix(s: &str) -> String {
         .collect()
 }
 
-/// Who a request counts against. A valid token gets its own bucket; everything else (no token, a wrong
-/// token, a made-up token) shares one bucket per client address, so guessing cannot dodge the limit.
-fn limit_key(state: &AppState, peer: SocketAddr, authorization: Option<&str>) -> String {
-    if !state.auth.is_open() {
-        if let Some((_, key)) = state.auth.identify(authorization) {
-            return key;
-        }
+/// Whether a limited request may go ahead. Anything without a valid token (no token, a wrong token, a made-up
+/// token) counts against one bucket per client address (the address for IPv4, the /64 for IPv6, taken from the
+/// connection and never from forwarding headers), so guessing cannot dodge the limit. A valid token counts
+/// against its own bucket, and is also refused, without spending either budget, while its client address's
+/// anonymous bucket is over the limit: otherwise the right guess would be told apart from the wrong ones by its
+/// 200, and the limit would not slow guessing at all. The cost is that a legitimate caller sharing an address
+/// with someone guessing can be refused for up to one window (a minute). Any other code that counts a request
+/// against `limiter` should call this rather than `check`, so a valid token never spends its address's anonymous
+/// budget and locks other tokens on that address out.
+fn admit(state: &AppState, peer: SocketAddr, authorization: Option<&str>) -> bool {
+    let anonymous = ratelimit::anonymous_key(peer.ip());
+    let token = if state.auth.is_open() {
+        None
+    } else {
+        state.auth.identify(authorization)
+    };
+    match token {
+        Some((_, key)) => !state.limiter.is_over(&anonymous) && state.limiter.check(&key),
+        None => state.limiter.check(&anonymous),
     }
-    ratelimit::anonymous_key(peer.ip())
 }
 
 async fn limit_requests(
@@ -200,7 +211,7 @@ async fn limit_requests(
             .headers()
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok());
-        if !s.limiter.check(&limit_key(&s, peer, authorization)) {
+        if !admit(&s, peer, authorization) {
             return (
                 StatusCode::TOO_MANY_REQUESTS,
                 [(header::RETRY_AFTER, "60")],
