@@ -506,11 +506,13 @@ fn a_cli_worker_executes_runs_for_a_server_without_embedded_workers() {
         &[("HAIRSPRING_TOKENS", &format!("{tok}:admin"))],
     );
     let base = url_of(&wait_for_line(&mut srv, "listening on"));
-    let _worker = spawn(
+    let mut worker = spawn(
         &d,
         &["worker", "--server", &base, "--poll-ms", "50"],
         &[("HAIRSPRING_TOKEN", tok)],
     );
+    // Printed once the server has accepted the registration.
+    wait_for_line(&mut worker, "serving");
     let (status, body) = http(
         "POST",
         &format!("{base}/api/runs"),
@@ -533,6 +535,70 @@ fn a_cli_worker_executes_runs_for_a_server_without_embedded_workers() {
             "worker never completed the run: {b}"
         );
         std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[test]
+fn a_worker_that_cannot_register_does_not_say_it_is_serving() {
+    let d = scratch("worker-unreachable");
+    // A port that was free a moment ago: connections are refused, so registration keeps retrying.
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let base = format!("http://127.0.0.1:{port}");
+    let mut worker = Command::new(env!("CARGO_BIN_EXE_hairspring"))
+        .args(["worker", "--server", &base, "--poll-ms", "50"])
+        .current_dir(&d)
+        .env("HAIRSPRING_TOKEN", "worker-token-0123456789abcdef")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    std::thread::sleep(Duration::from_millis(1500));
+    let _ = worker.kill();
+    let output = worker.wait_with_output().unwrap();
+    let stdout = out(&output);
+    assert!(!stdout.contains("serving"), "{stdout}");
+    assert!(
+        err(&output).contains("registration failed"),
+        "{}",
+        err(&output)
+    );
+}
+
+#[test]
+fn a_worker_token_file_in_the_servers_format_is_refused_with_the_reason() {
+    let d = scratch("worker-token-file");
+    let cases = [
+        ("role", "worker-token-0123456789abcdef:run\n"),
+        (
+            "lines",
+            "worker-token-0123456789abcdef\nsecond-token-0123456789abcdef\n",
+        ),
+    ];
+    for (name, text) in cases {
+        let file = d.join(name);
+        std::fs::write(&file, text).unwrap();
+        let o = hairspring(
+            &d,
+            &[
+                "worker",
+                "--server",
+                "http://127.0.0.1:9",
+                "--token-file",
+                file.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(o.status.code(), Some(2), "{name}: {}{}", out(&o), err(&o));
+        assert!(
+            err(&o).contains("the worker token file must contain one bare token")
+                && err(&o).contains("token:role lines"),
+            "{name}: {}",
+            err(&o)
+        );
+        assert!(!out(&o).contains("serving"), "{name}: {}", out(&o));
     }
 }
 
@@ -607,6 +673,112 @@ fn process_targets_report_a_missing_hermit_clearly() {
         out(&o),
         err(&o)
     );
+}
+
+#[test]
+fn a_process_target_whose_program_is_missing_is_a_configuration_error_not_a_failure() {
+    let (d, hermit) = process_project("noprog");
+    std::fs::write(
+        d.join("hairspring.toml"),
+        "[target.svc]\nkind = \"process\"\ncommand = [\"/definitely/not/a/program\", \"--flag\"]\n[target.svc.budget]\nmax_trials = 3\n",
+    )
+    .unwrap();
+    let o = hairspring_env(&d, &["test", "svc"], &hermit);
+    let both = format!("{}{}", out(&o), err(&o));
+    assert_eq!(o.status.code(), Some(2), "{both}");
+    assert!(
+        both.contains("target svc: program /definitely/not/a/program not found or not executable"),
+        "{both}"
+    );
+    assert!(!both.contains("FAILED"), "{both}");
+    assert!(!both.contains("exit code 127"), "{both}");
+    assert!(
+        !d.join(".hairspring/bundles").exists(),
+        "no bundle for a configuration error"
+    );
+}
+
+#[test]
+fn hermits_own_program_not_found_is_a_configuration_error() {
+    let (d, _) = process_project("hermit-127");
+    // Says what the pinned Hermit says when a program is missing inside the guest (for example under a --mount).
+    let fake = d.join("refusing-hermit");
+    write_exe(
+        &fake,
+        "#!/bin/sh\necho 'Error: Program /opt/app/svc does not exist or is not accessible. Check the path and any --mount or --bind target.' >&2\nexit 127\n",
+    );
+    std::fs::write(
+        d.join("hairspring.toml"),
+        "[target.svc]\nkind = \"process\"\ncommand = [\"/opt/app/svc\"]\nhermit_args = [\"--mount=type=bind,source=/srv/app,target=/opt/app\"]\n[target.svc.budget]\nmax_trials = 3\n",
+    )
+    .unwrap();
+    let o = hairspring_env(&d, &["test", "svc"], fake.to_str().unwrap());
+    let both = format!("{}{}", out(&o), err(&o));
+    assert_eq!(o.status.code(), Some(2), "{both}");
+    assert!(
+        both.contains("target svc: program /opt/app/svc not found or not executable"),
+        "{both}"
+    );
+    assert!(!both.contains("FAILED"), "{both}");
+}
+
+#[test]
+fn a_program_that_exits_127_itself_is_still_a_failure() {
+    let (d, hermit) = process_project("guest-127");
+    std::fs::write(
+        d.join("hairspring.toml"),
+        "[target.svc]\nkind = \"process\"\ncommand = [\"/bin/sh\", \"-c\", \"echo 'sh: helper: not found' >&2; exit 127\"]\n[target.svc.budget]\nmax_trials = 2\n",
+    )
+    .unwrap();
+    let o = hairspring_env(&d, &["test", "svc"], &hermit);
+    assert_eq!(o.status.code(), Some(1), "{}{}", out(&o), err(&o));
+    assert!(out(&o).contains("FAILED"), "{}", out(&o));
+}
+
+#[test]
+fn a_program_that_prints_hermits_words_about_another_program_is_still_a_failure() {
+    let (d, hermit) = process_project("guest-says-missing");
+    std::fs::write(
+        d.join("hairspring.toml"),
+        "[target.svc]\nkind = \"process\"\ncommand = [\"/bin/sh\", \"-c\", \"echo 'Error: Program /opt/other does not exist or is not accessible.' >&2; exit 127\"]\n[target.svc.budget]\nmax_trials = 2\n",
+    )
+    .unwrap();
+    let o = hairspring_env(&d, &["test", "svc"], &hermit);
+    let both = format!("{}{}", out(&o), err(&o));
+    assert_eq!(o.status.code(), Some(1), "{both}");
+    assert!(out(&o).contains("FAILED"), "{both}");
+    assert!(!both.contains("not found or not executable"), "{both}");
+}
+
+#[test]
+fn hermit_args_that_change_the_guest_view_only_warn_about_a_program_missing_on_the_host() {
+    let (d, _) = process_project("guest-view");
+    // Hermit would find the program through the PATH it is given; this one just passes.
+    let fake = d.join("passing-hermit");
+    write_exe(&fake, "#!/bin/sh\necho ok\n");
+    std::fs::write(
+        d.join("hairspring.toml"),
+        "[target.svc]\nkind = \"process\"\ncommand = [\"mytool-not-on-this-host\"]\nhermit_args = [\"--env=PATH=/opt/tools\"]\n[target.svc.budget]\nmax_trials = 2\n",
+    )
+    .unwrap();
+    let o = hairspring_env(&d, &["test", "svc"], fake.to_str().unwrap());
+    assert_eq!(o.status.code(), Some(0), "{}{}", out(&o), err(&o));
+    let warning = "could not find mytool-not-on-this-host on the host; Hermit's arguments change what the guest sees, so continuing";
+    assert_eq!(err(&o).matches(warning).count(), 1, "{}", err(&o));
+}
+
+#[test]
+fn a_process_target_with_a_relative_program_in_its_cwd_still_runs() {
+    let (d, hermit) = process_project("relprog");
+    std::fs::create_dir_all(d.join("app")).unwrap();
+    write_exe(&d.join("app/svc"), "#!/bin/sh\necho ok\n");
+    std::fs::write(
+        d.join("hairspring.toml"),
+        "[target.svc]\nkind = \"process\"\ncwd = \"app\"\ncommand = [\"./svc\"]\n[target.svc.budget]\nmax_trials = 2\n",
+    )
+    .unwrap();
+    let o = hairspring_env(&d, &["test", "svc"], &hermit);
+    assert_eq!(o.status.code(), Some(0), "{}{}", out(&o), err(&o));
 }
 
 // ---- wasm targets ----

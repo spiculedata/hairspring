@@ -350,8 +350,20 @@ fn deliver_trials(
 /// Transient network errors are retried, a forgotten worker re-registers,
 /// and rejected credentials end the loop.
 pub fn run_loop(engine: &Engine, cfg: &WorkerConfig, stop: &AtomicBool) -> Result<(), WorkerError> {
+    run_loop_notify(engine, cfg, stop, &mut |_| {})
+}
+
+/// [`run_loop`], calling `on_registered` with the worker id once the first registration has succeeded, so a caller can
+/// say it is serving only when it is.
+pub fn run_loop_notify(
+    engine: &Engine,
+    cfg: &WorkerConfig,
+    stop: &AtomicBool,
+    on_registered: &mut dyn FnMut(&str),
+) -> Result<(), WorkerError> {
     let api = Api::new(cfg)?;
     let (mut worker_id, mut secret) = register(&api, cfg, stop)?;
+    on_registered(&worker_id);
     let mut backoff = Duration::from_millis(200);
     let mut reregister = ReregisterBackoff::default();
     while !stop.load(Ordering::SeqCst) {

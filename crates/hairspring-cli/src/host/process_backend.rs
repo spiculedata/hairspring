@@ -55,6 +55,10 @@ pub struct ProcessBackendFacts {
     pub hermit: HermitFact,
     pub perf: PerfFact,
     pub perf_event_paranoid: Option<i32>,
+    /// Whether a hardware PMU is registered under `/sys/bus/event_source/devices` (`cpu`, or `cpu_core` on hybrid
+    /// CPUs). `None` when that cannot be told: the list is missing (no `/sys`), or it was not looked for (off Linux,
+    /// where no counter is opened either).
+    pub pmu_registered: Option<bool>,
     /// `None` when Yama is not present (no restriction from it).
     pub ptrace_scope: Option<i32>,
     pub is_root: bool,
@@ -205,6 +209,21 @@ fn judge_hermit(f: &ProcessBackendFacts) -> Judged {
     }
 }
 
+/// Why a refused counter is not about `perf_event_paranoid` when no PMU is registered: the kernel can answer EACCES
+/// before it finds there is no hardware to count with.
+const NO_PMU_REGISTERED: &str = "no hardware PMU registered: this machine (a virtual machine or container, or an \
+     emulated one) cannot provide the counters Hermit needs; lowering perf_event_paranoid will not help";
+
+/// A refused counter on a machine whose list of PMUs could not be read.
+fn pmu_unknown(paranoid: &str) -> String {
+    format!(
+        "the kernel refused a hardware performance counter (perf_event_paranoid is {paranoid}), and \
+         /sys/bus/event_source/devices could not be read, so whether this machine has a hardware PMU cannot be \
+         determined (a chroot or sandbox without /sys does this). Run the check where /sys is mounted. Hairspring \
+         never changes kernel settings."
+    )
+}
+
 fn judge_perf(f: &ProcessBackendFacts) -> Judged {
     let paranoid = f
         .perf_event_paranoid
@@ -213,6 +232,16 @@ fn judge_perf(f: &ProcessBackendFacts) -> Judged {
         PerfFact::Usable => pass(
             "perf counters",
             format!("a hardware branch counter opened (perf_event_paranoid {paranoid})"),
+        ),
+        PerfFact::Denied if f.pmu_registered == Some(false) => fail(
+            "perf counters",
+            format!("no hardware PMU registered (perf_event_paranoid {paranoid})"),
+            NO_PMU_REGISTERED,
+        ),
+        PerfFact::Denied if f.pmu_registered.is_none() => fail(
+            "perf counters",
+            format!("opening a hardware counter was refused; PMU unknown (perf_event_paranoid {paranoid})"),
+            pmu_unknown(&paranoid),
         ),
         PerfFact::Denied => fail(
             "perf counters",
@@ -349,6 +378,7 @@ mod tests {
             },
             perf: PerfFact::Usable,
             perf_event_paranoid: Some(2),
+            pmu_registered: Some(true),
             ptrace_scope: Some(1),
             is_root: false,
             container: None,
@@ -532,6 +562,55 @@ mod tests {
             ..good()
         };
         assert!(only_blocker(&other).contains("errno 24"));
+    }
+
+    #[test]
+    fn a_refused_counter_without_a_registered_pmu_does_not_blame_perf_event_paranoid() {
+        let facts = ProcessBackendFacts {
+            perf: PerfFact::Denied,
+            perf_event_paranoid: Some(2),
+            pmu_registered: Some(false),
+            ..good()
+        };
+        let reason = only_blocker(&facts);
+        assert!(reason.starts_with("no hardware PMU registered"), "{reason}");
+        assert!(
+            reason.contains("lowering perf_event_paranoid will not help"),
+            "{reason}"
+        );
+        assert!(!reason.contains("your decision"), "{reason}");
+        let text = text(&facts);
+        assert!(text.contains("no hardware PMU registered"), "{text}");
+        assert!(!text.contains("was refused"), "{text}");
+    }
+
+    #[test]
+    fn a_refused_counter_with_a_pmu_keeps_the_paranoid_advice() {
+        let facts = ProcessBackendFacts {
+            perf: PerfFact::Denied,
+            perf_event_paranoid: Some(2),
+            pmu_registered: Some(true),
+            ..good()
+        };
+        let reason = only_blocker(&facts);
+        assert!(
+            reason.contains("perf_event_paranoid is 2") && reason.contains("your decision"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn a_refused_counter_with_an_unreadable_pmu_list_says_the_cause_is_unknown() {
+        let facts = ProcessBackendFacts {
+            perf: PerfFact::Denied,
+            perf_event_paranoid: Some(2),
+            pmu_registered: None,
+            ..good()
+        };
+        let reason = only_blocker(&facts);
+        assert!(reason.contains("cannot be determined"), "{reason}");
+        assert!(!reason.contains("virtual machine"), "{reason}");
+        assert!(!reason.contains("your decision"), "{reason}");
     }
 
     #[test]

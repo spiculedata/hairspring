@@ -244,6 +244,38 @@
 
 ### Fixed
 
+- A process target whose program (`command[0]`) cannot be started is now a configuration error with a message naming
+  the target and the program, `target NAME: program PATH not found or not executable` (exit 2), found before any trial
+  runs. With the pinned Hermit a missing program was already an error, worded as a Hermit failure. Before any trial
+  runs, the program is looked up on the host the way Hermit starts it by default: a name with
+  a `/` relative to the target's `cwd`, a bare name on the guest's `PATH` (the target's own `PATH` if it sets one).
+  When `hermit_args` contain `--mount`, `--bind`, `--tmp`, `--image`, `--env` (`-e`), `--base-env`, `--workdir`,
+  `--config` or `--from`, the guest may see other files or another `PATH`, so a program missing on the host is only a
+  warning and Hermit decides. After a trial, Hermit's own refusal to start the program (exit 127 with its "does not
+  exist or is not accessible" or "Could not resolve program" message about the target's own program) is reported as the
+  same configuration error, with Hermit's line added; a program that exits 127 itself is still judged by its exit
+  status. The checks run where the backend runs, so a remote
+  worker checks its own machine.
+- `hairspring doctor --process-backend` no longer blames `perf_event_paranoid` when the kernel refuses a hardware
+  counter on a machine with no hardware PMU registered (no `cpu` or `cpu_core` under
+  `/sys/bus/event_source/devices`). It now says that the machine cannot provide the counters Hermit needs and that
+  lowering the setting will not help. When that directory cannot be read at all (a chroot or sandbox without `/sys`),
+  it says the cause cannot be determined. The advice about the setting stays for machines that have a PMU. Exit codes
+  are unchanged.
+- `hairspring worker --token-file` refuses a file holding more than one token or a `token:role` line, saying that the
+  worker token file must contain one bare token; before, every request failed with an HTTP header error. The worker
+  prints `serving` only after the server has accepted its registration.
+- `hairspring doctor` no longer prints `x 0 steps` for wasm and process targets, which have no step count:
+  `deterministic over 8 seeds`.
+- `scripts/install.sh`: the help and the tag error now give `v0.1-RC1` as the example tag (a release that exists).
+  `--dry-run --version TAG` checks that the release's `SHA256SUMS` exists (a HEAD request; status code only) and exits
+  1 with `release TAG not found` when it does not; when there is no answer it warns that it could not check and still
+  exits 0. A source build (and its dry run) checks for cargo and a C compiler and linker (`cc`) before building, and
+  says what to install (`sudo apt-get install -y build-essential` on Debian and Ubuntu, `xcode-select --install` on
+  macOS); `--with-ui` also checks for `node` and `npm`. A failing `cargo build` now exits 1 with `the build failed`
+  rather than cargo's own status, so the installer keeps to its documented exit codes 0, 1 and 2.
+- The `hairspring init` template's process example now shows `wall_secs = 600` in its budget, with a note that the
+  default of 60 seconds allows few Hermit trials.
 - Text a worker sends is now cleaned or refused when it arrives. A failure reason (`/api/worker/jobs/{job}/fail`) and
   a progress message are cut to one line with no control or bidirectional characters, as a result's error already was,
   so the run's `error` and the progress events carry clean text. A worker name with a control or invisible formatting

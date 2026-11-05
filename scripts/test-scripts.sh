@@ -995,16 +995,157 @@ t_cli_source_build_names_a_missing_cargo() {
   rm -f "$BIN/cargo"
   installer_run -- --prefix "$SB/prefix"
   assert_rc 1
-  assert_err_has "cargo is required"
+  assert_err_has "cargo (the Rust toolchain)"
+  assert_err_has "https://rustup.rs"
   assert_absent "$SB/prefix"
 }
 
-t_cli_source_build_fails_when_the_build_fails() {
+t_cli_source_build_names_a_missing_c_compiler_before_building() {
+  new_sandbox "$1"
+  rm -f "$BIN/cc"
+  installer_run -- --prefix "$SB/prefix"
+  assert_rc 1
+  assert_err_has "a C compiler and linker (cc)"
+  assert_err_has "sudo apt-get install -y build-essential"
+  assert_err_has "xcode-select --install"
+  assert_err_has "Nothing was built"
+  assert_log_lacks "cargo build"
+  assert_absent "$SB/prefix"
+  assert_no_tripwire
+}
+
+t_cli_source_build_refuses_a_cc_that_does_not_run() {
+  # macOS without the command line tools has a /usr/bin/cc that only fails.
+  new_sandbox "$1"
+  mk_fake cc 'echo "xcrun: error: invalid active developer path" >&2; exit 1'
+  installer_run -- --prefix "$SB/prefix"
+  assert_rc 1
+  assert_err_has "xcode-select --install"
+  assert_log_lacks "cargo build"
+}
+
+t_cli_source_build_names_every_missing_prerequisite_at_once() {
+  new_sandbox "$1"
+  rm -f "$BIN/cc" "$BIN/cargo"
+  installer_run -- --prefix "$SB/prefix" --with-ui
+  assert_rc 1
+  assert_err_has "cargo (the Rust toolchain)"
+  assert_err_has "a C compiler and linker (cc)"
+  assert_err_has "  - node, which --with-ui needs"
+  assert_err_has "  - npm, which --with-ui needs"
+}
+
+t_cli_with_ui_needs_node_and_npm() {
+  new_sandbox "$1"
+  mk_fake npm 'exit 0'
+  installer_run -- --prefix "$SB/prefix" --with-ui --dry-run
+  assert_rc 1
+  assert_err_has "  - node, which --with-ui needs"
+  rm -f "$BIN/npm"
+  mk_fake node 'exit 0'
+  installer_run -- --prefix "$SB/prefix" --with-ui --dry-run
+  assert_rc 1
+  assert_err_has "  - npm, which --with-ui needs"
+  mk_fake npm 'exit 0'
+  installer_run -- --prefix "$SB/prefix" --with-ui --dry-run
+  assert_rc 0
+  assert_out_has "dry run"
+  assert_log_lacks "npm ci"
+}
+
+t_cli_dry_run_checks_the_source_prerequisites() {
+  new_sandbox "$1"
+  installer_run -- --prefix "$SB/prefix" --dry-run
+  assert_rc 0
+  assert_out_has "dry run"
+  rm -f "$BIN/cc"
+  installer_run -- --prefix "$SB/prefix" --dry-run
+  assert_rc 1
+  assert_err_has "sudo apt-get install -y build-essential"
+  assert_err_has "xcode-select --install"
+  assert_out_lacks "dry run: nothing was"
+  assert_log_lacks "cargo"
+  assert_absent "$SB/prefix"
+}
+
+t_cli_source_build_fails_with_exit_1_when_the_build_fails() {
   new_sandbox "$1"
   mk_fake cargo 'echo "error: could not compile" >&2; exit 101'
   installer_run -- --prefix "$SB/prefix"
-  assert_rc 101
+  assert_rc 1
+  assert_err_has "the build failed (cargo exited 101"
   assert_absent "$SB/prefix/bin/hairspring"
+}
+
+# ---- install.sh: release tags and the dry run's release check ---------------------------------------------------
+t_cli_help_and_errors_show_a_tag_that_exists() {
+  new_sandbox "$1"
+  installer_run -- --help
+  assert_rc 0
+  assert_out_has "v0.1-RC1"
+  assert_out_lacks "v0.1.0"
+  installer_run -- --version latest
+  assert_rc 2
+  assert_err_has "such as v0.1-RC1"
+}
+
+t_cli_tags_of_both_shapes_are_accepted() {
+  new_sandbox "$1"
+  make_release "$SB/rel" hairspring-linux-x86_64
+  installer_run "HAIRSPRING_RELEASE_BASE_URL=file://$SB/rel" -- --version v0.1-RC1 --prefix "$SB/prefix" --dry-run
+  assert_rc 0
+  assert_out_has "release v0.1-RC1 found"
+  installer_run "HAIRSPRING_RELEASE_BASE_URL=file://$SB/rel" -- --version v1.2.3 --prefix "$SB/prefix" --dry-run
+  assert_rc 0
+}
+
+t_cli_dry_run_says_a_release_that_does_not_exist_is_not_found() {
+  new_sandbox "$1"
+  mkdir -p "$SB/rel"
+  installer_run "HAIRSPRING_RELEASE_BASE_URL=file://$SB/rel" -- --version v0.1.0 --prefix "$SB/prefix" --dry-run
+  assert_rc 1
+  assert_err_has "release v0.1.0 not found"
+  assert_out_lacks "dry run: nothing was"
+  assert_absent "$SB/prefix"
+}
+
+# A stub curl answers the HEAD request, so the real GitHub URL is built but never contacted.
+stub_release_curl() {
+  mk_fake curl 'printf "%s" "${FAKE_CURL_CODE:-000}"; exit "${FAKE_CURL_RC:-0}"'
+}
+
+t_cli_dry_run_asks_github_for_the_release_headers_only() {
+  new_sandbox "$1"
+  stub_release_curl
+  installer_run FAKE_CURL_CODE=302 -- --version v0.1-RC1 --prefix "$SB/prefix" --dry-run
+  assert_rc 0
+  assert_out_has "release v0.1-RC1 found"
+  assert_log_has "--head"
+  assert_log_has "https://github.com/spiculedata/hairspring/releases/download/v0.1-RC1/SHA256SUMS"
+  assert_log_lacks "--location"
+  assert_count "$SB/calls.log" "curl " 1
+}
+
+t_cli_dry_run_fails_on_a_404_from_github() {
+  new_sandbox "$1"
+  stub_release_curl
+  installer_run FAKE_CURL_CODE=404 -- --version v0.1.0 --prefix "$SB/prefix" --dry-run
+  assert_rc 1
+  assert_err_has "release v0.1.0 not found"
+}
+
+t_cli_dry_run_offline_warns_and_succeeds() {
+  new_sandbox "$1"
+  stub_release_curl
+  # curl exit 6: could not resolve the host.
+  installer_run FAKE_CURL_CODE=000 FAKE_CURL_RC=6 -- --version v0.1-RC1 --prefix "$SB/prefix" --dry-run
+  assert_rc 0
+  assert_err_has "warning: could not check that release v0.1-RC1 exists"
+  assert_err_has "offline?"
+  assert_out_has "dry run"
+  installer_run FAKE_CURL_CODE=503 -- --version v0.1-RC1 --prefix "$SB/prefix" --dry-run
+  assert_rc 0
+  assert_err_has "answered HTTP 503"
 }
 
 # ---- test-install-docker.sh ---------------------------------------------------------------------------------------
@@ -1143,7 +1284,20 @@ run_mutations() {
   mutate cli-require-backend-ignored install.sh '[ "$REQUIRE_PROCESS_BACKEND" != "yes" ] || exit 1' 'true'
   mutate cli-doctor-failure-ignored install.sh '"$bin" doctor) || die "'"'"'hairspring doctor'"'"' failed"' '"$bin" doctor) || true'
   mutate cli-tag-unchecked install.sh '      v[0-9]*) ;;
-      *) usage_error "--version must be a release tag such as v0.1.0" ;;' '      *) ;;'
+      *) usage_error "--version must be a release tag such as v0.1-RC1" ;;' '      *) ;;'
+  mutate cli-help-shows-a-missing-tag install.sh '(for example v0.1-RC1)' '(for example v0.1.0)'
+  mutate cli-dry-run-skips-the-release-check install.sh 'die "curl is required to download a release"
+      check_release_exists' 'die "curl is required to download a release"'
+  mutate cli-missing-release-accepted install.sh '"$CURL_FILE_UNREADABLE"/*) die' '"$CURL_FILE_UNREADABLE"/*) say'
+  mutate cli-offline-is-fatal install.sh '    *) warn "could not check that release' '    *) die "could not check that release'
+  mutate cli-cc-unchecked install.sh 'if ! command -v cc >/dev/null 2>&1 || ! cc --version >/dev/null 2>&1; then' 'if false; then'
+  mutate cli-cc-run-unchecked install.sh ' || ! cc --version >/dev/null 2>&1; then' '; then'
+  mutate cli-node-unchecked install.sh 'command -v node >/dev/null 2>&1 || missing' 'true || missing'
+  mutate cli-npm-unchecked install.sh 'command -v npm >/dev/null 2>&1 || missing' 'true || missing'
+  mutate cli-dry-run-skips-prerequisites install.sh '    else
+      check_source_prerequisites' '    else
+      true'
+  mutate cli-build-status-escapes install.sh '[ "$rc" -eq 0 ] || die "the build failed' '[ "$rc" -eq 0 ] || exit "$rc"; die "the build failed'
   mutate cli-tag-characters-unchecked install.sh '*[!0-9A-Za-z._-]*) usage_error "--version contains characters a tag cannot have" ;;' '*[!0-9A-Za-z._-]*) true ;;'
   mutate cli-repo-unchecked install.sh '*/*/* | */ | /* | *[!0-9A-Za-z._/-]* | '"''"') usage_error' '*/*/* | */ | /* | '"''"') usage_error'
   mutate cli-uses-sudo install.sh '  mv -f "$tmp" "$target"' '  sudo mv -f "$tmp" "$target"'
