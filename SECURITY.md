@@ -44,6 +44,11 @@ agents.
   `run` token can lease jobs and report arbitrary (but bounded) results. Give `run` tokens only to workers you trust.
 - **Hermit is third-party code** (a small, fast-moving fork). It is unaudited by us and executes the program
   under test with ptrace and namespaces. Use it on machines where that risk is acceptable.
+- **The pinned Hermit build has a known advisory.** It includes `ruzstd` versions affected by RUSTSEC-2026-0344 (a
+  decompression bomb in the zstd decoder; denial of service only, CVSS 7.5). Hermit decodes zstd only when it reads
+  compressed debug sections, which happens with its `--happens-before` and stack-trace options; Hairspring does not
+  pass these by default, though `hermit_args` can. The effect is that run failing for lack of memory. A fix is carried
+  on the fork and will ship with the next pinned update. See [supply-chain.md](docs/supply-chain.md).
 - **Process targets execute the commands in `hairspring.toml` with the server's privileges.** Protect that file and
   run workers as an unprivileged user (the provided Docker image does).
 - **Dependency vetting.** We use mainstream crates and npm packages and run `cargo audit` and `npm audit` in CI.

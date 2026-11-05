@@ -19,3 +19,19 @@
   `--locked` and publishes nothing to a package registry; it creates a draft release for a maintainer to review.
 - The Docker image builds from `rust:1-bookworm` and `node:22-bookworm-slim` and runs as a non-root user; pin
   image digests in your own deployment.
+
+## Known advisory in the pinned Hermit build
+
+The pinned Hermit build includes `ruzstd` versions affected by RUSTSEC-2026-0344 (a decompression bomb: a crafted zstd
+input can make the decoder allocate several gigabytes and the process abort; denial of service only, rated CVSS 7.5).
+Hermit decodes zstd only when it reads compressed debug sections of the program under test, which happens with Hermit's
+`--happens-before` and stack-trace options. Hairspring does not pass these by default, though `hermit_args` can. The
+effect is limited to that run failing for lack of memory.
+
+A fix (a lockfile-only update of `ruzstd` to 0.9.1) is carried on the fork's `fix/ruzstd-advisory` branch and will ship
+with the next pinned Hermit update. Changing the lockfile changes the built binary, so it is not applied to the current
+pin.
+
+`cargo audit` on the Hermit lockfile additionally reports an unused older `ruzstd` copy (0.8.3, reached only through an
+`addr2line` feature Hermit does not call) and warnings for unmaintained or yanked crates. These are noted and are not
+exploitable through Hairspring.
