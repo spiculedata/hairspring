@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { ApiError } from '../api';
+import { isNetworkFailure } from '../pollPolicy';
 import { searchRequest, type SearchResults } from './searchApi';
 import { checkSearchText } from './searchText';
-import { searchFailed, tooManySearches } from './searchWording';
+import { SEARCH_OFFLINE, searchFailed, tooManySearches } from './searchWording';
 
 /** How long typing must pause before a search is sent. */
 export const SEARCH_DEBOUNCE_MS = 250;
@@ -38,7 +39,9 @@ export function useSearchResults(raw: string, onAbsent: () => void, now: () => n
   const text = checked.kind === 'ok' ? checked.text : undefined;
   const [outcome, setOutcome] = useState<Outcome>();
   const last = useRef<SearchResults | undefined>(undefined);
+  const [retry, setRetry] = useState(0);
   const blockedUntil = useRef(0);
+  const unblock = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const absent = useRef(onAbsent);
   absent.current = onAbsent;
 
@@ -57,18 +60,24 @@ export function useSearchResults(raw: string, onAbsent: () => void, now: () => n
           if (controller.signal.aborted) return;
           if (e instanceof ApiError && e.status === 404) return absent.current();
           if (e instanceof ApiError && e.status === 429) {
-            blockedUntil.current = now() + (e.retryAfterMs ?? 60_000);
+            const pause = e.retryAfterMs ?? 60_000;
+            blockedUntil.current = now() + pause;
+            unblock.current = setTimeout(() => {
+              setOutcome(undefined);
+              setRetry((n) => n + 1);
+            }, pause);
             return setOutcome({ text, message: tooManySearches(e.retryAfterMs) });
           }
-          setOutcome({ text, message: searchFailed(messageOf(e)) });
+          setOutcome({ text, message: isNetworkFailure(e) ? SEARCH_OFFLINE : searchFailed(messageOf(e)) });
         },
       );
     }, wait);
     return () => {
       clearTimeout(timer);
+      clearTimeout(unblock.current);
       controller.abort();
     };
-  }, [text, now]);
+  }, [text, now, retry]);
 
   if (checked.kind === 'empty') return { view: { status: 'idle' } };
   if (checked.kind !== 'ok') return { view: { status: 'hint', problem: checked.kind === 'short' ? 'short' : checked.problem } };

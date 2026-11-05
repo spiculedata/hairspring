@@ -1,14 +1,14 @@
 import { useId, useState, type KeyboardEvent } from 'react';
 import { GuestText } from '../components/GuestText';
 import { navigate } from '../router';
-import { groupHits, hitCount, scopeNote, type HitGroup, type HitRow } from './searchHits';
+import { groupHits, hiddenCount, hitCount, scopeNote, type HitGroup, type HitRow } from './searchHits';
 import { useSearchAvailable } from './useSearchAvailable';
 import { useSearchResults, type SearchView } from './useSearchResults';
 import { MAX_SEARCH_CHARS } from './searchText';
-import { BAD_CHARACTERS, matchCount, MORE_NOTE, NO_MATCHES, RESULTS_LABEL, SEARCH_LABEL, SEARCH_PLACEHOLDER, SEARCHING, TOO_LONG, TOO_SHORT } from './searchWording';
+import { BAD_CHARACTERS, matchCount, MORE_NOTE, NO_MATCHES, RESULTS_LABEL, SEARCH_LABEL, SEARCH_PLACEHOLDER, SEARCHING, SOME_HIDDEN, TOO_LONG, TOO_SHORT } from './searchWording';
 
 /** The text under the box for a view with no list of hits, and the line a screen reader hears for any view. */
-function noteOf(view: SearchView, groups: readonly HitGroup[]): string | undefined {
+function noteOf(view: SearchView, groups: readonly HitGroup[], hidden: number): string | undefined {
   switch (view.status) {
     case 'idle':
       return undefined;
@@ -19,14 +19,14 @@ function noteOf(view: SearchView, groups: readonly HitGroup[]): string | undefin
     case 'error':
       return view.message;
     case 'done':
-      return groups.length === 0 ? NO_MATCHES : undefined;
+      return groups.length > 0 ? undefined : hidden > 0 ? SOME_HIDDEN : NO_MATCHES;
   }
 }
 
-function announcement(view: SearchView, groups: readonly HitGroup[]): string {
-  if (view.status === 'done') return groups.length === 0 ? NO_MATCHES : matchCount(hitCount(groups));
+function announcement(view: SearchView, groups: readonly HitGroup[], hidden: number): string {
+  if (view.status === 'done' && groups.length > 0) return hidden > 0 ? `${matchCount(hitCount(groups))} ${SOME_HIDDEN}` : matchCount(hitCount(groups));
   if (view.status === 'busy') return SEARCHING;
-  return noteOf(view, groups) ?? '';
+  return noteOf(view, groups, hidden) ?? '';
 }
 
 function Option({ row, active, id, onChoose, onHover }: { row: HitRow; active: boolean; id: string; onChoose: (r: HitRow) => void; onHover: (i: number) => void }) {
@@ -65,11 +65,12 @@ export function SearchBox() {
 
   const results = view.status === 'done' ? view.results : view.status === 'busy' ? view.previous : undefined;
   const groups = results === undefined ? [] : groupHits(results);
+  const hidden = results === undefined ? 0 : hiddenCount(results, groups);
   const rows = groups.flatMap((g) => g.rows);
   const active = rows.find((r) => r.index === activeIndex);
   const listId = `${base}-list`;
   const optionId = (r: HitRow): string => `${base}-hit-${r.index}`;
-  const note = noteOf(view, groups);
+  const note = noteOf(view, groups, hidden);
   const showPopup = open && view.status !== 'idle';
   const showList = showPopup && rows.length > 0;
 
@@ -133,10 +134,10 @@ export function SearchBox() {
         onKeyDown={onKeyDown}
       />
       <div className="sr-only" role="status" aria-live="polite">
-        {announcement(view, groups)}
+        {announcement(view, groups, hidden)}
       </div>
       {showPopup && (
-        <div className="search-popup">
+        <div className="search-popup" onMouseDown={(e) => e.preventDefault()}>
           {note !== undefined && <p className={view.status === 'done' ? 'search-note' : 'search-note search-note-plain'}>{note}</p>}
           {showList && (
             <div id={listId} role="listbox" aria-label={RESULTS_LABEL} aria-busy={view.status === 'busy'}>
@@ -153,9 +154,9 @@ export function SearchBox() {
               ))}
             </div>
           )}
-          {view.status === 'done' && (groups.length === 0 || groups.some((g) => g.more)) && (
-            <p className="search-scope">{groups.length === 0 ? scopeNote(view.results.scope) : MORE_NOTE}</p>
-          )}
+          {view.status === 'done' && groups.length > 0 && hidden > 0 && <p className="search-scope">{SOME_HIDDEN}</p>}
+          {view.status === 'done' && groups.length === 0 && hidden === 0 && <p className="search-scope">{scopeNote(view.results.scope)}</p>}
+          {view.status === 'done' && groups.some((g) => g.more) && <p className="search-scope">{MORE_NOTE}</p>}
         </div>
       )}
     </div>

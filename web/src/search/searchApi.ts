@@ -77,7 +77,7 @@ export async function searchRequest(text: string, signal: AbortSignal | undefine
 
 /**
  * Whether this server has a search endpoint. It asks with a text the server refuses before it looks anything up (a
- * lone space), so the question costs no query. Only a 404 means the endpoint is absent (an older server); any other
+ * lone space), so the question costs no database query. It does spend one request from the rate-limit allowance, once per page load. Only a 404 means the endpoint is absent (an older server); any other
  * answer, and a network failure, keep the box, since the endpoint may simply need a token or a moment.
  */
 export async function probeSearchAvailable(): Promise<boolean> {

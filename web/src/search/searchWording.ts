@@ -6,6 +6,8 @@ export const SEARCH_PLACEHOLDER = 'Run, failure, target, seed';
 export const RESULTS_LABEL = 'Search results';
 export const SEARCHING = 'Searching…';
 export const NO_MATCHES = 'No matches.';
+export const SOME_HIDDEN = 'Some results could not be shown.';
+export const SEARCH_OFFLINE = 'Search is unavailable until the connection returns.';
 export const MORE_NOTE = 'A group marked "more" has further matches than are listed. Type more of the id to narrow it.';
 
 export const TOO_SHORT = `Type at least ${MIN_SEARCH_CHARS} characters.`;

@@ -76,6 +76,10 @@ export function groupHits(results: SearchResults): HitGroup[] {
   });
 }
 
+/** How many hits the server listed that have no row: ids the page cannot build an address for. */
+export const hiddenCount = (results: SearchResults, groups: readonly HitGroup[]): number =>
+  ORDER.reduce((n, id) => n + results[id].length, 0) - hitCount(groups);
+
 export const hitCount = (groups: readonly HitGroup[]): number => groups.reduce((n, g) => n + g.rows.length, 0);
 
 /** How far the search looked. An empty answer means "none in this much", not "never stored". */

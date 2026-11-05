@@ -241,6 +241,78 @@ describe('the answer', () => {
     await wait(30_000);
     expect(s.searches()).toHaveLength(2);
   });
+
+  it('clears the rate-limit message once the wait has passed, and searches the same text again', async () => {
+    let calls = 0;
+    const s = server(() => (++calls === 1 ? json(429, { error: 'rate limit exceeded' }, { 'Retry-After': '30' }) : json(200, WITH_HITS)));
+    await open();
+    type('run');
+    await wait(SEARCH_DEBOUNCE_MS);
+    expect(screen.getAllByText(/Too many searches just now/).length).toBeGreaterThan(0);
+    await wait(29_000);
+    expect(screen.getAllByText(/Too many searches just now/).length).toBeGreaterThan(0);
+    await wait(1_000);
+    expect(screen.queryAllByText(/Too many searches just now/)).toHaveLength(0);
+    await wait(2 * SEARCH_DEBOUNCE_MS);
+    expect(screen.queryAllByText(/Too many searches just now/)).toHaveLength(0);
+    expect(s.searches()).toHaveLength(2);
+    expect(screen.getAllByRole('option')).toHaveLength(3);
+  });
+
+  it('sends text typed during a 429 once when the wait ends, and does not send it again', async () => {
+    let calls = 0;
+    const s = server(() => (++calls === 1 ? json(429, { error: 'rate limit exceeded' }, { 'Retry-After': '30' }) : json(200, WITH_HITS)));
+    await open();
+    type('run');
+    await wait(SEARCH_DEBOUNCE_MS);
+    type('run_');
+    await wait(30_000);
+    await wait(1_000);
+    expect(s.searches()).toHaveLength(2);
+    expect(screen.getAllByRole('option')).toHaveLength(3);
+  });
+
+  it('does not search again after a 429 if the text was cleared before the wait ended', async () => {
+    const s = server(() => json(429, { error: 'rate limit exceeded' }, { 'Retry-After': '30' }));
+    await open();
+    type('run');
+    await wait(SEARCH_DEBOUNCE_MS);
+    type('');
+    await wait(60_000);
+    expect(s.searches()).toHaveLength(1);
+  });
+
+  it('says the search is unavailable until the connection returns when the request never reached the server', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => (url === '/api/search?q=%20' ? Promise.resolve(json(400, { error: 'bad' })) : Promise.reject(new TypeError('Failed to fetch')))),
+    );
+    await open();
+    type('run');
+    await wait(SEARCH_DEBOUNCE_MS);
+    expect(screen.getAllByText('Search is unavailable until the connection returns.').length).toBeGreaterThan(0);
+    expect(document.body.textContent).not.toContain('Failed to fetch');
+  });
+
+  it('says "Some results could not be shown", not "No matches.", when every hit has an id the page cannot link to', async () => {
+    server(() => json(200, { ...EMPTY, runs: [{ id: 'run.1:a', target: 't', state: 'failed' }] }));
+    await open();
+    type('run');
+    await wait(SEARCH_DEBOUNCE_MS);
+    expect(screen.getAllByText('Some results could not be shown.').length).toBeGreaterThan(0);
+    expect(document.body.textContent).not.toContain('No matches.');
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('keeps the hits it can show and says that some could not be', async () => {
+    server(() => json(200, { ...EMPTY, runs: [{ id: 'run.1:a', target: 't', state: 'failed' }, { id: RUN, target: 't', state: 'failed' }] }));
+    await open();
+    type('run');
+    await wait(SEARCH_DEBOUNCE_MS);
+    expect(screen.getAllByRole('option')).toHaveLength(1);
+    expect(document.body.textContent).toContain('Some results could not be shown.');
+    expect(screen.getByRole('status').textContent).toBe('1 match. Some results could not be shown.');
+  });
 });
 
 describe('the keyboard', () => {
@@ -332,6 +404,15 @@ describe('the mouse', () => {
     expect(target.getAttribute('aria-selected')).toBe('true');
     fireEvent.click(target);
     expect(window.location.pathname + window.location.search).toBe('/runs?target=lock-lease');
+  });
+
+  it('does not take focus from the box when the button goes down on the popup itself, such as on its scrollbar', async () => {
+    server(() => json(200, WITH_HITS));
+    await open();
+    type('run');
+    await wait(SEARCH_DEBOUNCE_MS);
+    const popup = document.querySelector('.search-popup') as HTMLElement;
+    expect(fireEvent.mouseDown(popup)).toBe(false);
   });
 });
 
