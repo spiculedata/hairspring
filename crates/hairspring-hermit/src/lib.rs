@@ -28,6 +28,8 @@ mod property_verdict;
 mod replay_environment;
 mod safe_open;
 mod schedule_set;
+#[cfg(test)]
+mod stream_fuzz_tests;
 mod summary;
 mod summary_dir;
 mod tally;

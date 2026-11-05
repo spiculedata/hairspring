@@ -3,6 +3,7 @@
 
 use hairspring_props::{AssertKind, TrialEvents, TrialProps};
 
+pub mod fuzz_rng;
 pub mod legacy_run;
 pub mod subtree_gen;
 
