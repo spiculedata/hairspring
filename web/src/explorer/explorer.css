@@ -13,6 +13,7 @@
 
 .filters label { min-width: 9rem; }
 .table-scroll { overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
+.table-scroll > table { margin-top: 0; }
 .table-scroll:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 table.props { margin-top: 0; table-layout: fixed; width: 100%; }
 table.props caption { text-align: left; padding: .4rem .5rem; color: var(--muted); font-size: .8rem; }

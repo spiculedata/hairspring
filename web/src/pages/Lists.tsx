@@ -1,8 +1,12 @@
 import { api } from '../api';
 import { LoadFailed } from '../components/Notices';
+import { ScrollRegion } from '../components/ScrollRegion';
 import { TimeStamp } from '../components/TimeStamp';
 import { UpdatedAt } from '../components/UpdatedAt';
 import { usePolling } from '../usePolling';
+
+const TABLE_MAX_HEIGHT = 640;
+const SCROLL_HINT = 'Scroll to see more of the table.';
 
 export function Targets() {
   const t = usePolling(api.targets, 60_000);
@@ -11,21 +15,23 @@ export function Targets() {
       <h1>Targets</h1>
       {t.error && <LoadFailed what="targets" message={t.error} />}
       <UpdatedAt at={t.updatedAt} />
-      <table>
-        <thead>
-          <tr><th>Name</th><th>Kind</th><th>Budget</th><th>Description</th></tr>
-        </thead>
-        <tbody>
-          {(t.data ?? []).map((x) => (
-            <tr key={x.name}>
-              <td>{x.name}</td>
-              <td>{x.kind}</td>
-              <td className="muted">{x.budget === undefined ? '' : `${x.budget.max_steps.toLocaleString()} steps / ${x.budget.wall_secs}s`}</td>
-              <td>{x.description}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <ScrollRegion label="Targets" hint={SCROLL_HINT} maxHeight={TABLE_MAX_HEIGHT}>
+        <table>
+          <thead>
+            <tr><th>Name</th><th>Kind</th><th>Budget</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            {(t.data ?? []).map((x) => (
+              <tr key={x.name}>
+                <td>{x.name}</td>
+                <td>{x.kind}</td>
+                <td className="muted">{x.budget === undefined ? '' : `${x.budget.max_steps.toLocaleString()} steps / ${x.budget.wall_secs}s`}</td>
+                <td>{x.description}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </ScrollRegion>
     </>
   );
 }
@@ -37,23 +43,25 @@ export function Workers() {
       <h1>Workers</h1>
       {w.error && <LoadFailed what="workers" message={w.error} />}
       <UpdatedAt at={w.updatedAt} />
-      <table>
-        <thead>
-          <tr><th>Name</th><th>Id</th><th>Last seen</th></tr>
-        </thead>
-        <tbody>
-          {(w.data ?? []).map((x, i) => (
-            <tr key={x.id ?? `${x.name}-${i}`}>
-              <td>{x.name}</td>
-              <td>{x.id ? <code>{x.id}</code> : <span className="muted">hidden</span>}</td>
-              <td>
-                <TimeStamp ms={x.last_seen} />
-              </td>
-            </tr>
-          ))}
-          {w.data?.length === 0 && <tr><td colSpan={3} className="muted">No workers registered.</td></tr>}
-        </tbody>
-      </table>
+      <ScrollRegion label="Workers" hint={SCROLL_HINT} maxHeight={TABLE_MAX_HEIGHT}>
+        <table>
+          <thead>
+            <tr><th>Name</th><th>Id</th><th>Last seen</th></tr>
+          </thead>
+          <tbody>
+            {(w.data ?? []).map((x, i) => (
+              <tr key={x.id ?? `${x.name}-${i}`}>
+                <td>{x.name}</td>
+                <td>{x.id ? <code>{x.id}</code> : <span className="muted">hidden</span>}</td>
+                <td>
+                  <TimeStamp ms={x.last_seen} />
+                </td>
+              </tr>
+            ))}
+            {w.data?.length === 0 && <tr><td colSpan={3} className="muted">No workers registered.</td></tr>}
+          </tbody>
+        </table>
+      </ScrollRegion>
     </>
   );
 }

@@ -20,4 +20,10 @@ describe('trial.css source order', () => {
       expect(css.lastIndexOf(`\n${selector} {`), `${selector} has no later base rule`).toBeLessThan(mediaStart);
     }
   });
+
+  it('draws the section buttons as links, in the clickable colour with an underline', () => {
+    const rule = /\.trial-nav-list button\.linklike \{([^}]*)\}/.exec(css);
+    expect(rule?.[1]).toContain('color: var(--accent)');
+    expect(rule?.[1]).toContain('text-decoration: underline');
+  });
 });

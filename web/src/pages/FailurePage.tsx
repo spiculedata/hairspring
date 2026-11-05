@@ -38,7 +38,7 @@ export function FailurePage({ id }: { id: string }) {
       </p>
       <h1>{record.target}: shortest failing steps</h1>
       <p>{record.message}</p>
-      <FailureActions record={record} />
+      <FailureActions record={record} bundle={bundle} />
       <div className="row">
         <button
           onClick={async () => {
@@ -53,7 +53,6 @@ export function FailurePage({ id }: { id: string }) {
           Replay
         </button>
         <button onClick={() => download(`${record.target}-${record.bundle_hash.slice(0, 8)}.hairspring`, bundle)}>Download bundle</button>
-        <button onClick={() => void navigator.clipboard?.writeText(bundle)}>Copy bundle</button>
       </div>
       {replayError && <p className="error" role="alert">{replayError}</p>}
       {replay && <ReplayVerdict failedAgain={replay.reproduced} />}
@@ -69,7 +68,7 @@ export function FailurePage({ id }: { id: string }) {
         ))}
       </ol>
       <h2>Bundle</h2>
-      <pre className="log">{bundle}</pre>
+      <pre className="log" tabIndex={0} aria-label="Bundle text">{bundle}</pre>
     </>
   );
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from '../components/Layout';
 import { failurePath, trialPath } from '../router';
-import { CopyButton } from '../share/CopyButton';
+import { CopyButtons, type CopyItem } from '../share/CopyButton';
 import { failureSummary } from '../share/summary';
 import { trialApi } from '../trial/api';
 import type { FailureSummary } from '../types';
@@ -26,16 +26,23 @@ function useFirstViolationSeq(runId: string): number | undefined {
   return seq;
 }
 
-/** What a reader can do from a bundle failure: open the run's failing trial, copy the link, copy a summary with no program text. */
-export function FailureActions({ record }: { record: FailureSummary }) {
+/**
+ * What a reader can do from a bundle failure: open the run's failing trial, copy the link, copy a summary with no program
+ * text and, when the bundle is given, copy the bundle. The copy buttons share one live region.
+ */
+export function FailureActions({ record, bundle }: { record: FailureSummary; bundle?: string }) {
   const seq = useFirstViolationSeq(record.run_id);
   const trialHref = seq === undefined ? undefined : trialPath(record.run_id, seq);
   const link = (): string => new URL(failurePath(record.id) ?? window.location.pathname, window.location.href).href;
+  const items: CopyItem[] = [
+    { label: 'Copy link', text: link },
+    { label: 'Copy summary', text: () => failureSummary({ record, link: link() }) },
+    ...(bundle === undefined ? [] : [{ label: 'Copy bundle', text: () => bundle }]),
+  ];
   return (
     <div className="row failure-actions">
       {trialHref !== undefined && seq !== undefined && <Link to={trialHref}>{`Open trial ${seq}`}</Link>}
-      <CopyButton label="Copy link" text={link} />
-      <CopyButton label="Copy summary" text={() => failureSummary({ record, link: link() })} />
+      <CopyButtons items={items} />
     </div>
   );
 }

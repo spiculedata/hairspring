@@ -1,5 +1,6 @@
 import { Link } from './Layout';
 import { GuestText } from './GuestText';
+import { useConnectionLoss } from './useConnectionLoss';
 
 const ERROR_CHARS = 300;
 
@@ -26,6 +27,10 @@ export function NotFound({ what }: { what: 'run' | 'trial' | 'failure' | 'page' 
  * that polls tries again by itself, so it does not tell the reader to reload.
  */
 export function LoadFailed({ what, message, retries = true }: { what: string; message: string; retries?: boolean }) {
+  const loss = useConnectionLoss();
+  // While the connection banner is up the cause is known and announced there; the browser's own text ("Failed to fetch")
+  // would only repeat it in worse words, once per section.
+  if (loss !== undefined) return <p className="muted">{`Could not load ${what} until the connection returns.`}</p>;
   return (
     <div className="error" role="alert">
       {`Could not load ${what}: `}

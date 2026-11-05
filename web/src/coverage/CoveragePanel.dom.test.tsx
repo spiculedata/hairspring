@@ -33,6 +33,19 @@ describe('CoveragePanel', () => {
     expect(screen.queryAllByRole('img')).toHaveLength(0);
   });
 
+  it('says so in one sentence instead of three flat charts when every count is zero', async () => {
+    const flat: Coverage = {
+      run_id: 'run_1',
+      trials: 4,
+      downsampled: false,
+      points: Array.from({ length: 4 }, (_, i) => ({ seq: i + 1, ids_hit: 0, ids_true: 0, schedules: 0 })),
+    };
+    vi.spyOn(api, 'coverage').mockResolvedValue(flat);
+    render(<CoveragePanel runId="run_1" live={false} />);
+    await waitFor(() => expect(screen.getByText(/nothing was seen in any of the 4 trials/i)).toBeTruthy());
+    expect(screen.queryAllByRole('img')).toHaveLength(0);
+  });
+
   it('says what failed to load, in an alert', async () => {
     vi.spyOn(api, 'coverage').mockRejectedValue(new ApiError(500, 'store unavailable'));
     render(<CoveragePanel runId="run_1" live={false} />);
