@@ -209,15 +209,12 @@ read endpoints, so a missing or wrong token gets the same 401. The reply:
 }
 ```
 
-- `role` is the caller's role: `read` (look at runs, failures and targets), `run` (also start runs and sweeps and
-  replay bundles) or `admin` (also change worker trust). Each role includes the ones before it. `can` spells out what
-  that role allows, and `roles` lists the role names in order.
+- `role` is the caller's role: `read` (look at runs, failures and targets), `run` (also start, cancel and replay runs
+  and sweeps, and act as a worker) or `admin` (also change worker trust). Each role includes the ones before it. `can`
+  spells out what that role allows, and `roles` lists the role names in order.
 - `open_mode` is `true` when the server has no API tokens and only accepts same-origin local requests. Every caller is
   then treated as `admin`.
 - The reply never contains the token, a digest of it, or any other secret.
-
-The web UI asks once when a page loads, and again after you save or clear a token. It uses the answer to disable the
-buttons your role cannot use, with a one-line reason beside each, instead of waiting for a 403.
 
 ## Start a run or a sweep from the web UI
 
