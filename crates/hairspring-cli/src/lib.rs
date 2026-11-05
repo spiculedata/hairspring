@@ -6,6 +6,9 @@
 //!     hairspring_cli::main_with(hairspring_engine::erased::Registry::new() /* .with(...) */)
 //! }
 //! ```
+// Compiled by build.rs; here only so its rules are unit tested.
+#[cfg(test)]
+mod build_id;
 mod cli;
 mod commands;
 mod ctx;

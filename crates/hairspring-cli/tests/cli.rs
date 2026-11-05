@@ -153,6 +153,86 @@ fn results_and_show_read_back_stored_runs() {
     );
 }
 
+/// Splits `hairspring 0.1.0 (f819c1a 2026-10-24)` into the crate version and the text inside the brackets.
+fn parse_version_line(line: &str) -> (String, String) {
+    let rest = line
+        .strip_prefix("hairspring ")
+        .unwrap_or_else(|| panic!("{line:?}"));
+    let (version, bracketed) = rest.split_once(' ').unwrap_or_else(|| panic!("{line:?}"));
+    let build = bracketed
+        .strip_prefix('(')
+        .and_then(|b| b.strip_suffix(')'))
+        .unwrap_or_else(|| panic!("{line:?}"));
+    (version.to_string(), build.to_string())
+}
+
+/// The full commit and commit date git reports for this checkout, or None when git is absent or does not track this crate.
+fn checkout_commit_and_date() -> Option<(String, String)> {
+    let dir = env!("CARGO_MANIFEST_DIR");
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .ok()?;
+        o.status
+            .success()
+            .then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    git(&["ls-files", "--error-unmatch", "Cargo.toml"])?;
+    Some((
+        git(&["rev-parse", "HEAD"])?,
+        git(&["show", "-s", "--format=%cs", "HEAD"])?,
+    ))
+}
+
+#[test]
+fn version_prints_the_crate_version_then_the_build_commit_and_date() {
+    let d = scratch("version");
+    for flag in ["--version", "-V"] {
+        let o = hairspring(&d, &[flag]);
+        assert_eq!(o.status.code(), Some(0), "{}", err(&o));
+        let text = out(&o);
+        let line = text.lines().next().unwrap_or_default();
+        assert_eq!(text, format!("{line}\n"), "one line only: {text:?}");
+        let (version, build) = parse_version_line(line);
+        assert_eq!(version, env!("CARGO_PKG_VERSION"), "{line}");
+
+        if build == "unknown" {
+            assert!(
+                checkout_commit_and_date().is_none(),
+                "git knows the commit but the binary does not: {line}"
+            );
+            continue;
+        }
+        let (commit, date) = build.split_once(' ').unwrap_or_else(|| panic!("{line}"));
+        assert_eq!(commit.len(), 7, "{line}");
+        assert!(
+            commit
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "{line}"
+        );
+        let date_shape = date.len() == 10
+            && date.char_indices().all(|(i, c)| {
+                if i == 4 || i == 7 {
+                    c == '-'
+                } else {
+                    c.is_ascii_digit()
+                }
+            });
+        assert!(date_shape || date == "unknown", "{line}");
+        // A release build names its commit through HAIRSPRING_BUILD_COMMIT; otherwise it is this checkout's HEAD.
+        if option_env!("HAIRSPRING_BUILD_COMMIT").is_none() {
+            if let Some((head, head_date)) = checkout_commit_and_date() {
+                assert_eq!(commit, &head[..7], "{line}");
+                assert_eq!(date, head_date, "{line}");
+            }
+        }
+    }
+}
+
 #[test]
 fn doctor_passes_for_demo_targets() {
     let d = scratch("doctor");
