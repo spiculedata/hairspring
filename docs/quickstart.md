@@ -323,7 +323,8 @@ from for 24 hours is removed when the table is full. A trimmed example:
 - `capabilities` is what the worker sent when it registered, when that was valid JSON, and `null` otherwise. The
   original text is `caps_json`. Capabilities are the worker's own statement and are not checked.
 - `current_jobs` names up to three jobs the worker holds, oldest first: the run, the kind of job, when the lease ends
-  and how many times the job has been leased. `leased_jobs` counts all of them.
+  and how many times the job has been leased. `leased_jobs` counts the live leases the server reads at once, which is at most 5000 in all, so a fleet
+  holding more than that is undercounted.
 - `queue.queued` is the number of jobs waiting for a worker and `queue.running` the number held under a live lease.
 - `id` is left out unless the token has the `run` role or more, because a worker id is a credential for the worker
   endpoints. The reply never contains a worker secret or its digest, a job payload, an error text or guest output.

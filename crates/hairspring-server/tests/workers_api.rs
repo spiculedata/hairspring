@@ -137,6 +137,19 @@ fn a_read_caller_never_gets_a_worker_id_and_a_run_caller_does() {
 }
 
 #[test]
+fn a_read_caller_never_gets_a_worker_id_in_ndjson_and_a_run_caller_does() {
+    let f = boot();
+    let read = get(&f.server, Some(READ), Some(NDJSON), "/api/workers");
+    assert!(!read.body.contains(&f.busy_id), "{}", read.body);
+    for line in read.body.lines() {
+        let v: Value = serde_json::from_str(line).unwrap();
+        assert!(v.get("id").is_none(), "{v}");
+    }
+    let run = get(&f.server, Some(RUN), Some(NDJSON), "/api/workers");
+    assert!(run.body.contains(&f.busy_id), "{}", run.body);
+}
+
+#[test]
 fn no_secret_digest_or_job_payload_reaches_any_caller() {
     let f = boot();
     let digest = f

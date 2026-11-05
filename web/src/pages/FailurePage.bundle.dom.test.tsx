@@ -34,4 +34,12 @@ describe('FailurePage bundle', () => {
     render(<FailurePage id="f_abc" />);
     expect(await screen.findByRole('button', { name: 'Copy bundle' })).toBeTruthy();
   });
+
+  it('links back to the run it came from, worded as the other run-level pages word it', async () => {
+    vi.spyOn(api, 'failure').mockResolvedValue(failure);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 404 })));
+    render(<FailurePage id="f_abc" />);
+    const back = await screen.findByRole('link', { name: '← Run' });
+    expect(back.getAttribute('href')).toBe('/runs/run_1');
+  });
 });

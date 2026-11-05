@@ -73,11 +73,20 @@ describe('Layout', () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     expect(isNavActive('/failures', '/failures')).toBe(true);
     expect(isNavActive('/runs', '/failures')).toBe(false);
-    expect(isNavActive('/failures', '/failures/f_1')).toBe(false);
   });
 
-  it('counts a run, its seeds, its trials and a failure as part of Runs', () => {
-    for (const path of ['/runs', '/runs/run_1', '/runs/run_1/seeds', '/runs/run_1/trials/3', '/failures/f_1']) {
+  it('counts a failure page as part of Failures, not Runs, as it is reached from the Failures list', () => {
+    const html = render('/failures/f_1');
+    expect(html).toMatch(/<a href="\/failures" aria-current="page"/);
+    expect(html).not.toMatch(/<a href="\/runs" aria-current/);
+    expect(html.match(/aria-current="page"/g)).toHaveLength(1);
+    expect(isNavActive('/failures', '/failures/f_1')).toBe(true);
+    expect(isNavActive('/runs', '/failures/f_1')).toBe(false);
+    expect(isNavActive('/failures', '/failuresx/f_1')).toBe(false);
+  });
+
+  it('counts a run, its seeds and its trials as part of Runs', () => {
+    for (const path of ['/runs', '/runs/run_1', '/runs/run_1/seeds', '/runs/run_1/trials/3']) {
       expect(isNavActive('/runs', path), path).toBe(true);
       expect(isNavActive('/', path), path).toBe(false);
       expect(isNavActive('/targets', path), path).toBe(false);

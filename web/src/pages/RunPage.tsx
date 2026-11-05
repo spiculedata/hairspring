@@ -8,7 +8,7 @@ import { CoveragePanel } from '../coverage/CoveragePanel';
 import { FirstFailingSeed } from '../explorer/FirstFailingSeed';
 import { PropertyOverviewPanel } from '../explorer/PropertyOverviewPanel';
 import { usePropertyOverview } from '../explorer/usePropertyOverview';
-import { Loading, NotFound } from '../components/Notices';
+import { Loading, LoadFailed, NotFound } from '../components/Notices';
 import { TimeStamp } from '../components/TimeStamp';
 import { useReportMissing } from '../PageStatus';
 import { RunPanel } from '../runPanel/RunPanel';
@@ -35,7 +35,7 @@ export function RunPage({ id }: { id: string }) {
   useReportMissing(detail.notFound);
 
   if (detail.notFound) return <NotFound what="run" />;
-  if (detail.error && !run) return <p className="error" role="alert">{detail.error}</p>;
+  if (detail.error && !run) return <LoadFailed what="this run" message={detail.error} network={detail.networkError} />;
   if (!run) return <Loading what="run" />;
 
   const failures = detail.data?.failures ?? [];

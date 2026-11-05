@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError } from '../api';
 import { startPolling } from '../pollLoop';
+import { isNetworkFailure } from '../pollPolicy';
 import { useTokenVersion } from '../useTokenVersion';
 import { applyHead, applyMore, rowsOf, type Held, type ListPage } from './listPaging';
 
@@ -30,6 +31,8 @@ export interface ListPagesModel<T> {
   moreLoads: number;
   /** Why the last load of the first page failed. The rows already held are kept, and the page tries again by itself. */
   error: string | undefined;
+  /** That failure was no response at all, not an error status from the server. */
+  networkError: boolean;
   /** When the first page last arrived (ms since the epoch); kept through later errors. */
   updatedAt: number | undefined;
 }
@@ -54,6 +57,7 @@ const isCursorTooDeep = (e: unknown): boolean => e instanceof ApiError && e.stat
 export function useListPages<T>({ loadPage, id, intervalMs, rowsLeave = false }: ListPagesOptions<T>): ListPagesModel<T> {
   const [held, setHeld] = useState<Held<T>>();
   const [error, setError] = useState<string>();
+  const [networkError, setNetworkError] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number>();
   const [loadingMore, setLoadingMore] = useState(false);
   const [moreError, setMoreError] = useState<string>();
@@ -83,8 +87,12 @@ export function useListPages<T>({ loadPage, id, intervalMs, rowsLeave = false }:
         setHeld((prev) => applyHead(prev, page, idRef.current, { rowsLeave: rowsLeaveRef.current }));
         setUpdatedAt(Date.now());
         setError(undefined);
+        setNetworkError(false);
       },
-      onError: (e) => setError(messageOf(e)),
+      onError: (e) => {
+        setError(messageOf(e));
+        setNetworkError(isNetworkFailure(e));
+      },
     });
     return () => {
       controller.abort();
@@ -123,5 +131,5 @@ export function useListPages<T>({ loadPage, id, intervalMs, rowsLeave = false }:
 
   const rows = useMemo(() => (held === undefined ? undefined : rowsOf(held, idRef.current)), [held]);
   const hasMore = held?.cursor !== undefined && !endReached;
-  return { rows, hasMore, endReached, loadMore, loadingMore, moreError, moreLoads, error, updatedAt };
+  return { rows, hasMore, endReached, loadMore, loadingMore, moreError, moreLoads, error, networkError, updatedAt };
 }
