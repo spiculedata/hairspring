@@ -44,6 +44,7 @@ struct Cursor {
 pub async fn events(
     State(s): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
     caller: Caller,
     Path(run_id): Path<String>,
     ApiQuery(q): ApiQuery<After>,
@@ -58,7 +59,7 @@ pub async fn events(
         .ok_or_else(ApiError::not_found)?;
     // Keyed like the rate limit: the token, or the client address when there are no tokens.
     let caller_key = if s.auth.is_open() {
-        crate::ratelimit::anonymous_key(peer.ip())
+        crate::ratelimit::anonymous_key(crate::client_ip(&s, peer, &headers))
     } else {
         caller.key.clone()
     };

@@ -4,6 +4,16 @@
 
 ### Added
 
+- `hairspring serve --trusted-proxy ADDR[,ADDR...]` (or `HAIRSPRING_TRUSTED_PROXY`) names reverse proxies, by
+  address or network, whose `X-Forwarded-For` header gives the client address for the rate limit, for the check that
+  refuses a valid token while its address's anonymous budget is used up, and, without tokens, for the per-caller
+  event-stream cap. The header is read only on connections from a listed proxy, from the right, skipping listed
+  proxies; a missing, malformed, over-long (more than 1024 bytes or 16 entries) or all-proxy header falls back to the
+  connecting address. `Forwarded` and `X-Real-IP` are not read, and the open-mode `Host` and `Origin` checks never
+  use forwarding headers. Entries covering every address (`0.0.0.0/0`, `::/0`, any `/0`) or naming the unspecified
+  address are refused at startup. Without the flag nothing changes: forwarding headers are ignored and all callers
+  behind a proxy share its address, so unauthenticated traffic through the proxy can cause valid tokens arriving
+  through it to be refused. SECURITY.md describes how to configure nginx and Caddy to overwrite the header.
 - `GET /api/workers` also reports, for each worker, a `state` (`busy`, `idle` or `not_seen_recently`), the parsed
   `capabilities`, the jobs it holds (`current_jobs`, at most three, and the count `leased_jobs`), and the response has a
   `queue` with the number of jobs waiting and the number held. The `read` role is enough; `id` is still left out for

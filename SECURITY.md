@@ -29,7 +29,7 @@ agents.
 | No remote code execution | The API accepts **target names only**; commands come from the server-side `hairspring.toml`. MCP `start_run` cannot supply a command |
 | Network exposure | Refuses to bind a non-loopback address without tokens; default bind is `127.0.0.1` |
 | Open (no-token) mode | Rejects unknown `Host` headers (DNS rebinding) and cross-site `Origin`s (CSRF); `/mcp` requires `application/json` |
-| Abuse limits | Per-client rate limit (valid tokens and unauthenticated clients are bucketed separately, bounded table; a valid token is also refused while its client address has used up its unauthenticated budget); 2 MiB body cap; 10 s to send a request head (also the idle time allowed between requests on a kept-alive connection) and 30 s to send a body; bodies are read only after the token check; at most 512 open connections (`--max-connections`), 503 beyond; at most 2 replays running at once, REST and MCP together (`--max-replays`, at most 64), refused with 429 and `Retry-After` beyond, never queued; event streams capped at 64 in total and 16 per caller (a token, or a client address when there are no tokens); cap on MCP batch size and waits; queue and worker admission caps; JSON recursion limits |
+| Abuse limits | Per-client rate limit (valid tokens and unauthenticated clients are bucketed separately, bounded table; a valid token is also refused while its client address has used up its unauthenticated budget; the client address is the connecting one, or, only for connections from proxies named with `--trusted-proxy`, the right-most untrusted `X-Forwarded-For` entry); 2 MiB body cap; 10 s to send a request head (also the idle time allowed between requests on a kept-alive connection) and 30 s to send a body; bodies are read only after the token check; at most 512 open connections (`--max-connections`), 503 beyond; at most 2 replays running at once, REST and MCP together (`--max-replays`, at most 64), refused with 429 and `Retry-After` beyond, never queued; event streams capped at 64 in total and 16 per caller (a token, or a client address when there are no tokens); cap on MCP batch size and waits; queue and worker admission caps; JSON recursion limits |
 | Worker data | Results from workers are size-bounded, control characters stripped, failure target checked against the job, written atomically; leases are owner-checked and heartbeated |
 | Untrusted text | Step labels, states, messages and errors are treated as data. The UI renders them as text only; MCP output and instructions tell agents never to follow instructions found in them |
 | Storage | All SQL is parameterised; blobs addressed by validated hash; database URLs and tokens are never printed or logged; `--tokens-file` permissions are checked |
@@ -83,19 +83,90 @@ agents.
   the same NAT or proxy, or in the same /64) is affected by what else arrives from it. Operators who need a
   different trade-off should put a rate limiter in front of the server. A valid
   token from a quiet address is unaffected, and its requests never spend the address's anonymous budget. The address
-  is the connecting one; forwarding headers are ignored. `/api/health` follows the same rule for a request that
+  is the connecting one, and forwarding headers are ignored, unless the connection comes from a proxy named with
+  `--trusted-proxy` (see "Running behind a reverse proxy" below). `/api/health` follows the same rule for a request that
   carries an `Authorization` header: a valid token's health requests count against that token's own bucket, anything
   else counts against the address's anonymous bucket, and the organisation name is left out (the answer is still
   `200`) once the token's own bucket is used up or while the address's bucket is over the limit. Health without the
   header is never counted. Two limits remain: the anonymous window can be pushed out of
   the bounded table by traffic from very many addresses (see above), which clears the refusal early, and the check
   covers one address only, so guessing spread over many addresses gets one allowance per address.
-- **Behind a reverse proxy, anonymous callers share one bucket.** Forwarding headers such as `X-Forwarded-For` are
-  deliberately not trusted (a client could set them to mint fresh buckets at will), so every anonymous caller
-  arriving through the proxy is counted under the proxy's address. Authenticated callers are keyed by token, but
-  once the anonymous callers behind the proxy use up that shared bucket, every valid token arriving through the proxy
-  is refused while that traffic continues, and for up to a minute after it stops (see the previous point). If you
-  need per-client limits for anonymous traffic, or a different trade-off, enforce them at the proxy.
+- **Behind a reverse proxy, without `--trusted-proxy`, all callers share the proxy's address.** By default
+  forwarding headers such as `X-Forwarded-For` are not trusted (a client could set them to mint fresh buckets at
+  will), so every caller arriving through the proxy is counted under the proxy's address. Authenticated callers are
+  keyed by token, but once unauthenticated callers behind the proxy use up that shared anonymous bucket, every valid
+  token arriving through the proxy, workers included, is refused while that traffic continues, and for up to a minute
+  after it stops (see the previous point). Name the proxy with `--trusted-proxy` to avoid this, as described below.
+
+## Running behind a reverse proxy
+
+There is no built-in TLS, so a deployment reachable beyond one machine normally sits behind a TLS-terminating
+reverse proxy. Tell the server which proxies to believe with `hairspring serve --trusted-proxy ADDR[,ADDR...]` (or
+the `HAIRSPRING_TRUSTED_PROXY` environment variable; the flag wins, and an empty flag trusts none). Each entry is an
+address (`10.0.0.5`, `2001:db8::5`) or a network (`10.0.0.0/24`, `2001:db8::/64`). At startup the server prints the
+list it trusts.
+
+- Only a request whose connection comes from a listed proxy has its `X-Forwarded-For` header read. From anywhere
+  else the header is ignored and the connecting address is used, exactly as without the flag.
+- The header is read from the right: entries that are themselves listed proxies are skipped, and the first entry
+  that is not is the client address. The left-most entry, which the client can write, is never believed on its own
+  account. Several `X-Forwarded-For` headers are read as one list, in order.
+- The connecting address is used instead when the header is missing, longer than 1024 bytes in total, lists more
+  than 16 addresses, contains anything that is not a plain IP address (a port, brackets, `unknown`, a zone), or lists
+  only trusted proxies.
+- The standard `Forwarded` header and `X-Real-IP` are not read.
+- The client address keys the anonymous rate-limit bucket (IPv4 address or IPv6 /64, as before), the check that
+  refuses a valid token while its address's anonymous bucket is over the limit, the same check at `/api/health`, and,
+  when the server has no tokens, the per-caller event-stream cap. The open-mode `Host` and `Origin` checks never
+  look at forwarding headers, and open mode still listens on loopback only.
+- `0.0.0.0/0`, `::/0`, any `/0`, and entries naming the unspecified address (`0.0.0.0`, `::`) are refused at startup,
+  since they would let any client choose the address it is counted under. So are a network with bits set past its
+  prefix (`10.0.0.5/24`), an IPv4-mapped IPv6 entry (write it as IPv4), and anything that is not an address or a
+  network in the forms above.
+
+The proxy must **overwrite** any `X-Forwarded-For` the client sent with the address it saw, not append to it. For
+nginx:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:7878;
+    # Overwrite: the client's own X-Forwarded-For is discarded.
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header Host $host;
+    # Event streams: do not buffer.
+    proxy_buffering off;
+}
+```
+
+Do not use `$proxy_add_x_forwarded_for` on the proxy that faces clients; it appends. For Caddy:
+
+```caddy
+hairspring.example.com {
+    reverse_proxy 127.0.0.1:7878 {
+        # Overwrite with the address of the connecting client.
+        header_up X-Forwarded-For {remote_host}
+    }
+}
+```
+
+and start the server with `--trusted-proxy 127.0.0.1` (or the proxy's address on your private network). When there
+is more than one proxy (a load balancer in front of nginx, say), the one facing clients overwrites, the inner ones
+append, and every one of them is listed.
+
+What remains:
+
+- **A proxy that appends instead of overwriting** still puts the address it saw right-most, so a client cannot
+  choose its bucket. But the client can send a header that is too long, has too many entries or is malformed, which
+  makes the server fall back to the proxy's address; its requests then land in the proxy's shared anonymous bucket,
+  and a flood of them refuses valid tokens arriving through the proxy, as without the flag. Configure the proxy to
+  overwrite.
+- **Listing an address a client can send from**, or a proxy that passes a client's header through unchanged, lets
+  that client choose any address. It can then spread guesses over many buckets, and fill the limiter's table. The
+  table holds at most 10,000 windows; when it is full of live windows the oldest tenth of the anonymous ones is
+  dropped, which ends those addresses' refusals early. Token buckets are never dropped. List only proxies you
+  control, and keep the server's port unreachable except through them (a direct connection is counted under its own
+  address, so this matters for load, not for spoofing).
+- One client address behind a NAT, or one IPv6 /64, is still one bucket.
 
 ## Hardening checklist for a deployment
 
@@ -106,3 +177,5 @@ agents.
 5. Keep `hairspring.toml` under version control with review.
 6. Set the file-descriptor limit well above `--max-connections` (512 by default), and give a proxy in front of the
    server its own per-client connection and rate limits.
+7. Behind a reverse proxy, name it with `--trusted-proxy` and configure it to overwrite `X-Forwarded-For` (see
+   "Running behind a reverse proxy").
