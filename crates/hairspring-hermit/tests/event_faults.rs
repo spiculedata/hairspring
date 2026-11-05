@@ -250,22 +250,46 @@ fn the_host_path_does_not_depend_on_the_seed() {
     assert!(!nb.contains("987654321"), "{nb}");
 }
 
-#[test]
-fn a_reader_that_never_sees_the_end_of_the_stream_marks_the_capture_incomplete() {
-    if std::process::Command::new("perl")
+/// Runs a guest that leaves behind a process in its own session (so the group kill at guest exit cannot reach it) and
+/// holding the output pipes open. The perl process waits `start_delay` before detaching, as a slow start under load
+/// would, and the guest only ends once the detached process has written `$REPORT.ready` (after `setsid`), so the
+/// outcome never depends on how long perl took to start.
+fn capture_with_detached_holder(name: &str, start_delay: &str) -> hairspring_hermit::Trial {
+    let script = format!(
+        "M=$REPORT.ready; \
+         perl -e 'use POSIX; select(undef, undef, undef, $ARGV[1]); POSIX::setsid(); open(F, \">\", $ARGV[0]); close F; exec \"sleep\", \"6\"' \"$M\" {start_delay} 2>/dev/null & \
+         until [ -e \"$M\" ]; do sleep 0.01; done; echo done"
+    );
+    rig(name, &script, false, vec![]).run(1)
+}
+
+fn perl_is_available() -> bool {
+    std::process::Command::new("perl")
         .arg("-v")
         .output()
-        .is_err()
-    {
+        .is_ok()
+}
+
+#[test]
+fn a_reader_that_never_sees_the_end_of_the_stream_marks_the_capture_incomplete() {
+    if !perl_is_available() {
         return;
     }
-    let r = rig(
-        "incomplete",
-        "perl -e 'use POSIX; POSIX::setsid(); exec \"sleep\", \"6\"' 2>/dev/null & sleep 0.5; echo done",
-        false,
-        vec![],
+    let t = capture_with_detached_holder("incomplete", "0");
+    assert!(
+        matches!(&t.events_error, Some(EventsFault::Guest(m)) if m.contains("incomplete")),
+        "{:?}",
+        t.events_error
     );
-    let t = r.run(1);
+}
+
+#[test]
+fn a_slow_starting_holder_still_marks_the_capture_incomplete() {
+    if !perl_is_available() {
+        return;
+    }
+    // Longer than the fixed 0.5s the guest used to wait before ending, which let the group kill reach the holder.
+    let t = capture_with_detached_holder("incomplete-slow", "1.5");
     assert!(
         matches!(&t.events_error, Some(EventsFault::Guest(m)) if m.contains("incomplete")),
         "{:?}",
