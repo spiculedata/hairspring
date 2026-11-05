@@ -35,7 +35,7 @@ export function panelInput(detail: RunDetail, page: PropertyPage | undefined): R
 function Sentences({ heading, lines }: { heading: string; lines: readonly string[] }) {
   return (
     <div>
-      <h3>{heading}</h3>
+      <h2>{heading}</h2>
       <ul>
         {lines.map((line) => (
           <li key={line}>{line}</li>

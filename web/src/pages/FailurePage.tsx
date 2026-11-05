@@ -68,7 +68,7 @@ export function FailurePage({ id }: { id: string }) {
         ))}
       </ol>
       <h2>Bundle</h2>
-      <pre className="log" tabIndex={0} aria-label="Bundle text">{bundle}</pre>
+      <pre className="log" tabIndex={0} role="group" aria-label="Bundle text">{bundle}</pre>
     </>
   );
 }
