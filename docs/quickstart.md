@@ -143,9 +143,27 @@ A Glossary page at `/glossary` defines the words the pages use (seed, trial, swe
 page, a word with a dotted underline, such as Confirmation, opens its definition when pressed or activated from the
 keyboard, with a link to the glossary entry. The definitions are shortened from the wiki Glossary.
 
+## Tabs on the run page
+
+A run page shows the run's facts, its Cancel button and the "what this run shows" panel at the top, and below them four
+tabs: **Properties** (the property table and the coverage chart), **Seeds and trials** (a link to the seed explorer),
+**Failures** (this run's failure records, with the count on the tab) and **Activity** (the run's events as they
+arrive). The chosen tab is kept in the address as `?tab=seeds`, `?tab=failures` or `?tab=activity`; the Properties tab
+is the plain address `/runs/<run id>`, which also opens on it. An address with an unknown tab name opens Properties.
+Following a tab adds a history entry, so Back returns to the tab before. With the keyboard, Left and Right (wrapping),
+Home and End move between the tabs and select the one reached; Tab then moves into the tab's content. The seed explorer
+keeps its own address, `/runs/<run id>/seeds`, with its filters. The selected tab is marked by a bold label and a thicker
+underline as well as by colour, and on a phone the tab row scrolls sideways instead of wrapping.
+
+The run page also shows the coverage chart (below), so opening a run page makes a request to
+`GET /api/runs/{id}/coverage`; it is repeated while the run is live and only while the Properties tab is showing. The
+page's event stream (`/api/runs/{id}/events`) stays open for as long as the page is, whichever tab is selected, so the
+lines that arrive while another tab is showing are there when Activity is opened. It does not pause while the browser
+tab is hidden.
+
 ## Coverage chart on the run page
 
-A run page has a **Coverage over trials** section, drawn from `GET /api/runs/{id}/coverage`. It has three small charts
+A run page has a **Coverage over trials** section, on the Properties tab, drawn from `GET /api/runs/{id}/coverage`. It has three small charts
 that share one axis, the trial number: property ids reached, property ids seen true, and distinct schedules. Each is a
 cumulative count of distinct things seen so far, so a line never falls, and each has its own scale starting at zero
 because the units differ; the label at the top of each y-axis is the round value the top edge stands for, and the line is

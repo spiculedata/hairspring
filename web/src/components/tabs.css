@@ -1,0 +1,23 @@
+/* Tabs (Tabs.tsx). Colours come from the tokens in styles.css only. The selected tab is marked by a heavier weight and
+   a thicker underline as well as by colour, so it reads without telling colours apart. */
+.tabs { display: flex; flex-wrap: wrap; gap: .25rem; margin: 1rem 0 .75rem; border-bottom: 1px solid var(--border); }
+.tabs [role="tab"] {
+  min-height: 2.75rem;
+  padding: .4rem .9rem;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--text-muted);
+}
+.tabs [role="tab"]:hover { background: var(--surface-2); color: var(--text); }
+.tabs [role="tab"][aria-selected="true"] { border-bottom-color: var(--accent); background: var(--accent-soft); color: var(--text); font-weight: 600; }
+.tabs [role="tab"]:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.tabs .count { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+/* Phone width. Last in the file so these win over the base rules above at equal specificity. The tab row scrolls
+   sideways inside itself instead of wrapping into several rows or widening the page. */
+@media (max-width: 40rem) {
+  .tabs { flex-wrap: nowrap; overflow-x: auto; }
+  .tabs [role="tab"] { flex: none; white-space: nowrap; }
+}
