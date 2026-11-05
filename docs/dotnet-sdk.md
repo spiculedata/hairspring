@@ -25,6 +25,29 @@ NameThread("writer", 0);       // stable thread key "writer-0"
 Build it with `make -C sdks/dotnet dll` (`Hairspring.dll`; any .NET 10.0 SDK from 10.0.100 on works, per `global.json`; the Linux build record uses exactly 10.0.402, from `scripts/record-global.json`), or reference `sdks/dotnet/src/Hairspring.csproj` from your project.
 A runnable program is `sdks/dotnet/samples/Sample`.
 
+For a project of your own outside this repository, a complete `demo.csproj` is:
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../hairspring/sdks/dotnet/src/Hairspring.csproj" />
+  </ItemGroup>
+
+</Project>
+```
+
+`net10.0` is the SDK's own target framework, so your project must target it and the machine needs a .NET 10 SDK. With
+this file and the snippet from the [wiki's SDK page](https://github.com/spiculedata/hairspring/wiki/Guest-SDKs-by-Language#net)
+as `Program.cs`, `dotnet run` prints the `assert` line (run natively on a Mac with SDK 10.0.400). `ImplicitUsings` makes
+`Thread` available without a `using System.Threading;`.
+
 > **A site that never runs is invisible, not unmet.** .NET cannot see a call site before it executes, so a `Reachable`,
 > `Sometimes` or `Always` in code the run never reaches is simply absent from the report, and the run cannot flag it as
 > UNMET. That is the main thing those kinds exist to find. **Call `Declare(Kind.Reachable, id, msg)` once, early, for every

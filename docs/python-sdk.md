@@ -19,6 +19,8 @@ hs.thread("writer", 0)           # stable thread key "writer-0"
 ```
 
 Use it from the source tree with `PYTHONPATH=sdks/python/src`, or install it from `sdks/python` (`pip install ./sdks/python`).
+The install writes `sdks/python/build/` and `sdks/python/src/hairspring.egg-info/` into the clone; the repository's
+ignore rules cover both, and you can delete them afterwards.
 A runnable example is `sdks/python/examples/quickstart.py`.
 
 > **A site that never runs is invisible, not unmet.** Python cannot see a call site before it executes, so a
