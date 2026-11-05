@@ -102,7 +102,7 @@
   (this is also the idle time allowed between requests on a kept-alive connection), answers `408` and closes the
   connection when a request body has not arrived within 30 seconds, and allows at most 512 open connections
   (`hairspring serve --max-connections N`); a connection beyond that is answered `503` with `Retry-After: 1` and
-  closed (while more than 128 connections are being refused at once, further ones are closed without a reply). These
+  closed (while 128 connections are being refused at once, a further one is closed without a reply). These
   deadlines do not apply while a response is being produced or sent, so event streams and long replays are
   unaffected. A request body is still read only after its token has been checked, so a request with a missing or
   wrong token is answered `401` without its body being read. The server speaks HTTP/1.1 only.

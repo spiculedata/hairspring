@@ -681,9 +681,10 @@ writes the `503`, reads and discards what the client sent (at most 16 KiB), and 
 most 128 such tasks run at once; a connection refused while all 128 are busy is closed without a reply.
 
 The connection cap is one count for the whole server, not per address: a client that opens many connections can fill
-it, and others are refused until those connections end, which for a connection that sends nothing is at most 10
-seconds. Keep the process's file-descriptor limit (`LimitNOFILE` under systemd) comfortably above the cap plus the
-128 refusals.
+it, and others are refused until those connections end. A connection that sends nothing ends after at most 10
+seconds, but a client that keeps sending requests on its kept-alive connections can hold them indefinitely; only
+per-client limits in front of the server prevent that. Keep the process's file-descriptor limit (`LimitNOFILE` under
+systemd) comfortably above the cap plus the 128 refusals.
 
 Replays run target code synchronously on the server's blocking threads, so they have their own small cap:
 `hairspring serve --max-replays N` (default 2, 1 to 64) counts REST `/api/replay` and MCP `replay_bundle` together.

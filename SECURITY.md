@@ -52,7 +52,8 @@ agents.
 - **The connection cap is server-wide, not per address.** A client that opens many connections can fill the cap
   (512 by default), and other clients are answered `503` until those connections end. A connection that sends
   nothing, or sends a request head slowly, is closed after 10 seconds, and one that sends its body slowly after a
-  further 30, so a client must keep reconnecting to hold the cap. A proxy in front of the server makes all its
+  further 30. A client that keeps sending requests on its kept-alive connections can hold them indefinitely; only
+  per-client limits in front of the server prevent that. A proxy in front of the server makes all its
   clients share its connections, so give the proxy its own per-client connection limits. Up to 128 refused
   connections are held for at most a second each while they are told the server is busy, so keep the
   file-descriptor limit (`LimitNOFILE` under systemd) well above `--max-connections` plus 128.
