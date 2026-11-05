@@ -230,8 +230,11 @@ be stated for the trials it ran; a sweep with no failure says only that those tr
   sends it inside the target's whole budget, so the target's steps and seconds are unchanged. It cannot change the
   step or wall-clock budget.
 - The seed is optional, as on the command line.
-- Starting a run needs a token with the `run` role. Without one the server answers 403 ("this endpoint requires the
-  run role") and the form says the token cannot start runs.
+- Starting a run needs a token with the `run` role. The page asks the server for your role (`GET /api/me`) when it
+  loads, and again after you save or clear a token. With the `read` role, Start run is disabled and a line beside it
+  says your role cannot start runs and to ask an administrator for the run role. If the server cannot say what your
+  role is (an older server, an error, or no answer within 5 seconds), the button stays available and the server
+  decides: it answers 403 ("this endpoint requires the run role") and the form says the token cannot start runs.
 - Once the server accepts the run, the browser opens its page. Confirming a failure is not started from the browser.
 
 ## Replay a bundle

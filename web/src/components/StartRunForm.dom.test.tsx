@@ -191,3 +191,39 @@ describe('StartRunForm', () => {
     expect(q('button[type="submit"]').textContent).toBe('Start sweep');
   });
 });
+
+describe('StartRunForm access', () => {
+  afterEach(cleanup);
+  const denied = { canStart: false, note: 'Your role (read) cannot start runs or sweeps. Ask an administrator for the run role.' };
+
+  it('with no access given, behaves as before: enabled, no note', () => {
+    const { container } = setup();
+    expect((container.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(false);
+    expect(container.querySelector('.start-access-note')).toBeNull();
+  });
+
+  it('disables the button and shows the one-line reason, tied to the button for assistive technology', () => {
+    const start = vi.fn((_: StartRunBody) => ok());
+    const { container } = render(<StartRunForm targets={targets} start={start} onStarted={vi.fn()} access={denied} />);
+    const button = container.querySelector('button[type="submit"]') as HTMLButtonElement;
+    const note = container.querySelector('.start-access-note') as HTMLElement;
+    expect(button.disabled).toBe(true);
+    expect(note.textContent).toBe(denied.note);
+    expect(note.getAttribute('role')).toBe('status');
+    expect(button.getAttribute('aria-describedby')).toBe(note.id);
+  });
+
+  it('does not call the server when a submit arrives while access is denied', () => {
+    const start = vi.fn((_: StartRunBody) => ok());
+    const { container } = render(<StartRunForm targets={targets} start={start} onStarted={vi.fn()} access={denied} />);
+    submit(container);
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('still starts when access is allowed', async () => {
+    const start = vi.fn((_: StartRunBody) => ok());
+    const { container } = render(<StartRunForm targets={targets} start={start} onStarted={vi.fn()} access={{ canStart: true }} />);
+    submit(container);
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+  });
+});

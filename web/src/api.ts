@@ -1,3 +1,4 @@
+import { isMe, type Me } from './me';
 import { parseSse, type SseEvent } from './sse';
 import type { StartRunBody } from './startRun';
 import type { Coverage, FailureChecks, FailureDetail, FailureSummary, PropertyPage, PropertyQuery, ReplayResult, Run, RunDetail, Target, Worker } from './types';
@@ -109,6 +110,9 @@ async function failure(res: Response): Promise<ApiError> {
   return new ApiError(res.status, message, parseRetryAfter(res.headers.get('Retry-After'), Date.now()));
 }
 
+/** How long the role lookup may take before the UI treats it as unavailable and lets the server decide. */
+export const ME_TIMEOUT_MS = 5000;
+
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, { ...init, headers: { ...headers(init.body !== undefined), ...(init.headers as Record<string, string>) } });
   if (!res.ok) throw await failure(res);
@@ -149,6 +153,18 @@ export const api = {
   coverage: async (runId: string, signal?: AbortSignal): Promise<Coverage> => {
     const body = await request<unknown>(`/api/runs/${encodeURIComponent(runId)}/coverage`, { signal });
     if (!isCoverage(body)) throw new ApiError(502, 'the server sent a coverage response in an unexpected shape');
+    return body;
+  },
+  me: async (): Promise<Me> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ME_TIMEOUT_MS);
+    let body: unknown;
+    try {
+      body = await request<unknown>('/api/me', { signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!isMe(body)) throw new ApiError(502, 'the server sent a /api/me response in an unexpected shape');
     return body;
   },
   /** `{ status, version }`, and `organisation` when the server has a name and this caller has a valid token. Read with `organisationName`. */
