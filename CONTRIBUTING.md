@@ -47,13 +47,16 @@ self-test and the sample programs as real processes. Its conformance tests again
 `make -C examples/language-fixtures/dotnet at-test`.
 
 PostgreSQL tests are skipped unless `HAIRSPRING_TEST_PG_URL` is set. Besides the store conformance suite, the
-service and CLI tests also run against PostgreSQL when it is set:
+service and CLI tests also run against PostgreSQL when it is set. The CI job "PostgreSQL tests" runs them against a
+`postgres:16.6-alpine` service container with trust authentication (one store test creates a login role without a
+password and connects as it) and sets `HAIRSPRING_REQUIRE_PG=1`, so a missing database fails the tests instead of
+skipping them. To run the same thing locally:
 
 ```bash
-docker run -d --name pg -e POSTGRES_PASSWORD=x -e POSTGRES_DB=hairspring -p 127.0.0.1:54329:5432 postgres:17-alpine
-export HAIRSPRING_TEST_PG_URL=postgres://postgres:x@127.0.0.1:54329/hairspring
-cargo test -p hairspring-store --features postgres
-cargo test -p hairspring-service -p hairspring-cli
+docker run -d --name pg -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=hairspring -p 127.0.0.1:54329:5432 postgres:16.6-alpine
+export HAIRSPRING_TEST_PG_URL=postgres://postgres@127.0.0.1:54329/hairspring
+export HAIRSPRING_REQUIRE_PG=1
+cargo test -p hairspring-store -p hairspring-service -p hairspring-cli --features hairspring-store/postgres --no-fail-fast
 ```
 
 Tests against the real Hermit need x86-64 Linux with performance counters:

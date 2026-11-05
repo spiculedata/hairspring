@@ -1,5 +1,5 @@
 //! Completing a run's identity and creating the run's tree at the same time, on PostgreSQL. Skipped unless
-//! `HAIRSPRING_TEST_PG_URL` is set (see `postgres.rs`); the CI workflow does not run the PostgreSQL tests.
+//! `HAIRSPRING_TEST_PG_URL` is set (see `postgres.rs`).
 #![cfg(feature = "postgres")]
 mod common;
 use common::pg_support::*;
