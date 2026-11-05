@@ -715,10 +715,17 @@ proxy addresses and networks whose `X-Forwarded-For` is believed. The rules, in
 - The header is read only when the peer address is in the list (an IPv4-mapped IPv6 peer counts as its IPv4
   address).
 - All `X-Forwarded-For` headers are read as one comma-separated list, in order. Walking from the right, entries
-  that are themselves in the list are skipped; the first one that is not is the client address. The left-most entry
-  is never believed on its own account.
-- The peer address is used when the header is missing, more than 1024 bytes in total, more than 16 entries, has any
-  entry that is not a plain IP address, or has only trusted entries.
+  that are themselves in the list are skipped; the first one that is not is the client address, and reading stops
+  there. The header is handled as raw bytes and an entry is decoded only when it is read, so entries further left
+  (including non-ASCII or invalid UTF-8 bytes on the same line as the proxy's entry) are never decoded or parsed and
+  cannot cause a fallback. They can still decide the result when every entry to the right is a listed proxy, which is
+  how a client inside a listed network can choose its address; SECURITY.md lists the cases that remain.
+- The peer address is used when the header is missing, an entry read on the way is not a plain IP address, finding
+  the client would need more than 1024 bytes or 16 entries counted from the right, or every entry is trusted. The
+  total header size is not capped here (the HTTP server bounds it); a long header alone does not cause a fallback.
+- At startup, networks wider than /8 (IPv4) or /32 (IPv6), the unspecified address and ranges starting at it,
+  IPv4-mapped and IPv4-compatible IPv6 entries are refused; a repeated entry is listed once; an error repeats at most
+  16 characters of the entry, with control characters escaped.
 - `Forwarded` and `X-Real-IP` are never read. The open-mode `Host` and `Origin` checks never look at forwarding
   headers.
 - Entries are parsed strictly: an address or `address/prefix` with a decimal prefix and no bits set past it. Any

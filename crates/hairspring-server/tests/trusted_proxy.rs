@@ -167,10 +167,8 @@ fn a_header_that_cannot_be_used_counts_the_request_under_the_proxy() {
     // Arrange: the proxy's own address has used up its anonymous budget (requests with no forwarded address).
     let srv = boot_with_token(LOOPBACK_PROXY);
     assert_eq!(flood(srv.addr(), None), flooded());
-    let too_many: String = (0..17)
-        .map(|i| format!("198.51.100.{i}"))
-        .collect::<Vec<_>>()
-        .join(",");
+    // The client's entry is the 18th from the right: too many entries to examine to find it.
+    let too_many = format!("198.51.100.9{}", ",127.0.0.1".repeat(17));
     // Two addresses padded past the length bound (HTTP strips spaces at the ends of a value, not inside it).
     let too_long = format!("198.51.100.8,{}198.51.100.9", " ".repeat(1100));
 
@@ -330,7 +328,27 @@ fn the_connection_cap_is_unchanged_by_trusted_proxies() {
 
 #[test]
 fn a_trusted_proxy_entry_that_covers_everyone_is_refused() {
-    for spec in ["0.0.0.0/0", "::/0", "0.0.0.0", "::"] {
+    for spec in ["0.0.0.0/0", "::/0", "0.0.0.0", "::", "0.0.0.0/1", "::/96"] {
         assert!(TrustedProxies::parse(spec).is_err(), "{spec}");
     }
+}
+
+#[test]
+fn text_a_client_put_left_of_the_proxys_entry_does_not_move_it_to_the_proxys_bucket() {
+    // Arrange: a proxy that appended the address it saw to whatever the client sent.
+    let srv = boot_with_token(LOOPBACK_PROXY);
+    let junk = "x".repeat(4000);
+
+    // Act: one client floods, each request with unusable text to the left of the proxy's entry.
+    let statuses: Vec<u16> = (0..GUESSES)
+        .map(|i| {
+            let wrong = bearer(&format!("wrong-guess-number-{i:04}-abcdef"));
+            let fwd = xff(&format!("{junk}, not-an-address, 198.51.100.1"));
+            status(srv.addr(), "/api/targets", &[&wrong, &fwd])
+        })
+        .collect();
+
+    // Assert: it is counted under its own address, so another client behind the proxy is unaffected.
+    assert_eq!(statuses, flooded());
+    assert_eq!(token_from(srv.addr(), "198.51.100.2"), 200);
 }
