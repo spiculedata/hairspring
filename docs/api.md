@@ -10,7 +10,7 @@ Every example below was run against a scratch `hairspring serve` with scratch to
 example keeps the fields it is about and says so. JSON object keys come back in alphabetical order, as in the examples.
 
 ```bash
-hairspring serve --addr 127.0.0.1:7878 --tokens-file tokens   # tokens: one `token:role` line each
+hairspring serve --addr 127.0.0.1:7878 --tokens-file tokens   # one `token:role` line each; tokens are 16+ characters, no whitespace
 export TOKEN=...                                               # one of those tokens
 curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:7878/api/me
 ```
@@ -28,7 +28,9 @@ role includes the ones before it:
 
 Create a token with `hairspring token --role read|run|admin`; it prints the line to give the server
 (`HAIRSPRING_TOKENS=token:role`, or one `token:role` per line in `--tokens-file`) and, for a worker, the bare
-token (`HAIRSPRING_TOKEN`). A server with no tokens is in **open mode**: it listens only on a loopback address, accepts
+token (`HAIRSPRING_TOKEN`). A token must be at least 16 characters with no whitespace; `serve` refuses a shorter one,
+and `hairspring token` generates valid ones. `serve` warns when the tokens file is readable by other users (mode 644);
+run `chmod 600` on it. A server with no tokens is in **open mode**: it listens only on a loopback address, accepts
 only same-origin local requests (anything else is a 403), and treats every caller as `admin`.
 
 A missing or wrong token is a `401` with a `WWW-Authenticate: Bearer` header; a token whose role is too low is a `403`
@@ -78,6 +80,11 @@ Roles are checked in the handler, from the router in `crates/hairspring-server/s
 | `POST /api/worker/register` | `run` | a remote worker registers; the reply holds its secret |
 | `POST /api/worker/lease`, `/api/worker/jobs/{job}/progress`, `/complete`, `/fail`, `/trials`, `/heartbeat` | `run`, plus the worker's secret | the worker protocol; used by `hairspring worker`, not by hand (see [architecture.md](architecture.md#job-lifecycle)) |
 | `POST /mcp` | any valid token | one JSON-RPC message per request; each tool checks its own role (`start_run`, `replay_bundle` and `cancel_run` need `run`, the others `read`) |
+
+The role is checked inside each handler, after the body of a `POST` has been read. A caller whose role is too low that
+sends a malformed body to `POST /api/runs` or `POST /api/worker/register` therefore gets a 400 before it would get the
+403 (checked: a `read` token sending `{"seed":1}` to either gets a 400 naming the missing field). A token that is
+missing or wrong is refused with 401 before any body is read.
 
 A request for an id the server does not know, or whose text is not an id, is a `404` (`{"error":"not found"}`).
 

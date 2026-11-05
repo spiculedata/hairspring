@@ -8,7 +8,7 @@ Which backend decides where the job can run:
 
 | Target kind | Where it can run in CI | Needs |
 |---|---|---|
-| `sim` (built-in demos, or a state machine you wrote) | A GitHub-hosted runner, or any Linux x86-64 or macOS arm64 machine | The `hairspring` release binary |
+| `sim` (built-in demos, or a state machine you wrote) | A GitHub-hosted runner (not run on GitHub; see the last section), or any Linux x86-64 or macOS arm64 machine | The `hairspring` release binary |
 | `wasm` | The same | The binary and your `.wasm` or `.wat` file |
 | `process` | A bare-metal Linux x86-64 machine you control, with Hermit and performance counters | See [Process targets](#process-targets-on-a-self-hosted-runner) |
 
@@ -72,8 +72,9 @@ The findings appear under the repository's Security tab, Code scanning. Each ale
 (that is the location the SARIF file names), with the target, the property message and the shrunk step count. The
 repository needs code scanning to be available to it: GitHub offers it free for public repositories, and for private
 ones it depends on your plan and settings (see GitHub's documentation). A workflow started by a pull request from a
-fork gets a read-only token, so the SARIF upload step cannot write alerts there; the job still fails on a violation
-and the bundles are still attached. None of the GitHub-side behaviour in this paragraph was run here.
+fork gets a read-only token, so the SARIF upload step may fail there, which could turn a pull request that passed
+hairspring red; the bundles should still be attached. If that matters to you, set `upload-sarif: "false"` for fork
+pull requests or use `format: junit`. None of the GitHub-side behaviour in this paragraph was run here.
 
 ### JUnit instead of SARIF
 
@@ -116,7 +117,8 @@ To show the report on the pull request, use a JUnit report publisher from the Ac
 Neither was tried here; read their documentation for how to point them at `hairspring-junit.xml`.
 
 `hairspring test` takes one `--format` per run, so a single run gives one report. If you want both SARIF and JUnit
-from the same exploration, use the workflow in the next section and run the command twice with the same `--seed`; a
+from the same exploration, use the workflow in the next section and run the command twice with the same `--seed` (the
+action cannot do this: calling it twice in one job fails on the duplicate `hairspring-results` artifact name); a
 sim run with a fixed seed repeats exactly, and each run costs its own time.
 
 ### The same job without the action

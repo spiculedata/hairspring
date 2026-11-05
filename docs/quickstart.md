@@ -493,13 +493,12 @@ automated tests, because it needs a browser download and seeded data and would m
 
 Everything the web UI shows comes from the server's REST API, which you can call from a script or CI. The reference is
 in [api.md](api.md): who may call each endpoint (`read`, `run` or `admin`), the error shapes, the rate limits, and the
-endpoints this guide used to describe in place, which moved there:
+endpoints listed here:
 
-- "Who am I: `GET /api/me`" is now [`GET /api/me`](api.md#get-apime);
-- "Workers and the queue: `GET /api/workers`" is now [`GET /api/workers`](api.md#get-apiworkers), and trusting a worker is
-  [`POST /api/workers/{id}/trust`](api.md#post-apiworkersidtrust);
-- "Find something by its id: `GET /api/search?q=...`" is now [`GET /api/search?q=...`](api.md#get-apisearchq);
-- paging and filters on `/api/runs` and `/api/failures` are in [api.md](api.md#paging-and-filters), with the detail in
+- [`GET /api/me`](api.md#get-apime);
+- [`GET /api/workers`](api.md#get-apiworkers), and trusting a worker, [`POST /api/workers/{id}/trust`](api.md#post-apiworkersidtrust);
+- [`GET /api/search?q=...`](api.md#get-apisearchq);
+- paging and filters on `/api/runs` and `/api/failures`, in [api.md](api.md#paging-and-filters), with the detail in
   [architecture.md](architecture.md#paging-and-filters-on-the-runs-and-failures-lists); lists can also be read as
   [NDJSON](ndjson.md).
 
