@@ -86,13 +86,14 @@ impl TrustedProxies {
         let mut bytes = 0;
         let mut hops = 0;
         for value in values.into_iter().rev() {
-            for entry in value.to_str().ok()?.rsplit(',') {
+            // Raw bytes: an entry is decoded only when it is read, so bytes further left are never decoded.
+            for entry in value.as_bytes().rsplit(|b| *b == b',') {
                 hops += 1;
                 bytes += entry.len();
                 if hops > MAX_FORWARDED_HOPS || bytes > MAX_FORWARDED_BYTES {
                     return None;
                 }
-                let hop: IpAddr = entry.trim_matches([' ', '\t']).parse().ok()?;
+                let hop = parse_entry(entry)?;
                 if !self.contains(hop) {
                     return Some(hop);
                 }
@@ -100,6 +101,13 @@ impl TrustedProxies {
         }
         None
     }
+}
+
+/// One `X-Forwarded-For` entry as an IP address: spaces and tabs around it are allowed, anything else that is not a
+/// plain address, including bytes that are not UTF-8, is `None`.
+fn parse_entry(entry: &[u8]) -> Option<IpAddr> {
+    let text = std::str::from_utf8(entry).ok()?;
+    text.trim_matches([' ', '\t']).parse().ok()
 }
 
 impl Net {
@@ -117,9 +125,15 @@ impl Net {
         let addr: IpAddr = addr.parse().map_err(|_| malformed())?;
         if let IpAddr::V6(v6) = addr {
             if let Some(v4) = v6.to_ipv4_mapped() {
-                return Err(format!(
-                    "`{shown}` is an IPv4-mapped address; write it as {v4}"
-                ));
+                return Err(match mapped_suggestion(v4, prefix) {
+                    Some(suggestion) => {
+                        format!("`{shown}` is an IPv4-mapped address; write it as {suggestion}")
+                    }
+                    None => format!(
+                        "`{shown}` is an IPv4-mapped address, which is not accepted; use an IPv4 \
+                         address or network"
+                    ),
+                });
             }
             if is_ipv4_compatible(v6) {
                 return Err(format!(
@@ -152,11 +166,15 @@ impl Net {
             ));
         }
         if addr.is_unspecified() {
-            return Err(if prefix == max {
-                format!("`{shown}` is the unspecified address,{spoofable}")
+            let kind = if prefix == max {
+                "the unspecified address"
             } else {
-                format!("`{shown}` is a range starting at the unspecified address,{spoofable}")
-            });
+                "a range starting at the unspecified address"
+            };
+            return Err(format!(
+                "`{shown}` is {kind}, which no proxy connects from; name the proxy's own address \
+                 or network"
+            ));
         }
         let net = Net {
             addr: masked(addr, prefix),
@@ -174,6 +192,20 @@ impl Net {
     fn contains(&self, ip: IpAddr) -> bool {
         ip.is_ipv4() == self.addr.is_ipv4() && masked(ip, self.prefix) == self.addr
     }
+}
+
+/// The IPv4 entry to suggest in place of an IPv4-mapped one, or `None` when it has no accepted IPv4 form: the prefix
+/// (which counts bits of the 128-bit address, so 96 of them are the mapping) is not plain decimal or leaves less than
+/// the IPv4 network, or the IPv4 entry would itself be refused.
+fn mapped_suggestion(v4: std::net::Ipv4Addr, prefix: Option<&str>) -> Option<String> {
+    let suggestion = match prefix {
+        None => v4.to_string(),
+        Some(text) => {
+            let v4_prefix = parse_prefix(text)?.checked_sub(96)?;
+            format!("{v4}/{v4_prefix}")
+        }
+    };
+    Net::parse(&suggestion).ok().map(|_| suggestion)
 }
 
 /// `::a.b.c.d` other than `::` and `::1`: the deprecated IPv4-compatible form.
@@ -250,12 +282,22 @@ mod tests {
         h
     }
 
+    /// A header set from raw bytes, one value per slice.
+    fn xff_bytes(values: &[&[u8]]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for v in values {
+            h.append(X_FORWARDED_FOR, HeaderValue::from_bytes(v).unwrap());
+        }
+        h
+    }
+
     const PROXY: &str = "10.0.0.5";
 
     #[test]
     fn a_blank_list_trusts_nothing() {
         assert!(proxies("").is_empty());
         assert!(proxies("   ").is_empty());
+        assert!(!proxies(PROXY).is_empty());
     }
 
     #[test]
@@ -336,10 +378,47 @@ mod tests {
             assert!(err.contains("range"), "{spec}: {err}");
             assert!(!err.contains("names the unspecified"), "{spec}: {err}");
             assert!(!err.contains("every address"), "{spec}: {err}");
+            assert!(!err.contains("could choose"), "{spec}: {err}");
         }
         for spec in ["0.0.0.0", "::"] {
             let err = TrustedProxies::parse(spec).unwrap_err();
             assert!(err.contains("is the unspecified address"), "{spec}: {err}");
+            assert!(!err.contains("could choose"), "{spec}: {err}");
+        }
+    }
+
+    #[test]
+    fn an_ipv4_mapped_entry_suggests_the_matching_accepted_ipv4_entry() {
+        for (spec, suggestion) in [
+            ("::ffff:10.0.0.5", "10.0.0.5"),
+            ("::ffff:10.0.0.5/128", "10.0.0.5/32"),
+            ("::ffff:10.0.0.0/120", "10.0.0.0/24"),
+            ("::ffff:10.0.0.0/104", "10.0.0.0/8"),
+        ] {
+            let err = TrustedProxies::parse(spec).unwrap_err();
+            assert!(err.contains("IPv4-mapped"), "{spec}: {err}");
+            assert!(
+                err.contains(&format!("write it as {suggestion}")),
+                "{spec}: {err}"
+            );
+            assert!(TrustedProxies::parse(suggestion).is_ok(), "{suggestion}");
+        }
+    }
+
+    #[test]
+    fn an_ipv4_mapped_entry_whose_suggestion_would_be_refused_gets_a_plain_refusal() {
+        for spec in [
+            "::ffff:0:0/96",
+            "::ffff:0.0.0.0",
+            "::ffff:0.0.0.0/120",
+            "::ffff:10.0.0.5/120",
+            "::ffff:10.0.0.0/103",
+            "::ffff:10.0.0.0/64",
+            "::ffff:10.0.0.0/200",
+        ] {
+            let err = TrustedProxies::parse(spec).unwrap_err();
+            assert!(err.contains("IPv4-mapped"), "{spec}: {err}");
+            assert!(!err.contains("write it as"), "{spec}: {err}");
         }
     }
 
@@ -356,6 +435,19 @@ mod tests {
             err.contains("10.0.0.5/33"),
             "short entries are still shown: {err}"
         );
+    }
+
+    #[test]
+    fn a_shown_entry_is_cut_only_past_the_limit() {
+        assert_eq!(
+            shown_entry(&"a".repeat(SHOWN_ENTRY_CHARS)),
+            "a".repeat(SHOWN_ENTRY_CHARS)
+        );
+        assert_eq!(
+            shown_entry(&"a".repeat(SHOWN_ENTRY_CHARS + 1)),
+            format!("{}...", "a".repeat(SHOWN_ENTRY_CHARS))
+        );
+        assert_eq!(shown_entry("ab"), "ab");
     }
 
     #[test]
@@ -521,6 +613,80 @@ mod tests {
         assert_eq!(
             p.client_ip(ip(PROXY), &xff(&["198.51.100.1, garbage, 10.1.2.3"])),
             ip(PROXY)
+        );
+    }
+
+    #[test]
+    fn non_text_bytes_left_of_the_first_untrusted_hop_do_not_cause_a_fallback() {
+        let p = proxies("10.0.0.5, 10.1.0.0/16");
+        let client = ip("198.51.100.1");
+        for left in [
+            &b"\x80"[..],
+            b"\xff\xfe",
+            b"caf\xe9",
+            b"\xc3\x28",
+            b"203.0.113.66\xff",
+            b"\x80, \xff, garbage",
+        ] {
+            // The proxy appended its peer's address to the client's own text in the same line.
+            let one = [left, b", 198.51.100.1"].concat();
+            assert_eq!(
+                p.client_ip(ip(PROXY), &xff_bytes(&[&one])),
+                client,
+                "{left:?}"
+            );
+            // With a chain of trusted hops to the right of the client.
+            let chain = [left, b", 198.51.100.1, 10.1.2.3, 10.0.0.5"].concat();
+            assert_eq!(
+                p.client_ip(ip(PROXY), &xff_bytes(&[&chain])),
+                client,
+                "{left:?}"
+            );
+            // Without a space after the comma, and with tabs.
+            let tight = [left, b",198.51.100.1,\t10.1.2.3\t"].concat();
+            assert_eq!(
+                p.client_ip(ip(PROXY), &xff_bytes(&[&tight])),
+                client,
+                "{left:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_text_bytes_in_an_entry_that_is_read_still_fall_back_to_the_peer() {
+        let p = proxies("10.0.0.5, 10.1.0.0/16");
+        for bad in [
+            &b"198.51.100.1, \xff"[..],
+            b"198.51.100.1, 198.51.100.\x80",
+            b"198.51.100.1, \xc3\xa9",
+            b"198.51.100.1, \xff, 10.1.2.3",
+            b"198.51.100.1, 10.1.2.3\xe9, 10.0.0.5",
+        ] {
+            assert_eq!(
+                p.client_ip(ip(PROXY), &xff_bytes(&[bad])),
+                ip(PROXY),
+                "{bad:?}"
+            );
+        }
+        // The right-most of several headers is the one read first.
+        assert_eq!(
+            p.client_ip(ip(PROXY), &xff_bytes(&[b"198.51.100.1", b"\xff"])),
+            ip(PROXY)
+        );
+        assert_eq!(
+            p.client_ip(ip(PROXY), &xff_bytes(&[b"\xff", b"198.51.100.1"])),
+            ip("198.51.100.1")
+        );
+    }
+
+    #[test]
+    fn non_text_bytes_are_not_counted_when_they_are_left_of_the_client() {
+        let p = proxies(PROXY);
+        let mut junk = vec![0x80u8; 100_000];
+        junk.extend_from_slice(b", 198.51.100.1");
+        assert_eq!(
+            p.client_ip(ip(PROXY), &xff_bytes(&[&junk])),
+            ip("198.51.100.1")
         );
     }
 

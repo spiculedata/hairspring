@@ -109,8 +109,9 @@ list it trusts.
 - Only a request whose connection comes from a listed proxy has its `X-Forwarded-For` header read. From anywhere
   else the header is ignored and the connecting address is used, exactly as without the flag.
 - The header is read from the right: entries that are themselves listed proxies are skipped, and the first entry
-  that is not is the client address. Reading stops there; anything further left is written by the client, is never
-  examined and cannot change the result. Several `X-Forwarded-For` headers are read as one list, in order.
+  that is not is the client address. Reading stops there; anything further left is never decoded or parsed, so
+  text there (including bytes that are not ASCII or not valid UTF-8, even on the same line as the address the proxy
+  appended) cannot cause a fallback. Whether it can change the result is covered under "What remains". Several `X-Forwarded-For` headers are read as one list, in order.
 - The connecting address is used instead when the header is missing, when an entry read on the way to the client
   address is not a plain IP address (a port, brackets, `unknown`, a zone, an empty entry), when finding the client
   address would need more than 16 entries or 1024 bytes counted from the right, or when every entry is a listed
@@ -124,7 +125,8 @@ list it trusts.
 - Refused at startup, with a message that names the setting: any network wider than /8 (IPv4) or /32 (IPv6), which
   includes `0.0.0.0/0` and `::/0`; the unspecified address (`0.0.0.0`, `::`) and any range starting at it
   (`0.0.0.0/8`, `::/96`); a network with bits set past its prefix (`10.0.0.5/24`); an IPv4-mapped (`::ffff:10.0.0.5`)
-  or IPv4-compatible (`::10.0.0.5`) IPv6 entry (write it as IPv4); and anything that is not an address or a network
+  or IPv4-compatible (`::10.0.0.5`) IPv6 entry (write it as IPv4; the message suggests the IPv4 form only when that
+  form would be accepted, with the prefix reduced by 96 for a network); and anything that is not an address or a network
   in the forms above. A repeated entry is listed once. An error message repeats at most the first 16 characters of
   the entry, with control characters escaped.
 
@@ -165,10 +167,20 @@ append, and every one of them is listed.
 
 What remains:
 
-- **A proxy that appends instead of overwriting** still puts the address it saw right-most, so a client cannot
-  choose its bucket, and whatever the client wrote to the left of that address is ignored. Overwriting is still
-  the recommended configuration: it keeps the header short and does not depend on every proxy in the chain appending
-  correctly. A proxy that passes the header through without adding anything is the case described next.
+- **A proxy that appends instead of overwriting** still puts the address it saw right-most. When that address is not itself
+  a listed proxy it is the client address, and whatever the client wrote to the left of it is never decoded or parsed
+  and cannot change the result. Overwriting is still the recommended configuration: it keeps the header short and
+  does not depend on every proxy in the chain appending correctly. A proxy that passes the header through without
+  adding anything is the case described below.
+- **A client inside a listed network can choose its counted address through an appending proxy.** Networks up to
+  /8 (IPv4) or /32 (IPv6) can be listed. If the address the proxy saw is inside such a network, the proxy appends it,
+  it is skipped as a listed proxy, and reading continues into text the client wrote, so the client names the address it
+  is counted under. List the narrowest network that covers your proxies, and do not list a network that also holds
+  clients.
+- **Two further cases remain, and are documented here rather than detected.** A listed proxy that forwards a request
+  without adding the address it saw leaves the client's own header as the right-most entry. A host inside a listed
+  network that connects to the server directly is a trusted peer, so its header is read and believed. Both let that
+  host choose its address, as in the next item.
 - **Listing an address a client can send from**, or a proxy that passes a client's header through unchanged, lets
   that client choose any address. It can then spread guesses over many buckets, and fill the limiter's table. The
   table holds at most 10,000 windows; when it is full of live windows the oldest tenth of the anonymous ones is

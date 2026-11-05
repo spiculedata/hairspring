@@ -39,7 +39,8 @@ pub struct ServeArgs {
     /// Reverse proxies (addresses or networks, comma-separated, e.g. `10.0.0.5,2001:db8::/64`) whose
     /// X-Forwarded-For header names the client a request is counted under for the rate limit. Only requests whose
     /// connection comes from one of these use the header, and only its right-most address that is not itself a
-    /// listed proxy (anything further left is ignored); the proxy should overwrite any X-Forwarded-For the client sent. Off by default
+    /// listed proxy (anything further left is never decoded or parsed); the proxy should overwrite any X-Forwarded-For the client
+    /// sent, and no listed network should hold clients. Off by default
     /// (forwarding headers are ignored). Networks wider than /8 (IPv4) or /32 (IPv6), unspecified addresses and
     /// ranges starting at them, and IPv4-mapped or IPv4-compatible IPv6 entries are refused. Alternative to the
     /// HAIRSPRING_TRUSTED_PROXY environment variable.

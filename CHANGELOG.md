@@ -8,14 +8,17 @@
   address or network, whose `X-Forwarded-For` header gives the client address for the rate limit, for the check that
   refuses a valid token while its address's anonymous budget is used up, and, without tokens, for the per-caller
   event-stream cap. The header is read only on connections from a listed proxy, from the right, skipping listed
-  proxies and stopping at the first address that is not one; entries further left are ignored, so malformed or
-  extra text there no longer causes a fallback. A missing header, a malformed entry on the way to the client
+  proxies and stopping at the first address that is not one; entries further left are never decoded or parsed, so
+  malformed text there, including bytes that are not ASCII or not valid UTF-8 on the same line as the proxy's
+  entry, no longer causes a fallback. With a network of up to /8 (IPv4) or /32 (IPv6) listed, a client inside it
+  can still choose its counted address through an appending proxy; SECURITY.md lists this and two further cases. A missing header, a malformed entry on the way to the client
   address, one that needs more than 1024 bytes or 16 entries counted from the right, or a header of only listed
   proxies falls back to the connecting address. `Forwarded` and `X-Real-IP` are not read, and the open-mode `Host`
   and `Origin` checks never use forwarding headers. Refused at startup: networks wider than /8 (IPv4) or /32 (IPv6),
   the unspecified address and ranges starting at it, and IPv4-mapped or IPv4-compatible IPv6 entries; a repeated
   entry is listed once, and an error message repeats at most 16 characters of the entry, control characters
-  escaped. Without the flag nothing changes: forwarding headers are ignored and all callers
+  escaped; for an IPv4-mapped entry the message suggests the IPv4 form only when that form would be accepted,
+  and the unspecified address and ranges starting at it are explained as addresses no proxy connects from. Without the flag nothing changes: forwarding headers are ignored and all callers
   behind a proxy share its address, so unauthenticated traffic through the proxy can cause valid tokens arriving
   through it to be refused. SECURITY.md describes how to configure nginx and Caddy to overwrite the header.
 - `GET /api/workers` also reports, for each worker, a `state` (`busy`, `idle` or `not_seen_recently`), the parsed
