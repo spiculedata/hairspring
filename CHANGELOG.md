@@ -29,6 +29,10 @@
   any age, so an empty answer means "none among the recent runs"; `scope` in the answer says how far, including how
   many runs' property catalogues were read. Both stores give the same hits. No schema change. See "Search" in
   `docs/architecture.md` for the measured worst-case cost.
+- The web UI's top bar has a search box over `GET /api/search`: debounced, grouped hits (runs, failures, targets,
+  properties, seeds, schedules) in a listbox you can drive from the keyboard (Down, Up, Enter, Escape), with an honest
+  "No matches." that says how far the search looked. It fits a 320 px screen, shows property ids as escaped text, stops
+  after a 429 until the server's retry time, and is not drawn at all when the server answers 404 to `/api/search`.
 - A Hermit bundle records hashes of the target's command line and working directory (`target.command.sha256`,
   `target.cwd.sha256`; no paths or arguments are stored). Replay warns when either differs, still runs from the current
   configuration, and a miss then exits 3 (inconclusive). Older bundles replay as before and say the fields were not
