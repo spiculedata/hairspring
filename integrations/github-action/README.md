@@ -8,7 +8,8 @@ action is written to behave. The binary download and checksum steps are the part
 
 ## Use it from another repository
 
-Pin the action by full commit SHA, not by a tag or branch:
+Pin the action by full commit SHA, not by a tag or branch. Take the 40-character SHA from the commit page on GitHub,
+or from `rev-parse HEAD` in a checkout of the commit you want:
 
 ```yaml
 jobs:
@@ -32,9 +33,12 @@ Your repository needs a `hairspring.toml` (or pass `config:`).
 - Default: the action downloads the release binary for the runner (`hairspring-linux-x86_64` on Linux x64,
   `hairspring-macos-arm64` on macOS arm64) from
   <https://github.com/spiculedata/hairspring/releases>, checks its sha256 against the release's `SHA256SUMS` and
-  stops with an error if they differ. Other runners get an error that points at the options below.
-- `version`: the release tag to download. The default is the newest pre-release the action was tested with
-  (`v0.1-RC1`). Pin the action commit and the version together.
+  stops with an error if they differ. The checksum guards against a corrupted download or a single swapped asset. It
+  does not protect against a compromised release, because `SHA256SUMS` comes from the same place as the binary. Other
+  runners get an error that points at the options below.
+- `version`: the release tag to download. The default (`v0.1-RC1`) is the release this action's commit was written
+  against. Pin the action commit and the version together. The tag is checked to be a plain `v...` name before it is
+  used in a URL, and downloads are HTTPS only.
 - `from-source: true`: build the CLI with `cargo` from the action's own checkout instead. Needs a Rust toolchain on
   the runner and takes longer.
 - `hairspring-bin`: a path to a binary you installed in an earlier step. When set, nothing is downloaded or built.
@@ -47,7 +51,12 @@ written to `hairspring.sarif`, `hairspring-junit.xml` or `hairspring.txt` and at
 artifact. If you want both SARIF and JUnit, call the action twice with the same `seed`; each call runs the tests
 again.
 
-With an empty `seed` the run picks a random seed and prints it in the log.
+The report goes to a file, so the seed is printed to the job log as `hairspring seed: N`. The default `seed` is the
+workflow run number, so each run explores a different seed and a rerun of the same run repeats it. Set `seed: ""` for a
+random seed (still printed). When `seeds` is set it replaces `seed`, because the CLI does not accept both.
+
+If the job fails, the last step of the action says why: exit 1 means a property was violated; anything else means
+hairspring did not finish (or an earlier step failed) and there may be no report.
 
 ## Regression sweep
 
@@ -87,11 +96,11 @@ jobs:
 | Input | Default | Meaning |
 |---|---|---|
 | `targets` | all in the config | Space-separated target names |
-| `seed` | random | Exploration seed; a sweep runs consecutive seeds from it |
+| `seed` | run number | Exploration seed, printed in the log; empty means random |
 | `config` | `hairspring.toml` | Path to the configuration |
 | `format` | `sarif` | `sarif`, `junit` or `text` |
 | `sweep` | `false` | Run a sweep |
-| `seeds` | empty | Sweep seed range, `FIRST..END` |
+| `seeds` | empty | Sweep seed range, `FIRST..END`; replaces `seed` |
 | `version` | `v0.1-RC1` | Release tag to download |
 | `from-source` | `false` | Build with cargo instead of downloading |
 | `hairspring-bin` | empty | Use this binary; skip install |
@@ -103,7 +112,10 @@ Output: `exit-code` (0 = all properties held, 1 = a violation was found, 2 = err
 
 - A failing run uploads `.hairspring/bundles/*.hairspring`; download one and run `hairspring replay <file>` locally to
   reproduce exactly.
-- Pin third-party actions (`github/codeql-action`, `actions/upload-artifact`) to a commit SHA in security-sensitive
-  repositories.
-- This repository's own CI does not use the action, so the action is checked with `actionlint` and by reading, not
-  by a self-test job.
+- The action's own third-party steps (`github/codeql-action/upload-sarif`, `actions/upload-artifact`) are pinned to
+  full commit SHAs with the tag in a comment.
+- This repository's own CI does not use the action and there is no self-test job. The shell in `action.yml` was
+  checked with `shellcheck`, and the install and run steps were run locally (the install step against the real
+  release and against a local fixture). `actionlint` checks workflow files only, so it was not used on `action.yml`.
+- Maintainers: when cutting a release, bump the default of the `version` input in `action.yml` to the new tag and
+  update the `version` row above.

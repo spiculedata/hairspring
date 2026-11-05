@@ -11,9 +11,9 @@ inputs:
     required: false
     default: ""
   seed:
-    description: "Exploration seed. Empty = random (the seed is printed so failures can be reproduced). A sweep runs consecutive seeds from this one."
+    description: "Exploration seed, printed in the job log as 'hairspring seed: N'. Default: the workflow run number, so reruns of one run repeat. Empty = a random seed, still printed. Ignored when seeds is set."
     required: false
-    default: ""
+    default: "${{ github.run_number }}"
   config:
     description: "Path to hairspring.toml"
     required: false
@@ -27,7 +27,7 @@ inputs:
     required: false
     default: "false"
   seeds:
-    description: "Seed range for a sweep, FIRST..END with END left out (for example 100..200 is 100 trials). Needs sweep: true."
+    description: "Seed range for a sweep, FIRST..END with END left out (for example 100..200 is 100 trials). Needs sweep: true. Replaces seed."
     required: false
     default: ""
   version:
@@ -84,9 +84,14 @@ runs:
             exit 2
             ;;
         esac
+        if ! [[ "$INPUT_VERSION" =~ ^v[0-9A-Za-z._-]+$ ]] || [[ "$INPUT_VERSION" == *..* ]]; then
+          echo "invalid version: $INPUT_VERSION" >&2
+          exit 2
+        fi
         base="https://github.com/spiculedata/hairspring/releases/download/$INPUT_VERSION"
-        curl --fail --silent --show-error --location --output "$dest/$asset" "$base/$asset"
-        curl --fail --silent --show-error --location --output "$dest/SHA256SUMS" "$base/SHA256SUMS"
+        curl_opts=(--fail --silent --show-error --location --proto '=https' --proto-redir '=https')
+        curl "${curl_opts[@]}" --output "$dest/$asset" "$base/$asset"
+        curl "${curl_opts[@]}" --output "$dest/SHA256SUMS" "$base/SHA256SUMS"
         expected="$(awk -v a="$asset" '$2 == a { print $1 }' "$dest/SHA256SUMS")"
         if [ -z "$expected" ]; then
           echo "SHA256SUMS for $INPUT_VERSION has no entry for $asset." >&2
@@ -134,25 +139,35 @@ runs:
         args=(test)
         read -r -a targets <<< "$INPUT_TARGETS"
         [ ${#targets[@]} -gt 0 ] && args+=("${targets[@]}")
-        [ -n "$INPUT_SEED" ] && args+=(--seed "$INPUT_SEED")
+        if [ -n "$INPUT_SEEDS" ]; then
+          # --seed and --seeds cannot be combined; the range wins.
+          args+=(--seeds "$INPUT_SEEDS")
+          echo "hairspring seeds: $INPUT_SEEDS" >&2
+        else
+          seed="${INPUT_SEED:-$(( (RANDOM << 15) | RANDOM ))}"
+          args+=(--seed "$seed")
+          echo "hairspring seed: $seed" >&2
+        fi
         [ "$INPUT_SWEEP" = "true" ] && args+=(--sweep)
-        [ -n "$INPUT_SEEDS" ] && args+=(--seeds "$INPUT_SEEDS")
         args+=(--config "$INPUT_CONFIG" --db .hairspring/hairspring.db --bundle-dir .hairspring/bundles --format "$INPUT_FORMAT")
         "$BIN" "${args[@]}" > "$report"
         code=$?
+        # An errored run can leave an empty report; remove it so the SARIF upload (which checks the
+        # file exists) is skipped rather than failing on it.
+        [ -s "$report" ] || rm -f "$report"
         echo "exit-code=$code" >> "$GITHUB_OUTPUT"
         exit 0
 
     - name: Upload findings to code scanning
-      if: ${{ inputs.upload-sarif == 'true' && inputs.format == 'sarif' && always() }}
-      uses: github/codeql-action/upload-sarif@v3
+      if: ${{ inputs.upload-sarif == 'true' && inputs.format == 'sarif' && always() && hashFiles('hairspring.sarif') != '' }}
+      uses: github/codeql-action/upload-sarif@9418214df1f2c4b8128c770156c409013b07d6b9 # v3
       with:
         sarif_file: hairspring.sarif
         category: hairspring
 
     - name: Upload reproduction bundles and reports
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: hairspring-results
         path: |
@@ -163,11 +178,19 @@ runs:
         if-no-files-found: ignore
 
     - name: Fail if a property was violated
+      if: always()
       shell: bash
       env:
         CODE: ${{ steps.run.outputs.exit-code }}
       run: |
-        if [ "$CODE" != "0" ]; then
-          echo "hairspring exited with $CODE (1 = property violated, 2 = error). Replay with: hairspring replay <bundle>"
-          exit 1
-        fi
+        case "${CODE:-}" in
+          0) ;;
+          1)
+            echo "hairspring found a property violation (exit 1). Replay with: hairspring replay <bundle>"
+            exit 1
+            ;;
+          *)
+            echo "hairspring did not finish (exit ${CODE:-unknown}, an error rather than a violation, or an earlier step failed). See the log above."
+            exit 1
+            ;;
+        esac
