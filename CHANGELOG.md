@@ -129,8 +129,9 @@
   0.09 to 0.25 s), and it must be done by the role that owns the tables; a role that only reads and writes rows can
   still open a version 7 schema. An index of either name built beforehand is kept only if it has the same definition
   (and, on PostgreSQL, is valid): otherwise the open is refused and asks for it to be dropped, which is also what to do
-  with the invalid index a failed `CREATE INDEX CONCURRENTLY` leaves. An older release refuses a version 7 database. There is no offline downgrade from 7
-  to 6 (reset the stored version by hand); the downgrade to version 2 drops the indexes. See "Failure list indexes" in
+  with the invalid index a failed `CREATE INDEX CONCURRENTLY` leaves. An older release refuses a version 7
+  database. There is no offline downgrade from 7 to 6 (reset the stored version by hand); the downgrade to version 2
+  drops the indexes. See "Failure list indexes" in
   docs/architecture.md.
 - The `property` filter of `GET /api/failures` now looks at the newest 1000 runs only (or at the run named by `run`,
   however old), so its cost no longer grows with the stored history, only with the violations those runs hold (up to
@@ -141,9 +142,8 @@
   Measured on a generated store of 100000 runs and 300000 failures (release builds, median of warm requests): the
   failures list without a filter took 100 to 109 ms on SQLite and 15 to 17 ms on PostgreSQL and now takes under 1 ms;
   `property=` took 0.8 to 1.9 s on SQLite for any prefix and 44 ms to 5.4 s on PostgreSQL and now takes 2 to 49 ms and
-  10 to 225 ms; `status=confirmed` took 0.36 s and 55 ms and now takes 2 ms and 13 to 14 ms. Every other list, filter and cursor answers
-  byte for byte as before on that store.
-
+  10 to 225 ms; `status=confirmed` took 0.36 s and 55 ms and now takes 2 ms and 13 to 14 ms. Every other list,
+  filter and cursor answers byte for byte as before on that store.
 - The server keeps in memory the figures of a finished run that cost a pass over its stored rows: who reported its
   trials, its property statistics, its sweep counts, its trial count and its coverage series. An entry is served only
   while the run row read for the request is unchanged since the entry was worked out; trial rows cannot be added to a

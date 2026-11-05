@@ -198,6 +198,36 @@ fn an_index_of_the_same_name_but_another_definition_is_refused() {
             "run_properties_violation",
             "CREATE UNIQUE INDEX run_properties_violation ON run_properties(run_id, idx) WHERE status = 'violation'",
         ),
+        // Another table: the name belongs to this index, but it is not on the table the migration indexes.
+        ("failures_created", "CREATE INDEX failures_created ON runs(created_at)"),
+        (
+            "run_properties_violation",
+            "CREATE INDEX run_properties_violation ON run_catalog(run_id, idx) WHERE must_hit = 1",
+        ),
+        // Collation and direction change what the index orders by.
+        ("failures_created", "CREATE INDEX failures_created ON failures(created_at COLLATE NOCASE)"),
+        ("failures_created", "CREATE INDEX failures_created ON failures(created_at DESC)"),
+        (
+            "run_properties_violation",
+            "CREATE INDEX run_properties_violation ON run_properties(run_id COLLATE NOCASE, idx) WHERE status = 'violation'",
+        ),
+        (
+            "run_properties_violation",
+            "CREATE INDEX run_properties_violation ON run_properties(run_id, idx DESC) WHERE status = 'violation'",
+        ),
+        // The predicate's literal is compared exactly: case and spaces inside it count.
+        (
+            "run_properties_violation",
+            "CREATE INDEX run_properties_violation ON run_properties(run_id, idx) WHERE status='VIOLATION'",
+        ),
+        (
+            "run_properties_violation",
+            "CREATE INDEX run_properties_violation ON run_properties(run_id, idx) WHERE status = 'vio lation'",
+        ),
+        (
+            "run_properties_violation",
+            "CREATE INDEX run_properties_violation ON run_properties(run_id, idx) WHERE status = 'violation' AND idx >= 0",
+        ),
     ];
     for (index, sql) in cases {
         let path = temp_db("wrong");
@@ -249,6 +279,35 @@ fn an_index_of_the_same_name_but_another_definition_is_refused() {
         CURRENT_VERSION
     );
     cleanup(&path);
+}
+
+/// The same index in other spellings is the same index: keywords in any case, quoted names, a comment between the
+/// column list and `WHERE`.
+#[test]
+fn equivalent_spellings_of_the_version_seven_indexes_are_accepted() {
+    let spellings = [
+        "create index run_properties_violation on run_properties ( run_id , idx ) where status='violation'",
+        "CREATE INDEX run_properties_violation ON run_properties(run_id, idx) WHERE \"status\" = 'violation'",
+        "CREATE INDEX \"run_properties_violation\" ON \"run_properties\"(\"run_id\", [idx]) WHERE `status` = 'violation'",
+        "CREATE INDEX run_properties_violation ON run_properties(run_id, idx) /* the violations */ WHERE status = 'violation'",
+        "CREATE INDEX run_properties_violation ON run_properties(run_id, idx) -- the violations\n WHERE status = 'violation'",
+        "CREATE INDEX run_properties_violation ON run_properties(run_id, idx COLLATE BINARY ASC) WHERE status = 'violation'",
+    ];
+    for sql in spellings {
+        let path = temp_db("spelled-more");
+        drop(SqliteStore::open(&path).unwrap());
+        make_v6(&path);
+        Connection::open(&path).unwrap().execute_batch(sql).unwrap();
+        SqliteStore::open(&path)
+            .map(drop)
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+        assert_eq!(
+            user_version(&Connection::open(&path).unwrap()),
+            CURRENT_VERSION,
+            "{sql}"
+        );
+        cleanup(&path);
+    }
 }
 
 #[test]

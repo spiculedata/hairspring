@@ -5,6 +5,7 @@
 //! processes opening the same old file at once migrate it exactly once and none of them sees a half-migrated file.
 use crate::downgrade::V7_INDEXES;
 use crate::run_mode::{mode_of_config, SEARCH_MODE, SWEEP_MODE};
+use crate::sqlite_index_check::sqlite_index_fits;
 use crate::types::{Result, StoreError};
 use rusqlite::Connection;
 
@@ -247,48 +248,6 @@ fn verify_v7_definitions(conn: &Connection) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn sqlite_index_fits(
-    conn: &Connection,
-    index: &str,
-    table: &str,
-    columns: &[&str],
-    predicate: Option<&str>,
-) -> Result<bool> {
-    let Some((on, sql)) = conn
-        .query_row(
-            "SELECT tbl_name, sql FROM sqlite_master WHERE type='index' AND name=?",
-            [index],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
-        )
-        .ok()
-    else {
-        return Ok(false);
-    };
-    let unique: i64 = conn.query_row(
-        "SELECT \"unique\" FROM pragma_index_list(?1) WHERE name=?2",
-        [table, index],
-        |r| r.get(0),
-    )?;
-    let mut stmt = conn.prepare("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")?;
-    let names = stmt
-        .query_map([index], |r| r.get::<_, Option<String>>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    let squeezed: String = sql
-        .unwrap_or_default()
-        .to_lowercase()
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
-    let where_clause = squeezed.split_once(")where").map(|(_, w)| w.to_owned());
-    Ok(on == table
-        && unique == 0
-        && names
-            .iter()
-            .map(|n| n.as_deref())
-            .eq(columns.iter().map(|c| Some(*c)))
-        && where_clause.as_deref() == predicate)
 }
 
 /// Versions 5 and 6 have the same tables and indexes (version 6 only rewrites data); version 7 adds indexes to them.
