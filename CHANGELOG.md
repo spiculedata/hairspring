@@ -49,8 +49,11 @@
 
 - The per-client rate limit now also applies to valid tokens from an address that has used up its budget. Once
   requests without a valid token (no token, or a wrong one) from a client address (an IPv4 address or an IPv6 /64)
-  go past `--rate-limit` in a minute, a request with a valid token from that address is answered `429` too, until the
-  minute is over. A legitimate caller sharing an address with such traffic can be refused for up to a minute. A valid
+  go past `--rate-limit` in a minute, a request with a valid token from that address is answered `429` too. The
+  window is fixed and restarts on the next request, so valid tokens from that address are refused while such traffic
+  continues, and for up to a minute after it stops. This is the trade-off of limiting guessing per address, and it
+  applies to every caller behind a shared address, such as a proxy; operators who need otherwise should put a
+  limiter in front of the server. A valid
   token from any other address works as before, and its requests, including its `/api/health` requests, do not count
   against the address's allowance. `/api/health` without a token is still never limited; with a valid token from such
   an address it still answers 200, without the organisation name.

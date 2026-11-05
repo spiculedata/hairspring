@@ -64,9 +64,12 @@ agents.
   `/api/health`) and `/mcp` without a valid token (no token, or a wrong one) count against the client address's
   anonymous bucket. Once that bucket is over the limit, a request with a valid token from the same address (the same
   IPv4 address or IPv6 /64) is also answered `429` with `Retry-After: 60`, without spending the token's own allowance,
-  until the bucket's one-minute window ends. Without this, the right token would be told apart from wrong guesses by
-  its `200`, and the limit would not slow guessing. The cost is that a legitimate caller sharing an address with
-  someone guessing (behind the same NAT or proxy, or in the same /64) can be refused for up to a minute. A valid
+  while that bucket stays over the limit. Without this, the right token would be told apart from wrong guesses by
+  its `200`, and the limit would not slow guessing. The window is fixed and restarts with the first request after
+  it ends, so valid tokens from that address are refused while such traffic continues, and for up to a minute after
+  it stops. This is the trade-off of limiting guessing per address: a legitimate caller sharing an address (behind
+  the same NAT or proxy, or in the same /64) is affected by what else arrives from it. Operators who need a
+  different trade-off should put a rate limiter in front of the server. A valid
   token from a quiet address is unaffected, and its requests never spend the address's anonymous budget. The address
   is the connecting one; forwarding headers are ignored. `/api/health` follows the same rule for a request that
   carries an `Authorization` header: a valid token's health requests count against that token's own bucket, anything
@@ -79,8 +82,8 @@ agents.
   deliberately not trusted (a client could set them to mint fresh buckets at will), so every anonymous caller
   arriving through the proxy is counted under the proxy's address. Authenticated callers are keyed by token, but
   once the anonymous callers behind the proxy use up that shared bucket, every valid token arriving through the proxy
-  is refused for the rest of the minute too (see the previous point). If you need per-client limits for anonymous
-  traffic, enforce them at the proxy.
+  is refused while that traffic continues, and for up to a minute after it stops (see the previous point). If you
+  need per-client limits for anonymous traffic, or a different trade-off, enforce them at the proxy.
 
 ## Hardening checklist for a deployment
 

@@ -1,5 +1,5 @@
 //! The per-client rate limit, over real HTTP: a valid token from an address that has used up its anonymous budget
-//! is refused until that budget's minute is over, while legitimate use from a quiet address is unaffected. Health
+//! is refused while that budget stays over the limit, while legitimate use from a quiet address is unaffected. Health
 //! requests that carry a token are counted by the same rule, so one token cannot lock others out through health.
 use hairspring_engine::config::Config;
 use hairspring_engine::demos::default_registry;

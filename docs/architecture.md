@@ -120,9 +120,11 @@ Requests to `/api/` (except `/api/health`) and `/mcp` are limited per caller. `h
 `Retry-After: 60` past it. A request with a valid token counts against that token's own allowance. Every other
 request (no token, or a wrong one) counts against one allowance per client address: the IPv4 address, or the /64 for
 IPv6, taken from the connection and never from forwarding headers. While an address's anonymous allowance is used
-up, a valid token from that address is refused as well, without counting against either allowance, until the window
-ends; otherwise the right token would be told apart from wrong guesses by its `200`. A caller sharing an address with
-someone guessing can therefore be refused for up to a minute. `/api/health` is never refused, but a health request
+up, a valid token from that address is refused as well, without counting against either allowance; otherwise the
+right token would be told apart from wrong guesses by its `200`. The window is fixed and restarts with the next
+request after it ends, so valid tokens from that address are refused while such traffic continues, and for up to a
+minute after it stops. That is the trade-off of limiting guessing per address; operators who need otherwise should put
+a limiter in front of the server. `/api/health` is never refused, but a health request
 that carries an `Authorization` header is counted by the same rule, and the organisation name is added only when the
 request would have been let through and the token is valid; otherwise the answer is still `200` without the name.
 Health without the header is never counted. The windows are kept in server memory in a bounded table (see
