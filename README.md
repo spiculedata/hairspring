@@ -179,7 +179,7 @@ to 0, while the CLI refuses such a sweep. Without a mode a run is a search, as b
 
 `hairspring serve` serves the web UI at `/` on the same address as the API. With no tokens configured it accepts only
 loopback connections and opens straight away. With tokens configured (see [Run it for a team](#run-it-for-a-team)) it
-asks for one and keeps it for that browser tab only. A `read` token can look at everything; starting a run needs `run`.
+asks for one and keeps it for that browser tab only. A `read` token can look at everything except worker ids; starting a run needs `run`.
 
 <p align="center"><picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/ui/overview-dark.png">
@@ -213,8 +213,9 @@ A quick tour (the [quickstart](docs/quickstart.md#tour-of-the-web-ui) has the sa
   <img src="docs/images/ui/run-properties-light.png" alt="A run page: pubsub-buggy, Failed, with a panel listing what the run shows and does not show, four tabs, an empty property table and the coverage section saying every count stayed at zero" width="760">
 </picture></p>
 
-*A run page (light and dark themes both exist; GitHub shows the one that matches your setting). Simulation targets declare no named properties, so the property table is empty and the
-coverage chart says so; a `process` target with the guest SDK fills both.*
+*A run page (light and dark themes both exist; GitHub shows the one that matches your setting). Simulation
+targets declare no named properties, so the property table is empty and the coverage chart says so; a `process`
+target with the guest SDK fills both.*
 
 <p align="center"><img src="docs/images/ui/failures-list-light.png" alt="The Failures page filtered to the Candidate state, listing three failures with target, state, message, run, original and shortest step counts" width="760"></p>
 

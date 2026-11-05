@@ -155,6 +155,10 @@ Failures, Targets and Workers. On a phone it becomes a row of links under the to
 *The same page in the dark theme. The Colour theme switch (System, Light, Dark) is at the top right; the choice is
 saved in your browser only.*
 
+![The top bar in the dark theme: the Hairspring name and organisation, the search box, and the System, Light and Dark buttons with Dark pressed.](images/ui/theme-switch-dark.png)
+
+*The top bar close up, dark theme, with Dark chosen.*
+
 ### 2. Start a run, or a sweep
 
 ![The Runs page: a form with a Target menu set to pubsub-atomic, Run type set to "Measure how often (sweep)", a Trials box holding 5, the budget the server will enforce, then the filter bar and the list of runs.](images/ui/runs-start-form-light.png)
@@ -174,10 +178,10 @@ and opens the run's page once the server accepts it.
 *Filters are kept in the address (here `/runs?state=failed`), so a filtered list can be bookmarked. Runs: state, run
 type and target. Failures: run id, property id prefix and state.*
 
-The list refreshes by itself every few seconds, and **Load more** adds older rows. A sweep started from the form appears
+The list refreshes by itself every few seconds, and **Load more** adds older rows (Load more and the 100,000-row limit were checked in the web tests, not captured here). A sweep started from the form appears
 in the list, and its page opens as soon as the server accepts it:
 
-![The Runs page after a sweep started from the form: the newest run is a lock-lease run that failed, above a finished pubsub-atomic sweep of 10 trials and three failed searches.](images/ui/runs-list-light.png)
+![The Runs page after a sweep started from the form: the newest run is a lock-lease run that failed, above a finished pubsub-atomic sweep of 10 trials and, below it, two failed searches and a failed sweep of pubsub-buggy.](images/ui/runs-list-light.png)
 
 *The list after a sweep was started from the form. Simulation data.*
 

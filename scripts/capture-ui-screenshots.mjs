@@ -21,7 +21,8 @@
 //        [--bin target/debug/hairspring] [--out docs/images/ui] [--playwright-dir /tmp/hs-shots/pw]
 //
 //   --port        loopback port for the scratch server (required)
-//   --scratch     scratch directory (required; created if missing; must be empty or hold only a previous run)
+//   --scratch     scratch directory (required; created if missing; must be empty (a `pw` or `shots` folder is fine)
+//                 or hold a previous run of this script, recognised by its `pids` or `tokens` file; anything else is refused)
 //   --bin         the hairspring binary (default: $HAIRSPRING_BIN, else target/debug/hairspring)
 //   --out         where the PNG files go (default <scratch>/shots)
 //   --playwright-dir  a directory where `npm i playwright` was run (default <scratch>/pw)
@@ -82,6 +83,13 @@ try {
   fail(`the playwright package was not found in ${pwDir}; run \`npm i playwright\` there`);
 }
 
+// Only a directory this script made before (it holds `pids` or `tokens`), or an empty one, may be reused: the
+// project directory inside it is deleted and rebuilt.
+if (fs.existsSync(scratch)) {
+  const entries = fs.readdirSync(scratch).filter((n) => n !== 'pw' && n !== 'shots');
+  const isMine = entries.includes('pids') || entries.includes('tokens');
+  if (entries.length > 0 && !isMine) fail(`${scratch} is not empty and was not made by this script (no pids or tokens file); use a new directory`);
+}
 fs.mkdirSync(scratch, { recursive: true });
 fs.rmSync(projectDir, { recursive: true, force: true });
 fs.rmSync(path.join(scratch, 'pids'), { force: true });
@@ -231,7 +239,7 @@ async function capturePages(browser, theme, ids) {
 
   await go(page, `/failures/${ids.failure}`, 'Candidate');
   await page.getByRole('button', { name: 'Confirmation', exact: true }).click();
-  await shot(page, 'failure-term-popover-light', { screenshot: { clip: { x: 200, y: 60, width: 1080, height: 560 } } });
+  await shot(page, 'failure-term-popover-light', { keepFocus: true, screenshot: { clip: { x: 200, y: 60, width: 1080, height: 560 } } });
   await go(page, `/failures/${ids.failure}`, 'Candidate');
   await page.getByRole('button', { name: 'Replay', exact: true }).click();
   await page.getByText(/Failed again on replay|Did not fail on replay/).first().waitFor({ timeout: MAX_WAIT_MS });
