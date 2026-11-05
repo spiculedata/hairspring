@@ -1,0 +1,136 @@
+# Versions, upgrades and uninstalling
+
+Hairspring is experimental and changes quickly. This page says how to tell which build you have, what differs between
+the pre-release binary and a build of `main`, what happens to your results database when you upgrade, and how to remove
+Hairspring again. For running a server see [deploy.md](deploy.md).
+
+Everything on this page about commands was checked by running them on macOS (Apple silicon), with the v0.1-RC1 macOS
+binary and a build of `main`. Anything that needs Linux x86-64 is marked "not run here".
+
+## Which build do I have?
+
+```console
+$ hairspring --version
+hairspring 0.1.0 (0ba59f0 2026-11-05)
+```
+
+Since the version-string change, `hairspring --version` (or `-V`) prints the crate version, then the commit the binary was
+built from and that commit's date. The v0.1-RC1 pre-release binary was built before that change and prints only
+`hairspring 0.1.0`, so a bare `hairspring 0.1.0` with no commit means the pre-release (or another build older than the
+change); it also means you cannot tell two such builds apart from the version alone. The release notes for v0.1-RC1 name
+its commit: `f819c1a` (25 October 2026). A build from a source archive, or any build that had no git history, prints
+`hairspring 0.1.0 (unknown)`. When you report a problem, quote the whole line (see
+[Getting started and getting help](../README.md#getting-started-and-getting-help)).
+
+## Pre-release binary or a build of `main`?
+
+The documentation in this repository describes `main`. The pre-release binary (v0.1-RC1, the one
+`bash scripts/install.sh --version v0.1-RC1` installs) is older. Comparing `--help` of the two on the command line
+(each subcommand's options, the v0.1-RC1 macOS binary against a build of `main`) shows these differences, and no others on
+the command line:
+
+| Only in builds newer than v0.1-RC1 | What the pre-release says |
+|---|---|
+| `hairspring gc` (retention) | `error: unrecognized subcommand 'gc'` |
+| `hairspring serve --trusted-proxy` | `error: unexpected argument '--trusted-proxy' found` |
+| `hairspring serve --organisation` | `error: unexpected argument '--organisation' found` |
+| `hairspring serve --max-connections` and `--max-replays` | not in `serve --help`; not accepted |
+| `hairspring test --confirm` (with `--sweep`) | not in `test --help`; not accepted |
+| the commit and date in `hairspring --version` | prints `hairspring 0.1.0` only |
+
+Changes inside the server and the web UI are not in this table: only the command line was compared. If a page of the
+documentation describes something your binary does not do, check `hairspring --help` and `hairspring <command> --help`
+first, and if it is in the table above, build from source to use it:
+
+```bash
+git clone https://github.com/spiculedata/hairspring && cd hairspring
+make ui                                # needs Node.js and npm; skip it for a server without the web UI
+bash scripts/install.sh --with-ui      # builds with cargo and installs to ~/.local/bin
+```
+
+You need Rust and a C compiler and linker for that (see [quickstart.md](quickstart.md#what-you-need)). A pre-release
+binary is checked against the release's `SHA256SUMS` before it is installed, which catches a damaged download but does
+not prove who built it; to pin a hash you got another way, pass `--sha256` to the installer.
+
+## The schema-version error
+
+Hairspring stores results in a database (SQLite by default, `.hairspring/hairspring.db`, or PostgreSQL). The database
+records a schema version. When a newer build opens a database made by an older one it **migrates it in place, silently**.
+An older build then refuses the database:
+
+```console
+$ hairspring results
+error: storage error: database schema version 6 is not supported (expected 5)
+```
+
+(exit status 2). That is what the v0.1-RC1 binary printed when run on a copy of a database that a build of `main` had
+created. The number after "version" is the database's; the number after "expected" is the highest your binary knows. The
+database is not damaged: the binary you are running is older than the one that last opened it. Schema 6 was the current
+schema on `main` when this page was written; a newer schema can be added later, and the table of what each version adds is
+in [architecture.md](architecture.md).
+
+What to do:
+
+- **Keep using the newer build.** This is the usual answer: install or build the newer one wherever you open that
+  database (the same machine, and every server and worker that uses it).
+- **Or point the older build at a different database** with `--db`, for example `hairspring --db other.db results`. That
+  starts a new, empty set of results; it does not read the old ones.
+- **Or restore a backup** taken before the newer build ran (below).
+
+The migration is one way. There is no downgrade command in the `hairspring` CLI. [architecture.md](architecture.md)
+describes an offline downgrade routine for developers; it drops stored data for the newer versions, so do not use it on
+results you want to keep, and restore a backup instead.
+
+## Upgrade safely
+
+1. **Take a backup first.** For SQLite:
+
+   ```bash
+   sqlite3 .hairspring/hairspring.db ".backup 'hairspring-backup.db'"
+   ```
+
+   This was run and the copy read back with `hairspring --db hairspring-backup.db results`. For PostgreSQL use
+   `pg_dump "$HAIRSPRING_DATABASE_URL" > hairspring-backup.sql` (not run here). Copy `.hairspring/bundles` as well if
+   you keep bundle files there, and keep your `hairspring.toml` and tokens file.
+2. **Stop every server and worker** that uses the database. A process left running on the old build can keep writing in
+   the old way after the database has moved on (architecture.md gives an example for sweeps).
+3. **Upgrade the server and all workers together**, on every host, to the same build. The documentation does not describe a
+   mixed-build setup, and architecture.md says to stop every older server and worker before upgrading.
+4. Start the server, then the workers. Check `hairspring --version` on each, and open the Workers page.
+5. To go back, stop everything, put the old binary back, and **restore the backup** over the database. Anything stored
+   after the backup is lost.
+
+If you only want to try a newer build without touching your results, run it with a different database (`--db`) in a
+different directory.
+
+## Uninstall
+
+What Hairspring writes outside a project directory, from `scripts/install.sh` and `scripts/install-hermit.sh`:
+
+| What | Where (the defaults) | Remove with |
+|---|---|---|
+| The `hairspring` command | `~/.local/bin/hairspring` (`--prefix DIR` puts it in `DIR/bin`) | `rm ~/.local/bin/hairspring` |
+| Hermit, if you installed it | `~/.local/share/hairspring/hermit` (`--prefix` changes it; the folder holds a provenance file written by the installer) | `rm -rf ~/.local/share/hairspring/hermit` |
+| Results and bundles | `.hairspring/` in each directory you ran `hairspring` in | `rm -rf .hairspring` in each |
+| Your configuration | `hairspring.toml` where you ran `hairspring init` | delete it if you no longer want it |
+
+The installers never use `sudo` and, by their own description, write only below their prefix and into a scratch
+directory they remove. Building from source also fills cargo's own caches (`~/.cargo`), which are not specific to
+Hairspring. Hermit's installer can also install a Rust
+toolchain for you if you pass `--install-toolchain`; remove it with `rustup toolchain uninstall nightly-2026-07-12`
+if you no longer need it (not run here). Delete the checkout you built from if you do not need it. If you added the
+folder holding `hairspring` to your `PATH` or exported `HAIRSPRING_HERMIT` in a shell profile, remove those lines.
+
+A server set up as in [deploy.md](deploy.md): stop and disable the systemd units and remove them
+(`systemctl disable --now hairspring`, `rm /etc/systemd/system/hairspring.service`, `systemctl daemon-reload`; not run
+here), and delete the database, tokens file and configuration you created. For Docker Compose, `docker compose down`
+stops the stack, and `docker compose down -v` also deletes the PostgreSQL volume with all results (not run here).
+
+### The SDKs
+
+The SDKs live in the repository; nothing is installed system-wide unless you installed one yourself.
+
+- **Python:** `pip uninstall hairspring` if you ran `pip install ./sdks/python`. That install also left ignored `build/`
+  and `*.egg-info` folders under `sdks/python`; delete them if you want a clean checkout.
+- **Rust, Go, Java, .NET, C:** remove the dependency you added (the path dependency in `Cargo.toml`, the `go.mod`
+  requirement, the jar on your class path, the project reference, the built library) and rebuild your program.

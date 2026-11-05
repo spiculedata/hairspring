@@ -3,6 +3,9 @@
 Hairspring is experimental software. It runs code you point it at and listens on a network port, so please read
 this before deploying it.
 
+If you run a server, [docs/deploy.md](docs/deploy.md) is the step-by-step guide (tokens, workers, PostgreSQL, systemd,
+backups, upgrades); this page is the threat model, the limits and the reverse-proxy and hardening details.
+
 ## Reporting a vulnerability
 
 Please report security issues **privately** using GitHub's "Report a vulnerability" (private security advisory)
