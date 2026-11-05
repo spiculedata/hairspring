@@ -1,0 +1,54 @@
+# Weekly, read-only report on what changed upstream of the pinned Hermit build (scripts/hermit-upstream-report.sh).
+#
+# This is a separate workflow from ci.yml on purpose: it does not run on pull requests or pushes, so it can never fail
+# a repository check. It does not write to the repository, push, or open issues or pull requests. Read the result in
+# the run's job summary, or download the `hermit-upstream-report` artifact. The job goes red only if the script fails.
+# Scheduled workflows run from the default branch only; use "Run workflow" (workflow_dispatch) to run it on demand.
+name: Hermit upstream report
+
+on:
+  schedule:
+    - cron: "23 6 * * 1" # Mondays 06:23 UTC, off the hour to avoid the scheduler's busiest minutes
+  workflow_dispatch:
+
+# issues: read is for the script's optional `gh` search of open upstream issues; nothing here writes.
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: hermit-upstream-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build the upstream report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/hermit-upstream-report.sh > hermit-upstream-report.md
+
+      - name: Write the report to the job summary
+        run: |
+          # A job summary is limited to 1 MiB (1048576 bytes); stay well under it and say so if the report is cut.
+          limit=900000
+          size="$(wc -c < hermit-upstream-report.md)"
+          if [ "$size" -le "$limit" ]; then
+            cat hermit-upstream-report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            head -c "$limit" hermit-upstream-report.md >> "$GITHUB_STEP_SUMMARY"
+            printf '\n\n---\nReport truncated to %s of %s bytes for the job summary. The full report is in the hermit-upstream-report artifact.\n' "$limit" "$size" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hermit-upstream-report
+          path: hermit-upstream-report.md
+          if-no-files-found: error
+          retention-days: 30
