@@ -18,6 +18,17 @@
   A list can be read down to position 100000; a page that would continue past that has no `next_cursor`.
   Both stores give the same rows in the same order. See "Paging and filters on the runs and failures lists" in
   `docs/architecture.md`.
+- `GET /api/search?q=...` finds ids and names: run ids, failure ids, property ids and target names by their start, and
+  seeds and schedule fingerprints exactly. It returns hits in groups of at most 5, with `more` naming the groups that
+  have others, and never returns guest output, bundles or failure messages. Runs and failures are newest first, targets
+  in name order, properties by newest run and then by id within a run, seeds as the runs started with the seed and then
+  the trials that ran it, and schedules by newest run and then by trial. The text is 1 to 64 characters from ASCII
+  letters, digits and `_ - . : /`; anything else is a 400 that does not repeat it. It needs a valid token (any role) and
+  counts against the rate limit. It looks in the 1000 newest runs (10 for property ids, which are not looked for when
+  the text is a whole run or failure id, digits or a fingerprint), plus a direct lookup of a whole run or failure id of
+  any age, so an empty answer means "none among the recent runs"; `scope` in the answer says how far, including how
+  many runs' property catalogues were read. Both stores give the same hits. No schema change. See "Search" in
+  `docs/architecture.md` for the measured worst-case cost.
 - A Hermit bundle records hashes of the target's command line and working directory (`target.command.sha256`,
   `target.cwd.sha256`; no paths or arguments are stored). Replay warns when either differs, still runs from the current
   configuration, and a miss then exits 3 (inconclusive). Older bundles replay as before and say the fields were not

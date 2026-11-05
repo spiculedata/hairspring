@@ -243,6 +243,10 @@ impl Store for SqliteStore {
         crate::sqlite_listing::list_runs(&self.conn(), filter, offset, limit)
     }
 
+    fn search(&self, q: &crate::SearchQuery) -> Result<crate::SearchHits> {
+        crate::sqlite_search::run(&self.conn(), q)
+    }
+
     fn mark_running(&self, id: &str, now: i64) -> Result<()> {
         let n = self.conn().execute("UPDATE runs SET state=?, started_at=COALESCE(started_at,?) WHERE id=? AND state IN ('queued','running')", params![RunState::Running.as_str(), now, id])?;
         expect_changed(n, "run", id)

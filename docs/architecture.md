@@ -430,6 +430,72 @@ one the list leaves `finding` out, as before.
 
 There is no `mine` filter: a run does not record who started it.
 
+## Search
+
+`GET /api/search?q=...` (any valid token, rate limited like every `/api/` route except health) answers "where is this
+id?" and nothing larger. The text, the groups and the answer are described in the quickstart; this section is about what
+a request costs, because a search box sends a request for every pause in typing.
+
+The service checks the text (1 to 64 characters from ASCII letters, digits and `_ - . : /`) before any query runs, and
+decides which probes apply: a seed probe only for digits that fit in 53 bits, a fingerprint probe only for 16 to 64
+lower case hex digits, a run-id probe only for text that can start `run_`, a failure-id probe only for text that can
+start `fail_`, and a property probe unless the text is plainly another kind of id (a whole run id or failure id,
+only digits, or 16 to 64 lower case hex digits). Both stores then run the same statements, built from fixed text
+(`crates/hairspring-store/src/search.rs`).
+The text is a bound parameter. A prefix is compared with `substr(column, 1, n) = ?`, never `LIKE`, so `%` and `_` mean
+themselves, and the comparison is by characters on SQLite and on PostgreSQL alike. The group limit is 5 and the store
+is asked for 6, to learn whether `more` is true.
+
+No statement reads a table end to end. Each is an equality on a key, or a look at the **recent window**: the newest 1000
+runs, read backwards through `runs_created` (`created_at`, then insertion order), joined run by run to the rows of those
+runs through an index that starts with the run id. The join order is fixed: `CROSS JOIN` on SQLite, and
+`CROSS JOIN LATERAL (... OFFSET 0)` on PostgreSQL, so the planner cannot choose to read all of `failures` or `trials`
+and hash it against the window (it did, on a million failures, before the statements were written this way).
+
+| Group | Looks for | Cost per request |
+|---|---|---|
+| runs | The whole id: one primary-key lookup, any age. The start of an id: the 1000-run window, filtered by `substr`. | 1 key lookup + at most 1000 rows from `runs_created`. |
+| failures | The whole id: one primary-key lookup, any age. The start of an id: the failures of the window's runs through `failures_run`. | 1 key lookup + 1000 index probes (and the failures each run holds). |
+| targets | The start of a name, among the targets in the server's configuration. | In memory; no store read. |
+| properties | The start of an id in the catalogues of the newest 10 runs, each run read on its own: one range of the `(run_id, prop_id)` index of `run_catalog` (the `UNIQUE` constraint), from the text up to the text with its last character raised by one, compared bytewise, with a `LIMIT` of 6 per run. Not run for a whole run or failure id, digits or a fingerprint. | 10 rows from `runs_created` + 10 statements. SQLite: one index seek per run, at most 6 rows each. PostgreSQL: at most the run's own index entries (16384) per run, so at most 163840 in all, and a top-6 sort of the matches. |
+| seeds | The whole seed as a run's seed (window) and as a trial's seed (`trials_seed`). | 1000 rows from `runs_created` + 1000 index probes. |
+| schedules | The whole fingerprint (`trials_schedule`). | 1000 index probes. |
+
+So the number of rows a request can touch is set by the window sizes and the 16384-row catalogue limit, not by how
+much has been stored. No statement needed a new index, and the search changed no table.
+
+The property window is the small one because the program under test decides how many catalogue rows a run holds, up to
+16384. Within a run, property hits are in bytewise id order: on SQLite the index already sorts that way, so a run costs
+one seek; on PostgreSQL the comparisons and the order say `COLLATE "C"` so that both stores agree whatever the
+database's collation, and since the index follows the database collation PostgreSQL reads the run's index entries and
+keeps the first six. The other prefix probes pay for a `substr` over the rows they reach for the same reason: a text
+index that served a prefix on PostgreSQL would need a byte-order collation, which the existing indexes do not have. If
+the windows prove too small, a prefix index per column is the way to widen them; that is a schema change and is not
+part of this endpoint.
+
+Measured worst case, on a laptop (Apple M3 Max), release build, each figure the best and worst of 5 requests after one
+warm-up: 100000 runs, 3 million trials, and the newest 100 runs each holding 16384 catalogue rows (`prop.00000` to
+`prop.16383`). The store was asked for 6 hits per group, as the server asks. PostgreSQL 16.6 ran in a local container.
+
+| Text | SQLite before | SQLite now | PostgreSQL before | PostgreSQL now |
+|---|---|---|---|---|
+| `prop` (the start of every catalogue row) | 1675 to 1784 ms | 0.1 ms | 1830 to 2143 ms | 40 to 41 ms |
+| `prop.01234` (one row per run) | 147 to 170 ms | 0.1 ms | 332 to 340 ms | 22 to 24 ms |
+| `zzz` (matches nothing) | 148 to 172 ms | 0.1 ms | 316 to 324 ms | 20 to 22 ms |
+| a whole run id | 161 to 180 ms | 0.2 ms | 322 to 326 ms | 1.9 to 2.5 ms |
+| a seed (digits) | 148 to 155 ms | 0.6 to 0.7 ms | 330 to 334 ms | 3.2 to 4.3 ms |
+| a schedule fingerprint | 139 to 194 ms | 0.4 to 0.5 ms | 323 to 329 ms | 2.4 to 2.8 ms |
+
+"Before" is the first version of this endpoint, which read the newest 100 runs' catalogues in one statement and
+numbered every matching row (`ROW_NUMBER() OVER (PARTITION BY prop_id ...)`) to keep each id once; on SQLite that time
+was spent holding the store's one connection, so every other request and every worker write waited behind it. A test
+checks that the SQLite statement is a single index range with no temporary sort
+(`crates/hairspring-store/src/sqlite_search.rs`).
+
+The answer never contains guest output, kept output, bundle text or a failure message. A property id comes from the
+program under test, so it is cut to one line of at most 500 characters and sits under a `guest` object. An error names
+`q` and never repeats the text, including text that was not valid UTF-8 once unescaped.
+
 ## Bundles
 
 A bundle is a small text file: `seed`, `build`, `target`, `backend`, `param.*` and `path` (hex action ids or

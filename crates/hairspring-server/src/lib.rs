@@ -299,6 +299,7 @@ fn router(state: AppState) -> Router {
         )
         .route("/api/runs/{id}/strip", get(read_api::strip))
         .route("/api/runs/{id}/coverage", get(read_api::coverage))
+        .route("/api/search", get(api::search))
         .route("/api/failures", get(api::list_failures))
         .route("/api/failures/{id}", get(api::get_failure))
         .route("/api/failures/{id}/checks", get(read_api::failure_checks))

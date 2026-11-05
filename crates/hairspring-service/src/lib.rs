@@ -23,6 +23,7 @@ mod property_query;
 mod query;
 pub mod sanitize;
 mod scan;
+mod search;
 mod strip_query;
 mod sweep;
 mod tree_input;
@@ -45,6 +46,10 @@ pub use list_pages::{
 pub use query::{
     PropertyQuery, SeedQuery, StripQuery, TrialQuery, DEFAULT_PAGE, MAX_PAGE, MAX_PREFIX_BYTES,
     MAX_SEED_PAGE, MAX_STRIP_PAGE,
+};
+pub use search::{
+    PropertyGuest, PropertyHit, SearchResults, SearchScope, TargetHit, MAX_SEARCH_CHARS,
+    SEARCH_PER_GROUP,
 };
 pub use tree_input::{
     check_command_json, check_edge_ref, check_new_branch, check_new_node, TreeFieldError,

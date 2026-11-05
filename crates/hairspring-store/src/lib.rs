@@ -29,11 +29,14 @@ mod pg_run_end;
 #[cfg(feature = "postgres")]
 mod pg_schema;
 #[cfg(feature = "postgres")]
+mod pg_search;
+#[cfg(feature = "postgres")]
 mod pg_tree_query;
 #[cfg(feature = "postgres")]
 mod pg_trials;
 mod reporters;
 mod run_mode;
+mod search;
 mod sqlite;
 mod sqlite_checks;
 mod sqlite_downgrade;
@@ -43,6 +46,7 @@ mod sqlite_lineage;
 mod sqlite_listing;
 mod sqlite_run_end;
 mod sqlite_schema;
+mod sqlite_search;
 mod sqlite_tree_query;
 mod sqlite_trials;
 mod sqlite_tx;
@@ -58,6 +62,10 @@ pub use listing::{FailureFilter, RunFilter};
 pub use pg::PgStore;
 #[cfg(feature = "postgres")]
 pub use pg_downgrade::downgrade_postgres;
+pub use search::{
+    FailureHit, PropertyHit, RunHit, ScheduleHit, SearchHits, SearchQuery, SeedHit,
+    SEARCH_PROPERTY_RUNS, SEARCH_RECENT_RUNS,
+};
 pub use sqlite::{SqliteStore, BUSY_TIMEOUT};
 pub use sqlite_downgrade::downgrade_sqlite;
 pub use trials::*;
@@ -163,6 +171,10 @@ pub trait Store: Send + Sync {
         offset: u64,
         limit: u32,
     ) -> Result<Vec<FailureRecord>>;
+    /// Ids, seeds and schedule fingerprints that match `q`, by exact value or id prefix, newest first and at most
+    /// `q.limit` per group. It reads the recent window of runs and a primary key, never a table end to end; see
+    /// [`SearchQuery`]. Both backends give the same hits in the same order.
+    fn search(&self, q: &SearchQuery) -> Result<SearchHits>;
     fn put_blob(&self, data: &[u8]) -> Result<String>;
     fn get_blob(&self, hash: &str) -> Result<Option<Vec<u8>>>;
 

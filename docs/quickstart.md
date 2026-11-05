@@ -329,6 +329,53 @@ from for 24 hours is removed when the table is full. A trimmed example:
   endpoints. The reply never contains a worker secret or its digest, a job payload, an error text or guest output.
 - With `Accept: application/x-ndjson` each worker is one line and `queue` is on the closing control line under `page`.
 
+## Find something by its id: `GET /api/search?q=...`
+
+`GET /api/search?q=run_8` looks for ids and names that start with, or equal, the text you give. It needs a valid token
+(any role), is counted by the rate limit like the other read endpoints, and returns grouped hits:
+
+```json
+{
+  "runs": [{ "id": "run_8f3a9c0d11b2e4a7", "target": "lock-lease", "state": "failed" }],
+  "failures": [],
+  "targets": [],
+  "properties": [],
+  "seeds": [],
+  "schedules": [],
+  "more": [],
+  "scope": { "per_group": 5, "recent_runs": 1000, "property_runs": 10 }
+}
+```
+
+- `q` is 1 to 64 characters from ASCII letters, digits and `_ - . : /`. Anything else, a missing `q` and an empty one
+  are a 400 (`{"error": "`q` is not valid"}`) that never repeats what was sent. `%` and `_` are ordinary characters,
+  not wildcards, and matching is case-sensitive.
+- What is searched: run ids and failure ids (a whole id or its start), target names (the start of a name), property
+  ids (the start of an id), seeds (digits, the whole seed) and schedule fingerprints (16 to 64 lower case hex digits,
+  the whole fingerprint). It matches ids and names only. It never reads guest output, kept output, bundles or failure
+  messages, and it returns none of them.
+- Each group has at most 5 hits. `more` lists the groups that have further hits, so a search box can say "more"
+  instead of pretending it showed everything. The order differs by group:
+  - `runs` and `failures`: newest first. A whole id of a run or failure older than the window comes after the others.
+  - `targets`: in name order.
+  - `properties`: each id once, with the newest run whose catalogue holds it; newest run first, then in id order
+    (bytewise, so upper case before lower case) within a run. The id is untrusted text from the program under test,
+    so it sits under a `guest` object, cut to one line.
+  - `seeds`: first the runs started with that seed (`trial` is null), newest first, then the trials that ran it,
+    newest run first and then by trial number.
+  - `schedules`: newest run first, then by trial number.
+- It looks at recent work, and `scope` says how far: the start of a run id, a failure id, a seed or a schedule
+  fingerprint is looked for in the 1000 newest runs, and a property id in the 10 newest. `scope.property_runs` is the
+  number of runs whose catalogues this search read: 10, or fewer when fewer runs are stored, and 0 when the text is a
+  whole run id, a whole failure id, only digits, or 16 to 64 lower case hex digits, which are not looked for as
+  property ids. A whole run id or failure id is also looked up directly, so one of any age is found. An empty answer
+  therefore means "none in the recent runs", not "never stored". To go further back use the filters on
+  `GET /api/runs` and `GET /api/failures`.
+- `q` given more than once: the last one is used, as with the other query parameters.
+
+The endpoint is meant for a search box in the web UI's top bar, which is a separate change. See "Search" in
+[architecture.md](architecture.md) for what each group costs.
+
 ## Start a run or a sweep from the web UI
 
 With `hairspring serve` running, the Runs page of the web UI has a form that starts a run through `POST /api/runs`. Pick
