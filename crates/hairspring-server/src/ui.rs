@@ -43,7 +43,7 @@ fn respond(body: Vec<u8>, mime: &str) -> Response {
         .header(header::CACHE_CONTROL, "no-cache")
         .header(
             header::CONTENT_SECURITY_POLICY,
-            "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
         )
         .header(header::X_FRAME_OPTIONS, "DENY")
         .body(Body::from(body))

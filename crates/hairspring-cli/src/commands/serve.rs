@@ -21,6 +21,14 @@ pub struct ServeArgs {
     /// Workers one token may register per hour (0 disables the limit). Counted in memory: a restart resets the count.
     #[arg(long, default_value_t = 100)]
     pub register_limit: u32,
+    /// Open connections allowed at once (1 to 1000000); a connection beyond it is answered 503 and closed (just closed
+    /// while 128 are being refused at once). Keep it below the process's file-descriptor limit.
+    #[arg(long, default_value_t = hairspring_server::DEFAULT_MAX_CONNECTIONS)]
+    pub max_connections: usize,
+    /// Replays allowed to run on the server at once, REST and MCP together (1 to 64). A replay beyond it is
+    /// refused with 429 and `Retry-After`, not queued.
+    #[arg(long, default_value_t = hairspring_mcp::DEFAULT_MAX_REPLAYS)]
+    pub max_replays: usize,
     /// File with one `token:role` per line (alternative to the HAIRSPRING_TOKENS environment variable).
     #[arg(long)]
     pub tokens_file: Option<PathBuf>,
@@ -92,6 +100,8 @@ pub fn run(ctx: &Ctx, args: &ServeArgs, out: &mut dyn Write) -> CmdResult<i32> {
     config.embedded_workers = args.workers;
     config.rate_limit_per_min = args.rate_limit;
     config.register_limit = args.register_limit;
+    config.max_connections = args.max_connections;
+    config.max_replays = args.max_replays;
     config.organisation = organisation_from(
         args.organisation.as_deref(),
         std::env::var(ORGANISATION_ENV).ok(),

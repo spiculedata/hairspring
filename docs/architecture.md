@@ -653,6 +653,56 @@ Gaps for a later slice: the UI cannot tell "removed by retention" from "never ex
 there is no audit entry for a removal; and `--older-than` is the only age rule (nothing keeps the most recent N runs per
 target, or exempts a run).
 
+## Connection and request limits
+
+The server speaks HTTP/1.1 only and applies these limits before any token is checked:
+
+| Limit | Default | Set by | Beyond it |
+|---|---|---|---|
+| Open connections | 512 | `hairspring serve --max-connections N` (1 to 1000000) | `503` with `Retry-After: 1`, then the connection is closed |
+| Time to send a request head | 10 s | `ServerConfig::header_read_timeout` | the connection is closed |
+| Time to send a request body, once the head has arrived | 30 s | `ServerConfig::body_read_timeout` | `408` with a JSON error, then the connection is closed |
+
+The head deadline runs whenever the server is waiting for a request: from the moment a connection is accepted, and
+again after each response on a kept-alive connection. So a connection that sends nothing, sends half a head, or sits
+idle between requests is closed after 10 seconds. It does not run while a handler works or a response is being sent,
+so a long replay or an event stream is not cut off by it.
+
+A request body is read only by the handler's own extractor (at most 2 MiB, `413` beyond), which runs after the
+open-mode checks, the rate limit and the token check. So a request that is refused by any of those, or sent to a route
+that takes no body (`/api/health`, the web UI), never has its body read; a client that sends `Expect: 100-continue`
+with a missing or wrong token gets `401` rather than `100 Continue`. The body deadline is a wrapper around the
+streaming body, not a read ahead of the handler: it starts when the request head has arrived and only matters while
+the handler is waiting for more of the body. Roles are checked by each handler, as before, so a token with too little
+access for a route that takes a body (a `read` token on `POST /api/runs`) has its body read before the `403`.
+
+A refused connection is answered in a short task of its own, so the accept loop never waits on a client: the task
+writes the `503`, reads and discards what the client sent (at most 16 KiB), and closes, all within one second. At
+most 128 such tasks run at once; a connection refused while all 128 are busy is closed without a reply.
+
+The connection cap is one count for the whole server, not per address: a client that opens many connections can fill
+it, and others are refused until those connections end. A connection that sends nothing ends after at most 10
+seconds, but a client that keeps sending requests on its kept-alive connections can hold them indefinitely; only
+per-client limits in front of the server prevent that. Keep the process's file-descriptor limit (`LimitNOFILE` under
+systemd) comfortably above the cap plus the 128 refusals.
+
+Replays run target code synchronously on the server's blocking threads, so they have their own small cap:
+`hairspring serve --max-replays N` (default 2, 1 to 64) counts REST `/api/replay` and MCP `replay_bundle` together.
+A replay over the cap is refused at once, never queued: REST answers `429` with `Retry-After: 5`, and the MCP tool
+returns a tool error with `structuredContent.code` set to `replay_busy`. A replay keeps its slot until it finishes,
+even if the client has gone away. Other handlers therefore always have blocking threads left.
+
+Event streams (`GET /api/runs/{id}/events`) are capped at 64 open in total and 16 per caller, where a caller is one
+token, or, when the server has no tokens, one client address (IPv4 address or IPv6 /64), as for the rate limit. Either
+cap answers `429` with a JSON error. A stream ends when its run ends, when the server stops, or after 10 minutes. For a
+`read` caller the `worker` key is removed from event payloads (it is in the `started` event), as `GET /api/workers`
+leaves out worker ids for that role.
+
+A query string that does not parse (for example `?after=abc` on the event stream) is a `400` with the JSON error
+`{"error": "invalid query string"}`, which does not repeat the caller's text. API and MCP responses carry
+`Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` unless the response sets its own (program output
+downloads use `sandbox`); the web UI's policy also sets `base-uri 'none'` and `form-action 'self'`.
+
 ## Bundles
 
 A bundle is a small text file: `seed`, `build`, `target`, `backend`, `param.*` and `path` (hex action ids or

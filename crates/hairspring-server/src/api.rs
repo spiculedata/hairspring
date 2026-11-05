@@ -7,7 +7,8 @@ use crate::ndjson::list_response;
 use crate::read_api::{limit, param, Params};
 use crate::AppState;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{ConnectInfo, FromRequest, Path, Query, Request, State};
+use axum::extract::{ConnectInfo, FromRequest, FromRequestParts, Path, Query, Request, State};
+use axum::http::request::Parts;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -41,6 +42,21 @@ impl<T: DeserializeOwned> FromRequest<AppState> for ApiJson<T> {
             Ok(Json(v)) => Ok(ApiJson(v)),
             Err(rej) => Err(reject(rej)),
         }
+    }
+}
+
+/// Query-string extractor that reports a string it cannot parse as a 400 in the usual JSON error shape, with a fixed
+/// message that does not repeat the caller's text.
+pub struct ApiQuery<T>(pub T);
+
+impl<T: DeserializeOwned, S: Send + Sync> FromRequestParts<S> for ApiQuery<T> {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
+        Query::<T>::from_request_parts(parts, state)
+            .await
+            .map(|Query(v)| ApiQuery(v))
+            .map_err(|_| ApiError::bad_request("invalid query string"))
     }
 }
 
@@ -129,7 +145,7 @@ pub async fn list_runs(
     State(s): State<AppState>,
     caller: Caller,
     headers: HeaderMap,
-    Query(p): Query<Params>,
+    ApiQuery(p): ApiQuery<Params>,
 ) -> Result<Response, ApiError> {
     caller.need(Role::Read)?;
     let q = RunListQuery {
@@ -152,7 +168,7 @@ pub async fn list_runs(
 pub async fn search(
     State(s): State<AppState>,
     caller: Caller,
-    Query(p): Query<Params>,
+    ApiQuery(p): ApiQuery<Params>,
 ) -> Result<Json<Value>, ApiError> {
     caller.need(Role::Read)?;
     let q = param(&p, "q");
@@ -222,7 +238,7 @@ pub async fn list_failures(
     State(s): State<AppState>,
     caller: Caller,
     headers: HeaderMap,
-    Query(p): Query<Params>,
+    ApiQuery(p): ApiQuery<Params>,
 ) -> Result<Response, ApiError> {
     caller.need(Role::Read)?;
     let q = FailureListQuery {
@@ -278,16 +294,40 @@ pub struct ReplayBody {
     allow_environment_change: bool,
 }
 
+/// Runs a replay on the blocking pool if a slot is free, and refuses it with `429` now if not. A replay holds a
+/// blocking thread for as long as the target runs, so only a few may run at once and the rest are not queued. The
+/// permit moves into the blocking task, so the slot stays taken until the replay ends, even if the client goes away.
+async fn replay_in_slot<T: Send + 'static>(
+    slots: &hairspring_mcp::ReplaySlots,
+    run: impl FnOnce() -> Result<T, ServiceError> + Send + 'static,
+) -> Result<T, ApiError> {
+    let permit = slots.try_acquire().ok_or_else(|| {
+        ApiError::too_many_requests(
+            "too many replays are running; try again shortly",
+            hairspring_mcp::REPLAY_RETRY_AFTER_SECS,
+        )
+    })?;
+    blocking(move || {
+        let _permit = permit;
+        run()
+    })
+    .await
+}
+
 pub async fn replay(
     State(s): State<AppState>,
     caller: Caller,
     ApiJson(body): ApiJson<ReplayBody>,
 ) -> Result<Json<Value>, ApiError> {
     caller.need(Role::Run)?; // replay executes target code, so it needs more than read access
+
     let options = hairspring_service::ReplayOptions {
         allow_environment_change: body.allow_environment_change,
     };
-    let out = blocking(move || s.svc.replay_bundle_with(&s.engine, &body.bundle, options)).await?;
+    let out = replay_in_slot(&s.replays, move || {
+        s.svc.replay_bundle_with(&s.engine, &body.bundle, options)
+    })
+    .await?;
     Ok(Json(serde_json::to_value(out).unwrap_or_default()))
 }
 
@@ -372,4 +412,46 @@ pub async fn set_worker_trust(
     crate::worker_api::check_worker(&id).map_err(|_| ApiError::not_found())?;
     blocking(move || s.svc.set_worker_trust(&id, b.trusted)).await?;
     Ok(Json(json!({ "ok": true })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hairspring_mcp::ReplaySlots;
+    use std::sync::mpsc;
+    use tokio::sync::oneshot;
+
+    #[tokio::test]
+    async fn a_second_replay_is_refused_while_the_first_runs_even_after_its_client_disconnects() {
+        // Arrange: one slot, and a first replay that runs until it is told to finish.
+        let slots = ReplaySlots::new(1);
+        let (started_tx, started_rx) = oneshot::channel();
+        let (finish_tx, finish_rx) = mpsc::channel::<()>();
+        let first = tokio::spawn({
+            let slots = slots.clone();
+            async move {
+                replay_in_slot(&slots, move || {
+                    let _ = started_tx.send(());
+                    let _ = finish_rx.recv();
+                    Ok(())
+                })
+                .await
+            }
+        });
+        started_rx.await.expect("the first replay started");
+
+        // Act: the first client disconnects (its request future is dropped), then a second replay arrives.
+        first.abort();
+        let second = replay_in_slot(&slots, || Ok(())).await;
+
+        // Assert: the second is refused, because the first target is still running.
+        let refused = second.expect_err("no slot is free");
+        assert_eq!(refused.status, StatusCode::TOO_MANY_REQUESTS);
+
+        // Once the first replay ends, its slot comes back.
+        finish_tx.send(()).unwrap();
+        while slots.try_acquire().is_none() {
+            tokio::task::yield_now().await;
+        }
+    }
 }

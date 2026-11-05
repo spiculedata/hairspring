@@ -856,11 +856,14 @@ dependencies = [
  "hairspring-service",
  "hairspring-store",
  "hairspring-worker",
+ "hyper",
+ "hyper-util",
  "rust-embed",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "tokio",
+ "tower",
  "ureq",
 ]
 

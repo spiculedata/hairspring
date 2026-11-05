@@ -86,6 +86,8 @@ pub(crate) enum Failed {
 
 /// The `code` of a replay refused because the host's dynamic loader differs from the recording.
 const ENVIRONMENT_MISMATCH_CODE: &str = "environment_mismatch";
+/// The `code` of a replay refused because the server's replay slots are all in use.
+const REPLAY_BUSY_CODE: &str = "replay_busy";
 
 impl From<String> for Failed {
     fn from(s: String) -> Self {
@@ -239,6 +241,15 @@ fn run_tool(server: &McpServer, name: &str, args: &Value) -> Result<Value, Faile
                 allow_environment_change: opt_bool(args, "allow_environment_change")?
                     .unwrap_or(false),
             };
+            let _permit = server.replay_slots().try_acquire().ok_or_else(|| {
+                Failed::Coded(
+                    REPLAY_BUSY_CODE,
+                    format!(
+                        "too many replays are running; try again in {} seconds",
+                        crate::REPLAY_RETRY_AFTER_SECS
+                    ),
+                )
+            })?;
             Ok(
                 serde_json::to_value(svc.replay_bundle_with(server.engine(), &text, options)?)
                     .unwrap_or_default(),

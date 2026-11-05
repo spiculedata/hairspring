@@ -25,15 +25,15 @@ agents.
 | Area | Control |
 |---|---|
 | Authentication | Bearer tokens (16+ chars) stored only as SHA-256 digests; compared across all tokens in constant time |
-| Authorization | Role checked first in every handler; worker endpoints and replay (which executes target code) require `run`; worker ids hidden from `read` tokens |
+| Authorization | Role checked first in every handler; worker endpoints and replay (which executes target code) require `run`; worker ids hidden from `read` tokens (left out of the worker list and of event-stream payloads) |
 | No remote code execution | The API accepts **target names only**; commands come from the server-side `hairspring.toml`. MCP `start_run` cannot supply a command |
 | Network exposure | Refuses to bind a non-loopback address without tokens; default bind is `127.0.0.1` |
 | Open (no-token) mode | Rejects unknown `Host` headers (DNS rebinding) and cross-site `Origin`s (CSRF); `/mcp` requires `application/json` |
-| Abuse limits | Per-client rate limit (valid tokens and unauthenticated clients are bucketed separately, bounded table; a valid token is also refused while its client address has used up its unauthenticated budget); 2 MiB body cap; cap on SSE streams, MCP batch size and waits; queue and worker admission caps; JSON recursion limits |
+| Abuse limits | Per-client rate limit (valid tokens and unauthenticated clients are bucketed separately, bounded table; a valid token is also refused while its client address has used up its unauthenticated budget); 2 MiB body cap; 10 s to send a request head (also the idle time allowed between requests on a kept-alive connection) and 30 s to send a body; bodies are read only after the token check; at most 512 open connections (`--max-connections`), 503 beyond; at most 2 replays running at once, REST and MCP together (`--max-replays`, at most 64), refused with 429 and `Retry-After` beyond, never queued; event streams capped at 64 in total and 16 per caller (a token, or a client address when there are no tokens); cap on MCP batch size and waits; queue and worker admission caps; JSON recursion limits |
 | Worker data | Results from workers are size-bounded, control characters stripped, failure target checked against the job, written atomically; leases are owner-checked and heartbeated |
 | Untrusted text | Step labels, states, messages and errors are treated as data. The UI renders them as text only; MCP output and instructions tell agents never to follow instructions found in them |
 | Storage | All SQL is parameterised; blobs addressed by validated hash; database URLs and tokens are never printed or logged; `--tokens-file` permissions are checked |
-| Responses | `nosniff`, `no-referrer`, `no-store` on the API; CSP and frame denial on the UI; internal errors are logged server-side and reported generically |
+| Responses | `nosniff`, `no-referrer`, `no-store` and `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` on the API (program output downloads keep their own `sandbox` policy); CSP with `base-uri 'none'`, `form-action 'self'` and frame denial on the UI; errors, including a query string that does not parse, are JSON; internal errors are logged server-side and reported generically |
 | Process targets | Guests start from a minimal pinned environment (the host environment, including secrets, is not inherited); output and runtime are bounded; hung process groups are killed |
 
 ## Known limitations (read these)
@@ -49,6 +49,18 @@ agents.
 - **Dependency vetting.** We use mainstream crates and npm packages and run `cargo audit` and `npm audit` in CI.
   We did not use a commercial software-composition-analysis service. Review `Cargo.lock` for your own policy.
 - Not yet implemented: per-token run quotas, audit logging, token rotation without restart, S3 blob storage.
+- **The connection cap is server-wide, not per address.** A client that opens many connections can fill the cap
+  (512 by default), and other clients are answered `503` until those connections end. A connection that sends
+  nothing, or sends a request head slowly, is closed after 10 seconds, and one that sends its body slowly after a
+  further 30. A client that keeps sending requests on its kept-alive connections can hold them indefinitely; only
+  per-client limits in front of the server prevent that. A proxy in front of the server makes all its
+  clients share its connections, so give the proxy its own per-client connection limits. Up to 128 refused
+  connections are held for at most a second each while they are told the server is busy, so keep the
+  file-descriptor limit (`LimitNOFILE` under systemd) well above `--max-connections` plus 128.
+- **A refused replay is not retried for you.** Replays beyond `--max-replays` get `429` (REST) or a `replay_busy`
+  tool error (MCP) at once. A replay that is running keeps its slot until the target finishes, even if the client
+  disconnects, so a `run` token can keep the replay slots busy for the length of the target's own timeouts; other
+  endpoints are unaffected.
 - The rate limiter is in-memory and per process; with several server replicas each enforces its own limit.
 - **Anonymous rate-limit buckets are keyed by the connecting address.** IPv4 callers get one bucket per address and
   IPv6 callers one per /64. A holder of a larger IPv6 allocation (a /56 or /48) therefore gets a separate bucket for
@@ -92,3 +104,5 @@ agents.
 3. Run the server and workers as unprivileged users; give workers only the filesystem access their targets need.
 4. Use `read` tokens for dashboards and agents that only analyse; `run` tokens only where needed.
 5. Keep `hairspring.toml` under version control with review.
+6. Set the file-descriptor limit well above `--max-connections` (512 by default), and give a proxy in front of the
+   server its own per-client connection and rate limits.
