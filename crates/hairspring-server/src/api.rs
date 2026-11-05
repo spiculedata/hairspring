@@ -114,11 +114,11 @@ fn may_see_organisation(
 }
 
 /// Who the caller is and what they may do, so a client can hide or explain actions instead of guessing from a 403.
-/// It carries the role name and what that role allows, whether the server is in open mode, and nothing that
-/// identifies or could stand in for the token.
+/// It carries the role name and what that role allows, whether the server is in open mode, the operator's label for
+/// the caller's own token when it has one, and nothing that identifies or could stand in for the token.
 pub async fn me(State(s): State<AppState>, caller: Caller) -> Json<Value> {
     let can = |needed: Role| caller.role.allows(needed);
-    Json(json!({
+    let mut body = json!({
         "role": caller.role.as_str(),
         "open_mode": s.auth.is_open(),
         "can": {
@@ -127,7 +127,11 @@ pub async fn me(State(s): State<AppState>, caller: Caller) -> Json<Value> {
             "admin": can(Role::Admin),
         },
         "roles": [Role::Read.as_str(), Role::Run.as_str(), Role::Admin.as_str()],
-    }))
+    });
+    if let Some(label) = &caller.label {
+        body["label"] = json!(label);
+    }
+    Json(body)
 }
 
 pub async fn targets(
@@ -192,6 +196,7 @@ pub async fn create_run(
     ApiJson(body): ApiJson<CreateRun>,
 ) -> Result<Response, ApiError> {
     caller.need(Role::Run)?;
+    let who = caller.who();
     let run = blocking(move || {
         s.svc.start_run_with_mode(
             &s.engine,
@@ -204,6 +209,7 @@ pub async fn create_run(
         )
     })
     .await?;
+    eprintln!("hairspring-server: run {} created by {who}", run.id);
     Ok((StatusCode::CREATED, Json(json!({ "run": run }))).into_response())
 }
 
@@ -322,10 +328,13 @@ pub async fn replay(
 ) -> Result<Json<Value>, ApiError> {
     caller.need(Role::Run)?; // replay executes target code, so it needs more than read access
 
+    // Logged from inside the slot, so a replay refused for want of a slot (429) is not logged as started.
+    let line = caller.action_line("replay started");
     let options = hairspring_service::ReplayOptions {
         allow_environment_change: body.allow_environment_change,
     };
     let out = replay_in_slot(&s.replays, move || {
+        eprintln!("{line}");
         s.svc.replay_bundle_with(&s.engine, &body.bundle, options)
     })
     .await?;
@@ -411,7 +420,9 @@ pub async fn set_worker_trust(
 ) -> Result<Json<Value>, ApiError> {
     caller.need(Role::Admin)?;
     crate::worker_api::check_worker(&id).map_err(|_| ApiError::not_found())?;
+    let (worker, trusted) = (id.clone(), b.trusted);
     blocking(move || s.svc.set_worker_trust(&id, b.trusted)).await?;
+    caller.log_action(&format!("worker {worker} trust set to {trusted}"));
     Ok(Json(json!({ "ok": true })))
 }
 

@@ -137,3 +137,49 @@ fn response_is_not_cached() {
     let r = get(&tokens(), "/api/me", Some(READ));
     assert_eq!(r.cache_control.as_deref(), Some("no-store"));
 }
+
+fn labelled() -> RunningServer {
+    boot(
+        Auth::from_spec(&format!(
+            "{READ}:read,{RUN}:run ci bot,{ADMIN}:admin Alice Smith"
+        ))
+        .unwrap(),
+    )
+}
+
+#[test]
+fn a_caller_sees_its_own_label_and_only_that() {
+    let srv = labelled();
+    let run = get(&srv, "/api/me", Some(RUN));
+    assert_eq!(run.status, 200);
+    let mut want = expected("run", false, true, true, false);
+    want["label"] = json!("ci bot");
+    assert_eq!(run.body, want);
+    assert!(!run.text.contains("Alice"), "another label leaked");
+
+    let admin = get(&srv, "/api/me", Some(ADMIN));
+    assert_eq!(admin.body["label"], json!("Alice Smith"));
+    assert!(!admin.text.contains("ci bot"), "another label leaked");
+}
+
+#[test]
+fn an_unlabelled_token_gets_exactly_the_old_answer_on_a_server_that_has_labels() {
+    let r = get(&labelled(), "/api/me", Some(READ));
+    assert_eq!(r.body, expected("read", false, true, false, false));
+    assert!(!r.text.contains("label"));
+}
+
+#[test]
+fn a_label_appears_in_no_other_response() {
+    let srv = labelled();
+    for path in ["/api/health", "/api/runs", "/api/workers", "/api/targets"] {
+        for token in [READ, RUN, ADMIN] {
+            let r = get(&srv, path, Some(token));
+            assert!(
+                !r.text.contains("ci bot") && !r.text.contains("Alice"),
+                "{path}: {}",
+                r.text
+            );
+        }
+    }
+}

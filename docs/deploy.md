@@ -69,9 +69,32 @@ The server and a worker read tokens in different formats. Mixing them up is the 
 
 | Who reads it | Where | Format |
 |---|---|---|
-| The server | `--tokens-file FILE` | One `token:role` per line. Blank lines and lines starting with `#` are skipped. Keep the file at mode 600 |
-| The server | `HAIRSPRING_TOKENS` | The same entries joined by commas: `token1:admin,token2:run,token3:read` |
+| The server | `--tokens-file FILE` | One `token:role` per line, optionally `token:role label`. Blank lines and lines starting with `#` are skipped. Keep the file at mode 600 |
+| The server | `HAIRSPRING_TOKENS` | The same entries joined by commas: `token1:admin,token2:run,token3:read`, or with labels `token1:admin alice,token2:run ci bot` |
 | A worker | `HAIRSPRING_TOKEN`, or `--token-file FILE` | One **bare** token, no `:role`, nothing else in the file |
+
+#### Token labels (optional)
+
+A label is a short name for a token, so that a log line says who did something instead of showing an opaque key. Write
+it after the role, separated by one space: `token:run ci bot`. Entries without a label work exactly as before.
+
+- Only you can set a label, in this file or in `HAIRSPRING_TOKENS`. A caller cannot choose or change one.
+- A label is 1 to 64 characters: ASCII letters and digits, space, `.`, `_` and `-`. No commas or colons (a comma ends
+  the entry), no leading, trailing or doubled spaces, and no other characters, so a label cannot hold control or
+  direction-changing characters. Exactly one space separates the label from the role; a tab, a second space or any
+  other whitespace there is refused.
+- Labels must differ from every other label, ignoring case, and a label must not contain any configured token. A
+  label that does is refused at start. Errors read `entry N: ...` and do not repeat the token, the label or the role
+  text. N counts entries, not file lines: blank and comment lines are not counted, and a line with commas counts as
+  several entries.
+- A label is not a secret and does not prove who is calling: two people who share a token share its label. Do not put
+  a password, a token or personal data in one.
+- The label appears in the server's log lines for creating a run, starting a replay, registering a worker and changing
+  a worker's trust, as `label (t:<key>)`, never the token. `GET /api/me` returns it as `label` to the holder of that
+  token only. It is not in any other response. Actions taken through MCP over HTTP are not yet logged with the label.
+  The `t:<key>` is a prefix of the token's SHA-256 digest, so use tokens made by `hairspring token`.
+- An older server refuses a labelled entry (it reads `run ci bot` as an unknown role), so it fails closed.
+- Open mode (no tokens) has no labels.
 
 Create the account the service runs as, and the files, so that the file is never readable by others and is owned by the
 service user (as root; the commands were run in a Ubuntu 24.04 container, see [the systemd section](#7-keep-it-running-a-systemd-unit)):
@@ -416,7 +439,7 @@ From `hairspring serve --help` on a build of `main`:
 | `--workers N` | Worker threads inside this process; 0 means remote workers only (default 1) |
 | `--rate-limit N` | Requests per minute per caller; 0 disables (default 1200) |
 | `--register-limit N` | Workers one token may register per hour; 0 disables (default 100; counted in memory) |
-| `--tokens-file FILE` | `token:role` lines, an alternative to `HAIRSPRING_TOKENS` |
+| `--tokens-file FILE` | `token:role` or `token:role label` lines, an alternative to `HAIRSPRING_TOKENS` |
 | `--max-connections N` | Open connections at once, 1 to 1000000 (default 512). Newer than v0.1-RC1 |
 | `--max-replays N` | Replays at once, 1 to 64 (default 2). Newer than v0.1-RC1 |
 | `--organisation NAME` | Name shown in the web UI's top bar (also `HAIRSPRING_ORGANISATION`). Newer than v0.1-RC1 |

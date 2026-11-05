@@ -12,6 +12,7 @@ mod organisation;
 mod ratelimit;
 mod read_api;
 mod sse;
+mod token_label;
 mod ui;
 mod worker_api;
 

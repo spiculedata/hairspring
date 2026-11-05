@@ -64,6 +64,7 @@ pub async fn register(
         return Err(ApiError::bad_request("caps is too large"));
     }
     let (w, secret) = blocking(move || s.svc.register_remote_worker(&b.name, &caps)).await?;
+    caller.log_action(&format!("worker {} registered", w.id));
     // The secret is shown once; only its hash is stored. The worker presents it to send trial records.
     Ok(Json(json!({ "worker_id": w.id, "worker_secret": secret })))
 }
