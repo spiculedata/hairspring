@@ -155,6 +155,12 @@ fn start_attempt(
     ] {
         tx.execute(&format!("DELETE FROM {table} WHERE run_id=?"), [run_id])?;
     }
+    // The inputs recorded by an earlier attempt describe a run whose trials are gone; this attempt's own, recorded when
+    // its job was leased, stay.
+    tx.execute(
+        "DELETE FROM run_inputs WHERE run_id=? AND attempt<?",
+        params![run_id, attempt],
+    )?;
     tx.execute(
         "UPDATE runs SET ingest_attempt=?, catalog_size=0, kept_bytes=0 WHERE id=?",
         params![attempt, run_id],

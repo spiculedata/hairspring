@@ -18,6 +18,8 @@ pub const MAX_RUN_INPUT_NAME_BYTES: usize = 40;
 /// Most text either JSON column may hold.
 pub const MAX_RUN_INPUTS_JSON_BYTES: usize = 16 * 1024;
 const MAX_REPORTER_BYTES: usize = 128;
+/// The largest attempt number a record may carry (the column is a 32-bit integer on PostgreSQL).
+const MAX_ATTEMPT: u32 = i32::MAX as u32;
 const MAX_RUN_ID_BYTES: usize = 128;
 
 /// The inputs of a run, as offered by whoever ran it.
@@ -32,6 +34,9 @@ pub struct NewRunInputs {
     pub missing: Vec<String>,
     pub reporter_id: String,
     pub reporter_trusted: bool,
+    /// The attempt of the job that ran (its lease count, from 1). A job leased again is a new attempt whose trials
+    /// replace the earlier attempt's, so its inputs replace theirs.
+    pub attempt: u32,
 }
 
 /// A stored record.
@@ -44,6 +49,7 @@ pub struct RunInputsRecord {
     pub missing: Vec<String>,
     pub reporter_id: String,
     pub reporter_trusted: bool,
+    pub attempt: u32,
     pub created_at: i64,
 }
 
@@ -51,8 +57,10 @@ pub struct RunInputsRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunInputsRejection {
     RunNotFound,
-    /// The run already has different inputs, and stored rows never change.
+    /// The run already has different inputs from the same attempt, and stored rows never change within an attempt.
     Conflict,
+    /// The run has inputs from a later attempt of its job.
+    Stale,
     /// A fixed description of what was wrong; it never repeats the offered text.
     Invalid(&'static str),
 }
@@ -60,7 +68,9 @@ pub enum RunInputsRejection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunInputsOutcome {
     Stored,
-    /// The same inputs were already stored (the first reporter and time stay).
+    /// Inputs from an earlier attempt were replaced, whole, by these.
+    Replaced,
+    /// The same inputs were already stored for this attempt (the first reporter and time stay).
     Duplicate,
     Rejected(RunInputsRejection),
 }
@@ -93,6 +103,9 @@ pub(crate) fn prepare(new: &NewRunInputs) -> Result<Prepared, &'static str> {
     }
     if !IDENTITY_SCHEMES.contains(&new.scheme.as_str()) {
         return Err("unknown input scheme");
+    }
+    if new.attempt == 0 || new.attempt > MAX_ATTEMPT {
+        return Err("attempt is not valid");
     }
     if !text_ok(&new.reporter_id, MAX_REPORTER_BYTES) {
         return Err("reporter id is empty, too long or has a NUL");
@@ -140,4 +153,40 @@ pub(crate) fn parse_columns(
     let missing =
         serde_json::from_str(missing_json).map_err(|_| "stored run inputs are unreadable")?;
     Ok((fields, missing))
+}
+
+/// What the store does with a record, given the row it holds for the run (its scheme, columns and attempt), if any.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Decision {
+    Insert,
+    Replace,
+    Duplicate,
+    Conflict,
+    Stale,
+}
+
+/// The one rule both stores follow: a later attempt replaces, the same attempt repeats or conflicts, an earlier
+/// attempt is stale.
+pub(crate) fn decide(
+    stored: Option<(&str, &str, &str, u32)>,
+    new: &NewRunInputs,
+    prepared: &Prepared,
+) -> Decision {
+    let Some((scheme, fields_json, missing_json, attempt)) = stored else {
+        return Decision::Insert;
+    };
+    match new.attempt.cmp(&attempt) {
+        std::cmp::Ordering::Greater => Decision::Replace,
+        std::cmp::Ordering::Less => Decision::Stale,
+        std::cmp::Ordering::Equal => {
+            let same = scheme == new.scheme
+                && fields_json == prepared.fields_json
+                && missing_json == prepared.missing_json;
+            if same {
+                Decision::Duplicate
+            } else {
+                Decision::Conflict
+            }
+        }
+    }
 }

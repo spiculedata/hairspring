@@ -4,17 +4,24 @@ mod common;
 
 use common::*;
 use hairspring_core::point::{CommonInputs, HermitInputs, IdentityDraft, Recorded, TmpPolicy};
+use hairspring_service::Service;
 use hairspring_service::{RunInputsSubmission, ServiceError};
-use hairspring_store::RunState;
+use hairspring_store::{now_ms, RunState, SqliteStore, Store};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 fn digest(c: char) -> String {
     c.to_string().repeat(64)
 }
 
 fn sim_submission(target: &str) -> RunInputsSubmission {
+    sim_submission_with(target, 'a')
+}
+
+/// A complete report for a simulated run of `target`, whose executable digest is `sha` repeated.
+fn sim_submission_with(target: &str, sha: char) -> RunInputsSubmission {
     let draft = IdentityDraft::Sim(CommonInputs {
-        hairspring_sha: Recorded::Value(digest('a')),
+        hairspring_sha: Recorded::Value(digest(sha)),
         target: Recorded::Value(target.into()),
     });
     RunInputsSubmission::from_hashes(&draft.input_hashes())
@@ -78,11 +85,14 @@ fn sending_the_same_inputs_again_is_accepted_and_different_ones_are_refused() {
         .unwrap();
     assert_eq!(again.outcome, "duplicate");
     let mut other = first.clone();
-    other.fields.insert("target".into(), digest('b'));
+    other.fields.insert("hairspring_sha".into(), digest('b'));
     let why = refused(svc.record_run_inputs(&job.job_id, &local(), &other));
     assert!(why.contains("already has different inputs"), "{why}");
     let kept = store.get_run_inputs(&job.run_id).unwrap().unwrap();
-    assert_eq!(kept.fields["target"], first.fields["target"]);
+    assert_eq!(
+        kept.fields["hairspring_sha"],
+        first.fields["hairspring_sha"]
+    );
 }
 
 #[test]
@@ -228,37 +238,202 @@ fn hostile_submissions_are_refused_in_fixed_words_that_never_repeat_them() {
     }
 }
 
+/// Reads every byte the database wrote, whatever the column: nothing a guest or an operator put in the environment, a
+/// path or a command line may be in any of it.
 #[test]
-fn no_environment_value_reaches_what_is_stored() {
-    let (svc, store, engine) = setup();
+fn no_value_path_or_environment_text_reaches_the_stored_bytes() {
+    let dir = std::env::temp_dir().join(format!(
+        "hairspring-inputs-{}-{}",
+        std::process::id(),
+        now_ms()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open(&dir.join("db.sqlite")).unwrap());
+    let svc = Service::new(store.clone());
+    let registry = Arc::new(hairspring_engine::demos::default_registry());
+    let engine = hairspring_engine::engine::Engine::new(
+        registry.clone(),
+        hairspring_engine::config::Config::from_registry(&registry),
+    );
     let job = lease(&svc, &engine, &local());
-    // A hermit-shaped draft with a planted value, for a run whose backend is simulated: refused by backend, so build
-    // the sim run's submission from a draft that only carries the planted text as its target name.
     let secret = "TOPSECRET-env-value-0042";
     let hermit = IdentityDraft::Hermit(
         CommonInputs {
             hairspring_sha: Recorded::Value(digest('a')),
-            target: Recorded::Value("t".into()),
+            target: Recorded::Value(format!("/opt/{secret}/target")),
         },
         HermitInputs {
             guest_env: Recorded::Value(vec![("API_TOKEN".into(), secret.into())]),
             cwd: Recorded::Value(format!("/srv/{secret}")),
             tmp_policy: Recorded::Value(TmpPolicy::Path(format!("/tmp/{secret}"))),
+            target_argv: Recorded::Value(vec![format!("/usr/bin/{secret}"), "--flag".into()]),
+            hermit_args: Recorded::Value(vec![format!("--arg={secret}")]),
             ..HermitInputs::default()
         },
     );
-    let submission = RunInputsSubmission::from_hashes(&hermit.input_hashes());
-    assert!(submission.fields.contains_key("guest_env"));
-    let wire = serde_json::to_string(&submission).unwrap();
-    assert!(
-        !wire.contains(secret) && !wire.contains("API_TOKEN"),
-        "{wire}"
+    let hashes = hermit.input_hashes();
+    assert!(hashes.fields.contains_key("guest_env") && hashes.fields.contains_key("cwd"));
+    // The store holds whatever digests it is given for the run, whatever its backend: store the hermit-shaped ones, and
+    // a sim report through the service.
+    let new = hairspring_store::NewRunInputs {
+        run_id: job.run_id.clone(),
+        scheme: hashes.scheme.clone(),
+        fields: hashes.fields.clone(),
+        missing: hashes.missing.clone(),
+        reporter_id: local(),
+        reporter_trusted: true,
+        attempt: 1,
+    };
+    store.put_run_inputs(&new, 1).unwrap();
+    drop((svc, store));
+    let mut seen = 0;
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let bytes = std::fs::read(entry.unwrap().path()).unwrap();
+        seen += bytes.len();
+        for needle in [
+            secret,
+            "API_TOKEN",
+            "/srv/",
+            "/usr/bin/",
+            "--flag",
+            "--arg=",
+        ] {
+            assert!(
+                !bytes.windows(needle.len()).any(|w| w == needle.as_bytes()),
+                "{needle} reached a database file"
+            );
+        }
+    }
+    assert!(seen > 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_report_that_leaves_out_an_input_its_scheme_has_is_refused() {
+    let (svc, store, engine) = setup();
+    let job = lease(&svc, &engine, &local());
+    let mut partial = sim_submission("lock-lease");
+    partial.fields.remove("backend");
+    let why = refused(svc.record_run_inputs(&job.job_id, &local(), &partial));
+    assert_eq!(why, "the inputs leave out an input this scheme has");
+    assert!(store.get_run_inputs(&job.run_id).unwrap().is_none());
+    // Naming it as one that could not be recorded makes the report complete.
+    partial.missing.push("backend".into());
+    svc.record_run_inputs(&job.job_id, &local(), &partial)
+        .unwrap();
+    let view = svc.run_inputs_view(&job.run_id).unwrap();
+    assert_eq!(view.missing, ["backend"]);
+}
+
+#[test]
+fn a_report_for_another_target_or_backend_is_refused() {
+    let (svc, store, engine) = setup();
+    let job = lease(&svc, &engine, &local());
+    let other_target = sim_submission("some-other-target");
+    let mut other_backend = sim_submission("lock-lease");
+    other_backend.fields.insert("backend".into(), digest('e'));
+    for bad in [other_target, other_backend] {
+        let why = refused(svc.record_run_inputs(&job.job_id, &local(), &bad));
+        assert_eq!(why, "the inputs do not belong to this run");
+    }
+    assert!(store.get_run_inputs(&job.run_id).unwrap().is_none());
+    svc.record_run_inputs(&job.job_id, &local(), &sim_submission("lock-lease"))
+        .unwrap();
+}
+
+fn one_trial() -> Vec<hairspring_engine::trial_log::TrialReport> {
+    vec![Recorder::new().pass(
+        1,
+        &props("a.id", hairspring_props::AssertKind::Always, 3, 0),
+    )]
+}
+
+/// An untrusted worker records inputs and sends trials, then fails; a trusted worker leases the same job with another
+/// executable. The second attempt's trials replace the first's, so its inputs must too: its report is accepted, and
+/// what the run shows is the trusted worker's, not the first worker's.
+#[test]
+fn a_job_leased_again_has_its_inputs_replaced_by_the_new_attempt() {
+    let (svc, store, engine) = setup();
+    let (a, a_secret) = svc.register_remote_worker("a", "{}").unwrap();
+    let (b, b_secret) = svc.register_remote_worker("b", "{}").unwrap();
+    svc.set_worker_trust(&b.id, true).unwrap();
+    let job = lease(&svc, &engine, &a.id);
+    svc.record_run_inputs_with_secret(
+        &job.job_id,
+        &a.id,
+        Some(&a_secret),
+        &sim_submission_with("lock-lease", 'a'),
+    )
+    .unwrap();
+    svc.ingest_trials_with_secret(&job.job_id, &a.id, Some(&a_secret), &one_trial())
+        .unwrap();
+    assert_eq!(
+        svc.run_inputs_view(&job.run_id).unwrap().reporter_trusted,
+        Some(false)
     );
-    // Recorded for the sim run under a sim scheme: take the shape, keep the hashes.
-    let sim = sim_submission(secret);
-    svc.record_run_inputs(&job.job_id, &local(), &sim).unwrap();
-    let stored = format!("{:?}", store.get_run_inputs(&job.run_id).unwrap());
-    assert!(!stored.contains(secret), "{stored}");
+    svc.fail(&job.job_id, &a.id, "the worker was lost").unwrap();
+
+    let again = svc.lease(&b.id).unwrap().expect("the job is leased again");
+    assert_eq!(again.job_id, job.job_id);
+    let receipt = svc
+        .record_run_inputs_with_secret(
+            &again.job_id,
+            &b.id,
+            Some(&b_secret),
+            &sim_submission_with("lock-lease", 'b'),
+        )
+        .unwrap();
+    assert_eq!(receipt.outcome, "replaced");
+    let kept = store.get_run_inputs(&job.run_id).unwrap().unwrap();
+    assert_eq!(kept.attempt, 2);
+    assert_eq!(kept.reporter_id, b.id);
+    assert!(kept.reporter_trusted);
+    assert_eq!(
+        kept.fields["hairspring_sha"],
+        sim_submission_with("lock-lease", 'b').fields["hairspring_sha"]
+    );
+
+    // The second attempt's trials start the run over; its own inputs stay.
+    svc.ingest_trials_with_secret(&again.job_id, &b.id, Some(&b_secret), &one_trial())
+        .unwrap();
+    assert_eq!(
+        store.get_run_inputs(&job.run_id).unwrap().unwrap().attempt,
+        2
+    );
+    // Sending the same report again is still a repeat.
+    let repeat = svc
+        .record_run_inputs_with_secret(
+            &again.job_id,
+            &b.id,
+            Some(&b_secret),
+            &sim_submission_with("lock-lease", 'b'),
+        )
+        .unwrap();
+    assert_eq!(repeat.outcome, "duplicate");
+}
+
+/// If the new attempt records nothing (a worker from an older release), the first attempt's inputs must not stay behind
+/// to describe trials they did not produce: starting the new attempt's trials removes them.
+#[test]
+fn a_new_attempt_that_records_nothing_does_not_inherit_the_first_attempts_inputs() {
+    let (svc, store, engine) = setup();
+    let (a, a_secret) = svc.register_remote_worker("a", "{}").unwrap();
+    let (b, b_secret) = svc.register_remote_worker("b", "{}").unwrap();
+    let job = lease(&svc, &engine, &a.id);
+    svc.record_run_inputs_with_secret(
+        &job.job_id,
+        &a.id,
+        Some(&a_secret),
+        &sim_submission("lock-lease"),
+    )
+    .unwrap();
+    svc.fail(&job.job_id, &a.id, "the worker was lost").unwrap();
+    let again = svc.lease(&b.id).unwrap().expect("leased again");
+    // Not yet: until the new attempt's trials arrive the earlier record is what the store holds.
+    assert!(store.get_run_inputs(&job.run_id).unwrap().is_some());
+    svc.ingest_trials_with_secret(&again.job_id, &b.id, Some(&b_secret), &one_trial())
+        .unwrap();
+    assert!(!svc.run_inputs_view(&job.run_id).unwrap().recorded);
 }
 
 #[test]

@@ -84,6 +84,7 @@ fn inputs(run: &str) -> NewRunInputs {
         missing: Vec::new(),
         reporter_id: "local-1".into(),
         reporter_trusted: true,
+        attempt: 1,
     }
 }
 
@@ -160,13 +161,18 @@ fn a_table_or_index_of_the_same_name_but_another_definition_is_refused() {
     let tables = [
         // A column missing, an extra column, another type, another nullability, no key, another key, no reference.
         "CREATE TABLE run_inputs (run_id TEXT PRIMARY KEY REFERENCES runs(id), scheme TEXT NOT NULL, fields_json TEXT NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL)",
-        "CREATE TABLE run_inputs (run_id TEXT PRIMARY KEY REFERENCES runs(id), scheme TEXT NOT NULL, fields_json TEXT NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, created_at INTEGER NOT NULL, extra TEXT)",
-        "CREATE TABLE run_inputs (run_id TEXT PRIMARY KEY REFERENCES runs(id), scheme TEXT NOT NULL, fields_json BLOB NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, created_at INTEGER NOT NULL)",
-        "CREATE TABLE run_inputs (run_id TEXT PRIMARY KEY REFERENCES runs(id), scheme TEXT, fields_json TEXT NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, created_at INTEGER NOT NULL)",
-        "CREATE TABLE run_inputs (run_id TEXT NOT NULL REFERENCES runs(id), scheme TEXT NOT NULL, fields_json TEXT NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, created_at INTEGER NOT NULL)",
-        "CREATE TABLE run_inputs (run_id TEXT PRIMARY KEY, scheme TEXT NOT NULL, fields_json TEXT NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, created_at INTEGER NOT NULL)",
-        "CREATE TABLE run_inputs (run_id TEXT PRIMARY KEY REFERENCES failures(id), scheme TEXT NOT NULL, fields_json TEXT NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, created_at INTEGER NOT NULL)",
-        "CREATE TABLE run_inputs (scheme TEXT PRIMARY KEY REFERENCES runs(id), run_id TEXT NOT NULL, fields_json TEXT NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, created_at INTEGER NOT NULL)",
+        "CREATE TABLE run_inputs (run_id TEXT PRIMARY KEY REFERENCES runs(id), scheme TEXT NOT NULL, fields_json TEXT NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, attempt INTEGER NOT NULL, created_at INTEGER NOT NULL, extra TEXT)",
+        "CREATE TABLE run_inputs (run_id TEXT PRIMARY KEY REFERENCES runs(id), scheme TEXT NOT NULL, fields_json BLOB NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, attempt INTEGER NOT NULL, created_at INTEGER NOT NULL)",
+        "CREATE TABLE run_inputs (run_id TEXT PRIMARY KEY REFERENCES runs(id), scheme TEXT, fields_json TEXT NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, attempt INTEGER NOT NULL, created_at INTEGER NOT NULL)",
+        "CREATE TABLE run_inputs (run_id TEXT NOT NULL REFERENCES runs(id), scheme TEXT NOT NULL, fields_json TEXT NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, attempt INTEGER NOT NULL, created_at INTEGER NOT NULL)",
+        "CREATE TABLE run_inputs (run_id TEXT PRIMARY KEY, scheme TEXT NOT NULL, fields_json TEXT NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, attempt INTEGER NOT NULL, created_at INTEGER NOT NULL)",
+        "CREATE TABLE run_inputs (run_id TEXT PRIMARY KEY REFERENCES failures(id), scheme TEXT NOT NULL, fields_json TEXT NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, attempt INTEGER NOT NULL, created_at INTEGER NOT NULL)",
+        "CREATE TABLE run_inputs (run_id TEXT PRIMARY KEY REFERENCES runs(id), scheme TEXT NOT NULL, fields_json TEXT NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, attempt INTEGER NOT NULL, created_at INTEGER NOT NULL, CHECK (attempt > 0))",
+        "CREATE TABLE run_inputs (run_id TEXT PRIMARY KEY REFERENCES runs(id), scheme TEXT NOT NULL, fields_json TEXT NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, attempt INTEGER NOT NULL, created_at INTEGER NOT NULL, UNIQUE (fields_json))",
+        "CREATE TABLE run_inputs (run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE, scheme TEXT NOT NULL, fields_json TEXT NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, attempt INTEGER NOT NULL, created_at INTEGER NOT NULL)",
+        "CREATE TABLE run_inputs (run_id TEXT PRIMARY KEY REFERENCES runs(id) ON UPDATE CASCADE, scheme TEXT NOT NULL, fields_json TEXT NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, attempt INTEGER NOT NULL, created_at INTEGER NOT NULL)",
+        "CREATE TABLE run_inputs (run_id TEXT PRIMARY KEY REFERENCES runs(id), scheme TEXT NOT NULL, fields_json TEXT NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, attempt INTEGER NOT NULL, created_at INTEGER NOT NULL) WITHOUT ROWID",
+        "CREATE TABLE run_inputs (scheme TEXT PRIMARY KEY REFERENCES runs(id), run_id TEXT NOT NULL, fields_json TEXT NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, attempt INTEGER NOT NULL, created_at INTEGER NOT NULL)",
     ];
     for sql in tables {
         let path = temp_db("wrong-table");
@@ -251,7 +257,7 @@ fn the_same_table_and_index_built_beforehand_are_kept() {
         .execute_batch(
             "create table run_inputs ( run_id text primary key references runs ( id ), scheme text not null,
                fields_json text not null, missing_json text not null, reporter_id text not null,
-               reporter_trusted integer not null, created_at integer not null );
+               reporter_trusted integer not null, attempt integer not null, created_at integer not null );
              create index runs_target_created on runs ( target , created_at )",
         )
         .unwrap();

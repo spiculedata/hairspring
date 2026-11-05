@@ -5,8 +5,9 @@
 //! The store checks that every value is a digest. A refusal uses fixed words and never repeats what the caller sent.
 //!
 //! Digests are kept, never served: a short value can be guessed from its digest. A reader is told which inputs were
-//! recorded and which were not, by name, and who reported them.
+//! recorded and which were not, by name, and whether the reporter was trusted.
 use crate::{Result, Service, ServiceError};
+use hairspring_core::point::encoding::{escape_value, sha256_hex};
 use hairspring_core::point::input_hashes::{known_fields, InputHashes, MAX_INPUT_FIELDS};
 use hairspring_engine::engine::Engine;
 use hairspring_store::{now_ms, NewRunInputs, RunInputsOutcome, RunInputsRejection, RunRecord};
@@ -36,7 +37,8 @@ impl RunInputsSubmission {
     }
 }
 
-/// The answer to a recording: `stored`, or `duplicate` when the same inputs were already there.
+/// The answer to a recording: `stored`, `replaced` (the job's earlier attempt had recorded others), or `duplicate` when
+/// the same inputs were already there.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RunInputsReceipt {
     pub outcome: &'static str,
@@ -52,11 +54,13 @@ pub struct RunInputsView {
     pub fields: Vec<String>,
     /// The inputs the worker could not record, by name.
     pub missing: Vec<String>,
-    /// Whether the reporter was trusted when it reported.
+    /// Whether the reporter was trusted when it reported (a snapshot, as for trial rows).
     pub reporter_trusted: Option<bool>,
 }
 
-/// Checks a submission against the scheme it names and the backend of the run, in fixed words.
+/// Checks a submission against the scheme it names and the run it is for, in fixed words: the scheme is the run's
+/// backend, every name is one the scheme has, every name the scheme has is either recorded or said to be missing, and
+/// the target and backend digests are those of this run's own target and backend.
 fn check(sub: &RunInputsSubmission, run: &RunRecord) -> Result<()> {
     let Some(known) = known_fields(&sub.scheme) else {
         return Err(invalid("unknown input scheme"));
@@ -73,6 +77,20 @@ fn check(sub: &RunInputsSubmission, run: &RunRecord) -> Result<()> {
         .any(|name| !known.contains(&name.as_str()))
     {
         return Err(invalid("an input name is not known for this scheme"));
+    }
+    let complete = known
+        .iter()
+        .all(|name| sub.fields.contains_key(*name) || sub.missing.iter().any(|m| m == name));
+    if !complete {
+        return Err(invalid("the inputs leave out an input this scheme has"));
+    }
+    let digest_of = |text: &str| sha256_hex(text.as_bytes());
+    let belongs =
+        |field: &str, expected: String| sub.fields.get(field).is_none_or(|d| *d == expected);
+    if !(belongs("target", digest_of(&escape_value(&run.target)))
+        && belongs("backend", digest_of(&run.backend)))
+    {
+        return Err(invalid("the inputs do not belong to this run"));
     }
     Ok(())
 }
@@ -121,15 +139,22 @@ impl Service {
             missing: sub.missing.clone(),
             reporter_id: worker_id.to_string(),
             reporter_trusted: self.worker_is_trusted(worker_id)?,
+            attempt: job.attempts,
         };
         match self.store.put_run_inputs(&new, now_ms())? {
             RunInputsOutcome::Stored => Ok(RunInputsReceipt { outcome: "stored" }),
+            RunInputsOutcome::Replaced => Ok(RunInputsReceipt {
+                outcome: "replaced",
+            }),
             RunInputsOutcome::Duplicate => Ok(RunInputsReceipt {
                 outcome: "duplicate",
             }),
             RunInputsOutcome::Rejected(RunInputsRejection::RunNotFound) => {
                 Err(ServiceError::NotFound(format!("run {}", run.id)))
             }
+            RunInputsOutcome::Rejected(RunInputsRejection::Stale) => Err(invalid(
+                "these inputs are from an earlier attempt of this job",
+            )),
             RunInputsOutcome::Rejected(RunInputsRejection::Conflict) => {
                 Err(invalid("this run already has different inputs recorded"))
             }

@@ -45,3 +45,19 @@ fn the_same_target_gives_the_same_hashes_and_another_target_another_name_hash() 
 fn an_unknown_target_has_no_inputs() {
     assert!(engine().run_inputs("no-such-target").is_none());
 }
+
+/// The digest is of the image this process runs: the file `current_exe` names, here, where nothing replaced it.
+#[test]
+fn the_executable_digest_is_the_sha256_of_the_running_image() {
+    let engine = engine();
+    let name = engine.target_names().into_iter().next().unwrap();
+    let hashes = engine.run_inputs(&name).unwrap().input_hashes();
+    let want =
+        hairspring_core::environment::sha256_file(&std::env::current_exe().unwrap()).unwrap();
+    // The rendered value of an input is hashed again, so compare through the same path.
+    let draft = hairspring_core::point::IdentityDraft::Sim(hairspring_core::point::CommonInputs {
+        hairspring_sha: hairspring_core::point::Recorded::Value(want),
+        target: hairspring_core::point::Recorded::Value(name),
+    });
+    assert_eq!(hashes, draft.input_hashes());
+}

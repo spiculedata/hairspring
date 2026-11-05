@@ -162,7 +162,8 @@ const MIGRATE_V7_TO_V8: &str = "
 CREATE INDEX IF NOT EXISTS runs_target_created ON runs(target, created_at, seq);
 CREATE TABLE IF NOT EXISTS run_inputs (
   run_id TEXT PRIMARY KEY REFERENCES runs(id), scheme TEXT NOT NULL, fields_json TEXT NOT NULL,
-  missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted BOOLEAN NOT NULL, created_at BIGINT NOT NULL);
+  missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted BOOLEAN NOT NULL, attempt INTEGER NOT NULL,
+  created_at BIGINT NOT NULL);
 ";
 
 /// Brings the schema to [`SCHEMA_VERSION`] inside the caller's transaction. A schema from a newer release is refused.
@@ -313,23 +314,29 @@ fn migrate_v7_to_v8(tx: &mut Transaction<'_>) -> Result<()> {
 }
 
 /// The columns of `run_inputs`: name, data type as `information_schema` names it, and whether it may be NULL.
-const RUN_INPUTS_COLUMNS: [(&str, &str, &str); 7] = [
+const RUN_INPUTS_COLUMNS: [(&str, &str, &str); 8] = [
     ("run_id", "text", "NO"),
     ("scheme", "text", "NO"),
     ("fields_json", "text", "NO"),
     ("missing_json", "text", "NO"),
     ("reporter_id", "text", "NO"),
     ("reporter_trusted", "boolean", "NO"),
+    ("attempt", "integer", "NO"),
     ("created_at", "bigint", "NO"),
 ];
 
 /// The table has these columns, `run_id` alone is its primary key, and `run_id` references `runs`; the index is valid
 /// and ready, on `runs`, not unique, on `(target, created_at, seq)`.
 fn verify_v8_definitions(tx: &mut Transaction<'_>) -> Result<()> {
+    // Everything here is read from the catalogs (`pg_class`, `pg_attribute`, `pg_constraint`, `pg_index`), which show every
+    // table whatever the role may do with it. `information_schema` shows only tables the role has a privilege on, and a
+    // role without a grant on `run_inputs` would be told the table is not there.
     let columns: Vec<(String, String, String)> = tx
         .query(
-            "SELECT column_name::text, data_type::text, is_nullable::text FROM information_schema.columns \
-             WHERE table_schema = current_schema() AND table_name = 'run_inputs' ORDER BY ordinal_position",
+            "SELECT a.attname::text, format_type(a.atttypid, a.atttypmod), CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END \
+             FROM pg_attribute a JOIN pg_class t ON t.oid = a.attrelid JOIN pg_namespace n ON n.oid = t.relnamespace \
+             WHERE n.nspname = current_schema() AND t.relname = 'run_inputs' AND t.relkind = 'r' \
+               AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum",
             &[],
         )?
         .iter()
@@ -339,25 +346,30 @@ fn verify_v8_definitions(tx: &mut Transaction<'_>) -> Result<()> {
         .iter()
         .map(|(n, t, nullable)| (n.to_string(), t.to_string(), nullable.to_string()))
         .collect();
-    let references_runs: i64 = tx
-        .query_one(
-            "SELECT count(*) FROM pg_constraint k JOIN pg_class t ON t.oid = k.conrelid \
-             JOIN pg_namespace n ON n.oid = t.relnamespace JOIN pg_class r ON r.oid = k.confrelid \
-             WHERE n.nspname = current_schema() AND t.relname = 'run_inputs' \
-               AND k.contype = 'f' AND r.relname = 'runs' AND k.conkey = ARRAY[1]::smallint[]",
+    // Exactly two constraints (NOT NULL ones, which version 18 lists too, are left out): the primary key on `run_id`,
+    // and the reference from `run_id` to `id` of `runs` in this same schema with the default actions. No CHECK, no
+    // UNIQUE, no ON DELETE CASCADE. And no index but the primary key's.
+    let (constraints, primary, references_runs, indexes): (i64, i64, i64, i64) = {
+        let row = tx.query_one(
+            "WITH t AS (SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+                         WHERE n.nspname = current_schema() AND c.relname = 'run_inputs' AND c.relkind = 'r') \
+             SELECT \
+               (SELECT count(*) FROM pg_constraint k, t WHERE k.conrelid = t.oid AND k.contype <> 'n'), \
+               (SELECT count(*) FROM pg_constraint k, t WHERE k.conrelid = t.oid AND k.contype = 'p' \
+                  AND k.conkey = ARRAY[1]::smallint[]), \
+               (SELECT count(*) FROM pg_constraint k, t, pg_class r, pg_namespace rn \
+                 WHERE k.conrelid = t.oid AND k.contype = 'f' AND r.oid = k.confrelid AND rn.oid = r.relnamespace \
+                   AND rn.nspname = current_schema() AND r.relname = 'runs' AND k.conkey = ARRAY[1]::smallint[] \
+                   AND array_length(k.confkey, 1) = 1 \
+                   AND (SELECT a.attname FROM pg_attribute a WHERE a.attrelid = k.confrelid AND a.attnum = k.confkey[1]) = 'id' \
+                   AND k.confdeltype = 'a' AND k.confupdtype = 'a' AND k.confmatchtype = 's'), \
+               (SELECT count(*) FROM pg_index i, t WHERE i.indrelid = t.oid)",
             &[],
-        )?
-        .get(0);
-    let primary: i64 = tx
-        .query_one(
-            "SELECT count(*) FROM pg_constraint k JOIN pg_class t ON t.oid = k.conrelid \
-             JOIN pg_namespace n ON n.oid = t.relnamespace \
-             WHERE n.nspname = current_schema() AND t.relname = 'run_inputs' \
-               AND k.contype = 'p' AND k.conkey = ARRAY[1]::smallint[]",
-            &[],
-        )?
-        .get(0);
-    if columns != wanted || references_runs != 1 || primary != 1 {
+        )?;
+        (row.get(0), row.get(1), row.get(2), row.get(3))
+    };
+    if columns != wanted || constraints != 2 || primary != 1 || references_runs != 1 || indexes != 1
+    {
         return Err(StoreError::Backend(
             "table run_inputs exists but has a different definition: rename or drop it and open the database again"
                 .to_string(),
@@ -480,9 +492,11 @@ fn verify_objects(
     indexes: &[&str],
 ) -> Result<()> {
     for table in tables {
+        // From `pg_class`, which lists a table whatever the role may do with it (`information_schema` hides a table the
+        // role has no privilege on, and the open would be refused for a table that is there).
         let row = tx.query_one(
-            "SELECT EXISTS (SELECT 1 FROM information_schema.tables \
-             WHERE table_schema = current_schema() AND table_name = $1)",
+            "SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = current_schema() AND c.relname = $1 AND c.relkind IN ('r', 'p'))",
             &[&table],
         )?;
         if !row.get::<_, bool>(0) {

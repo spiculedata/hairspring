@@ -15,6 +15,14 @@
   as `label (t:<key>)` or, without a label, by the key alone. A replay is logged once a replay slot is held. Actions
   taken through MCP over HTTP are not yet logged with the label. A label is not a secret and not proof of identity.
   The message for an unknown role no longer repeats the text in the role slot.
+- Run inputs are recorded: for each run, a SHA-256 digest of each input it executed with (never the values, which can
+  include the working directory and environment), whether the reporting worker was trusted, and the attempt of the job
+  that ran. A job leased again records its own inputs, which replace the earlier attempt's. The process records them for
+  a run of a built-in simulated target (the digest of the executable it runs, the target name and the backend), and a
+  remote worker reports them to the new `POST /api/worker/jobs/{job}/inputs`, with its secret, for the job it holds; a
+  report must name every input its scheme has and be for the run's own target and backend. Nothing serves a digest, and
+  no existing response changes; a run stored before this version, or a Hermit or WASM run, has none and reads as "not
+  recorded". Nothing compares runs by these inputs yet. See "Run inputs" in docs/architecture.md.
 - `hairspring serve --trusted-proxy ADDR[,ADDR...]` (or `HAIRSPRING_TRUSTED_PROXY`) names reverse proxies, by
   address or network, whose `X-Forwarded-For` header gives the client address for the rate limit, for the check that
   refuses a valid token while its address's anonymous budget is used up, and, without tokens, for the per-caller
@@ -165,20 +173,17 @@
 
 ### Changed
 
-- Schema version 8 adds a table, `run_inputs`, and an index, `runs_target_created`, on both stores. The table keeps,
-  once per run, a SHA-256 digest of each input the run executed with (never the values, which can include the working
-  directory and environment), who reported them and whether that worker was trusted; nothing serves a digest, and a
-  run stored before this version has no row and reads as "not recorded". The process records the inputs of a run it
-  executes for a built-in simulated target, and a remote worker reports them to the new
-  `POST /api/worker/jobs/{job}/inputs` (with its secret, for the job it holds); a Hermit or WASM run records none yet.
-  No existing response changes, and nothing compares runs by these inputs yet. Opening a version 7 database creates
-  both in the transaction that sets the version; no row is rewritten. On PostgreSQL this blocks writes to `runs` while
-  the index builds and must be done by the role that owns the tables; a role that only reads and writes rows needs
-  `SELECT, INSERT` on `run_inputs` to record inputs. A table or index of either name built beforehand is kept only if
-  it has the same definition: otherwise the open is refused, everything is rolled back and the database stays at
-  version 7. An older release refuses a version 8 database. There is no offline downgrade from 8 to 7 (reset the stored
-  version by hand); the downgrade to version 2 drops the table and the index. `hairspring gc` deletes a run's inputs
-  with the run. See "Run inputs" in docs/architecture.md.
+- Schema version 8 upgrade (it adds the `run_inputs` table and the `runs_target_created` index, on both stores).
+  Opening a version 7 database creates both in the transaction that sets the version; no row is rewritten. On SQLite
+  every write to the database waits during the upgrade. On PostgreSQL `CREATE INDEX` takes a `SHARE` lock on `runs`
+  until the migration commits, so every insert or update of a run waits (build the index beforehand with
+  `CREATE INDEX CONCURRENTLY` under the same name to avoid it), and the migration must be run by the role that owns
+  the tables. A role that only reads and writes rows needs `SELECT, INSERT, DELETE` on `run_inputs` (`DELETE` for
+  `hairspring gc`) to record inputs; without a grant it still opens the database. A table or index of either name built
+  beforehand is kept only if it has the same definition: otherwise the open is refused, everything is rolled back and the
+  database stays at version 7. An older release refuses a version 8 database. There is no offline downgrade from 8 to
+  7 (reset the stored version by hand); the downgrade to version 2 drops the table and the index. See "Run inputs" in
+  docs/architecture.md.
 - `hairspring --version` names the build: `hairspring 0.1.0 (f819c1a 2026-10-24)` is the crate version, the short
   commit and that commit's date, so two builds of the same crate version can be told apart (`v0.1-RC1` and later
   builds all printed `hairspring 0.1.0`). The commit comes from git at build time, or from `HAIRSPRING_BUILD_COMMIT`

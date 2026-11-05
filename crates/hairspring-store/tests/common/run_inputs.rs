@@ -14,6 +14,82 @@ pub fn run_all_run_inputs(make: &dyn Fn() -> Arc<dyn Store>) {
     the_trust_of_the_first_reporter_stays(&*make());
     inputs_go_with_their_run_when_it_is_deleted(&*make());
     hostile_text_is_never_spliced(&*make());
+    a_newer_attempt_replaces_the_inputs_and_an_older_one_is_stale(&*make());
+}
+
+/// A job leased again is a new attempt, and its trials replace the earlier attempt's. Its inputs do too: the newer
+/// attempt's row replaces the older one's whole (fields, reporter and trust), the same attempt keeps the repeat and
+/// conflict rules, and an older attempt is refused as stale.
+fn a_newer_attempt_replaces_the_inputs_and_an_older_one_is_stale(s: &dyn Store) {
+    let run = new_run(s, 10);
+    let first = NewRunInputs {
+        reporter_trusted: false,
+        attempt: 1,
+        ..inputs(&run.id)
+    };
+    assert_eq!(
+        s.put_run_inputs(&first, 100).unwrap(),
+        RunInputsOutcome::Stored
+    );
+    let mut second = NewRunInputs {
+        reporter_id: "wrk_0000000000000002".into(),
+        reporter_trusted: true,
+        attempt: 2,
+        ..first.clone()
+    };
+    second.fields.insert("hermit_sha".into(), digest('d'));
+    second.missing.clear();
+    assert_eq!(
+        s.put_run_inputs(&second, 200).unwrap(),
+        RunInputsOutcome::Replaced
+    );
+    let stored = s.get_run_inputs(&run.id).unwrap().unwrap();
+    assert_eq!(stored.attempt, 2);
+    assert_eq!(stored.fields, second.fields);
+    assert!(stored.missing.is_empty());
+    assert_eq!(
+        (
+            stored.reporter_id.as_str(),
+            stored.reporter_trusted,
+            stored.created_at
+        ),
+        ("wrk_0000000000000002", true, 200)
+    );
+    // The same attempt again: a repeat, then a conflict, and the stored row stays.
+    assert_eq!(
+        s.put_run_inputs(&second, 300).unwrap(),
+        RunInputsOutcome::Duplicate
+    );
+    let mut conflicting = second.clone();
+    conflicting.fields.insert("hermit_sha".into(), digest('e'));
+    assert_eq!(
+        rejected(s.put_run_inputs(&conflicting, 300).unwrap()),
+        RunInputsRejection::Conflict
+    );
+    // An older attempt is stale, even with the same content as the one it lost to.
+    for old in [
+        first.clone(),
+        NewRunInputs {
+            attempt: 1,
+            ..second.clone()
+        },
+    ] {
+        assert_eq!(
+            rejected(s.put_run_inputs(&old, 400).unwrap()),
+            RunInputsRejection::Stale
+        );
+    }
+    assert_eq!(s.get_run_inputs(&run.id).unwrap().unwrap().attempt, 2);
+    // A later attempt replaces again, with its own trust.
+    let third = NewRunInputs {
+        attempt: 5,
+        ..first
+    };
+    assert_eq!(
+        s.put_run_inputs(&third, 500).unwrap(),
+        RunInputsOutcome::Replaced
+    );
+    assert!(!s.get_run_inputs(&run.id).unwrap().unwrap().reporter_trusted);
 }
 
 fn digest(c: char) -> String {
@@ -44,6 +120,7 @@ fn inputs(run: &str) -> NewRunInputs {
         missing: vec!["loader_libc_sha".into()],
         reporter_id: "wrk_0000000000000001".into(),
         reporter_trusted: true,
+        attempt: 1,
     }
 }
 

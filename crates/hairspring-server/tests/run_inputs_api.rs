@@ -5,7 +5,7 @@ use hairspring_engine::config::Config;
 use hairspring_engine::engine::Engine;
 use hairspring_server::{start, Auth, RunningServer, ServerConfig};
 use hairspring_service::Service;
-use hairspring_store::{SqliteStore, Store};
+use hairspring_store::{sha256_hex, SqliteStore, Store};
 use serde_json::{json, Value};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -115,7 +115,7 @@ fn body(l: &Leased, inputs: Value) -> Value {
 }
 
 fn sim_inputs() -> Value {
-    json!({"scheme": "sim/1", "fields": {"hairspring_sha": digest('a'), "target": digest('b'), "backend": digest('c')}})
+    json!({"scheme": "sim/1", "fields": {"hairspring_sha": digest('a'), "target": sha256_hex(b"pubsub-atomic"), "backend": sha256_hex(b"sim")}})
 }
 
 #[test]
@@ -135,7 +135,7 @@ fn a_remote_worker_reports_its_inputs_once_and_repeats_are_accepted() {
     let again = post(srv.addr(), RUN, &path, &body(&l, sim_inputs()));
     assert_eq!(again.json(), json!({"ok": true, "outcome": "duplicate"}));
     let mut changed = sim_inputs();
-    changed["fields"]["target"] = json!(digest('d'));
+    changed["fields"]["hairspring_sha"] = json!(digest('d'));
     let refused = post(srv.addr(), RUN, &path, &body(&l, changed));
     assert_eq!(refused.status, 400, "{}", refused.body);
     assert!(

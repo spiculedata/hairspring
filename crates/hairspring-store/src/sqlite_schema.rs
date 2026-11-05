@@ -185,7 +185,8 @@ const MIGRATE_V7_TO_V8: &str = "
 CREATE INDEX IF NOT EXISTS runs_target_created ON runs(target, created_at);
 CREATE TABLE IF NOT EXISTS run_inputs (
   run_id TEXT PRIMARY KEY REFERENCES runs(id), scheme TEXT NOT NULL, fields_json TEXT NOT NULL,
-  missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, created_at INTEGER NOT NULL);
+  missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, attempt INTEGER NOT NULL,
+  created_at INTEGER NOT NULL);
 ";
 
 /// The tables a version 3 database must have.
@@ -245,13 +246,14 @@ fn verify_v7(conn: &Connection, version: i64) -> Result<()> {
 }
 
 /// The columns of `run_inputs` as `PRAGMA table_info` reports them: name, declared type, NOT NULL, primary key.
-const RUN_INPUTS_COLUMNS: [(&str, &str, i64, i64); 7] = [
+const RUN_INPUTS_COLUMNS: [(&str, &str, i64, i64); 8] = [
     ("run_id", "TEXT", 0, 1),
     ("scheme", "TEXT", 1, 0),
     ("fields_json", "TEXT", 1, 0),
     ("missing_json", "TEXT", 1, 0),
     ("reporter_id", "TEXT", 1, 0),
     ("reporter_trusted", "INTEGER", 1, 0),
+    ("attempt", "INTEGER", 1, 0),
     ("created_at", "INTEGER", 1, 0),
 ];
 
@@ -276,13 +278,38 @@ fn verify_v8_definitions(conn: &Connection) -> Result<()> {
         .iter()
         .map(|(n, t, nn, pk)| (n.to_string(), t.to_string(), *nn, *pk))
         .collect();
+    // Exactly one reference, to runs(id), with the default actions (no ON DELETE CASCADE and the like).
     let references_runs: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM pragma_foreign_key_list('run_inputs') \
-         WHERE \"table\"='runs' AND \"from\"='run_id' AND \"to\"='id'",
+        "SELECT (SELECT COUNT(*) FROM pragma_foreign_key_list('run_inputs')) \
+              + (SELECT COUNT(*) FROM pragma_foreign_key_list('run_inputs') \
+                  WHERE \"table\"='runs' AND \"from\"='run_id' AND \"to\"='id' \
+                    AND on_update='NO ACTION' AND on_delete='NO ACTION' AND \"match\"='NONE')",
         [],
         |r| r.get(0),
     )?;
-    if columns != wanted || references_runs != 1 {
+    // The primary key's own index and nothing else: no UNIQUE constraint, no index added by hand. No CHECK either.
+    let extra_indexes: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_index_list('run_inputs') WHERE origin <> 'pk'",
+        [],
+        |r| r.get(0),
+    )?;
+    let sql: String = conn.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='run_inputs'",
+        [],
+        |r| r.get(0),
+    )?;
+    let has_check = sql.to_ascii_uppercase().contains("CHECK");
+    let without_rowid: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_list('run_inputs') WHERE wr = 1 OR strict = 1",
+        [],
+        |r| r.get(0),
+    )?;
+    if columns != wanted
+        || references_runs != 2
+        || extra_indexes != 0
+        || has_check
+        || without_rowid != 0
+    {
         return Err(StoreError::Backend(
             "table run_inputs exists but has a different definition: rename or drop it and open the database again"
                 .to_string(),

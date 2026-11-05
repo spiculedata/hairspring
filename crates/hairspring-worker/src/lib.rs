@@ -107,6 +107,9 @@ struct Api {
     agent: ureq::Agent,
     base: String,
     token: Option<String>,
+    /// Set once the server has answered that it has no endpoint for run inputs (an older release): the worker then stops
+    /// sending them, so the log says it once and the server is not asked again for every job.
+    inputs_unsupported: AtomicBool,
 }
 
 impl Api {
@@ -132,6 +135,7 @@ impl Api {
             agent,
             base: cfg.server.trim_end_matches('/').to_string(),
             token,
+            inputs_unsupported: AtomicBool::new(false),
         })
     }
 

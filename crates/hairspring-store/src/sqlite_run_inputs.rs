@@ -1,17 +1,19 @@
 //! Run inputs on SQLite (schema version 8). The rules are in [`crate::run_inputs`]; this only fetches and writes rows.
 use crate::run_inputs::{
-    parse_columns, prepare, NewRunInputs, RunInputsOutcome, RunInputsRecord, RunInputsRejection,
+    decide, parse_columns, prepare, Decision, NewRunInputs, RunInputsOutcome, RunInputsRecord,
+    RunInputsRejection,
 };
 use crate::sqlite_tx::write_tx;
 use crate::types::{Result, StoreError};
 use rusqlite::{params, Connection, OptionalExtension};
 
-type Row = (String, String, String, String, bool, i64);
+/// scheme, fields, missing, reporter, trust, attempt, created_at
+type Row = (String, String, String, String, bool, u32, i64);
 
 fn stored_row(conn: &Connection, run_id: &str) -> Result<Option<Row>> {
     Ok(conn
         .query_row(
-            "SELECT scheme, fields_json, missing_json, reporter_id, reporter_trusted, created_at \
+            "SELECT scheme, fields_json, missing_json, reporter_id, reporter_trusted, attempt, created_at \
              FROM run_inputs WHERE run_id=?",
             [run_id],
             |r| {
@@ -22,6 +24,7 @@ fn stored_row(conn: &Connection, run_id: &str) -> Result<Option<Row>> {
                     r.get(3)?,
                     r.get(4)?,
                     r.get(5)?,
+                    r.get(6)?,
                 ))
             },
         )
@@ -29,8 +32,15 @@ fn stored_row(conn: &Connection, run_id: &str) -> Result<Option<Row>> {
 }
 
 pub(crate) fn get(conn: &Connection, run_id: &str) -> Result<Option<RunInputsRecord>> {
-    let Some((scheme, fields_json, missing_json, reporter_id, reporter_trusted, created_at)) =
-        stored_row(conn, run_id)?
+    let Some((
+        scheme,
+        fields_json,
+        missing_json,
+        reporter_id,
+        reporter_trusted,
+        attempt,
+        created_at,
+    )) = stored_row(conn, run_id)?
     else {
         return Ok(None);
     };
@@ -43,6 +53,7 @@ pub(crate) fn get(conn: &Connection, run_id: &str) -> Result<Option<RunInputsRec
         missing,
         reporter_id,
         reporter_trusted,
+        attempt,
         created_at,
     }))
 }
@@ -60,19 +71,25 @@ pub(crate) fn put(conn: &mut Connection, new: &NewRunInputs, now: i64) -> Result
     if !run_exists {
         return Ok(RunInputsOutcome::Rejected(RunInputsRejection::RunNotFound));
     }
-    if let Some((scheme, fields_json, missing_json, ..)) = stored_row(&tx, &new.run_id)? {
-        let same = scheme == new.scheme
-            && fields_json == prepared.fields_json
-            && missing_json == prepared.missing_json;
-        return Ok(if same {
-            RunInputsOutcome::Duplicate
-        } else {
-            RunInputsOutcome::Rejected(RunInputsRejection::Conflict)
+    let stored = stored_row(&tx, &new.run_id)?;
+    let view = stored
+        .as_ref()
+        .map(|(scheme, fields, missing, _, _, attempt, _)| {
+            (scheme.as_str(), fields.as_str(), missing.as_str(), *attempt)
         });
-    }
+    let outcome = match decide(view, new, &prepared) {
+        Decision::Duplicate => return Ok(RunInputsOutcome::Duplicate),
+        Decision::Conflict => return Ok(RunInputsOutcome::Rejected(RunInputsRejection::Conflict)),
+        Decision::Stale => return Ok(RunInputsOutcome::Rejected(RunInputsRejection::Stale)),
+        Decision::Replace => {
+            tx.execute("DELETE FROM run_inputs WHERE run_id=?", [&new.run_id])?;
+            RunInputsOutcome::Replaced
+        }
+        Decision::Insert => RunInputsOutcome::Stored,
+    };
     tx.execute(
-        "INSERT INTO run_inputs(run_id,scheme,fields_json,missing_json,reporter_id,reporter_trusted,created_at) \
-         VALUES (?,?,?,?,?,?,?)",
+        "INSERT INTO run_inputs(run_id,scheme,fields_json,missing_json,reporter_id,reporter_trusted,attempt,created_at) \
+         VALUES (?,?,?,?,?,?,?,?)",
         params![
             new.run_id,
             new.scheme,
@@ -80,9 +97,10 @@ pub(crate) fn put(conn: &mut Connection, new: &NewRunInputs, now: i64) -> Result
             prepared.missing_json,
             new.reporter_id,
             new.reporter_trusted,
+            new.attempt,
             now
         ],
     )?;
     tx.commit()?;
-    Ok(RunInputsOutcome::Stored)
+    Ok(outcome)
 }

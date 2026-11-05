@@ -516,15 +516,22 @@ reads it for a comparison yet: this version only records it and says whether a r
 changes.
 
 - `run_inputs(run_id PRIMARY KEY REFERENCES runs(id), scheme, fields_json, missing_json, reporter_id,
-  reporter_trusted, created_at)`: one row per run, written once. `scheme` is `sim/1`, `wasm/1` or `hermit/1`, the scheme
+  reporter_trusted, attempt, created_at)`: one row per run, for one attempt of its job. `scheme` is `sim/1`, `wasm/1` or `hermit/1`, the scheme
   of the point identity (see "Point addresses and hashes"), and must be the run's backend. `fields_json` is an object
   from input name to the lower-case SHA-256 hex of that input's rendered value (the text after `key=` in the identity
   text), keys sorted, at most 64 names and 16 KiB. `missing_json` lists the names of inputs the worker could not
-  record. `reporter_trusted` is the reporting worker's trust when it reported, as for trial rows.
+  record. `reporter_trusted` is the reporting worker's trust when it reported, as for trial rows. `attempt` is the job's attempt
+  number (its lease count, from 1).
+- **Attempts.** A job that is leased again (its worker was lost, or the server restarted mid-run) is a new attempt, and
+  its trials replace the earlier attempt's. Its inputs do too: a record from a later attempt replaces the row whole
+  (fields, missing names, reporter and trust), the same attempt again is a repeat (the first reporter, trust and time
+  stay) or, if different, a conflict, and a record from an earlier attempt is refused as stale. When the new attempt's
+  trials start, any inputs left by an earlier attempt are removed with the other rows of that attempt, so a worker
+  that records nothing (one from an older release) never inherits the first attempt's.
 - **Digests, never values.** The identity text holds the working directory and the guest environment in plain text, so
   it is not stored. A value is stored only if it is a digest: a plain value is refused. A digest of a short input can
   be guessed by trying candidates, so no endpoint returns one; the service reports the names of the recorded and
-  missing inputs and who reported them (`hairspring_service::Service::run_inputs_view`).
+  missing inputs and whether the reporter was trusted (`hairspring_service::Service::run_inputs_view`).
 - `runs_target_created` on `runs(target, created_at)` on SQLite (every SQLite index also holds the `rowid`) and
   `runs(target, created_at, seq)` on PostgreSQL: the runs of one target, newest first, read without sorting the whole
   table. Nothing in this version reads it; the property history will.
@@ -533,13 +540,20 @@ changes.
 - **Who records.** The process itself records the inputs of a run it executes, for a built-in simulated target: the
   digest of the running executable (the code under test is compiled into it, so one digest covers engine and target),
   the target name and the backend. The executable is read once per process, so the first run of a process pays a time
-  that grows with the size of the file (a debug build is much larger than a release build). A remote worker reports the inputs its own engine can describe, once per job, to
+  that grows with the size of the file (a debug build is much larger than a release build). On Linux the digest is of
+  `/proc/self/exe`, the image the kernel started, even if the file at its path was replaced since; elsewhere hashing
+  starts, in the background, when the first backend is built, and the first run waits for it only if it is not done. An
+  image that cannot be read leaves the input missing, never a guess. A remote worker reports the inputs its own engine can describe, once per job, to
   `POST /api/worker/jobs/{job}/inputs` with its secret and the job's lease, as for trials (`run` role). The body is
   `{"worker_id", "worker_secret", "inputs": {"scheme", "fields": {name: digest}, "missing": [name]}}`; the answer is
-  `{"ok": true, "outcome": "stored"}` or `"duplicate"`. The server checks that the scheme is the run's backend and
-  that every name is one the scheme has; the same inputs again are accepted and change nothing; different inputs for a
-  run that has some are refused (400, "this run already has different inputs recorded"). A refusal uses fixed words and
-  never repeats what was sent. Only the built-in simulated backend describes its inputs today: a Hermit or WASM run
+  `{"ok": true, "outcome": "stored"}`, `"replaced"` (an earlier attempt's inputs were replaced) or `"duplicate"`. The
+  server checks that the scheme is the run's backend, that every name is one the scheme has, that every name the scheme
+  has is either in `fields` or in `missing` (an incomplete report is refused), and that the `target` and `backend`
+  digests are those of this run's own target and backend (a report for another run is refused). The same inputs again
+  are accepted and change nothing; different inputs from the same attempt are refused (400, "this run already has
+  different inputs recorded"). A refusal uses fixed words and never repeats what was sent. A worker that is told the
+  server has no such endpoint (404 or 405, an older server) stops sending inputs for the rest of its life, so the log
+  says it once. Only the built-in simulated backend describes its inputs today: a Hermit or WASM run
   records none yet, so it reads as "not recorded".
 - `hairspring gc` deletes a run's `run_inputs` row with the run.
 
@@ -549,22 +563,26 @@ before upgrading. An older release refuses a version 8 database ("database schem
 (expected 7)").
 
 - *How long, and locks.* Building the index reads the `runs` table once; creating the table is instant. SQLite holds its
-  write lock for the whole migration. On PostgreSQL `CREATE INDEX` (not `CONCURRENTLY`, which cannot run in a
+  write lock for the whole migration, so every write to the database waits until it is done. On PostgreSQL `CREATE INDEX` (not `CONCURRENTLY`, which cannot run in a
   transaction) takes a `SHARE` lock on `runs` until the migration commits: reads carry on, and every insert or update of
   a run waits. Upgrade at a quiet time, or build the index beforehand with `CREATE INDEX CONCURRENTLY runs_target_created
   ON runs(target, created_at, seq)`; the migration then finds it. A concurrent build that fails leaves an invalid index:
   drop it first.
 - *Checked, not trusted.* `IF NOT EXISTS` goes by name, so after creating them the migration, and every later open,
-  checks that `run_inputs` has these columns (names, types, not-null), that `run_id` alone is its primary key and
-  references `runs`, and that the index is on `runs`, not unique, with these columns in this order and the default
+  checks that `run_inputs` has these columns (names, types, not-null), that `run_id` alone is its primary key, that
+  its one reference is to `runs(id)` (in the same schema, on PostgreSQL) with the default actions, and that it has no
+  CHECK or UNIQUE constraint and no index beyond the primary key's, and that the index is on `runs`, not unique, with these columns in this order and the default
   collation and direction (on PostgreSQL also valid and ready). Otherwise the open is refused ("table run_inputs exists
   but has a different definition: rename or drop it and open the database again", or the same for the index), the
   whole migration is rolled back, and a version 7 database stays at 7. A current database missing either object is
-  refused, not repaired.
+  refused, not repaired. On PostgreSQL the checks read the system catalogs, not `information_schema`, so a role that
+  has no privilege on `run_inputs` still sees the table and opens the database: only recording (and reading) it fails,
+  with the database's own "permission denied".
 - *Rights.* On PostgreSQL the migration must be run, once, by the role that owns the schema's tables (or a member of it,
   or a superuser): creating the index needs ownership of `runs`. The table it creates belongs to that role, so a role
-  that only reads and writes rows needs `SELECT, INSERT` on `run_inputs` granted, as on the other tables, before it can
-  record inputs. Opening a current (version 8) schema issues no DDL. A role that is not the owner, opening a version 7
+  that only reads and writes rows needs `SELECT, INSERT, DELETE` on `run_inputs` granted (as on the other tables)
+  before it can record inputs: replacing an earlier attempt's inputs, removing them when a new attempt's trials start,
+  and `hairspring gc` all delete, and nothing here updates a row. Opening a current (version 8) schema issues no DDL. A role that is not the owner, opening a version 7
   schema, is refused by the database ("must be owner of table runs") and the schema stays at 7.
 - *Downgrade.* There is no offline downgrade from 8 to 7. Version 8 has the tables and columns of version 7 plus the new
   table, so that step is dropping `run_inputs` and `runs_target_created` (optional: a version 7 build ignores them,

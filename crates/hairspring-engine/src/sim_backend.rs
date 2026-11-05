@@ -27,6 +27,7 @@ pub struct SimBackend {
 
 impl SimBackend {
     pub fn new(registry: Arc<Registry>) -> Self {
+        start_hashing_the_image();
         SimBackend { registry }
     }
 
@@ -91,16 +92,46 @@ pub(crate) fn failure_report(
     })
 }
 
-/// SHA-256 of the running executable, read once per process: the code under test is compiled into it, so this one
-/// digest covers the engine and the target. `None` when the executable cannot be read, which leaves the input missing.
-fn executable_sha() -> Option<String> {
-    static SHA: OnceLock<Option<String>> = OnceLock::new();
-    SHA.get_or_init(|| {
-        let path = std::env::current_exe().ok()?;
-        hairspring_core::environment::sha256_file(&path).ok()
-    })
-    .clone()
+/// The image this process is running, as the file to read it from. On Linux that is `/proc/self/exe`, which opens the
+/// image the kernel started even if the file at its path was replaced since (a rebuild or an upgrade under a running
+/// server), so the digest is of the code that runs. Elsewhere it is the path `current_exe` gives.
+fn running_image() -> Option<std::path::PathBuf> {
+    if cfg!(target_os = "linux") {
+        let proc_exe = std::path::PathBuf::from("/proc/self/exe");
+        if std::fs::File::open(&proc_exe).is_ok() {
+            return Some(proc_exe);
+        }
+    }
+    std::env::current_exe().ok()
 }
+
+static EXECUTABLE_SHA: OnceLock<Option<String>> = OnceLock::new();
+
+fn hash_running_image() -> Option<String> {
+    hairspring_core::environment::sha256_file(&running_image()?).ok()
+}
+
+/// SHA-256 of the running image, worked out once per process and kept: the code under test is compiled into it, so this
+/// one digest covers the engine and the target. `None` when the image cannot be read, which leaves the input missing
+/// (never a guess). Where the path of the running image can change under a process (not Linux), hashing starts when the
+/// first backend is built, in the background, so it describes the image at the start; the first run waits for it only
+/// if it is not done yet.
+fn executable_sha() -> Option<String> {
+    EXECUTABLE_SHA.get_or_init(hash_running_image).clone()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn start_hashing_the_image() {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        std::thread::spawn(|| {
+            let _ = executable_sha();
+        });
+    });
+}
+
+#[cfg(target_os = "linux")]
+fn start_hashing_the_image() {}
 
 impl Backend for SimBackend {
     fn name(&self) -> &'static str {
