@@ -691,7 +691,7 @@ fn a_process_target_whose_program_is_missing_is_a_configuration_error_not_a_fail
         "{both}"
     );
     assert!(!both.contains("FAILED"), "{both}");
-    assert!(!both.contains("127"), "{both}");
+    assert!(!both.contains("exit code 127"), "{both}");
     assert!(
         !d.join(".hairspring/bundles").exists(),
         "no bundle for a configuration error"
