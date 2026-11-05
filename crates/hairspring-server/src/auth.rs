@@ -206,6 +206,84 @@ mod tests {
     }
 
     #[test]
+    fn the_comparison_is_false_for_any_pair_of_digests_that_differ() {
+        let zero = [0u8; 32];
+        assert!(ct_eq(&zero, &zero));
+        // Two bytes that differ by the same amount must not cancel each other out.
+        let mut two_equal_differences = zero;
+        two_equal_differences[0] = 1;
+        two_equal_differences[31] = 1;
+        assert!(!ct_eq(&zero, &two_equal_differences));
+        for i in 0..32 {
+            let mut one = zero;
+            one[i] = 0x80;
+            assert!(!ct_eq(&zero, &one), "byte {i}");
+        }
+    }
+
+    #[test]
+    fn a_token_of_exactly_the_minimum_length_is_accepted_and_one_shorter_is_not() {
+        let sixteen = "a".repeat(MIN_TOKEN_LEN);
+        assert!(Auth::from_spec(&format!("{sixteen}:read")).is_ok());
+        let fifteen = "a".repeat(MIN_TOKEN_LEN - 1);
+        assert!(Auth::from_spec(&format!("{fifteen}:read")).is_err());
+    }
+
+    #[test]
+    fn a_token_with_whitespace_or_a_control_character_is_refused() {
+        for bad in [
+            "token with spaces 0123456789",
+            "token-with-bell-\u{7}-0123456789",
+            "token-with-tab-\t-0123456789",
+            "token-with-nul-\0-0123456789",
+            "token-with-nbsp-\u{a0}-0123456789",
+        ] {
+            assert!(Auth::from_spec(&format!("{bad}:read")).is_err(), "{bad:?}");
+        }
+        assert!(Auth::from_spec("token-without-either-0123456789:read").is_ok());
+    }
+
+    #[test]
+    fn a_spec_without_a_valid_role_or_with_a_repeated_token_or_with_no_token_is_refused() {
+        assert!(Auth::from_spec("run-token-0123456789abcdef").is_err());
+        assert!(Auth::from_spec("run-token-0123456789abcdef:owner").is_err());
+        assert!(Auth::from_spec(&format!("{TOKEN}:read,{TOKEN}:admin")).is_err());
+        assert!(Auth::from_spec("").is_err());
+        assert!(Auth::from_spec(" , ").is_err());
+    }
+
+    #[test]
+    fn a_configured_auth_is_not_open_and_the_roles_come_back_as_configured() {
+        let a = auth();
+        assert!(!a.is_open());
+        assert!(Auth::open().is_open());
+        assert_eq!(
+            a.authenticate(Some(&format!("Bearer {TOKEN}"))),
+            Some(Role::Run)
+        );
+        assert_eq!(
+            a.authenticate(Some("Bearer other-token-0123456789abc")),
+            Some(Role::Read)
+        );
+        assert_eq!(
+            a.authenticate(Some("Bearer nope-nope-nope-nope-nope")),
+            None
+        );
+        assert_eq!(a.authenticate(None), None);
+    }
+
+    #[test]
+    fn a_caller_is_refused_a_role_above_its_own_and_allowed_its_own_and_below() {
+        let caller = Caller {
+            role: Role::Run,
+            key: "t:x".into(),
+        };
+        assert!(caller.need(Role::Read).is_ok());
+        assert!(caller.need(Role::Run).is_ok());
+        assert!(caller.need(Role::Admin).is_err());
+    }
+
+    #[test]
     fn an_unknown_token_has_no_key() {
         assert!(auth()
             .identify(Some("Bearer nope-nope-nope-nope-nope"))

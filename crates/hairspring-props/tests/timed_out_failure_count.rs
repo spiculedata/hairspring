@@ -295,3 +295,23 @@ fn a_trial_that_a_settled_id_also_attributes_is_never_held() {
     assert_eq!(run.provisional_refs(), 0);
     assert_eq!(run.summary().inconclusive_with_failure_trials, 1);
 }
+
+#[test]
+fn the_provisional_limit_is_reached_exactly_and_the_trial_that_fills_it_is_counted() {
+    // 64 undecided ids a trial divide the limit exactly, so the 512th trial brings the held total to the limit and
+    // is still counted; only the 513th would pass it.
+    let ids = 64;
+    assert_eq!(MAX_PROVISIONAL_REFS % ids, 0);
+    let fills = MAX_PROVISIONAL_REFS / ids;
+    let timed_out = many_failing_ids(ids);
+    let mut run = RunProps::new();
+    for i in 0..=fills {
+        run = run.add_inconclusive(i as u64, &timed_out);
+    }
+    assert_eq!(run.provisional_refs(), MAX_PROVISIONAL_REFS);
+    assert_eq!(
+        run.summary().inconclusive_with_failure_trials,
+        fills as u64,
+        "the trial that reaches the limit counts, the one past it does not"
+    );
+}
