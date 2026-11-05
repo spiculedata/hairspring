@@ -229,7 +229,7 @@ worker and how many are held by workers. Each row of the table is one worker:
   worker is shown, labelled as unverified. The page does not change trust. An administrator does that with
   `POST /api/workers/{id}/trust`.
 - **Capabilities**: what the worker said about itself when it registered, one line per key. The server does not check
-  it. Text that was not JSON is reported as unreadable, and long values are cut.
+  it. Text that was not JSON is reported as unreadable, and long values are cut to 120 characters and at most 8 lines are shown.
 - **Holding**: the runs the worker holds a job for, as links to the run page, and how many more it holds if there are
   more than three.
 - **Last seen**: when the server last heard from the worker.
@@ -239,7 +239,11 @@ worker and how many are held by workers. Each row of the table is one worker:
 The page loads again every three seconds, stops while the browser tab is hidden, and says when a load fails while
 keeping the rows it already has. With no workers it says so and says how one starts: `hairspring serve` runs one inside
 the server unless given `--workers 0`, and `hairspring worker` registers a remote one. Against an older server that does
-not send state, trust or capabilities, those cells read "Not reported by this server" and there is no queue line. The
+not send the new fields (`state`, `capabilities`, `current_jobs`, `leased_jobs` and the queue), State and Holding read
+"Not reported by this server" and there is no queue line; a worker that is busy is not shown as idle. Trust and
+Capabilities still show from the fields such a server does send: Trust from `trusted`, and Capabilities as the
+`caps_json` text, cut to 8 lines of 120 characters, or "Not reported by this server" when there is none. If the
+response has no list of workers, the page says it could not load them. The
 table is inside a scroll region, so on a narrow screen it scrolls sideways and the page does not.
 
 ## Side navigation and colour theme

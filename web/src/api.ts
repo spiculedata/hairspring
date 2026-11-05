@@ -179,7 +179,11 @@ export const api = {
   replay: (bundle: string) => request<ReplayResult>('/api/replay', { method: 'POST', body: JSON.stringify({ bundle }) }),
   workers: async () => (await request<{ workers: Worker[] }>('/api/workers')).workers,
   /** The workers and, from a server that reports it, the queue behind them. */
-  workersOverview: () => request<WorkersOverview>('/api/workers'),
+  workersOverview: async () => {
+    const body = await request<WorkersOverview>('/api/workers');
+    if (!Array.isArray(body?.workers)) throw new Error('The server answered, but not with a list of workers.');
+    return body;
+  },
 };
 
 /** Streams run events with fetch (EventSource cannot send an Authorization header). */

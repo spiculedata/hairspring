@@ -8,7 +8,7 @@ import { UpdatedAt } from '../components/UpdatedAt';
 import { useMe } from '../meStore';
 import type { Worker } from '../types';
 import { usePolling } from '../usePolling';
-import { capabilityLines, hiddenIdNote, idColumnShown, jobsSummary } from './workersModel';
+import { capabilityLines, hiddenIdNote, holdingReported, idColumnShown, jobsSummary } from './workersModel';
 import {
   attemptsText,
   CAPS_NOTE,
@@ -20,6 +20,7 @@ import {
   HEADER_NAME,
   HEADER_STATE,
   HEADER_TRUST,
+  HOLDING_NOT_REPORTED,
   HOLDING_NOTHING,
   ID_HIDDEN_NOTE,
   jobKindSuffix,
@@ -38,6 +39,7 @@ const POLL_MS = 3000;
 const TABLE_MAX_HEIGHT = 640;
 
 function Holding({ worker }: { worker: Worker }) {
+  if (!holdingReported(worker)) return <span className="muted">{HOLDING_NOT_REPORTED}</span>;
   const { jobs, more } = jobsSummary(worker);
   if (jobs.length === 0 && more === 0) return <span className="muted">{HOLDING_NOTHING}</span>;
   return (

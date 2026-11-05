@@ -1,6 +1,6 @@
 import type { MeState } from '../me';
 import type { Worker, WorkerJob } from '../types';
-import { CAPS_NOT_STATED, CAPS_UNREADABLE, capabilityMore } from './workersWording';
+import { CAPS_NOT_REPORTED, CAPS_NOT_STATED, CAPS_UNREADABLE, capabilityMore } from './workersWording';
 
 /** Lines of capabilities shown for one worker, and characters in one line. The server limits the text to 4 KiB. */
 export const MAX_CAPABILITY_LINES = 8;
@@ -8,7 +8,17 @@ export const MAX_CAPABILITY_TEXT = 120;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-const cut = (text: string): string => (text.length > MAX_CAPABILITY_TEXT ? `${text.slice(0, MAX_CAPABILITY_TEXT)}…` : text);
+/** Cut by code point, so a character outside the basic plane is never split in two. */
+const cut = (text: string): string => {
+  const points = Array.from(text);
+  return points.length > MAX_CAPABILITY_TEXT ? `${points.slice(0, MAX_CAPABILITY_TEXT).join('')}…` : text;
+};
+
+const limitLines = (lines: readonly string[]): string[] => {
+  const shown = lines.slice(0, MAX_CAPABILITY_LINES).map(cut);
+  const left = lines.length - shown.length;
+  return left > 0 ? [...shown, capabilityMore(left)] : shown;
+};
 
 function valueText(value: unknown): string {
   if (Array.isArray(value) && value.every((v) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')) {
@@ -26,14 +36,19 @@ export function capabilityLines(worker: Worker): string[] {
   const caps = worker.capabilities;
   // `null` is sent for text that is not JSON; the text `null` is valid JSON and says nothing.
   if (caps === null) return [worker.caps_json?.trim() === 'null' ? CAPS_NOT_STATED : CAPS_UNREADABLE];
-  if (caps === undefined) return [CAPS_NOT_STATED];
+  // An older server sends only the text it was given; show that text rather than claim nothing was stated.
+  if (caps === undefined) {
+    const text = worker.caps_json?.trim() ?? '';
+    return text === '' ? [CAPS_NOT_REPORTED] : limitLines(text.split(/\r?\n/));
+  }
   if (!isRecord(caps)) return [cut(JSON.stringify(caps) ?? String(caps))];
   const entries = Object.entries(caps);
   if (entries.length === 0) return [CAPS_NOT_STATED];
-  const lines = entries.slice(0, MAX_CAPABILITY_LINES).map(([key, value]) => cut(`${key}: ${valueText(value)}`));
-  const left = entries.length - lines.length;
-  return left > 0 ? [...lines, capabilityMore(left)] : lines;
+  return limitLines(entries.map(([key, value]) => `${key}: ${valueText(value)}`));
 }
+
+/** An older server sends neither held-job field, and a worker that holds jobs would look idle if that were read as none. */
+export const holdingReported = (worker: Worker): boolean => worker.current_jobs !== undefined || worker.leased_jobs !== undefined;
 
 /** The jobs named for a worker and how many more it holds than are named. */
 export function jobsSummary(worker: Worker): { jobs: readonly WorkerJob[]; more: number } {

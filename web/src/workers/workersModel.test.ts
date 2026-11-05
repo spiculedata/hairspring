@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Worker } from '../types';
-import { capabilityLines, hiddenIdNote, idColumnShown, jobsSummary, MAX_CAPABILITY_LINES, MAX_CAPABILITY_TEXT } from './workersModel';
-import { CAPS_NOT_STATED, CAPS_UNREADABLE } from './workersWording';
+import { capabilityLines, hiddenIdNote, holdingReported, idColumnShown, jobsSummary, MAX_CAPABILITY_LINES, MAX_CAPABILITY_TEXT } from './workersModel';
+import { CAPS_NOT_REPORTED, CAPS_NOT_STATED, CAPS_UNREADABLE } from './workersWording';
 import type { MeState } from '../me';
 
 const worker = (extra: Partial<Worker> = {}): Worker => ({ name: 'w', last_seen: 1, registered_at: 1, ...extra });
@@ -27,8 +27,42 @@ describe('capabilityLines', () => {
     expect(capabilityLines(worker({ capabilities: null, caps_json: 'null' }))).toEqual([CAPS_NOT_STATED]);
   });
 
-  it('treats a server that sends no capabilities field as nothing stated', () => {
-    expect(capabilityLines(worker())).toEqual([CAPS_NOT_STATED]);
+  it('shows caps_json as text when the server sends no capabilities field', () => {
+    expect(capabilityLines(worker({ caps_json: '{"backends":["sim"]}' }))).toEqual(['{"backends":["sim"]}']);
+  });
+
+  it('says the server did not report capabilities when there is neither field', () => {
+    expect(capabilityLines(worker())).toEqual([CAPS_NOT_REPORTED]);
+    expect(capabilityLines(worker({ caps_json: '' }))).toEqual([CAPS_NOT_REPORTED]);
+    expect(capabilityLines(worker({ caps_json: '  \n ' }))).toEqual([CAPS_NOT_REPORTED]);
+  });
+
+  it('cuts the caps_json fallback to 8 lines of 120 characters', () => {
+    const text = Array.from({ length: 11 }, (_, i) => `${i}`.repeat(130)).join('\n');
+    const lines = capabilityLines(worker({ caps_json: text }));
+    expect(lines).toHaveLength(9);
+    expect(lines[0]).toBe(`${'0'.repeat(120)}…`);
+    expect(lines[8]).toBe('and 3 more');
+  });
+
+  it('limits are 8 lines and 120 characters', () => {
+    expect(MAX_CAPABILITY_LINES).toBe(8);
+    expect(MAX_CAPABILITY_TEXT).toBe(120);
+    expect(capabilityLines(worker({ capabilities: { k: 'x'.repeat(200) } }))[0]).toBe(`k: ${'x'.repeat(117)}…`);
+    expect(capabilityLines(worker({ capabilities: { k: 'x'.repeat(117) } }))[0]).toBe(`k: ${'x'.repeat(117)}`);
+    const nine = Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`k${i}`, i]));
+    expect(capabilityLines(worker({ capabilities: nine }))).toHaveLength(9);
+    const eight = Object.fromEntries(Array.from({ length: 8 }, (_, i) => [`k${i}`, i]));
+    expect(capabilityLines(worker({ capabilities: eight }))).toHaveLength(8);
+  });
+
+  it('never splits a surrogate pair when it cuts', () => {
+    const emoji = '\u{1F600}';
+    // "k: " plus 116 characters is 119 code points, so the 120th is the first emoji and the second is cut.
+    const [line] = capabilityLines(worker({ capabilities: { k: `${'x'.repeat(116)}${emoji}${emoji}` } }));
+    expect(line).toBe(`k: ${'x'.repeat(116)}${emoji}…`);
+    const [fallback] = capabilityLines(worker({ caps_json: `${'x'.repeat(119)}${emoji}${emoji}` }));
+    expect(fallback).toBe(`${'x'.repeat(119)}${emoji}…`);
   });
 
   it('shows a value that is not an object as its JSON text', () => {
@@ -62,6 +96,14 @@ describe('jobsSummary', () => {
   it('reports the jobs held that are not named', () => {
     const jobs = [{ run_id: 'r1', kind: 'run', lease_until: 5, attempts: 1 }];
     expect(jobsSummary(worker({ leased_jobs: 4, current_jobs: jobs }))).toEqual({ jobs, more: 3 });
+  });
+});
+
+describe('holdingReported', () => {
+  it('is false only when the server sent neither held-job field', () => {
+    expect(holdingReported(worker())).toBe(false);
+    expect(holdingReported(worker({ leased_jobs: 0 }))).toBe(true);
+    expect(holdingReported(worker({ current_jobs: [] }))).toBe(true);
   });
 });
 

@@ -27,6 +27,8 @@ export const HEADER_ID = 'Id';
 export const HOLDING_NOTHING = 'Nothing';
 export const CAPS_NOT_STATED = 'None stated';
 export const CAPS_UNREADABLE = 'The worker’s capabilities could not be read as JSON.';
+export const CAPS_NOT_REPORTED = 'Not reported by this server';
+export const HOLDING_NOT_REPORTED = 'Not reported by this server';
 export const STATE_NOT_REPORTED = 'Not reported by this server';
 export const TRUST_NOT_REPORTED = 'Not reported by this server';
 

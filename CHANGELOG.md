@@ -53,8 +53,10 @@
   capabilities it stated, the run it is holding and when it was last seen, with the number of jobs waiting and held
   above the table. The table sits in a scroll region so it fits a 320 pixel screen. A `read` caller sees no Id column
   and is told why (an id is a credential, shown from the `run` role). It only reads: trust is still set through
-  `POST /api/workers/{id}/trust`. Against a server that does not report worker state the cells say so. This needs the
-  state, capability, held-job and queue fields of `GET /api/workers`.
+  `POST /api/workers/{id}/trust`. Against an older server that does not send the new state, capability, held-job and
+  queue fields, State and Holding say "Not reported by this server" and there is no queue line; Trust and
+  Capabilities still show from the `trusted` and `caps_json` fields it does send. A response with no list of workers
+  shows an error instead of "Loading workers". Capability text is cut by character, never through the middle of one.
 
 ### Changed
 

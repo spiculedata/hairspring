@@ -6,7 +6,7 @@ import type { Me } from '../me';
 import { resetMeForTests } from '../meStore';
 import type { Worker, WorkersOverview } from '../types';
 import { WorkersPage } from './WorkersPage';
-import { CAPS_NOT_STATED, HOLDING_NOTHING, ID_HIDDEN_NOTE, NO_WORKERS, NO_WORKERS_HINT, STATE_NOT_REPORTED, TRUST_NOT_REPORTED } from './workersWording';
+import { CAPS_NOT_REPORTED, CAPS_NOT_STATED, HOLDING_NOTHING, ID_HIDDEN_NOTE, NO_WORKERS, NO_WORKERS_HINT, STATE_NOT_REPORTED, TRUST_NOT_REPORTED } from './workersWording';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 const me = (role: Me['role'], open = false): Me => ({
@@ -61,6 +61,9 @@ function serve(role: Me['role'], overview: WorkersOverview | number) {
 const headers = (c: HTMLElement) => [...c.querySelectorAll('th')].map((th) => th.textContent);
 const rows = (c: HTMLElement) => [...c.querySelectorAll('tbody tr')] as HTMLElement[];
 const text = (c: HTMLElement) => c.textContent ?? '';
+
+const oldServer: Worker = { id: 'wrk-old', name: 'old', registered_at: 1, last_seen: NOW, trusted: true, caps_json: '{"backends":["sim"]}' };
+const cell = (row: HTMLElement, header: string, c: HTMLElement) => row.querySelectorAll('td')[headers(c).indexOf(header)];
 
 describe('Workers page', () => {
   beforeEach(() => {
@@ -141,6 +144,33 @@ describe('Workers page', () => {
     expect(text(container)).toContain(STATE_NOT_REPORTED);
     expect(text(container)).toContain(TRUST_NOT_REPORTED);
     expect(text(container)).not.toContain('Queue:');
+  });
+
+  it('against an older server shows trust and capabilities from the fields it sends, and says state and holding are not reported', async () => {
+    serve('run', { workers: [oldServer] });
+    const { container } = render(<WorkersPage />);
+    await waitFor(() => expect(rows(container)).toHaveLength(1));
+    const [row] = rows(container);
+    expect(cell(row, 'Trust', container).querySelector('.badge-good')?.textContent).toBe('Trusted');
+    expect(cell(row, 'Capabilities', container).textContent).toBe('{"backends":["sim"]}');
+    expect(cell(row, 'Holding', container).textContent).toBe(STATE_NOT_REPORTED);
+    expect(cell(row, 'State', container).textContent).toBe(STATE_NOT_REPORTED);
+  });
+
+  it('against an older server with no caps_json says capabilities are not reported', async () => {
+    const { caps_json: _c, ...bare } = oldServer;
+    serve('run', { workers: [bare] });
+    const { container } = render(<WorkersPage />);
+    await waitFor(() => expect(rows(container)).toHaveLength(1));
+    expect(cell(rows(container)[0], 'Capabilities', container).textContent).toBe(CAPS_NOT_REPORTED);
+  });
+
+  it('shows an honest error, not Loading forever, when the body has no workers array', async () => {
+    serve('run', {} as unknown as WorkersOverview);
+    const { container } = render(<WorkersPage />);
+    await waitFor(() => expect(text(container)).toContain('Could not load workers'));
+    expect(text(container)).not.toContain('Loading workers');
+    expect(container.querySelector('table')).toBeNull();
   });
 
   it('shows a word it does not know as Unknown, never as busy', async () => {
