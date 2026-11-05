@@ -33,6 +33,23 @@ pub fn cases(default: usize) -> usize {
         .unwrap_or(default)
 }
 
+/// Runs one generated case. A failing assertion inside `body` is re-raised with the case number, the seed the case was
+/// built from and the base seed, so any failure can be repeated from the message alone.
+pub fn check_case(case: usize, seed: u64, body: impl FnOnce()) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+    if let Err(payload) = result {
+        let reason = payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+            .unwrap_or_else(|| "a panic with no text".to_string());
+        panic!(
+            "case {case}, seed {seed} (HAIRSPRING_FUZZ_SEED={}): {reason}",
+            base_seed()
+        );
+    }
+}
+
 /// A base seed from `HAIRSPRING_FUZZ_SEED`, so a long run can be repeated with fresh inputs.
 pub fn base_seed() -> u64 {
     std::env::var("HAIRSPRING_FUZZ_SEED")

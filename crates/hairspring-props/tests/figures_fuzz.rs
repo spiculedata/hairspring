@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::fuzz_rng::{base_seed, cases, Rng};
+use common::fuzz_rng::{base_seed, cases, check_case, Rng};
 use hairspring_props::{percent, stats};
 
 fn count(rng: &mut Rng) -> u64 {
@@ -16,28 +16,33 @@ fn count(rng: &mut Rng) -> u64 {
     }
 }
 
+fn wilson_case(seed: u64) {
+    let mut rng = Rng::new(seed);
+    let n = count(&mut rng).max(1);
+    let k = if rng.chance(3) {
+        [0, n][rng.below(2)]
+    } else {
+        rng.next() % n.saturating_add(1)
+    };
+    let (lo, hi) = stats::wilson(k, n, stats::Z_95).expect("valid counts");
+    assert!(lo.is_finite() && hi.is_finite(), "k={k} n={n}");
+    assert!(
+        (0.0..=1.0).contains(&lo) && (0.0..=1.0).contains(&hi) && lo <= hi,
+        "k={k} n={n}: {lo} {hi}"
+    );
+    // A lower bound above the observed rate, or an upper bound below it, would overstate the evidence.
+    let p = k as f64 / n as f64;
+    assert!(lo <= p && p <= hi, "k={k} n={n}: {lo} {p} {hi}");
+    if let Some(bound) = stats::zero_event_upper_bound(n) {
+        assert!((0.0..=1.0).contains(&bound), "n={n}: {bound}");
+    }
+}
+
 #[test]
 fn wilson_intervals_stay_ordered_inside_zero_to_one_and_around_the_observed_rate() {
     for case in 0..cases(20_000) {
-        let mut rng = Rng::new(base_seed() + case as u64 + 1);
-        let n = count(&mut rng).max(1);
-        let k = if rng.chance(3) {
-            [0, n][rng.below(2)]
-        } else {
-            rng.next() % n.saturating_add(1)
-        };
-        let (lo, hi) = stats::wilson(k, n, stats::Z_95).expect("valid counts");
-        assert!(lo.is_finite() && hi.is_finite(), "k={k} n={n}");
-        assert!(
-            (0.0..=1.0).contains(&lo) && (0.0..=1.0).contains(&hi) && lo <= hi,
-            "k={k} n={n}: {lo} {hi}"
-        );
-        // A lower bound above the observed rate, or an upper bound below it, would overstate the evidence.
-        let p = k as f64 / n as f64;
-        assert!(lo <= p && p <= hi, "k={k} n={n}: {lo} {p} {hi}");
-        if let Some(bound) = stats::zero_event_upper_bound(n) {
-            assert!((0.0..=1.0).contains(&bound), "n={n}: {bound}");
-        }
+        let seed = base_seed() + case as u64 + 1;
+        check_case(case, seed, || wilson_case(seed));
     }
 }
 
@@ -76,42 +81,47 @@ fn percentages_round_away_from_overstating() {
         f64::NEG_INFINITY,
     ];
     for case in 0..cases(20_000) {
-        let mut rng = Rng::new(base_seed() + 0x2_0000 + case as u64);
-        let x = if case < specials.len() {
-            specials[case]
-        } else {
-            match rng.below(4) {
-                0 => f64::from_bits(rng.next()),
-                1 => (rng.next() % 1_000_001) as f64 / 1_000_000.0,
-                2 => (rng.next() % 10_001) as f64 / 10_000.0,
-                _ => (rng.next() >> 11) as f64 / (1u64 << 53) as f64,
-            }
-        };
-        let (up, low, near) = (percent::upper(x), percent::lower(x), percent::nearest(x));
-        for s in [&up, &low, &near] {
-            assert!(s.ends_with('%'), "{x}: {s}");
-            assert!((0.0..=1.0).contains(&shown_fraction(s)), "{x}: {s}");
+        let seed = base_seed() + 0x2_0000 + case as u64;
+        check_case(case, seed, || percentage_case(case, seed, &specials));
+    }
+}
+
+fn percentage_case(case: usize, seed: u64, specials: &[f64]) {
+    let mut rng = Rng::new(seed);
+    let x = if case < specials.len() {
+        specials[case]
+    } else {
+        match rng.below(4) {
+            0 => f64::from_bits(rng.next()),
+            1 => (rng.next() % 1_000_001) as f64 / 1_000_000.0,
+            2 => (rng.next() % 10_001) as f64 / 10_000.0,
+            _ => (rng.next() >> 11) as f64 / (1u64 << 53) as f64,
         }
-        if x.is_nan() {
-            // An unreadable number must not be shown as a good one: an upper bound reads as everything, a lower
-            // bound as nothing.
-            assert_eq!(up, "100.00%");
-            assert_eq!(low, "0.00%");
-            continue;
-        }
-        let clamped = x.clamp(0.0, 1.0);
-        let noise = 1e-9 / 10_000.0;
-        if !up.starts_with('<') {
-            assert!(shown_fraction(&up) + noise >= clamped, "upper({x}) = {up}");
-        }
-        if !low.starts_with('<') {
-            assert!(
-                shown_fraction(&low) <= clamped + noise,
-                "lower({x}) = {low}"
-            );
-        }
-        if clamped > 0.0 && clamped < 0.0001 {
-            assert_eq!(up, "<0.01%", "{x}");
-        }
+    };
+    let (up, low, near) = (percent::upper(x), percent::lower(x), percent::nearest(x));
+    for s in [&up, &low, &near] {
+        assert!(s.ends_with('%'), "{x}: {s}");
+        assert!((0.0..=1.0).contains(&shown_fraction(s)), "{x}: {s}");
+    }
+    if x.is_nan() {
+        // An unreadable number must not be shown as a good one: an upper bound reads as everything, a lower
+        // bound as nothing.
+        assert_eq!(up, "100.00%");
+        assert_eq!(low, "0.00%");
+        return;
+    }
+    let clamped = x.clamp(0.0, 1.0);
+    let noise = 1e-9 / 10_000.0;
+    if !up.starts_with('<') {
+        assert!(shown_fraction(&up) + noise >= clamped, "upper({x}) = {up}");
+    }
+    if !low.starts_with('<') {
+        assert!(
+            shown_fraction(&low) <= clamped + noise,
+            "lower({x}) = {low}"
+        );
+    }
+    if clamped > 0.0 && clamped < 0.0001 {
+        assert_eq!(up, "<0.01%", "{x}");
     }
 }

@@ -13,7 +13,7 @@ use std::collections::HashSet;
 
 mod common;
 
-use common::fuzz_rng::{base_seed, cases, Rng};
+use common::fuzz_rng::{base_seed, cases, check_case, Rng};
 
 // ---------------------------------------------------------------------------------------------------------------
 // Value pools
@@ -196,6 +196,14 @@ fn event_fields(rng: &mut Rng) -> Vec<(String, String)> {
             "\"p1\"".into()
         }
     };
+    // A small count that the decoder accepts, unless this field is meant to be awkward.
+    let count_value = |rng: &mut Rng| {
+        if awkward(rng) {
+            number_value(rng)
+        } else {
+            rng.below(MAX_THREADS_PER_PROC + 1).to_string()
+        }
+    };
     let id_value = |rng: &mut Rng| {
         if awkward(rng) {
             string_value(rng, MAX_ID_BYTES)
@@ -208,7 +216,13 @@ fn event_fields(rng: &mut Rng) -> Vec<(String, String)> {
         "hello", "catalog", "assert", "work", "thread", "end", "eval", "mystery",
     ][kind];
     put("kind", format!("\"{kind_text}\""));
-    put("proc", proc_value(rng));
+    // Eval lines belong to the reserved tag; any other tag is refused.
+    let proc_text = if kind == 6 && !awkward(rng) {
+        "\"_eval\"".into()
+    } else {
+        proc_value(rng)
+    };
+    put("proc", proc_text);
     match kind {
         0 => {
             let text = |rng: &mut Rng, limit| {
@@ -278,23 +292,33 @@ fn event_fields(rng: &mut Rng) -> Vec<(String, String)> {
             put("first_false", ff);
             put("first_true", ft);
         }
-        3 => put("ops", number_value(rng)),
+        3 => put("ops", count_value(rng)),
         4 => {
-            put("thread", string_value(rng, MAX_THREAD_KEY_BYTES));
-            put("evals", number_value(rng));
-            put("tape_consumed", number_value(rng));
-            put("key_stable", ["true", "false", "0"][rng.below(3)].into());
+            let thread = if hostile {
+                string_value(rng, MAX_THREAD_KEY_BYTES)
+            } else {
+                format!("\"w-{}\"", rng.below(8))
+            };
+            put("thread", thread);
+            put("evals", count_value(rng));
+            put("tape_consumed", count_value(rng));
+            let stable = if hostile { 3 } else { 2 };
+            put(
+                "key_stable",
+                ["true", "false", "0"][rng.below(stable)].into(),
+            );
         }
         5 => {
+            let reasons = ["\"exit\"", "\"signal\"", "\"explicit\"", "\"other\"", "3"];
             put(
                 "reason",
-                ["\"exit\"", "\"signal\"", "\"explicit\"", "\"other\"", "3"][rng.below(5)].into(),
+                reasons[rng.below(if hostile { 5 } else { 3 })].into(),
             );
-            put("status", number_value(rng));
-            put("sites", number_value(rng));
-            put("evals", number_value(rng));
-            put("dropped", number_value(rng));
-            put("threads", number_value(rng));
+            put("status", count_value(rng));
+            put("sites", count_value(rng));
+            put("evals", count_value(rng));
+            put("dropped", count_value(rng));
+            put("threads", count_value(rng));
         }
         6 => {
             put("id", id_value(rng));
@@ -476,45 +500,82 @@ fn assert_outcome_matches_bytes(line: &[u8], outcome: &LineOutcome) {
     }
 }
 
+fn event_kind_name(event: &Event) -> &'static str {
+    match event {
+        Event::Hello(_) => "hello",
+        Event::Catalog(_) => "catalog",
+        Event::Assert(_) => "assert",
+        Event::Work(_) => "work",
+        Event::Thread(_) => "thread",
+        Event::End(_) => "end",
+        Event::Eval(_) => "eval",
+    }
+}
+
+const EVENT_KIND_NAMES: [&str; 7] = [
+    "hello", "catalog", "assert", "work", "thread", "end", "eval",
+];
+
+/// The fewest accepted events of each kind that a default run of the line generator must reach, so that the decode
+/// and limit checks for every kind have inputs to work on.
+const MIN_ACCEPTED_PER_KIND: usize = 400;
+
 #[test]
 fn generated_lines_never_panic_and_accepted_events_obey_every_limit() {
     let n = cases(20_000);
     let mut accepted = 0usize;
+    let mut by_kind = std::collections::BTreeMap::<&'static str, usize>::new();
     for case in 0..n {
-        let mut rng = Rng::new(base_seed() + case as u64 + 1);
-        let line = event_line(&mut rng);
-        let outcome = parse_line(&line);
-        assert_outcome_matches_bytes(&line, &outcome);
-        if let LineOutcome::Event { event, .. } = &outcome {
-            accepted += 1;
-            assert_event_obeys_limits(event);
-        }
+        let seed = base_seed() + case as u64 + 1;
+        check_case(case, seed, || {
+            let mut rng = Rng::new(seed);
+            let line = event_line(&mut rng);
+            let outcome = parse_line(&line);
+            assert_outcome_matches_bytes(&line, &outcome);
+            if let LineOutcome::Event { event, .. } = &outcome {
+                accepted += 1;
+                *by_kind.entry(event_kind_name(event)).or_default() += 1;
+                assert_event_obeys_limits(event);
+            }
+        });
     }
+    eprintln!("accepted events by kind over {n} lines: {by_kind:?}");
     // The generator must reach the accepting path often enough for the limit checks to mean something.
     assert!(
         accepted * 8 >= n,
         "only {accepted} of {n} lines were accepted"
     );
+    // ... and it must reach every kind of event, not only the easy ones. The floor scales with the case count.
+    for kind in EVENT_KIND_NAMES {
+        let got = by_kind.get(kind).copied().unwrap_or(0);
+        assert!(
+            got * 20_000 >= MIN_ACCEPTED_PER_KIND * n,
+            "only {got} accepted `{kind}` events in {n} lines: {by_kind:?}"
+        );
+    }
 }
 
 #[test]
 fn arbitrary_bytes_with_and_without_the_prefix_never_panic() {
     let n = cases(6_000);
     for case in 0..n {
-        let mut rng = Rng::new(base_seed() + 0xA000 + case as u64);
-        let len = match rng.below(4) {
-            0 => rng.below(40),
-            1 => rng.below(400),
-            2 => MAX_LINE_BYTES - 20 + rng.below(40),
-            _ => rng.below(9000),
-        };
-        let mut line: Vec<u8> = if rng.chance(2) {
-            EVENT_PREFIX.as_bytes().to_vec()
-        } else {
-            Vec::new()
-        };
-        line.extend((0..len).map(|_| rng.next() as u8));
-        assert_outcome_matches_bytes(&line, &parse_line(&line));
+        let seed = base_seed() + 0xA000 + case as u64;
+        check_case(case, seed, || {
+            let mut rng = Rng::new(seed);
+            let len = match rng.below(4) {
+                0 => rng.below(40),
+                1 => rng.below(400),
+                2 => MAX_LINE_BYTES - 20 + rng.below(40),
+                _ => rng.below(9000),
+            };
+            let mut line: Vec<u8> = if rng.chance(2) {
+                EVENT_PREFIX.as_bytes().to_vec()
+            } else {
+                Vec::new()
+            };
+            line.extend((0..len).map(|_| rng.next() as u8));
+            assert_outcome_matches_bytes(&line, &parse_line(&line));
+        });
     }
 }
 
@@ -732,21 +793,312 @@ fn assert_trial_is_bounded_and_honest(t: &TrialProps, candidates: usize, budget:
 fn folding_generated_streams_stays_bounded_and_accounts_for_every_candidate_line() {
     let n = cases(4_000);
     for case in 0..n {
-        let mut rng = Rng::new(base_seed() + 0xB000 + case as u64);
-        let (out, candidates) = stream(&mut rng);
-        let budget = match rng.below(4) {
-            0 => rng.below(2000),
-            1 => LEGACY_MAX_EVENT_BYTES_PER_TRIAL,
-            _ => DEFAULT_MAX_EVENT_BYTES_PER_TRIAL,
-        };
-        let t = TrialEvents::from_output(&out).fold_with_budget(budget);
-        assert_trial_is_bounded_and_honest(&t, candidates, budget);
-        // The same bytes folded line by line give the same answer.
-        let lines = TrialEvents::from_lines(out.split(|b| *b == b'\n')).fold_with_budget(budget);
-        assert_eq!(t, lines, "case {case}");
-        let _ = t.verdict();
-        let _ = (t.report_missing(), t.thread_reports(), t.total_work());
+        let seed = base_seed() + 0xB000 + case as u64;
+        check_case(case, seed, || {
+            let mut rng = Rng::new(seed);
+            let (out, candidates) = stream(&mut rng);
+            let budget = match rng.below(4) {
+                0 => rng.below(2000),
+                1 => LEGACY_MAX_EVENT_BYTES_PER_TRIAL,
+                _ => DEFAULT_MAX_EVENT_BYTES_PER_TRIAL,
+            };
+            let t = TrialEvents::from_output(&out).fold_with_budget(budget);
+            assert_trial_is_bounded_and_honest(&t, candidates, budget);
+            // The same bytes folded line by line give the same answer.
+            let lines =
+                TrialEvents::from_lines(out.split(|b| *b == b'\n')).fold_with_budget(budget);
+            assert_eq!(t, lines, "folding line by line differs");
+            let _ = t.verdict();
+            let _ = (t.report_missing(), t.thread_reports(), t.total_work());
+        });
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// A trial that is clean except for one refused line
+
+const CLEAN_PROC_LINES: [&str; 2] = [
+    r#"HAIRSPRING_EVENT {"v":1,"kind":"hello","proc":"p1","sdk":"c","sdk_version":"1","catalog_hash":"h","signal_handlers":false}"#,
+    r#"HAIRSPRING_EVENT {"v":1,"kind":"work","proc":"p1","ops":1}"#,
+];
+
+/// The refused lines a guest can send, in the order of the counters `lone_flaw_counts` reads.
+const LONE_FLAWS: usize = 4;
+
+fn lone_flaw_line(rng: &mut Rng, flaw: usize) -> Vec<u8> {
+    match flaw {
+        0 => {
+            // Over MAX_LINE_BYTES, well formed in every other way.
+            let head = r#"HAIRSPRING_EVENT {"v":1,"kind":"work","proc":"p1","ops":1,"pad":""#;
+            let pad = MAX_LINE_BYTES + 1 - head.len() - 2 + rng.below(3000);
+            format!("{head}{}\"}}", "x".repeat(pad)).into_bytes()
+        }
+        1 => {
+            b"HAIRSPRING_EVENT {\"v\":1,\"kind\":\"work\",\"proc\":\"p1\",\"ops\":1,\"x\":\"\xff\"}"
+                .to_vec()
+        }
+        2 => b"HAIRSPRING_EVENT {\"v\":1,\"kind\":\"work\"".to_vec(),
+        _ => format!(
+            r#"HAIRSPRING_EVENT {{"v":1,"kind":"work","proc":"{}","ops":1}}"#,
+            long_ident(MAX_PROC_BYTES + 1)
+        )
+        .into_bytes(),
+    }
+}
+
+fn lone_flaw_counts(h: &EventHealth) -> [u64; LONE_FLAWS] {
+    [h.too_long, h.invalid_utf8, h.malformed, h.over_limit]
+}
+
+#[test]
+fn one_refused_line_in_an_otherwise_clean_trial_degrades_it() {
+    for case in 0..cases(2_000) {
+        let seed = base_seed() + 0x1_B000 + case as u64;
+        check_case(case, seed, || {
+            let mut rng = Rng::new(seed);
+            let flaw = rng.below(LONE_FLAWS);
+            let mut lines: Vec<Vec<u8>> = CLEAN_PROC_LINES
+                .iter()
+                .map(|l| l.as_bytes().to_vec())
+                .collect();
+            let at = rng.below(lines.len() + 1);
+            lines.insert(at, lone_flaw_line(&mut rng, flaw));
+            if rng.chance(3) {
+                lines.insert(0, b"ordinary program output".to_vec());
+            }
+            let out = lines.join(&b'\n');
+            let t = TrialEvents::from_output(&out).fold();
+            let mut expected = [0u64; LONE_FLAWS];
+            expected[flaw] = 1;
+            assert_eq!(lone_flaw_counts(&t.health), expected, "{:?}", t.health);
+            assert_eq!(t.health.accepted, 2, "{:?}", t.health);
+            assert!(
+                t.is_degraded(),
+                "flaw {flaw} did not degrade: {:?}",
+                t.health
+            );
+        });
+    }
+}
+
+#[test]
+fn a_clean_trial_is_not_degraded_and_one_over_long_line_alone_degrades_it() {
+    let clean = CLEAN_PROC_LINES.join("\n");
+    let t = TrialEvents::from_output(clean.as_bytes()).fold();
+    assert_eq!(t.health.accepted, 2);
+    assert!(!t.is_degraded(), "{:?}", t.health);
+
+    let mut rng = Rng::new(1);
+    let long = String::from_utf8(lone_flaw_line(&mut rng, 0)).unwrap();
+    assert!(long.len() > MAX_LINE_BYTES);
+    let t = TrialEvents::from_output(format!("{clean}\n{long}").as_bytes()).fold();
+    assert_eq!((t.health.too_long, t.health.accepted), (1, 2));
+    assert!(t.is_degraded(), "{:?}", t.health);
+}
+
+/// A named way to set one counter of an `EventHealth`.
+type HealthSetter = (&'static str, fn(&mut EventHealth));
+
+#[test]
+fn each_counter_that_means_lost_data_degrades_a_trial_and_the_additive_ones_do_not() {
+    let degrading: [HealthSetter; 12] = [
+        ("malformed", |h| h.malformed = 1),
+        ("too_long", |h| h.too_long = 1),
+        ("invalid_utf8", |h| h.invalid_utf8 = 1),
+        ("over_limit", |h| h.over_limit = 1),
+        ("duplicates", |h| h.duplicates = 1),
+        ("uncatalogued", |h| h.uncatalogued = 1),
+        ("conflicts", |h| h.conflicts = 1),
+        ("dropped_asserts", |h| h.dropped_asserts = 1),
+        ("unreported_ids", |h| h.unreported_ids = 1),
+        ("sites_mismatch", |h| h.sites_mismatch = 1),
+        ("thread_count_mismatch", |h| h.thread_count_mismatch = 1),
+        ("host_faults", |h| h.host_faults = 1),
+    ];
+    for (name, set) in degrading {
+        let mut h = EventHealth::default();
+        set(&mut h);
+        assert!(h.degraded(), "{name} alone must degrade a trial");
+    }
+    let additive: [HealthSetter; 5] = [
+        ("accepted", |h| h.accepted = 9),
+        ("event_bytes", |h| h.event_bytes = 9),
+        ("unknown_kind", |h| h.unknown_kind = 9),
+        ("unsupported_version", |h| h.unsupported_version = 9),
+        ("unknown_fields", |h| h.unknown_fields = 9),
+    ];
+    for (name, set) in additive {
+        let mut h = EventHealth::default();
+        set(&mut h);
+        assert!(!h.degraded(), "{name} alone must not degrade a trial");
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The per-trial process cap and the per-process thread cap
+
+fn start_of_proc(kind: usize, tag: &str) -> String {
+    let body = match kind % 5 {
+        0 => {
+            r#""kind":"hello","sdk":"c","sdk_version":"1","catalog_hash":"h","signal_handlers":false"#
+        }
+        1 => r#""kind":"work","ops":1"#,
+        2 => r#""kind":"catalog","id":"a","type":"always","must_hit":true,"msg":"m","loc":null"#,
+        3 => r#""kind":"thread","thread":"w-0","evals":0,"tape_consumed":0"#,
+        _ => {
+            r#""kind":"end","reason":"exit","status":0,"sites":0,"evals":0,"dropped":0,"threads":0"#
+        }
+    };
+    format!(r#"HAIRSPRING_EVENT {{"v":1,"proc":"{tag}",{body}}}"#)
+}
+
+fn thread_of_proc(tag: &str, thread: &str) -> String {
+    format!(
+        r#"HAIRSPRING_EVENT {{"v":1,"kind":"thread","proc":"{tag}","thread":"{thread}","evals":1,"tape_consumed":0}}"#
+    )
+}
+
+/// A stream with many processes and many threads, and what it was built from.
+struct CapStream {
+    out: Vec<u8>,
+    procs: usize,
+    threads: usize,
+    repeated_threads: usize,
+    event_lines: usize,
+}
+
+/// `procs` distinct process tags (each introduced by one line of a random kind) and `threads` distinct thread lines
+/// for the first of them, with `repeated` of those thread lines sent a second time. The two groups are interleaved at
+/// random, with ordinary output between, and the first process is always introduced first.
+fn cap_stream(rng: &mut Rng, procs: usize, threads: usize, repeated: usize) -> CapStream {
+    let mut thread_lines: Vec<String> = (0..threads)
+        .map(|i| thread_of_proc("p0", &format!("w-{i}")))
+        .collect();
+    for i in 0..repeated {
+        thread_lines.insert(1 + 2 * i, thread_of_proc("p0", &format!("w-{i}")));
+    }
+    let proc_lines: Vec<String> = (1..procs)
+        .map(|i| start_of_proc(rng.below(5), &format!("p{i}")))
+        .collect();
+    let (mut a, mut b) = (thread_lines.into_iter(), proc_lines.into_iter());
+    let mut lines: Vec<String> = Vec::new();
+    lines.extend(a.next());
+    loop {
+        let next = if rng.chance(2) {
+            a.next().or_else(|| b.next())
+        } else {
+            b.next().or_else(|| a.next())
+        };
+        let Some(line) = next else { break };
+        lines.push(line);
+        if rng.chance(20) {
+            lines.push("ordinary program output".into());
+        }
+    }
+    let event_lines = lines.iter().filter(|l| l.starts_with(EVENT_PREFIX)).count();
+    CapStream {
+        out: lines.join("\n").into_bytes(),
+        procs,
+        threads,
+        repeated_threads: repeated,
+        event_lines,
+    }
+}
+
+fn assert_caps_held(s: &CapStream) {
+    let t = TrialEvents::from_output(&s.out).fold();
+    let kept_procs = s.procs.min(MAX_PROCS_PER_TRIAL);
+    let kept_threads = s.threads.min(MAX_THREADS_PER_PROC);
+    assert_eq!(t.procs.len(), kept_procs, "{:?}", t.health);
+    let p0 = t
+        .procs
+        .iter()
+        .find(|p| p.tag == "p0")
+        .expect("p0 is first and always kept");
+    assert_eq!(p0.threads.len(), kept_threads, "{:?}", t.health);
+    // Every line past a cap is refused and counted; none is merged into a process that is full.
+    let refused = (s.procs - kept_procs) + (s.threads - kept_threads);
+    assert_eq!(t.health.over_limit, refused as u64, "{:?}", t.health);
+    assert_eq!(
+        t.health.duplicates, s.repeated_threads as u64,
+        "{:?}",
+        t.health
+    );
+    if refused > 0 || s.repeated_threads > 0 {
+        assert!(t.is_degraded(), "{:?}", t.health);
+    }
+    assert_trial_is_bounded_and_honest(&t, s.event_lines, DEFAULT_MAX_EVENT_BYTES_PER_TRIAL);
+}
+
+#[test]
+fn many_processes_and_threads_are_held_to_the_caps_and_every_extra_line_is_counted() {
+    let near_proc_cap = [
+        1,
+        2,
+        MAX_PROCS_PER_TRIAL - 1,
+        MAX_PROCS_PER_TRIAL,
+        MAX_PROCS_PER_TRIAL + 1,
+        MAX_PROCS_PER_TRIAL + 5,
+        MAX_PROCS_PER_TRIAL + 6,
+    ];
+    let near_thread_cap = [
+        1,
+        2,
+        MAX_THREADS_PER_PROC - 1,
+        MAX_THREADS_PER_PROC,
+        MAX_THREADS_PER_PROC + 1,
+        MAX_THREADS_PER_PROC + 5,
+        MAX_THREADS_PER_PROC + 6,
+    ];
+    for case in 0..cases(400) {
+        let seed = base_seed() + 0x2_B000 + case as u64;
+        check_case(case, seed, || {
+            let mut rng = Rng::new(seed);
+            let procs = if rng.chance(3) {
+                1 + rng.below(MAX_PROCS_PER_TRIAL + 30)
+            } else {
+                *rng.pick(&near_proc_cap)
+            };
+            let threads = if rng.chance(3) {
+                1 + rng.below(MAX_THREADS_PER_PROC + 40)
+            } else {
+                *rng.pick(&near_thread_cap)
+            };
+            let repeated = if rng.chance(3) {
+                rng.below(4).min(threads)
+            } else {
+                0
+            };
+            assert_caps_held(&cap_stream(&mut rng, procs, threads, repeated));
+        });
+    }
+}
+
+#[test]
+fn the_sixty_fifth_process_and_the_two_hundred_fifty_seventh_thread_are_refused() {
+    let mut rng = Rng::new(7);
+    let at_procs = cap_stream(&mut rng, MAX_PROCS_PER_TRIAL, 1, 0);
+    let t = TrialEvents::from_output(&at_procs.out).fold();
+    assert_eq!(t.procs.len(), MAX_PROCS_PER_TRIAL);
+    assert_eq!(t.health.over_limit, 0, "{:?}", t.health);
+
+    let past_procs = cap_stream(&mut rng, MAX_PROCS_PER_TRIAL + 1, 1, 0);
+    let t = TrialEvents::from_output(&past_procs.out).fold();
+    assert_eq!(t.procs.len(), MAX_PROCS_PER_TRIAL);
+    assert_eq!(t.health.over_limit, 1, "{:?}", t.health);
+    assert!(t.is_degraded());
+
+    let at_threads = cap_stream(&mut rng, 1, MAX_THREADS_PER_PROC, 0);
+    let t = TrialEvents::from_output(&at_threads.out).fold();
+    assert_eq!(t.procs[0].threads.len(), MAX_THREADS_PER_PROC);
+    assert_eq!(t.health.over_limit, 0, "{:?}", t.health);
+    assert!(!t.is_degraded(), "{:?}", t.health);
+
+    let past_threads = cap_stream(&mut rng, 1, MAX_THREADS_PER_PROC + 1, 0);
+    let t = TrialEvents::from_output(&past_threads.out).fold();
+    assert_eq!(t.procs[0].threads.len(), MAX_THREADS_PER_PROC);
+    assert_eq!(t.health.over_limit, 1, "{:?}", t.health);
+    assert!(t.is_degraded());
 }
 
 #[test]
@@ -771,48 +1123,53 @@ fn interleaved_partial_writes_are_judged_by_the_same_rules_as_any_line() {
 fn run_summaries_never_claim_more_than_the_trials_added() {
     let n = cases(300);
     for case in 0..n {
-        let mut rng = Rng::new(base_seed() + 0xC000 + case as u64);
-        let cap = [3usize, 8, MAX_IDS_PER_RUN][rng.below(3)];
-        let mut run = RunProps::with_id_cap(cap);
-        let trials = 1 + rng.below(8);
-        let mut degraded = 0u64;
-        let mut inconclusive = 0u64;
-        for seed in 0..trials {
-            let (out, _) = stream(&mut rng);
-            let t = TrialEvents::from_output(&out).fold();
-            if rng.chance(5) {
-                inconclusive += 1;
-                run = run.add_inconclusive(seed as u64, &t);
-            } else {
-                degraded += u64::from(t.is_degraded());
-                run = run.add(seed as u64, &t);
+        let seed = base_seed() + 0xC000 + case as u64;
+        check_case(case, seed, || {
+            let mut rng = Rng::new(seed);
+            let cap = [3usize, 8, MAX_IDS_PER_RUN][rng.below(3)];
+            let mut run = RunProps::with_id_cap(cap);
+            let trials = 1 + rng.below(8);
+            let mut degraded = 0u64;
+            let mut inconclusive = 0u64;
+            for seed in 0..trials {
+                let (out, _) = stream(&mut rng);
+                let t = TrialEvents::from_output(&out).fold();
+                if rng.chance(5) {
+                    inconclusive += 1;
+                    run = run.add_inconclusive(seed as u64, &t);
+                } else {
+                    degraded += u64::from(t.is_degraded());
+                    run = run.add(seed as u64, &t);
+                }
             }
-        }
-        let s = run.summary();
-        assert_eq!(s.trials, trials as u64, "case {case}");
-        assert_eq!(s.inconclusive_trials, inconclusive);
-        assert!(s.degraded_trials >= degraded.min(s.trials));
-        assert!(s.degraded_trials <= s.trials);
-        assert!(s.report_missing_trials <= s.trials);
-        assert!(s.conflict_trials <= s.trials);
-        if s.ids_dropped > 0 {
-            assert!(
-                s.degraded_trials > 0,
-                "ids were dropped but no trial is degraded"
-            );
-        }
-        let stats = run.finish();
-        assert!(stats.len() <= cap);
-        for p in &stats {
-            let bound = trials as u64;
-            assert!(p.trials <= bound);
-            assert!(p.trials_rated <= p.trials);
-            assert!(p.trials_claimable <= p.trials_rated);
-            assert!(
-                p.trials_hit <= p.trials && p.trials_false <= p.trials && p.trials_true <= p.trials
-            );
-            assert!(p.trials_rated + p.trials_unreported + p.trials_degraded >= p.trials_rated);
-        }
+            let s = run.summary();
+            assert_eq!(s.trials, trials as u64, "case {case}");
+            assert_eq!(s.inconclusive_trials, inconclusive);
+            assert!(s.degraded_trials >= degraded.min(s.trials));
+            assert!(s.degraded_trials <= s.trials);
+            assert!(s.report_missing_trials <= s.trials);
+            assert!(s.conflict_trials <= s.trials);
+            if s.ids_dropped > 0 {
+                assert!(
+                    s.degraded_trials > 0,
+                    "ids were dropped but no trial is degraded"
+                );
+            }
+            let stats = run.finish();
+            assert!(stats.len() <= cap);
+            for p in &stats {
+                let bound = trials as u64;
+                assert!(p.trials <= bound);
+                assert!(p.trials_rated <= p.trials);
+                assert!(p.trials_claimable <= p.trials_rated);
+                assert!(
+                    p.trials_hit <= p.trials
+                        && p.trials_false <= p.trials
+                        && p.trials_true <= p.trials
+                );
+                assert!(p.trials_rated + p.trials_unreported + p.trials_degraded >= p.trials_rated);
+            }
+        });
     }
 }
 
@@ -915,45 +1272,49 @@ fn trace_failure(kind: AssertKind, hits: u64, falses: u64) -> bool {
 fn digests_round_trip_and_the_decoder_only_accepts_what_the_encoder_writes() {
     let n = cases(10_000);
     for case in 0..n {
-        let mut rng = Rng::new(base_seed() + 0xD000 + case as u64);
-        let digest = random_digest(&mut rng);
-        let bytes = digest.encode();
-        assert_eq!(
-            TrialDigest::decode(&bytes),
-            Ok(digest.clone()),
-            "case {case}"
-        );
-
-        // Damaged copies: never a panic; an accepted copy must be canonical, so it re-encodes to the same bytes.
-        let mut damaged = bytes.clone();
-        corrupt(&mut rng, &mut damaged);
-        if let Ok(d) = TrialDigest::decode(&damaged) {
+        let seed = base_seed() + 0xD000 + case as u64;
+        check_case(case, seed, || {
+            let mut rng = Rng::new(seed);
+            let digest = random_digest(&mut rng);
+            let bytes = digest.encode();
             assert_eq!(
-                d.encode(),
-                damaged,
-                "case {case}: a non-canonical digest was accepted"
+                TrialDigest::decode(&bytes),
+                Ok(digest.clone()),
+                "case {case}"
             );
-            assert!(d.entries.len() <= MAX_IDS_PER_RUN);
-            assert!(
-                d.entries.iter().filter(|e| e.witness.is_some()).count() <= MAX_DIGEST_WITNESSES
-            );
-            for e in &d.entries {
-                if e.catalogued {
-                    assert_eq!(e.trues.checked_add(e.falses), Some(e.hits));
-                }
-                if let Some(decl) = &e.decl {
-                    assert!(is_plain_text(&decl.msg, MAX_MSG_BYTES));
+
+            // Damaged copies: never a panic; an accepted copy must be canonical, so it re-encodes to the same bytes.
+            let mut damaged = bytes.clone();
+            corrupt(&mut rng, &mut damaged);
+            if let Ok(d) = TrialDigest::decode(&damaged) {
+                assert_eq!(
+                    d.encode(),
+                    damaged,
+                    "case {case}: a non-canonical digest was accepted"
+                );
+                assert!(d.entries.len() <= MAX_IDS_PER_RUN);
+                assert!(
+                    d.entries.iter().filter(|e| e.witness.is_some()).count()
+                        <= MAX_DIGEST_WITNESSES
+                );
+                for e in &d.entries {
+                    if e.catalogued {
+                        assert_eq!(e.trues.checked_add(e.falses), Some(e.hits));
+                    }
+                    if let Some(decl) = &e.decl {
+                        assert!(is_plain_text(&decl.msg, MAX_MSG_BYTES));
+                    }
                 }
             }
-        }
-        // Every truncation is refused rather than read as a shorter digest.
-        if !bytes.is_empty() {
-            let cut = rng.below(bytes.len());
-            assert!(
-                TrialDigest::decode(&bytes[..cut]).is_err(),
-                "case {case}: cut at {cut}"
-            );
-        }
+            // Every truncation is refused rather than read as a shorter digest.
+            if !bytes.is_empty() {
+                let cut = rng.below(bytes.len());
+                assert!(
+                    TrialDigest::decode(&bytes[..cut]).is_err(),
+                    "case {case}: cut at {cut}"
+                );
+            }
+        });
     }
 }
 
@@ -961,16 +1322,19 @@ fn digests_round_trip_and_the_decoder_only_accepts_what_the_encoder_writes() {
 fn arbitrary_bytes_never_panic_the_digest_decoder_and_big_claims_do_not_allocate() {
     let n = cases(6_000);
     for case in 0..n {
-        let mut rng = Rng::new(base_seed() + 0xE000 + case as u64);
-        let len = rng.below(200);
-        let mut bytes: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
-        if rng.chance(2) && bytes.len() >= 2 {
-            bytes[0] = 1; // a plausible version, so the decoder gets further in
-            bytes[1] &= 0b11_1111;
-        }
-        if let Ok(d) = TrialDigest::decode(&bytes) {
-            assert_eq!(d.encode(), bytes);
-        }
+        let seed = base_seed() + 0xE000 + case as u64;
+        check_case(case, seed, || {
+            let mut rng = Rng::new(seed);
+            let len = rng.below(200);
+            let mut bytes: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
+            if rng.chance(2) && bytes.len() >= 2 {
+                bytes[0] = 1; // a plausible version, so the decoder gets further in
+                bytes[1] &= 0b11_1111;
+            }
+            if let Ok(d) = TrialDigest::decode(&bytes) {
+                assert_eq!(d.encode(), bytes);
+            }
+        });
     }
     // A header that promises the most entries with no body, and counts and lengths at the edge of 64 bits.
     let mut huge = vec![1u8, 0, 0];
@@ -1027,29 +1391,32 @@ fn random_row(rng: &mut Rng) -> CatalogRow {
 fn catalog_updates_from_an_untrusted_sender_keep_every_row_valid_and_the_cap() {
     let n = cases(4_000);
     for case in 0..n {
-        let mut rng = Rng::new(base_seed() + 0xF000 + case as u64);
-        let cap = 1 + rng.below(10);
-        let mut cat = RunCatalog::new();
-        for _ in 0..rng.below(40) {
-            let idx = if rng.chance(4) {
-                rng.next() as u32
-            } else {
-                rng.below(cat.len() + 2) as u32
-            };
-            let update = CatalogUpdate {
-                idx,
-                row: random_row(&mut rng),
-            };
-            if let Ok(next) = cat.clone().apply(&update, cap) {
-                cat = next;
+        let seed = base_seed() + 0xF000 + case as u64;
+        check_case(case, seed, || {
+            let mut rng = Rng::new(seed);
+            let cap = 1 + rng.below(10);
+            let mut cat = RunCatalog::new();
+            for _ in 0..rng.below(40) {
+                let idx = if rng.chance(4) {
+                    rng.next() as u32
+                } else {
+                    rng.below(cat.len() + 2) as u32
+                };
+                let update = CatalogUpdate {
+                    idx,
+                    row: random_row(&mut rng),
+                };
+                if let Ok(next) = cat.clone().apply(&update, cap) {
+                    cat = next;
+                }
+                assert!(cat.len() <= cap, "case {case}");
+                let ids: HashSet<&str> = cat.rows().iter().map(|r| r.id.as_str()).collect();
+                assert_eq!(ids.len(), cat.len(), "ids must stay unique");
+                for (i, row) in cat.rows().iter().enumerate() {
+                    assert!(row.validate().is_ok());
+                    assert_eq!(cat.index_of(&row.id), Some(i as u32));
+                }
             }
-            assert!(cat.len() <= cap, "case {case}");
-            let ids: HashSet<&str> = cat.rows().iter().map(|r| r.id.as_str()).collect();
-            assert_eq!(ids.len(), cat.len(), "ids must stay unique");
-            for (i, row) in cat.rows().iter().enumerate() {
-                assert!(row.validate().is_ok());
-                assert_eq!(cat.index_of(&row.id), Some(i as u32));
-            }
-        }
+        });
     }
 }

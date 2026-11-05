@@ -45,6 +45,23 @@ fn base_seed() -> u64 {
         .unwrap_or(0)
 }
 
+/// Runs one generated case. A failing assertion inside `body` is re-raised with the case number, the seed the case was
+/// built from and the base seed, so any failure can be repeated from the message alone.
+fn check_case(case: usize, seed: u64, body: impl FnOnce()) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+    if let Err(payload) = result {
+        let reason = payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+            .unwrap_or_else(|| "a panic with no text".to_string());
+        panic!(
+            "case {case}, seed {seed} (HAIRSPRING_FUZZ_SEED={}): {reason}",
+            base_seed()
+        );
+    }
+}
+
 const PIECES: &[&[u8]] = &[
     b"plain output\n",
     b"HAIRSPRING_EVENT {\"v\":1,\"kind\":\"work\",\"proc\":\"p\",\"ops\":3}\n",
@@ -136,87 +153,96 @@ fn same(a: &Captured, b: &Captured) -> bool {
 #[test]
 fn where_the_reads_end_never_changes_what_the_splitter_captures() {
     for case in 0..cases(200) {
-        let mut rng = Rng::new(base_seed() + case as u64 + 1);
-        let bytes = stream(&mut rng);
-        let cap = [0usize, 1, 7, 64, 4096][rng.below(5)];
-        let budget = [0usize, 100, 5_000, DEFAULT_MAX_EVENT_BYTES_PER_TRIAL][rng.below(4)];
-        let whole = capture(cap, budget, &[&bytes]);
-        let split = capture(cap, budget, &chunks(&mut rng, &bytes));
-        assert!(
-            same(&whole, &split),
-            "case {case}: chunking changed the capture"
-        );
+        let seed = base_seed() + case as u64 + 1;
+        check_case(case, seed, || {
+            let mut rng = Rng::new(seed);
+            let bytes = stream(&mut rng);
+            let cap = [0usize, 1, 7, 64, 4096][rng.below(5)];
+            let budget = [0usize, 100, 5_000, DEFAULT_MAX_EVENT_BYTES_PER_TRIAL][rng.below(4)];
+            let whole = capture(cap, budget, &[&bytes]);
+            let split = capture(cap, budget, &chunks(&mut rng, &bytes));
+            assert!(
+                same(&whole, &split),
+                "case {case}: chunking changed the capture"
+            );
 
-        // Caps: the kept text is the cap plus a marker, widened at most threefold by lossy decoding.
-        assert!(
-            whole.text.len() <= cap * 3 + 64,
-            "case {case}: text {} for cap {cap}",
-            whole.text.len()
-        );
-        // Each stored event line costs at most its bounded length plus the newline, and the budget is checked on
-        // the bounded length, so the store can pass the budget only by the two bytes a stored line keeps beyond it.
-        let lines = whole.events.bytes.iter().filter(|b| **b == b'\n').count();
-        assert!(
-            whole.events.bytes.len() <= budget + 2 * lines,
-            "case {case}"
-        );
-        for line in whole.events.lines() {
+            // Caps: the kept text is the cap plus a marker, widened at most threefold by lossy decoding.
             assert!(
-                line.len() <= MAX_LINE_BYTES + 2,
-                "case {case}: stored line of {}",
-                line.len()
+                whole.text.len() <= cap * 3 + 64,
+                "case {case}: text {} for cap {cap}",
+                whole.text.len()
             );
-        }
-        let findings_bound = 3 * 1024 + 64;
-        for text in [
-            &whole.findings.violation_line,
-            &whole.findings.error_line,
-            &whole.findings.lower_error_line,
-            &whole.findings.deadlock_line,
-        ]
-        .into_iter()
-        .flatten()
-        {
+            // Each stored event line costs at most its bounded length plus the newline, and the budget is checked on
+            // the bounded length, so the store can pass the budget only by the two bytes a stored line keeps beyond it.
+            let lines = whole.events.bytes.iter().filter(|b| **b == b'\n').count();
             assert!(
-                text.len() <= findings_bound,
-                "case {case}: finding of {} bytes",
-                text.len()
+                whole.events.bytes.len() <= budget + 2 * lines,
+                "case {case}"
             );
-        }
+            for line in whole.events.lines() {
+                assert!(
+                    line.len() <= MAX_LINE_BYTES + 2,
+                    "case {case}: stored line of {}",
+                    line.len()
+                );
+            }
+            let findings_bound = 3 * 1024 + 64;
+            for text in [
+                &whole.findings.violation_line,
+                &whole.findings.error_line,
+                &whole.findings.lower_error_line,
+                &whole.findings.deadlock_line,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                assert!(
+                    text.len() <= findings_bound,
+                    "case {case}: finding of {} bytes",
+                    text.len()
+                );
+            }
+        });
     }
 }
 
 #[test]
 fn the_events_the_splitter_keeps_fold_to_what_the_whole_stream_folds_to() {
     for case in 0..cases(200) {
-        let mut rng = Rng::new(base_seed() + 0x5000 + case as u64);
-        let bytes = stream(&mut rng);
-        let budget = DEFAULT_MAX_EVENT_BYTES_PER_TRIAL;
-        let captured = capture(4096, budget, &chunks(&mut rng, &bytes));
-        let direct = TrialEvents::from_output(&bytes).fold();
-        let empty = crate::capture::EventLines::default();
-        match fold_sources(None, &captured.events, &empty, budget) {
-            Some(via_splitter) => assert_eq!(via_splitter, direct, "case {case}"),
-            // Nothing that looked like an event reached the fold, so the whole-stream fold must have found none.
-            None => assert_eq!(direct.health.event_bytes, 0, "case {case}"),
-        }
+        let seed = base_seed() + 0x5000 + case as u64;
+        check_case(case, seed, || {
+            let mut rng = Rng::new(seed);
+            let bytes = stream(&mut rng);
+            let budget = DEFAULT_MAX_EVENT_BYTES_PER_TRIAL;
+            let captured = capture(4096, budget, &chunks(&mut rng, &bytes));
+            let direct = TrialEvents::from_output(&bytes).fold();
+            let empty = crate::capture::EventLines::default();
+            match fold_sources(None, &captured.events, &empty, budget) {
+                Some(via_splitter) => assert_eq!(via_splitter, direct, "case {case}"),
+                // Nothing that looked like an event reached the fold, so the whole-stream fold must have found none.
+                None => assert_eq!(direct.health.event_bytes, 0, "case {case}"),
+            }
+        });
     }
 }
 
 #[test]
 fn the_line_scanner_agrees_with_itself_wherever_the_reads_end() {
     for case in 0..cases(400) {
-        let mut rng = Rng::new(base_seed() + 0x9000 + case as u64);
-        let bytes = stream(&mut rng);
-        let whole: Findings = {
+        let seed = base_seed() + 0x9000 + case as u64;
+        check_case(case, seed, || {
+            let mut rng = Rng::new(seed);
+            let bytes = stream(&mut rng);
+            let whole: Findings = {
+                let mut scan = LineScan::default();
+                scan.feed(&bytes);
+                scan.finish()
+            };
             let mut scan = LineScan::default();
-            scan.feed(&bytes);
-            scan.finish()
-        };
-        let mut scan = LineScan::default();
-        for piece in chunks(&mut rng, &bytes) {
-            scan.feed(piece);
-        }
-        assert_eq!(scan.finish(), whole, "case {case}");
+            for piece in chunks(&mut rng, &bytes) {
+                scan.feed(piece);
+            }
+            assert_eq!(scan.finish(), whole, "case {case}");
+        });
     }
 }
