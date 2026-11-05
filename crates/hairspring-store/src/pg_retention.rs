@@ -172,6 +172,18 @@ impl RetentionOps for Ops<'_, '_> {
             .map(|r| r.get(0)))
     }
 
+    fn lock_tree(&mut self, tree_id: &str) -> Result<bool> {
+        // FOR NO KEY UPDATE conflicts with the FOR UPDATE that add_branch and add_node take on the tree, so neither
+        // can add to the tree until this transaction ends, but not with the key-share locks foreign keys take.
+        Ok(self
+            .tx
+            .query_opt(
+                "SELECT id FROM trees WHERE id=$1 FOR NO KEY UPDATE",
+                &[&tree_id],
+            )?
+            .is_some())
+    }
+
     fn tree_members(&mut self, tree_id: &str) -> Result<Vec<String>> {
         self.strings(
             "SELECT id FROM trees WHERE id=$1 UNION SELECT run_id FROM tree_branches WHERE tree_id=$1 \
@@ -191,14 +203,32 @@ impl RetentionOps for Ops<'_, '_> {
             )?;
         }
         if let Some(tree) = tree_id {
-            for h in self.strings(
-                "SELECT edge_ref FROM trial_lineage WHERE tree_id=$1 AND edge_ref IS NOT NULL",
-                tree,
+            let members: Vec<&str> = runs.iter().map(String::as_str).collect();
+            for r in self.tx.query(
+                "SELECT edge_ref FROM trial_lineage WHERE tree_id=$1 AND run_id = ANY($2) AND edge_ref IS NOT NULL",
+                &[&tree, &members],
             )? {
-                blobs.entry(h).or_insert(false);
+                blobs.entry(r.get(0)).or_insert(false);
             }
-            out.nodes += self.run("DELETE FROM trial_lineage WHERE tree_id=$1", tree)?;
-            self.run("DELETE FROM tree_branches WHERE tree_id=$1", tree)?;
+            out.nodes += self.tx.execute(
+                "DELETE FROM trial_lineage WHERE tree_id=$1 AND run_id = ANY($2)",
+                &[&tree, &members],
+            )?;
+            self.tx.execute(
+                "DELETE FROM tree_branches WHERE tree_id=$1 AND run_id = ANY($2)",
+                &[&tree, &members],
+            )?;
+            let left: i64 = self
+                .tx
+                .query_one(
+                    "SELECT (SELECT count(*) FROM trial_lineage WHERE tree_id=$1) \
+                     + (SELECT count(*) FROM tree_branches WHERE tree_id=$1)",
+                    &[&tree],
+                )?
+                .get(0);
+            if left > 0 {
+                return Err(tree_changed(tree));
+            }
             self.run("DELETE FROM trees WHERE id=$1", tree)?;
         }
         for run in runs {
@@ -217,6 +247,11 @@ impl RetentionOps for Ops<'_, '_> {
             out.events += self.run("DELETE FROM events WHERE run_id=$1", run)?;
             self.run("DELETE FROM runs WHERE id=$1", run)?;
         }
+        // Wait for every transaction that is storing a blob to end, and keep new ones out until this one ends. An
+        // ingest stores its blob (ON CONFLICT DO NOTHING, which locks no row) and the trial naming it in one
+        // transaction; until it commits, the reference checks below cannot see that trial.
+        self.tx
+            .batch_execute("LOCK TABLE blobs IN SHARE ROW EXCLUSIVE MODE")?;
         for (hash, is_bundle) in blobs {
             if let Some(bytes) = self.remove_if_unreferenced(&hash)? {
                 out.blobs.push(RemovedBlob {

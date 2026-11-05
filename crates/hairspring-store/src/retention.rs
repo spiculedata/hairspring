@@ -12,7 +12,7 @@
 //!
 //! A dry run does the same work inside one transaction and rolls it back, so its counts are exactly what an apply of
 //! the same runs would have removed at that moment.
-use crate::types::{Result, RunState};
+use crate::types::{Result, RunState, StoreError};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// A run old enough to be looked at, with the time its age is measured from.
@@ -148,9 +148,14 @@ pub(crate) trait RetentionOps {
     fn run_facts(&mut self, id: &str) -> Result<Option<RunFacts>>;
     /// The tree the run belongs to: the one it roots or the one it branches from.
     fn tree_of_run(&mut self, id: &str) -> Result<Option<String>>;
+    /// Locks the tree against new branches and nodes until the transaction ends, where the database needs it, so the
+    /// members read next stay the members. False when the tree no longer exists.
+    fn lock_tree(&mut self, tree_id: &str) -> Result<bool>;
     /// The runs of a tree: its root and every branch run, whichever tables say so.
     fn tree_members(&mut self, tree_id: &str) -> Result<Vec<String>>;
     /// Deletes the runs (and the tree, when given) and every row only they own, and then the blobs nothing refers to.
+    /// Tree rows are deleted only for the listed runs; if the tree still has rows for any other run, it returns an error
+    /// and the caller's transaction is rolled back, so nothing of the unit is removed.
     fn delete_unit(&mut self, tree_id: Option<&str>, runs: &[String]) -> Result<UnitRemoved>;
 }
 
@@ -184,7 +189,14 @@ pub(crate) fn process_anchor(
     if done.contains(anchor) {
         return Ok(());
     }
-    let tree = ops.tree_of_run(anchor)?;
+    let mut tree = ops.tree_of_run(anchor)?;
+    // Lock the tree before reading its members: a branch added after the read would otherwise be deleted with the
+    // tree although it was never judged. A tree that is gone (another pass removed it) leaves the run on its own.
+    if let Some(t) = &tree {
+        if !ops.lock_tree(t)? {
+            tree = None;
+        }
+    }
     let members = match &tree {
         Some(t) => ops.tree_members(t)?,
         None => vec![anchor.to_owned()],
@@ -201,6 +213,11 @@ pub(crate) fn process_anchor(
             states.push(None);
             reasons.push(Some(KeptReason::TreeKept));
         }
+    }
+    // A run judged on its own may have joined a tree since it was first read. The run is locked now (run_facts), so
+    // that cannot happen any more; ask again.
+    if tree.is_none() && reasons.iter().all(Option::is_none) && ops.tree_of_run(anchor)?.is_some() {
+        reasons = vec![Some(KeptReason::TreeKept)];
     }
     if reasons.iter().any(Option::is_some) {
         keep_unit(report, &tree, &members, named, &reasons);
@@ -260,6 +277,15 @@ fn record_removed(
             report.bundle_hashes.push(blob.hash);
         }
     }
+}
+
+/// The error for a tree that still has rows for runs outside the unit being removed. It should never happen (the
+/// tree is locked, or the database written by one writer at a time, before its members are read); if it does, the
+/// unit's transaction is rolled back and nothing of the unit is removed.
+pub(crate) fn tree_changed(tree: &str) -> StoreError {
+    StoreError::Backend(format!(
+        "trial tree {tree} has rows for runs that were not judged with it; nothing of the tree was removed"
+    ))
 }
 
 /// The ids to work through: deduplicated, in a fixed order.

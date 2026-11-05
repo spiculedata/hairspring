@@ -18,6 +18,7 @@ pub fn run_all_retention(make: &dyn Fn() -> Arc<dyn Store>) {
     every_row_that_belonged_to_a_run_goes_with_it(&*make());
     shared_blobs_stay_while_anything_refers_to_them(&*make());
     a_blob_named_by_a_kept_check_stays(&*make());
+    a_blob_named_only_by_a_kept_tree_edge_stays(&*make());
     deleting_twice_removes_nothing_the_second_time(&*make());
     a_tree_is_one_unit(make);
 }
@@ -319,6 +320,29 @@ fn a_blob_named_by_a_kept_check_stays(s: &dyn Store) {
     assert_eq!(report.runs_deleted(), 1);
     assert_eq!(report.blobs, 0, "a kept check's artefact is a reference");
     assert!(s.get_blob(&doomed).unwrap().is_some());
+}
+
+/// The tree edge clause of the blob guard: the blob is the old run's bundle and, by identical content, the edge of a
+/// node in a tree that stays. Only that edge refers to it once the old run is gone.
+fn a_blob_named_only_by_a_kept_tree_edge_stays(s: &dyn Store) {
+    use super::tree_support::{
+        add, child, finish, ingest_verdicts, make_tree, root, run_with_identity,
+    };
+    let old = finished(s, RunState::Failed, OLD);
+    let (_, shared) = failure_with_bundle(s, &old.id, b"edge and bundle alike");
+    let kept_root = run_with_identity(s, "e\n");
+    ingest_verdicts(s, &kept_root.id, &passes(2));
+    let tree = make_tree(s, &kept_root, Some(sha256_hex(b"e\n")));
+    add(s, &tree.id, &root(&kept_root.id, 0));
+    let mut edge = child(&kept_root.id, 1, 0, 1);
+    edge.edge_ref = Some(shared.clone());
+    add(s, &tree.id, &edge);
+    finish(s, &kept_root.id);
+    let report = delete(s, &ids(&[&old]), false);
+    assert_eq!(report.run_ids, vec![old.id.clone()]);
+    assert_eq!(report.blobs, 0, "the kept tree's edge is a reference");
+    assert!(s.get_blob(&shared).unwrap().is_some());
+    assert!(s.get_tree(&tree.id).unwrap().is_some());
 }
 
 fn deleting_twice_removes_nothing_the_second_time(s: &dyn Store) {

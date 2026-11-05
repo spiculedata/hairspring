@@ -2,7 +2,7 @@
 use crate::retention::*;
 use crate::sqlite_tx::write_tx;
 use crate::types::{Result, RunState};
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Transaction};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) fn scan(conn: &Connection, cutoff_ms: i64) -> Result<Vec<RetentionCandidate>> {
@@ -165,6 +165,15 @@ impl RetentionOps for Ops<'_> {
             .optional()?)
     }
 
+    fn lock_tree(&mut self, tree_id: &str) -> Result<bool> {
+        // The transaction holds SQLite's one write lock already; nothing else can add to the tree meanwhile.
+        Ok(self
+            .tx
+            .query_row("SELECT 1 FROM trees WHERE id=?", [tree_id], |_| Ok(()))
+            .optional()?
+            .is_some())
+    }
+
     fn tree_members(&mut self, tree_id: &str) -> Result<Vec<String>> {
         self.strings(
             "SELECT id FROM trees WHERE id=?1 UNION SELECT run_id FROM tree_branches WHERE tree_id=?1 \
@@ -184,14 +193,35 @@ impl RetentionOps for Ops<'_> {
             )?;
         }
         if let Some(tree) = tree_id {
-            for h in self.strings(
-                "SELECT edge_ref FROM trial_lineage WHERE tree_id=? AND edge_ref IS NOT NULL",
-                tree,
-            )? {
+            // One statement per table, so a node whose parent is another member's node goes in the same statement.
+            let marks = vec!["?"; runs.len()].join(",");
+            let args = || std::iter::once(tree).chain(runs.iter().map(String::as_str));
+            let mut stmt = self.tx.prepare(&format!(
+                "SELECT edge_ref FROM trial_lineage WHERE tree_id=? AND run_id IN ({marks}) AND edge_ref IS NOT NULL"
+            ))?;
+            let edges = stmt
+                .query_map(params_from_iter(args()), |r| r.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for h in edges {
                 blobs.entry(h).or_insert(false);
             }
-            out.nodes += self.run("DELETE FROM trial_lineage WHERE tree_id=?", tree)?;
-            self.run("DELETE FROM tree_branches WHERE tree_id=?", tree)?;
+            out.nodes += self.tx.execute(
+                &format!("DELETE FROM trial_lineage WHERE tree_id=? AND run_id IN ({marks})"),
+                params_from_iter(args()),
+            )? as u64;
+            self.tx.execute(
+                &format!("DELETE FROM tree_branches WHERE tree_id=? AND run_id IN ({marks})"),
+                params_from_iter(args()),
+            )?;
+            let left: i64 = self.tx.query_row(
+                "SELECT (SELECT count(*) FROM trial_lineage WHERE tree_id=?1) \
+                 + (SELECT count(*) FROM tree_branches WHERE tree_id=?1)",
+                [tree],
+                |r| r.get(0),
+            )?;
+            if left > 0 {
+                return Err(tree_changed(tree));
+            }
             self.run("DELETE FROM trees WHERE id=?", tree)?;
         }
         for run in runs {
@@ -223,3 +253,7 @@ impl RetentionOps for Ops<'_> {
         Ok(out)
     }
 }
+
+#[cfg(test)]
+#[path = "sqlite_retention_tests.rs"]
+mod tests;
