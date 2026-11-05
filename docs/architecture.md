@@ -532,7 +532,8 @@ changes.
   writes no row.
 - **Who records.** The process itself records the inputs of a run it executes, for a built-in simulated target: the
   digest of the running executable (the code under test is compiled into it, so one digest covers engine and target),
-  the target name and the backend. A remote worker reports the inputs its own engine can describe, once per job, to
+  the target name and the backend. The executable is read once per process, so the first run of a process pays a time
+  that grows with the size of the file (a debug build is much larger than a release build). A remote worker reports the inputs its own engine can describe, once per job, to
   `POST /api/worker/jobs/{job}/inputs` with its secret and the job's lease, as for trials (`run` role). The body is
   `{"worker_id", "worker_secret", "inputs": {"scheme", "fields": {name: digest}, "missing": [name]}}`; the answer is
   `{"ok": true, "outcome": "stored"}` or `"duplicate"`. The server checks that the scheme is the run's backend and
