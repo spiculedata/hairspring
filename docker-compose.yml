@@ -4,6 +4,14 @@
 #   docker compose up --build -d
 #   open http://127.0.0.1:7878  # sign in with the admin token
 #
+# What the workers can run: the image contains no Hermit and mounts no hairspring.toml, so out of the
+# box the workers run only the built-in simulation targets. Process targets (kind = "process") need
+# workers on Linux x86-64 hosts with Hermit installed.
+#
+# Trust: remote workers start untrusted, so their results are labelled unverified until an admin
+# trusts each worker. See docs/quickstart.md, the sections "The Workers page" and "Workers and the
+# queue: GET /api/workers".
+#
 # The server is published on localhost only. Put a TLS-terminating reverse proxy in front before
 # exposing it: bearer tokens and the database connection are plain TCP inside this compose network.
 name: hairspring
