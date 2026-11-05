@@ -376,4 +376,36 @@ fn text_is_never_a_pattern_and_a_group_never_exceeds_its_limit(s: &dyn Store) {
         ..query("run_")
     };
     assert!(s.search(&none).unwrap().runs.is_empty());
+
+    // A run's own seed and a trial's seed are two groups of hits joined in one; the limit covers both together.
+    start(s, "own", 100, 60);
+    let both = SearchQuery {
+        seed: Some(100),
+        limit: 5,
+        ..query("zzz")
+    };
+    let hits = s.search(&both).unwrap().seeds;
+    assert_eq!(
+        hits.iter().map(|h| h.trial).collect::<Vec<_>>(),
+        vec![None, Some(0)],
+        "the run that was started with the seed, then the trial that ran it"
+    );
+    let one = SearchQuery { limit: 1, ..both };
+    assert_eq!(s.search(&one).unwrap().seeds.len(), 1);
+
+    // A whole id outside the window is found by its own lookup, which the limit also covers.
+    let old = start(s, "old", 1, 1);
+    let outside = SearchQuery {
+        limit: 0,
+        recent_runs: 1,
+        ..query(&old.id)
+    };
+    assert!(s.search(&outside).unwrap().runs.is_empty());
+    let f = s.add_failure(&failure(&old), 2).unwrap().id;
+    let outside = SearchQuery {
+        limit: 0,
+        recent_runs: 1,
+        ..query(&f)
+    };
+    assert!(s.search(&outside).unwrap().failures.is_empty());
 }
