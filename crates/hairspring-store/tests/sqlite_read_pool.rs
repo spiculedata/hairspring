@@ -4,98 +4,14 @@
 //!
 //! Nothing here sleeps to arrange an interleaving. A read that must stay in progress waits on a channel inside
 //! [`SqliteStore::read_with`]; the time limits below only turn a hang into a failure.
+mod read_pool_support;
 use hairspring_store::*;
-use rusqlite::Connection;
-use std::path::{Path, PathBuf};
+use read_pool_support::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Barrier};
 use std::thread;
-use std::time::{Duration, Instant};
-
-/// The longest a step may take before the test calls it a hang.
-const HANG_LIMIT: Duration = Duration::from_secs(30);
-
-fn temp_db(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "hairspring-read-pool-{name}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir.join("db.sqlite")
-}
-
-fn cleanup(path: &Path) {
-    std::fs::remove_dir_all(path.parent().unwrap()).ok();
-}
-
-fn new_run(s: &dyn Store, created_at: i64) -> RunRecord {
-    s.create_run(
-        &NewRun {
-            target: "t".into(),
-            backend: "hermit".into(),
-            seed: 7,
-            config_json: "{}".into(),
-        },
-        created_at,
-    )
-    .unwrap()
-}
-
-fn run_count(c: &Connection) -> i64 {
-    c.query_row("SELECT COUNT(*) FROM runs", [], |r| r.get(0))
-        .unwrap()
-}
-
-/// Holds `n` read connections at once, each inside a read call, until the returned sender is dropped. Returns once all
-/// `n` are inside their calls, which only happens if `n` reads can be in progress together.
-fn hold_readers(s: &Arc<SqliteStore>, n: usize) -> (Vec<thread::JoinHandle<()>>, mpsc::Sender<()>) {
-    let (inside_tx, inside_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel::<()>();
-    let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
-    let handles = (0..n)
-        .map(|_| {
-            let s = Arc::clone(s);
-            let inside_tx = inside_tx.clone();
-            let release_rx = Arc::clone(&release_rx);
-            thread::spawn(move || {
-                s.read_with(|c| {
-                    run_count(c);
-                    inside_tx.send(()).unwrap();
-                    // Wait until released: every holder stops when the sender is dropped.
-                    let _ = release_rx.lock().unwrap().recv();
-                })
-                .unwrap();
-            })
-        })
-        .collect();
-    for i in 0..n {
-        inside_rx
-            .recv_timeout(HANG_LIMIT)
-            .unwrap_or_else(|_| panic!("only {i} of {n} reads were in progress together"));
-    }
-    (handles, release_tx)
-}
-
-fn release(handles: Vec<thread::JoinHandle<()>>, release_tx: mpsc::Sender<()>) {
-    drop(release_tx);
-    for h in handles {
-        h.join().unwrap();
-    }
-}
-
-/// Waits, without sleeping, until `done` holds or the hang limit passes.
-fn spin_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + HANG_LIMIT;
-    while !done() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        thread::yield_now();
-    }
-}
+use std::time::Duration;
 
 #[test]
 fn a_file_store_has_the_default_number_of_read_connections() {
@@ -404,5 +320,86 @@ fn the_conformance_reads_and_writes_mixed_with_gc_never_surface_busy_or_stale_re
         assert!(s.get_run(id).unwrap().is_none(), "retention kept {id}");
     }
     assert_eq!(s.get_run(&live.id).unwrap().unwrap().steps, WRITES);
+    cleanup(&path);
+}
+
+#[test]
+fn a_queued_read_is_woken_when_the_read_ahead_of_it_takes_one_of_two_returned_connections() {
+    // Two connections come back while two reads wait. Whichever waiter wakes first, the second must not sleep while a
+    // connection sits idle: the first wakes it after taking its own. The pause makes both come back before either
+    // waiter can take one, and the first waiter then holds its connection until the second is inside its read, so
+    // without that wake-up the second sleeps until the time limit. The order the two wake in is up to the scheduler,
+    // so the round is repeated.
+    const ROUNDS: usize = 100;
+    let path = temp_db("wake-next");
+    let s = Arc::new(SqliteStore::open_with_read_connections(&path, 2).unwrap());
+    for round in 0..ROUNDS {
+        let (handles, release_tx) = hold_readers(&s, 2);
+        let (second_in_tx, second_in_rx) = mpsc::channel::<()>();
+        let first = {
+            let s2 = Arc::clone(&s);
+            thread::spawn(move || {
+                s2.read_with(|_| second_in_rx.recv_timeout(Duration::from_secs(5)).is_ok())
+                    .unwrap()
+            })
+        };
+        spin_until("the first read to queue", || s.readers_waiting() == 1);
+        let second = {
+            let s2 = Arc::clone(&s);
+            thread::spawn(move || s2.read_with(|_| second_in_tx.send(()).unwrap()).unwrap())
+        };
+        spin_until("the second read to queue", || s.readers_waiting() == 2);
+        let pause = {
+            let s2 = Arc::clone(&s);
+            thread::spawn(move || s2.checkpoint_wal(HANG_LIMIT))
+        };
+        spin_until("the reads to pause", || s.reads_paused());
+        release(handles, release_tx);
+        assert_eq!(pause.join().unwrap(), WalCheckpoint::Done);
+        assert!(
+            first.join().unwrap(),
+            "round {round}: a read slept while a connection was idle"
+        );
+        second.join().unwrap();
+    }
+    cleanup(&path);
+}
+
+#[test]
+fn closing_the_store_after_every_read_connection_was_used_removes_the_wal_files() {
+    let path = temp_db("close");
+    let s = Arc::new(SqliteStore::open(&path).unwrap());
+    let (handles, release_tx) = hold_readers(&s, DEFAULT_READ_CONNECTIONS);
+    new_run(&*s, 1);
+    release(handles, release_tx);
+    assert_eq!(s.list_runs(10).unwrap().len(), 1);
+    assert!(sibling(&path, "-wal").exists() && sibling(&path, "-shm").exists());
+    drop(Arc::into_inner(s).unwrap());
+    assert!(!sibling(&path, "-wal").exists(), "the WAL file is left");
+    assert!(
+        !sibling(&path, "-shm").exists(),
+        "the shared-memory file is left"
+    );
+    // Everything written is in the database file itself.
+    let s = SqliteStore::open(&path).unwrap();
+    assert_eq!(s.list_runs(10).unwrap().len(), 1);
+    drop(s);
+    cleanup(&path);
+}
+
+#[test]
+fn reading_checks_runs_on_a_read_connection_and_a_write_does_not() {
+    let path = temp_db("which");
+    let s = Arc::new(SqliteStore::open(&path).unwrap());
+    let (on_reader, checks) = runs_on_a_reader(&s, |s| s.list_failure_checks("fail_none").unwrap());
+    assert!(on_reader, "list_failure_checks ran on the writer");
+    assert!(checks.is_empty());
+    let (on_reader, batch) = runs_on_a_reader(&s, |s| {
+        s.list_checks_of_failures(&["fail_a", "fail_b"]).unwrap()
+    });
+    assert!(on_reader, "list_checks_of_failures ran on the writer");
+    assert_eq!(batch.len(), 2);
+    let (on_reader, _) = runs_on_a_reader(&s, |s| s.register_worker("w", "{}", 1).unwrap());
+    assert!(!on_reader, "a write waited for a read connection");
     cleanup(&path);
 }

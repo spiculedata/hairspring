@@ -10,13 +10,14 @@ use crate::sqlite_run_end as run_end;
 use crate::sqlite_schema;
 use crate::sqlite_tree_query as query;
 use crate::sqlite_trials as trials;
+use crate::sqlite_wal_limit::{WalLimit, Writer, JOURNAL_SIZE_LIMIT};
 use crate::trials::*;
 use crate::types::*;
 use crate::{new_id, sha256_hex, FailureFilter, RunFilter, Store};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::Mutex;
 
 impl From<rusqlite::Error> for StoreError {
     fn from(e: rusqlite::Error) -> Self {
@@ -82,14 +83,23 @@ pub const DEFAULT_READ_CONNECTIONS: usize = 4;
 /// mode allows. Every read call runs in one read transaction: it sees one committed snapshot, and that snapshot
 /// includes every write that had returned before the call began. An in-memory database cannot be shared between
 /// connections, so an in-memory store reads and writes through its one connection, as does a store opened with no
-/// read connections.
+/// read connections. A store on a file keeps its WAL file bounded (see `sqlite_wal_limit`).
 pub struct SqliteStore {
-    // Field order is drop order: the read connections close before the writer, so the writer is the last connection
-    // and its close checkpoints the WAL.
+    // Dropping the store closes the read connections first (see `Drop` below), so the writer is the last connection:
+    // it checkpoints the WAL and its close removes the WAL files.
     pub(crate) readers: Option<ReadPool>,
-    conn: Mutex<Connection>,
+    pub(crate) conn: Mutex<Connection>,
     /// How subtree queries are answered; the store's own rule unless a caller changes it.
     query_rule: Mutex<TreeQueryRule>,
+    /// The WAL file of a store on a database file, kept bounded after each use of the writer; `None` in memory.
+    pub(crate) wal: Option<WalLimit>,
+}
+
+impl Drop for SqliteStore {
+    fn drop(&mut self) {
+        drop(self.readers.take());
+        self.checkpoint_on_close();
+    }
 }
 
 pub(crate) fn run_from_row(r: &Row<'_>) -> rusqlite::Result<RunRecord> {
@@ -166,13 +176,17 @@ impl SqliteStore {
         // without a busy handler it fails at once with "database is locked" when another process is opening the file.
         conn.busy_timeout(BUSY_TIMEOUT)?;
         enable_wal(&conn)?;
+        conn.pragma_update(None, "journal_size_limit", JOURNAL_SIZE_LIMIT)?;
         let file = conn
             .path()
             .filter(|p| !p.is_empty())
             .map(std::path::PathBuf::from);
         let mut store = SqliteStore::init(conn)?;
-        if let Some(file) = file.filter(|_| readers > 0) {
-            store.readers = Some(ReadPool::open(&file, readers)?);
+        if let Some(file) = file {
+            store.wal = Some(WalLimit::new(&file));
+            if readers > 0 {
+                store.readers = Some(ReadPool::open(&file, readers)?);
+            }
         }
         Ok(store)
     }
@@ -189,6 +203,7 @@ impl SqliteStore {
             readers: None,
             conn: Mutex::new(conn),
             query_rule: Mutex::new(TreeQueryRule::StoreDefault),
+            wal: None,
         })
     }
 
@@ -196,9 +211,10 @@ impl SqliteStore {
         *self.query_rule.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    pub(crate) fn conn(&self) -> MutexGuard<'_, Connection> {
+    /// The writer's connection, behind its mutex. Giving it back checks the WAL's size (see `sqlite_wal_limit`).
+    pub(crate) fn conn(&self) -> Writer<'_> {
         // A poisoned mutex only means another thread panicked mid-query; SQLite state is still consistent.
-        self.conn.lock().unwrap_or_else(|e| e.into_inner())
+        Writer::new(self, self.conn.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// Runs `f` on the store's writer connection, so tests can inspect or seed a database with raw SQL. What it commits
@@ -618,7 +634,7 @@ impl Store for SqliteStore {
         &self,
         failure_ids: &[&str],
     ) -> Result<BTreeMap<String, Vec<CheckRecord>>> {
-        checks::list_many(&self.conn(), failure_ids)
+        self.read(|c| checks::list_many(c, failure_ids))
     }
 
     fn put_run_identity(&self, identity: &RunIdentity) -> Result<IdentityOutcome> {

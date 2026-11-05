@@ -56,6 +56,7 @@ mod sqlite_search;
 mod sqlite_tree_query;
 mod sqlite_trials;
 mod sqlite_tx;
+mod sqlite_wal_limit;
 mod trials;
 
 pub use checks::*;
@@ -76,6 +77,10 @@ pub use search::{
 pub use sqlite::{SqliteStore, BUSY_TIMEOUT, DEFAULT_READ_CONNECTIONS};
 pub use sqlite_downgrade::downgrade_sqlite;
 pub use sqlite_process::disable_sqlite_memory_statistics;
+pub use sqlite_wal_limit::{
+    WalCheckpoint, JOURNAL_SIZE_LIMIT, WAL_CHECKPOINT_RETRY, WAL_CHECKPOINT_THRESHOLD,
+    WAL_DRAIN_WAIT,
+};
 pub use trials::*;
 pub use types::*;
 

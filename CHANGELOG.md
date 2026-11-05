@@ -135,8 +135,17 @@
   took 0.6 to 0.7 ms at the median instead of 264 to 371 ms (two runs of each, on 100,000 runs and 300,000
   failures; docs/architecture.md has the figures). In-memory stores keep a single connection; writes, retention and
   the schema are unchanged. The `hairspring` binary also turns off SQLite's process-wide memory statistics at start-up,
-  whose mutex made heavy reads on several connections slower side by side than one after another. PostgreSQL is
-  unaffected.
+  whose mutex made heavy reads on several connections slower side by side than one after another (it prints one line
+  to stderr if that setting could not be made). PostgreSQL is unaffected.
+
+  Reads that overlap without a gap stop SQLite starting its WAL file again, so the store now limits it: when the WAL
+  reaches 16 MiB the writer pauses the read connections, waits up to 250 ms for the reads in progress to finish,
+  checkpoints with `TRUNCATE` (the file goes to zero bytes) and lends the connections again. A read that arrives
+  during a pause waits at most 250 ms plus that checkpoint (the longest pause measured was 6.9 ms); if the reads in
+  progress do not finish in time the checkpoint is skipped and tried again after 2 s, so a read that keeps running
+  past every attempt still lets the WAL grow until it ends. `journal_size_limit` is 4 MiB, and closing the store
+  checkpoints. With 8 readers looping and an unthrottled writer of 2 KB events for 15 s, the WAL reached 3280 MiB
+  without the limit and 16 MiB with it; the writer managed 8553 to 10292 writes/s instead of 10623.
 - Server hardening. The server now closes a connection that has not sent a complete request head within 10 seconds
   (this is also the idle time allowed between requests on a kept-alive connection), answers `408` and closes the
   connection when a request body has not arrived within 30 seconds, and allows at most 512 open connections

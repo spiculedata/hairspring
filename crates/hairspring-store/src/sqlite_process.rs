@@ -14,6 +14,7 @@ use std::ffi::c_int;
 ///
 /// No other thread may be using SQLite while this runs (the rule of `sqlite3_config`). Call it at the start of `main`,
 /// before any thread is started.
+#[must_use = "the setting does not take effect once SQLite has started; report it when this is false"]
 pub unsafe fn disable_sqlite_memory_statistics() -> bool {
     // SAFETY: the caller guarantees no other thread is inside SQLite. The call takes one integer argument for this
     // option, passed as a C int, and only changes SQLite's own configuration.

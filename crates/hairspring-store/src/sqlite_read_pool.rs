@@ -12,6 +12,9 @@
 //! - **No poisoning.** The pool's lock is held only to take or return a connection, never while SQL runs. A connection
 //!   is returned when the [`Reader`] that holds it drops, panics included; one left inside a transaction is rolled back
 //!   first, and if that fails it is closed and a fresh one is opened when next needed.
+//! - **Pausable.** [`ReadPool::with_reads_drained`] stops lending connections, waits (for a bounded time) until every
+//!   lent connection is back, runs its closure with no read in progress, and lends again. The WAL limit uses it to
+//!   checkpoint; a read that arrives meanwhile waits in the queue, in turn.
 use crate::sqlite::BUSY_TIMEOUT;
 use crate::types::{Result, StoreError};
 use crate::SqliteStore;
@@ -20,6 +23,7 @@ use std::collections::VecDeque;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 impl SqliteStore {
     /// Runs one read call: on a read connection inside one read transaction, or on the writer's connection when the
@@ -54,6 +58,12 @@ impl SqliteStore {
     pub fn readers_waiting(&self) -> usize {
         self.readers.as_ref().map_or(0, ReadPool::waiting)
     }
+
+    /// Whether the read connections are paused for a WAL checkpoint. For tests; not part of the supported interface.
+    #[doc(hidden)]
+    pub fn reads_paused(&self) -> bool {
+        self.readers.as_ref().is_some_and(|p| p.lock().paused)
+    }
 }
 
 pub(crate) struct ReadPool {
@@ -70,6 +80,8 @@ struct PoolState {
     /// Tickets of the callers waiting, in arrival order; only the first may take a connection.
     queue: VecDeque<u64>,
     next_ticket: u64,
+    /// While set, no connection is lent: [`ReadPool::with_reads_drained`] is waiting for the lent ones or running.
+    paused: bool,
 }
 
 /// A connection lent out by the pool; it goes back when this drops.
@@ -92,6 +104,7 @@ impl ReadPool {
                 open: size,
                 queue: VecDeque::new(),
                 next_ticket: 0,
+                paused: false,
             }),
             returned: Condvar::new(),
         })
@@ -119,7 +132,7 @@ impl ReadPool {
         st.next_ticket += 1;
         st.queue.push_back(ticket);
         loop {
-            if st.queue.front() == Some(&ticket) {
+            if !st.paused && st.queue.front() == Some(&ticket) {
                 if let Some(conn) = st.idle.pop() {
                     st.queue.pop_front();
                     drop(st);
@@ -147,6 +160,34 @@ impl ReadPool {
         }
     }
 
+    /// Stops lending connections, waits until every lent one is back, runs `f` with no read in progress, and lends
+    /// again. If the lent connections are not all back within `wait`, `f` does not run and this returns `None`; either
+    /// way lending resumes before this returns, so a read never waits here longer than `wait` plus the time `f` takes.
+    /// Only one caller at a time may use this (the store calls it with the writer's mutex held).
+    pub(crate) fn with_reads_drained<R>(&self, wait: Duration, f: impl FnOnce() -> R) -> Option<R> {
+        let deadline = Instant::now() + wait;
+        let mut st = self.lock();
+        st.paused = true;
+        while st.idle.len() < st.open {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                st.paused = false;
+                drop(st);
+                self.returned.notify_all();
+                return None;
+            }
+            st = self
+                .returned
+                .wait_timeout(st, left)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+        drop(st);
+        // Lending resumes even if `f` panics.
+        let _resume = Resume(self);
+        Some(f())
+    }
+
     fn lend(&self, conn: Connection) -> Reader<'_> {
         Reader {
             pool: self,
@@ -163,6 +204,16 @@ impl ReadPool {
         }
         drop(st);
         self.returned.notify_all();
+    }
+}
+
+/// Lifts the pause of [`ReadPool::with_reads_drained`] when it drops, and wakes the callers waiting.
+struct Resume<'a>(&'a ReadPool);
+
+impl Drop for Resume<'_> {
+    fn drop(&mut self) {
+        self.0.lock().paused = false;
+        self.0.returned.notify_all();
     }
 }
 
