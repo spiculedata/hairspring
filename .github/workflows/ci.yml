@@ -188,7 +188,7 @@ jobs:
   dotnet-sdk:
     name: .NET SDK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       # The exact SDK of the build records (scripts/record-global.json), as for the other .NET steps.
@@ -461,6 +461,39 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install, build and check in a fresh container
         run: bash scripts/test-install-docker.sh --with-hermit-build --distro ${{ matrix.image }}
+
+  postgres:
+    name: PostgreSQL tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        # Trust authentication on purpose: one store test creates a login role without a password and connects as it
+        # (a non-owner). The container is only reachable from the runner and holds throwaway data.
+        image: postgres:16.6-alpine
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: hairspring
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d hairspring"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      HAIRSPRING_TEST_PG_URL: postgres://postgres@localhost:5432/hairspring
+      # A missing database fails the tests instead of skipping them.
+      HAIRSPRING_REQUIRE_PG: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The store conformance, migration, retention, search and paging suites, the service tests (workers views,
+      # list pages) and the CLI test that selects PostgreSQL by environment. Keep this command in step with
+      # CONTRIBUTING.md.
+      - name: Test against PostgreSQL
+        run: cargo test -p hairspring-store -p hairspring-service -p hairspring-cli --features hairspring-store/postgres --no-fail-fast
 
   web:
     name: Web UI
