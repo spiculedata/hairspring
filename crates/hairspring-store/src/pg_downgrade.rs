@@ -68,6 +68,11 @@ fn apply(
             candidates.extend(blobs_of_run(tx, run)?);
         }
     }
+    if version >= FIRST_VERSION_WITH_V7_INDEXES {
+        for index in V7_INDEXES {
+            tx.batch_execute(&format!("DROP INDEX {index}"))?;
+        }
+    }
     if version >= FIRST_VERSION_WITH_V5_TABLES {
         for table in V5_TABLES_DROP_ORDER {
             tx.batch_execute(&format!("DROP TABLE {table}"))?;

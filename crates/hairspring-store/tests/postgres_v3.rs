@@ -97,7 +97,7 @@ fn table_exists(c: &mut Client, schema: &str, table: &str) -> bool {
 
 const NEW_TABLES: [&str; 4] = ["run_identity", "trees", "trial_lineage", "tree_branches"];
 /// The schema version this build creates and migrates to (versions 4 and 5 only add tables to version 3).
-const CURRENT_VERSION: i32 = 6;
+const CURRENT_VERSION: i32 = 7;
 
 /// The PostgreSQL tests return early without a URL, which looks like a pass. Setting `HAIRSPRING_REQUIRE_PG=1` turns
 /// a missing URL into a failure, and with a URL this proves a server answers.

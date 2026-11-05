@@ -53,6 +53,27 @@ export async function runsPage(q: RunsQuery, signal?: AbortSignal): Promise<List
   return pageOf(await request<unknown>(runsUrl(q), { signal }), 'runs', isRun, 'list of runs');
 }
 
-export async function failuresPage(q: FailuresQuery, signal?: AbortSignal): Promise<ListPage<FailureSummary>> {
-  return pageOf(await request<unknown>(failuresUrl(q), { signal }), 'failures', isFailure, 'list of failures');
+/** How far a property filter looked: the newest `recent_runs` runs, and whether older runs were left out. */
+export interface FailureScope {
+  readonly recentRuns: number;
+  readonly cutShort: boolean;
+}
+
+/** A failures page, with the `scope` the server adds when the request had a property filter. */
+export interface FailuresPage extends ListPage<FailureSummary> {
+  readonly scope?: FailureScope;
+}
+
+/** The `scope` of a failures body, or undefined when there is none or it is not the shape the server sends. */
+function scopeOf(body: unknown): FailureScope | undefined {
+  const scope = isObject(body) ? body.scope : undefined;
+  if (!isObject(scope) || typeof scope.recent_runs !== 'number' || typeof scope.cut_short !== 'boolean') return undefined;
+  return { recentRuns: scope.recent_runs, cutShort: scope.cut_short };
+}
+
+export async function failuresPage(q: FailuresQuery, signal?: AbortSignal): Promise<FailuresPage> {
+  const body = await request<unknown>(failuresUrl(q), { signal });
+  const page = pageOf(body, 'failures', isFailure, 'list of failures');
+  const scope = scopeOf(body);
+  return scope === undefined ? page : { ...page, scope };
 }
