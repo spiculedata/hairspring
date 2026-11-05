@@ -18,6 +18,16 @@ func run() int {
 }
 ```
 
+To use it from a project of your own, make the project a module first: `go get` does not work outside one.
+
+```bash
+go mod init example.com/demo
+go get github.com/spiculedata/hairspring/sdks/go@main
+```
+
+The SDK is not tagged, so this pins a pseudo-version of the `main` branch. `go mod tidy` then drops the `// indirect`
+comment that `go get` leaves on the requirement.
+
 The package documentation (`go doc github.com/spiculedata/hairspring/sdks/go`) is the reference. In short:
 
 - **Declare** each site once, before the workload starts: `hs.Always`, `hs.AlwaysOrUnreachable`, `hs.Sometimes`,

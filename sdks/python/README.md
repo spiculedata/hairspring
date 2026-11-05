@@ -24,7 +24,8 @@ default on Linux for Python 3.12 and 3.13): only the process that started the SD
 
 * Documentation: [docs/python-sdk.md](../../docs/python-sdk.md) (API, environment, processes and threads, thread safety,
   the planted race, evidence, limits).
-* Use it from the source tree with `PYTHONPATH=sdks/python/src`, or `pip install ./sdks/python`.
+* Use it from the source tree with `PYTHONPATH=sdks/python/src`, or `pip install ./sdks/python` (the install writes
+  `sdks/python/build/` and `sdks/python/src/hairspring.egg-info/` into the clone; both are ignored by the repository).
 * Example: `PYTHONPATH=sdks/python/src python3 sdks/python/examples/quickstart.py`.
 * Tests: `python3 -m unittest discover -s sdks/python/tests -t sdks/python` from the repository root; conformance against
   the reference parser: `cargo test -p hairspring-props --test python_sdk` (set `HS_REQUIRE_PYTHON=1` to make a missing
