@@ -248,3 +248,8 @@
   bidirectional characters and at most 500 characters. A message that was cut ends in `...`. Messages for ordinary
   input read as before. The environment-mismatch message (409, `environment_mismatch`) follows the same rule and now
   also ends in `...` when it was cut, as does a property id longer than 500 characters in a `GET /api/search` answer.
+
+### Documentation
+
+- `docs/supply-chain.md` and SECURITY.md note a known advisory (RUSTSEC-2026-0344, `ruzstd`) in the pinned Hermit
+  build, when it can be reached, and that the fix will ship with the next pinned Hermit update.
