@@ -100,6 +100,8 @@ function serve() {
     const u = String(url);
     if (u.includes('/events')) return pending();
     if (u.includes('/runs/run_missing')) return json({ error: 'not found' }, 404);
+    if (u.startsWith('/api/failures/f_missing')) return json({ error: 'not found' }, 404);
+    if (u.startsWith('/api/runs/run_1/trials?seed=')) return json({ trials: [] });
     if (u.includes('/properties')) return json(page());
     if (u.includes('/coverage') || u.includes('/checks')) return json({}, 404);
     if (u.startsWith('/api/runs/run_1')) return json({ run, failures: [failure] });
@@ -177,9 +179,22 @@ describe('axe-core over the main pages', () => {
     expect(await violations()).toEqual([]);
   });
 
+  /**
+   * Every page a reader can reach for something that is not there. Each row is one branch in the app: the route that
+   * matches nothing, a run id the router refuses, a trial number too large to be one, and each page whose server
+   * answer is 404 (run, seeds of a run, failure, trial, and the run behind a seed). A row for a branch added later
+   * belongs here too; `NotFound` and the no-stored-trial note in `SeedPage` are the only places such a page is built.
+   */
   it.each([
     ['/nowhere', 'No such page'],
+    ['/runs/bad.id/trials/1', 'No such page'],
+    ['/runs/run_1/trials/99999999999999999999', 'No such page'],
     ['/runs/run_missing', 'No such run'],
+    ['/runs/run_missing/seeds', 'No such run'],
+    ['/runs/run_missing/seeds/5', 'No such run'],
+    ['/runs/run_missing/trials/1', 'No such trial'],
+    ['/failures/f_missing', 'No such failure'],
+    ['/runs/run_1/seeds/999999', 'No stored trial'],
   ])('%s has a level one heading and no other markup violations', async (path, heading) => {
     mount(path);
     await settled(heading);

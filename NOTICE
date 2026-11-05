@@ -45,7 +45,10 @@ Web UI (web/, built with Vite and embedded into the server binary)
   @vitejs/plugin-react  MIT
   typescript            Apache-2.0
   vitest                MIT
-  @types/react, @types/react-dom  MIT
+  happy-dom             MIT
+  @testing-library/react, @testing-library/dom  MIT
+  axe-core              MPL-2.0 (test only, not shipped)
+  @types/react, @types/react-dom, @types/node  MIT
 
 Only react and react-dom are runtime dependencies; the others are build and
 test tooling. Transitive packages are recorded in web/package-lock.json.

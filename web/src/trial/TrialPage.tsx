@@ -61,6 +61,7 @@ export function SeedPage({ runId, seed }: { runId: string; seed: string }) {
   if (lookup.data.seq === undefined) {
     return (
       <>
+        <h1>No stored trial</h1>
         <p>
           <Link to={runPath(runId)}>← Run</Link>
         </p>

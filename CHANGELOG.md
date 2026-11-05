@@ -117,8 +117,9 @@
 - Web UI accessibility fixes found by an axe-core audit of every page in light and dark at 1280 and 390 pixels wide. The
   "What this run shows" and "What it does not show" headings on the run page are now level 2 (they skipped from level 1
   to level 3). A page, run, trial or failure that does not exist now has a level 1 heading ("No such page", "No such
-  run" and so on) above the same message. On the seed explorer the table's scrolling box is named "Table of judged
-  trials", so it no longer shares a name with the "Judged trials" section that holds the strip. The scrolling boxes
-  for a raw event, the failure bundle and the output tail have the `group` role, so their names are announced. No
-  result wording changed. A test over the main pages in the web UI's test suite runs axe-core (a new dev dependency
-  of `web/`) on the markup rules; colour contrast and target size are not checked there.
+  run", "No stored trial" for a seed with no stored trial, and so on) above the same message. On the seed explorer the
+  table's scrolling box is named "Table of judged trials", so it no longer shares a name with the "Judged trials"
+  section that holds the strip. The scrolling boxes for a raw event, the failure bundle and the output tail have the
+  `group` role, so their names are announced. No result wording changed. A test over the main pages in the web UI's test
+  suite runs axe-core (a new dev dependency of `web/`) on the markup rules; colour contrast and target size are not
+  checked there.
