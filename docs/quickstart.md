@@ -253,9 +253,11 @@ The server works the ladder out from the checks stored for the failure: **Candid
 **Rerun repeated** (same-seed reruns repeat it, no replay yet), **Confirmed** (the reruns and the replay of its bundle
 repeat it) and **Verified** (confirmed, and Hermit's strict verify agrees). No step says the failure is fixed. Two states are ends of the
 ladder, not rungs: "Control failed" (the reruns repeat the failure, but the fixed build still fails at this seed) and
-"Not reproducible" (a rerun or the replay did not repeat it on the environment it was recorded in). The page cannot start a confirmation: run `hairspring confirm <failure id>` for that. It needs the
-`process` backend with Hermit, which runs on Linux x86-64, so a simulation failure stays a candidate and the page shows
-the command it would need. The checks table, which lists each recorded check, appears once a failure has checks. It was
+"Not reproducible" (a rerun or the replay did not repeat it on the environment it was recorded in). By default the page cannot start a confirmation: run `hairspring confirm <failure id>` for that. (A server started with
+`--max-confirmations N` adds a Run confirmation control for callers with the `run` role; it runs on the server, for up to
+120 seconds, and its checks are trusted. See [api.md](api.md#post-apifailuresidconfirm) and [SECURITY.md](../SECURITY.md#known-limitations-read-these).)
+A confirmation needs the `process` backend with Hermit, which runs on Linux x86-64, so a simulation failure stays a
+candidate and the page shows the command it would need. The checks table, which lists each recorded check, appears once a failure has checks. It was
 not captured here because that needs Hermit.
 
 ![The failure page with the word Confirmation pressed: a box defines it as recorded checks that a failure repeats, with a Glossary link.](images/ui/failure-term-popover-light.png)
@@ -523,7 +525,7 @@ be stated for the trials it ran; a sweep with no failure says only that those tr
   says your role cannot start runs and to ask an administrator for the run role. If the server cannot say what your
   role is (an older server, an error, or no answer within 5 seconds), the button stays available and the server
   decides: it answers 403 ("this endpoint requires the run role") and the form says the token cannot start runs.
-- Once the server accepts the run, the browser opens its page. Confirming a failure is not started from the browser.
+- Once the server accepts the run, the browser opens its page. Confirming a failure is not started from the browser unless the server was started with `--max-confirmations`.
 
 ## Replay a bundle
 
