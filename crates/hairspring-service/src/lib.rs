@@ -420,6 +420,15 @@ impl Service {
                 "worker name must be 1-64 characters".to_string(),
             ));
         }
+        if name
+            .chars()
+            .any(hairspring_core::environment::is_unsafe_display_char)
+        {
+            return Err(ServiceError::InvalidRequest(
+                "worker name must not contain control or invisible formatting characters"
+                    .to_string(),
+            ));
+        }
         let now = now_ms();
         if self.store.worker_count()? >= self.cfg.max_workers {
             self.store.prune_workers(now - STALE_WORKER_AGE_MS)?;

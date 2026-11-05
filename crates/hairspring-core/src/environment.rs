@@ -40,13 +40,20 @@ pub fn is_known_field(name: &str) -> bool {
     KNOWN_FIELDS.contains(&name)
 }
 
-/// Characters that can reorder or hide text when shown (bidirectional controls, zero-width and byte-order marks),
-/// besides ordinary control characters.
+/// Characters that can reorder or hide text when shown (bidirectional controls, zero-width and byte-order marks) or
+/// break a line (the line and paragraph separators U+2028 and U+2029), besides ordinary control characters. The web
+/// UI keeps the same list in `web/src/shell/organisation.ts`.
 pub fn is_unsafe_display_char(c: char) -> bool {
     c.is_control()
         || matches!(
             c,
-            '\u{061C}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
+            '\u{061C}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2060}'..='\u{2069}'
+                | '\u{FEFF}'
         )
 }
 

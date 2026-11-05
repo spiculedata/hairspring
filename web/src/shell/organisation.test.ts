@@ -32,7 +32,7 @@ describe('organisationName', () => {
   });
 
   it('is nothing for a name with a control or invisible formatting character', () => {
-    for (const bad of ['a\nb', 'a\tb', 'a\u0000b', 'a\u001b[31mb', 'a‮b', 'a​b', 'a⁦b', 'a﻿b', 'a؜b']) {
+    for (const bad of ['a\nb', 'a\tb', 'a\u0000b', 'a\u001b[31mb', 'a‮b', 'a​b', 'a⁦b', 'a﻿b', 'a؜b', 'a\u2028b', 'a\u2029b']) {
       expect(organisationName(health(bad)), JSON.stringify(bad)).toBeUndefined();
     }
   });

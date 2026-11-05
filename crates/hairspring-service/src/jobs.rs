@@ -147,8 +147,9 @@ impl Service {
     pub fn report_progress(&self, run_id: &str, p: &Progress) -> Result<()> {
         self.store.update_progress(run_id, p.steps, p.trials)?;
         if self.should_store_progress_event(run_id) {
+            let message = sanitize::public_text(&p.message);
             let payload =
-                serde_json::json!({ "steps": p.steps, "trials": p.trials, "message": p.message });
+                serde_json::json!({ "steps": p.steps, "trials": p.trials, "message": message });
             self.store
                 .add_event(run_id, "progress", &payload.to_string(), now_ms())?;
         }
@@ -432,6 +433,8 @@ impl Service {
     /// Records a transient worker failure; the job is retried until attempts run out,
     /// at which point its run is finalised as an error.
     pub fn fail(&self, job_id: &str, worker_id: &str, error: &str) -> Result<()> {
+        // The reason comes from a worker and is shown as the run's error, so it is cleaned like a result's error.
+        let error = &sanitize::public_text(error);
         let now = now_ms();
         if !self.store.fail_job(job_id, worker_id, error, now)? {
             return Ok(()); // not the lease holder (stale report): nothing to change

@@ -1,7 +1,7 @@
 use hairspring_core::bundle::Bundle;
 use hairspring_core::environment::{
-    compare, EnvError, EnvironmentComparison, EnvironmentIdentity, FieldChange,
-    MAX_FIELD_VALUE_CHARS, MAX_LISTED_CHANGES,
+    compare, is_unsafe_display_char, EnvError, EnvironmentComparison, EnvironmentIdentity,
+    FieldChange, MAX_FIELD_VALUE_CHARS, MAX_LISTED_CHANGES,
 };
 
 fn identity(pairs: &[(&str, &str)]) -> EnvironmentIdentity {
@@ -257,4 +257,26 @@ fn applying_leaves_the_original_bundle_untouched() {
     let original = Bundle::new(1, "b", vec![]);
     let _ = recorded().apply_to(original.clone());
     assert!(original.params.is_empty());
+}
+
+#[test]
+fn line_and_paragraph_separators_are_unsafe_to_display() {
+    for c in [
+        '\u{2028}', '\u{2029}', '\n', '\u{7}', '\u{202E}', '\u{200B}', '\u{FEFF}',
+    ] {
+        assert!(is_unsafe_display_char(c), "{c:?}");
+    }
+    for c in ['a', ' ', 'é', '研', '😀', '\u{2027}', '\u{202F}'] {
+        assert!(!is_unsafe_display_char(c), "{c:?}");
+    }
+}
+
+#[test]
+fn an_environment_value_with_a_line_or_paragraph_separator_is_refused() {
+    for value in ["line\u{2028}break", "para\u{2029}break"] {
+        assert!(matches!(
+            EnvironmentIdentity::default().with_field("host.container", value),
+            Err(EnvError::BadValue(_))
+        ));
+    }
 }

@@ -39,9 +39,21 @@ fn single_line(text: &str) -> String {
         .collect()
 }
 
-/// An error message that is safe to show a caller: one line, no control or bidirectional characters, cut to size.
+/// Ends a [`public_text`] that was cut, so a reader can tell it is not the whole text.
+pub const CUT_MARKER: &str = "...";
+
+/// An error message that is safe to show a caller: one line, no control or bidirectional characters, and at most
+/// [`MAX_MESSAGE_CHARS`] characters. A longer text is cut on a character boundary and ends in [`CUT_MARKER`].
 pub fn public_text(text: &str) -> String {
-    single_line(text).chars().take(MAX_MESSAGE_CHARS).collect()
+    let line = single_line(text);
+    if line.chars().count() <= MAX_MESSAGE_CHARS {
+        return line;
+    }
+    let kept: String = line
+        .chars()
+        .take(MAX_MESSAGE_CHARS - CUT_MARKER.len())
+        .collect();
+    format!("{kept}{CUT_MARKER}")
 }
 
 /// Multi-line text: newlines and tabs survive, other control characters become spaces.
@@ -226,4 +238,42 @@ pub fn outcome(outcome: &RunOutcome, run_target: &str) -> Result<RunOutcome, Ser
         sweep: None,
         ..outcome.clone().without_properties()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_text_is_unchanged_apart_from_unsafe_characters() {
+        assert_eq!(
+            public_text("unknown target `nope`"),
+            "unknown target `nope`"
+        );
+        assert_eq!(public_text("a\nb\u{202E}c"), "a b c");
+        let exact = "x".repeat(MAX_MESSAGE_CHARS);
+        assert_eq!(public_text(&exact), exact);
+    }
+
+    #[test]
+    fn long_text_is_cut_on_a_character_boundary_and_says_so() {
+        // Multi-byte characters across the cut point must not be split.
+        for long in [
+            "x".repeat(5000),
+            "é".repeat(5000),
+            "𝄞".repeat(MAX_MESSAGE_CHARS + 1),
+        ] {
+            let cut = public_text(&long);
+            assert_eq!(cut.chars().count(), MAX_MESSAGE_CHARS, "{cut}");
+            assert!(cut.ends_with(CUT_MARKER), "{cut}");
+            let first = long.chars().next().unwrap();
+            assert!(cut.trim_end_matches(CUT_MARKER).chars().all(|c| c == first));
+        }
+    }
+
+    #[test]
+    fn cutting_twice_changes_nothing() {
+        let once = public_text(&"y".repeat(5000));
+        assert_eq!(public_text(&once), once);
+    }
 }

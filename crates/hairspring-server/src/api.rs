@@ -49,12 +49,12 @@ fn reject(rej: JsonRejection) -> ApiError {
         StatusCode::UNPROCESSABLE_ENTITY => StatusCode::BAD_REQUEST,
         other => other,
     };
+    // serde's text can quote the caller's input at any length (an unknown variant), so it is one short line.
+    let detail = rej.body_text();
+    let first_line = detail.lines().next().unwrap_or("malformed JSON");
     ApiError::new(
         status,
-        format!(
-            "invalid request body: {}",
-            rej.body_text().lines().next().unwrap_or("malformed JSON")
-        ),
+        hairspring_service::sanitize::public_text(&format!("invalid request body: {first_line}")),
     )
 }
 
