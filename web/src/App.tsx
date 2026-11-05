@@ -6,7 +6,8 @@ import { TokenPrompt } from './components/TokenPrompt';
 import { FailurePage } from './pages/FailurePage';
 import { FailuresPage } from './pages/FailuresPage';
 import { GlossaryPage } from './glossary/GlossaryPage';
-import { Targets, Workers } from './pages/Lists';
+import { Targets } from './pages/Lists';
+import { WorkersPage } from './workers/WorkersPage';
 import { OverviewPage } from './pages/OverviewPage';
 import { RunPage } from './pages/RunPage';
 import { Runs } from './pages/Runs';
@@ -61,7 +62,7 @@ export function App() {
           (validTrial ? <TrialPage runId={route.id} seq={Number(route.seq)} /> : <NotFound what="page" />)}
         {route.name === 'seed' && <SeedPage runId={route.id} seed={route.seed} />}
         {route.name === 'targets' && <Targets />}
-        {route.name === 'workers' && <Workers />}
+        {route.name === 'workers' && <WorkersPage />}
         {route.name === 'glossary' && <GlossaryPage />}
         {route.name === 'notfound' && <NotFound what="page" />}
       </div>

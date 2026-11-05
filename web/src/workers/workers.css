@@ -1,0 +1,5 @@
+/* Workers page. Colours come from the tokens in styles.css only. */
+.worker-list { list-style: none; margin: 0; padding: 0; }
+.worker-list li { overflow-wrap: anywhere; }
+table.workers .badge { white-space: normal; overflow-wrap: normal; word-break: normal; }
+table.workers td { vertical-align: top; }

@@ -268,12 +268,44 @@ export interface PropertyQuery {
   limit?: number;
 }
 
+/** What the server says a worker is doing, worked out when it is asked. A word this browser does not know is shown as Unknown. */
+export type WorkerState = 'busy' | 'idle' | 'not_seen_recently';
+
+/** A job a worker holds: the run it belongs to, what kind of job it is, when the lease ends (ms) and how often it has been leased. */
+export interface WorkerJob {
+  run_id: string;
+  kind: string;
+  lease_until: number;
+  attempts: number;
+}
+
 export interface Worker {
   /** Hidden from read-only tokens (it doubles as a lease credential). */
   id?: string;
   name: string;
   last_seen: number;
   registered_at: number;
+  /** The fields below are sent by servers that report worker state; an older server leaves them out. */
+  state?: string;
+  trusted?: boolean;
+  /** What the worker said about itself at registration, when that was JSON; `null` when it was not. Never checked by the server. */
+  capabilities?: unknown;
+  caps_json?: string;
+  /** At most three of the jobs held, oldest first; `leased_jobs` counts them all. */
+  current_jobs?: WorkerJob[];
+  leased_jobs?: number;
+}
+
+/** Jobs waiting for a worker and jobs held under a live lease. */
+export interface QueueSummary {
+  queued: number;
+  running: number;
+}
+
+export interface WorkersOverview {
+  workers: Worker[];
+  /** Absent from an older server. */
+  queue?: QueueSummary;
 }
 
 /** One step of a run's coverage series, taken at trial number `seq`. All counts are cumulative and never fall. */
