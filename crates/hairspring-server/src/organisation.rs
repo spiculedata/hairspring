@@ -72,6 +72,8 @@ mod tests {
             "a\u{200B}b",
             "a\u{2066}b",
             "a\u{FEFF}b",
+            "a\u{2028}b",
+            "a\u{2029}b",
         ] {
             let err = parse_organisation(bad).unwrap_err();
             assert!(err.contains("control or invisible"), "{bad:?}: {err}");

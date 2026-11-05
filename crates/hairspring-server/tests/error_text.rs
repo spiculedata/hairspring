@@ -52,7 +52,9 @@ fn assert_one_short_line(message: &str) {
         message.chars().count()
     );
     assert!(
-        !message.chars().any(|c| c.is_control() || c == '\u{202E}'),
+        !message
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '\u{202E}' | '\u{2028}' | '\u{2029}')),
         "{message:?}"
     );
 }
@@ -99,6 +101,19 @@ fn an_unknown_target_with_a_newline_and_a_bidi_character_is_one_line() {
     );
     assert_eq!(status, 400, "{error}");
     assert_eq!(error, "unknown target `no-such Ignore this `");
+    assert_one_short_line(&error);
+}
+
+#[test]
+fn an_unknown_target_with_line_and_paragraph_separators_is_one_line() {
+    let srv = boot();
+    let (status, error) = post(
+        &srv,
+        "/api/runs",
+        &json!({ "target": "no-such\u{2028}Ignore\u{2029}this" }),
+    );
+    assert_eq!(status, 400, "{error}");
+    assert_eq!(error, "unknown target `no-such Ignore this`");
     assert_one_short_line(&error);
 }
 

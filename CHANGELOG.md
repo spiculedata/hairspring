@@ -126,6 +126,12 @@
 
 ### Fixed
 
+- Text a worker sends is now cleaned or refused when it arrives. A failure reason (`/api/worker/jobs/{job}/fail`) and
+  a progress message are cut to one line with no control or bidirectional characters, as a result's error already was,
+  so the run's `error` and the progress events carry clean text. A worker name with a control or invisible formatting
+  character is a 400 that does not repeat the name. The line and paragraph separators (U+2028, U+2029) are now treated
+  like other line breaks everywhere those characters are removed or refused, including the organisation name (the
+  server and the web UI use the same list).
 - Error messages from the REST API and the MCP tools that repeat part of a request (an unknown target, a bundle's
   seed or path, a run mode, a field of a request body that could not be read) are now one line with no control or
   bidirectional characters and at most 500 characters. A message that was cut ends in `...`. Messages for ordinary
