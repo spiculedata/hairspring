@@ -391,13 +391,17 @@ newest first, and by the order they were created within one millisecond, so a pa
 is the same on SQLite and PostgreSQL. A cursor is a position, so a run stored while a client pages moves later rows down
 by one: a client that keeps loading further pages should drop ids it already has.
 
+A list can be read down to position 100000. A page that would continue past that has no `next_cursor`, the same as the
+last page, so a client that follows `next_cursor` never receives one the server then refuses. To reach further down, narrow
+the list with a filter.
+
 Filters (all optional, all must match; a value that is not valid is a 400 whose message names the parameter and never
 repeats the value, as `{"error": "`state` is not valid"}`):
 
 | Endpoint | Parameter | Meaning |
 |---|---|---|
 | `/api/runs` | `state` | `queued`, `running`, `passed`, `failed`, `error` or `cancelled`. |
-| `/api/runs` | `target` | The exact target name (1 to 64 characters, no control characters). |
+| `/api/runs` | `target` | The exact target name (1 to 64 bytes, no control characters; a non-ASCII name takes more than one byte per character). |
 | `/api/runs` | `mode` | The mode the run was stored with: `search` or `sweep`. |
 | `/api/failures` | `run` | A run id: only that run's failures. |
 | `/api/failures` | `property` | A property id prefix (1 to 128 bytes). A failure holds no property id of its own, so this matches failures of runs in which a property with such an id is stored as a violation. Matching is exact and case-sensitive; `%` and `_` are ordinary characters. |

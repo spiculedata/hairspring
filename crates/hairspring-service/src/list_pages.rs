@@ -56,6 +56,16 @@ pub struct FailureListQuery {
     pub limit: Option<u32>,
 }
 
+/// Where a status-filtered scan starts and how far it may go.
+struct Scan {
+    offset: u64,
+    limit: usize,
+    /// Failures read before the scan stops.
+    cap: u64,
+    /// Largest cursor the server accepts; no `next_cursor` is handed out beyond it.
+    max_offset: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RunPage {
     pub runs: Vec<RunRecord>,
@@ -74,9 +84,9 @@ fn invalid(what: &str) -> ServiceError {
     ServiceError::InvalidRequest(format!("`{what}` is not valid"))
 }
 
-fn offset_of(cursor: Option<&str>) -> Result<u64> {
+fn offset_of(cursor: Option<&str>, max_offset: u64) -> Result<u64> {
     match parse_cursor(cursor)? {
-        Some(n) if n > MAX_LIST_OFFSET => Err(invalid("cursor")),
+        Some(n) if n > max_offset => Err(invalid("cursor")),
         other => Ok(other.unwrap_or(0)),
     }
 }
@@ -126,19 +136,25 @@ fn finding(value: Option<&str>) -> Result<Option<FindingStatus>> {
         .transpose()
 }
 
-fn next_position(offset: u64, limit: usize) -> String {
-    (offset + limit as u64).to_string()
+/// The cursor for the page that starts at `position`, or none when the server would refuse it: a list is never
+/// handed out with a `next_cursor` that the next request cannot send back.
+fn next_cursor(position: u64, max_offset: u64) -> Option<String> {
+    (position <= max_offset).then(|| position.to_string())
 }
 
 impl Service {
     /// One page of runs, newest first, narrowed by the query's filters.
     pub fn run_page(&self, q: &RunListQuery) -> Result<RunPage> {
+        self.run_page_capped(q, MAX_LIST_OFFSET)
+    }
+
+    fn run_page_capped(&self, q: &RunListQuery, max_offset: u64) -> Result<RunPage> {
         let filter = RunFilter {
             state: state(q.state.as_deref())?,
             target: plain_text(q.target.as_deref(), "target", MAX_TARGET_LEN)?,
             mode: mode(q.mode.as_deref())?,
         };
-        let offset = offset_of(q.cursor.as_deref())?;
+        let offset = offset_of(q.cursor.as_deref(), max_offset)?;
         let limit = page_size(q.limit, DEFAULT_LIST_PAGE, MAX_LIST_PAGE);
         // One row more than asked for tells whether another page exists.
         let mut runs = self
@@ -148,16 +164,23 @@ impl Service {
         runs.truncate(limit);
         Ok(RunPage {
             runs,
-            next_cursor: more.then(|| next_position(offset, limit)),
+            next_cursor: more
+                .then(|| next_cursor(offset + limit as u64, max_offset))
+                .flatten(),
         })
     }
 
     /// One page of failures, newest first, narrowed by the query's filters.
     pub fn failure_page(&self, q: &FailureListQuery) -> Result<FailurePage> {
-        self.failure_page_scanning(q, STATUS_SCAN_CAP)
+        self.failure_page_scanning(q, STATUS_SCAN_CAP, MAX_LIST_OFFSET)
     }
 
-    fn failure_page_scanning(&self, q: &FailureListQuery, scan_cap: u64) -> Result<FailurePage> {
+    fn failure_page_scanning(
+        &self,
+        q: &FailureListQuery,
+        scan_cap: u64,
+        max_offset: u64,
+    ) -> Result<FailurePage> {
         let filter = FailureFilter {
             run_id: run_id(q.run.as_deref())?,
             property_prefix: plain_text(
@@ -167,10 +190,18 @@ impl Service {
             )?,
         };
         let want = finding(q.status.as_deref())?;
-        let offset = offset_of(q.cursor.as_deref())?;
+        let offset = offset_of(q.cursor.as_deref(), max_offset)?;
         let limit = page_size(q.limit, DEFAULT_LIST_PAGE, MAX_LIST_PAGE);
         match want {
-            Some(want) => self.failures_in_state(&filter, want, offset, limit, scan_cap),
+            Some(want) => {
+                let scan = Scan {
+                    offset,
+                    limit,
+                    cap: scan_cap,
+                    max_offset,
+                };
+                self.failures_in_state(&filter, want, scan)
+            }
             None => {
                 let mut records =
                     self.store
@@ -179,7 +210,9 @@ impl Service {
                 records.truncate(limit);
                 Ok(FailurePage {
                     failures: records.iter().map(summary).collect(),
-                    next_cursor: more.then(|| next_position(offset, limit)),
+                    next_cursor: more
+                        .then(|| next_cursor(offset + limit as u64, max_offset))
+                        .flatten(),
                 })
             }
         }
@@ -191,10 +224,14 @@ impl Service {
         &self,
         filter: &FailureFilter,
         want: FindingStatus,
-        offset: u64,
-        limit: usize,
-        scan_cap: u64,
+        scan: Scan,
     ) -> Result<FailurePage> {
+        let Scan {
+            offset,
+            limit,
+            cap: scan_cap,
+            max_offset,
+        } = scan;
         let mut failures: Vec<FailureSummary> = Vec::new();
         let mut position = offset;
         let mut scanned = 0u64;
@@ -210,7 +247,7 @@ impl Service {
                         // One more match than the page holds: the next page starts at it.
                         return Ok(FailurePage {
                             failures,
-                            next_cursor: Some(position.to_string()),
+                            next_cursor: next_cursor(position, max_offset),
                         });
                     }
                     failures.push(FailureSummary {
@@ -223,7 +260,7 @@ impl Service {
                 if scanned >= scan_cap {
                     return Ok(FailurePage {
                         failures,
-                        next_cursor: Some(position.to_string()),
+                        next_cursor: next_cursor(position, max_offset),
                     });
                 }
             }
@@ -287,18 +324,18 @@ mod tests {
     fn a_scan_that_reaches_its_cap_stops_short_and_says_where_to_carry_on() {
         let svc = service_with_failures(5);
         let first = svc
-            .failure_page_scanning(&query("confirmed", None), 2)
+            .failure_page_scanning(&query("confirmed", None), 2, u64::MAX)
             .unwrap();
         assert_eq!(
             (first.failures.len(), first.next_cursor.as_deref()),
             (0, Some("2"))
         );
         let second = svc
-            .failure_page_scanning(&query("confirmed", Some("2")), 2)
+            .failure_page_scanning(&query("confirmed", Some("2")), 2, u64::MAX)
             .unwrap();
         assert_eq!(second.next_cursor.as_deref(), Some("4"));
         let last = svc
-            .failure_page_scanning(&query("confirmed", Some("4")), 2)
+            .failure_page_scanning(&query("confirmed", Some("4")), 2, u64::MAX)
             .unwrap();
         assert_eq!((last.failures.len(), last.next_cursor), (0, None));
     }
@@ -307,7 +344,7 @@ mod tests {
     fn a_scan_gathers_matches_across_the_store_batches() {
         let svc = service_with_failures(STATUS_SCAN_BATCH as usize * 2 + 7);
         let page = svc
-            .failure_page_scanning(&query("candidate", None), u64::MAX)
+            .failure_page_scanning(&query("candidate", None), u64::MAX, u64::MAX)
             .unwrap();
         assert_eq!(page.failures.len(), DEFAULT_LIST_PAGE as usize);
         assert_eq!(page.next_cursor.as_deref(), Some("50"));
@@ -318,8 +355,115 @@ mod tests {
                     ..query("candidate", None)
                 },
                 u64::MAX,
+                u64::MAX,
             )
             .unwrap();
         assert_eq!((all.failures.len(), all.next_cursor), (207, None));
+    }
+
+    fn service_with_runs(n: usize) -> Service {
+        let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        for i in 0..n {
+            store
+                .create_run(
+                    &NewRun {
+                        target: "t".into(),
+                        backend: "sim".into(),
+                        seed: i as u64,
+                        config_json: "{}".into(),
+                    },
+                    i as i64,
+                )
+                .unwrap();
+        }
+        Service::new(store)
+    }
+
+    fn run_query(cursor: Option<&str>) -> RunListQuery {
+        RunListQuery {
+            cursor: cursor.map(str::to_owned),
+            limit: Some(2),
+            ..RunListQuery::default()
+        }
+    }
+
+    fn failure_query(cursor: Option<&str>) -> FailureListQuery {
+        FailureListQuery {
+            cursor: cursor.map(str::to_owned),
+            limit: Some(2),
+            ..FailureListQuery::default()
+        }
+    }
+
+    fn status_query_with_limit(cursor: &str, limit: u32) -> FailureListQuery {
+        FailureListQuery {
+            limit: Some(limit),
+            ..query("candidate", Some(cursor))
+        }
+    }
+
+    #[test]
+    fn a_run_page_never_hands_out_a_cursor_the_server_refuses() {
+        let svc = service_with_runs(6);
+        let first = svc.run_page_capped(&run_query(None), 3).unwrap();
+        assert_eq!(first.next_cursor.as_deref(), Some("2"));
+        // The page after cursor 2 would start at 4, one past the cap.
+        let edge = svc.run_page_capped(&run_query(Some("2")), 3).unwrap();
+        assert_eq!((edge.runs.len(), edge.next_cursor), (2, None));
+        // A cursor at the cap is accepted, but the page after it would start at 5.
+        let at_cap = svc.run_page_capped(&run_query(Some("3")), 3).unwrap();
+        assert_eq!((at_cap.runs.len(), at_cap.next_cursor), (2, None));
+        assert!(svc.run_page_capped(&run_query(Some("4")), 3).is_err());
+    }
+
+    #[test]
+    fn a_failure_page_never_hands_out_a_cursor_the_server_refuses() {
+        let svc = service_with_failures(6);
+        let first = svc
+            .failure_page_scanning(&failure_query(None), u64::MAX, 3)
+            .unwrap();
+        assert_eq!(first.next_cursor.as_deref(), Some("2"));
+        let edge = svc
+            .failure_page_scanning(&failure_query(Some("2")), u64::MAX, 3)
+            .unwrap();
+        assert_eq!((edge.failures.len(), edge.next_cursor), (2, None));
+        let at_cap = svc
+            .failure_page_scanning(&failure_query(Some("3")), u64::MAX, 3)
+            .unwrap();
+        assert_eq!((at_cap.failures.len(), at_cap.next_cursor), (2, None));
+        assert!(svc
+            .failure_page_scanning(&failure_query(Some("4")), u64::MAX, 3)
+            .is_err());
+    }
+
+    #[test]
+    fn a_status_scan_cut_short_past_the_cap_hands_out_no_cursor() {
+        let svc = service_with_failures(8);
+        // Scanning 2 from position 1 stops at 3, which the server still accepts.
+        let within = svc
+            .failure_page_scanning(&query("confirmed", Some("1")), 2, 3)
+            .unwrap();
+        assert_eq!(within.next_cursor.as_deref(), Some("3"));
+        // Scanning 2 from position 2 would stop at 4, past the cap.
+        let beyond = svc
+            .failure_page_scanning(&query("confirmed", Some("2")), 2, 3)
+            .unwrap();
+        assert_eq!(beyond.next_cursor, None);
+    }
+
+    #[test]
+    fn a_status_page_that_finds_one_match_too_many_past_the_cap_hands_out_no_cursor() {
+        let svc = service_with_failures(8);
+        // Every failure is a candidate. From 3 the page takes position 3 and the next match is at 4.
+        let page = svc
+            .failure_page_scanning(&status_query_with_limit("3", 1), u64::MAX, 3)
+            .unwrap();
+        assert_eq!(page.failures.len(), 1);
+        assert_eq!(page.next_cursor, None);
+        // With room below the cap the same request does name the next match.
+        let roomy = svc
+            .failure_page_scanning(&status_query_with_limit("3", 1), u64::MAX, 4)
+            .unwrap();
+        assert_eq!(roomy.next_cursor.as_deref(), Some("4"));
     }
 }
