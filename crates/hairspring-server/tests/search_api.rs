@@ -258,11 +258,25 @@ fn a_run_id_prefix_lists_the_newest_runs_up_to_the_limit_and_says_there_are_more
     assert_eq!(r["more"], serde_json::json!(["runs"]));
     assert_eq!(
         r["scope"],
-        serde_json::json!({"per_group": 5, "recent_runs": 1000, "property_runs": 100})
+        serde_json::json!({"per_group": 5, "recent_runs": 1000, "property_runs": 7}),
+        "the property probe read the catalogues of all 7 runs stored (the window is 10)"
     );
     let whole = search(f.server.addr(), &f.runs[0]).json();
     assert_eq!(whole["runs"][0]["id"], f.runs[0].as_str());
     assert_eq!(whole["more"], serde_json::json!([]));
+    assert_eq!(
+        whole["scope"]["property_runs"], 0,
+        "a whole run id is not looked for as a property id"
+    );
+}
+
+#[test]
+fn a_repeated_q_uses_the_last_one_as_the_other_query_parameters_do() {
+    let f = boot(0);
+    let path = format!("/api/search?q=zzzz&q={}", f.runs[0]);
+    let r = get(f.server.addr(), Some(READ), &path);
+    assert_eq!(r.status, 200, "{}", r.text);
+    assert_eq!(r.json()["runs"][0]["id"], f.runs[0].as_str());
 }
 
 #[test]

@@ -10,6 +10,7 @@ pub fn run_all_search(make: &dyn Fn() -> Arc<dyn Store>) {
     only_the_recent_window_is_read_but_a_whole_id_is_found_at_any_age(&*make());
     failure_ids_match_whole_or_by_prefix(&*make());
     property_ids_match_by_prefix_once_each_with_their_newest_run(&*make());
+    properties_say_how_many_runs_were_read_and_sort_bytewise_within_a_run(&*make());
     seeds_match_exactly_as_run_seeds_and_trial_seeds(&*make());
     schedule_fingerprints_match_exactly(&*make());
     text_is_never_a_pattern_and_a_group_never_exceeds_its_limit(&*make());
@@ -248,6 +249,68 @@ fn property_ids_match_by_prefix_once_each_with_their_newest_run(s: &dyn Store) {
         s.search(&narrow).unwrap().properties.is_empty(),
         "only the newest run is read: it holds no db. property"
     );
+}
+
+fn properties_say_how_many_runs_were_read_and_sort_bytewise_within_a_run(s: &dyn Store) {
+    let r1 = ingested_run(s, "one", "w1", 10, &["n.b", "n.a"], 1);
+    let r2 = ingested_run(
+        s,
+        "two",
+        "w2",
+        20,
+        &["n.b", "n.\u{e9}", "n.Z", "n", "m.a", "o.a"],
+        1,
+    );
+    let ids = |h: &SearchHits| -> Vec<(String, String)> {
+        h.properties
+            .iter()
+            .map(|p| (p.prop_id.clone(), p.run_id.clone()))
+            .collect()
+    };
+    let pair = |p: &str, r: &RunRecord| (p.to_owned(), r.id.clone());
+
+    let h = s.search(&query("n.")).unwrap();
+    assert_eq!(
+        ids(&h),
+        vec![
+            pair("n.Z", &r2),
+            pair("n.b", &r2),
+            pair("n.\u{e9}", &r2),
+            pair("n.a", &r1)
+        ],
+        "newest run first; within a run, bytewise id order on both backends, whatever the collation"
+    );
+    assert_eq!(h.property_runs_read, 2, "both runs of the window exist");
+    assert_eq!(
+        ids(&s.search(&query("n")).unwrap())[0],
+        pair("n", &r2),
+        "a whole id is its own prefix"
+    );
+
+    let limited = SearchQuery {
+        limit: 2,
+        ..query("n.")
+    };
+    assert_eq!(
+        ids(&s.search(&limited).unwrap()),
+        vec![pair("n.Z", &r2), pair("n.b", &r2)]
+    );
+    let narrow = SearchQuery {
+        property_runs: 1,
+        ..query("n.a")
+    };
+    let h = s.search(&narrow).unwrap();
+    assert!(h.properties.is_empty(), "n.a is only in the older run");
+    assert_eq!(h.property_runs_read, 1);
+
+    for other in [r1.id.as_str(), "42", "0123456789abcdef"] {
+        let h = s.search(&query(other)).unwrap();
+        assert_eq!(
+            (h.properties.len(), h.property_runs_read),
+            (0, 0),
+            "{other} is another kind of id: the catalogues are not read"
+        );
+    }
 }
 
 fn seeds_match_exactly_as_run_seeds_and_trial_seeds(s: &dyn Store) {

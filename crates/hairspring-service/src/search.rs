@@ -55,6 +55,8 @@ pub struct PropertyGuest {
 pub struct SearchScope {
     pub per_group: usize,
     pub recent_runs: u32,
+    /// How many runs' catalogues this search read for property ids: at most [`SEARCH_PROPERTY_RUNS`], fewer when
+    /// fewer runs are stored, and 0 when the text is a whole run or failure id, digits or a fingerprint.
     pub property_runs: u32,
 }
 
@@ -166,7 +168,7 @@ impl Service {
             scope: SearchScope {
                 per_group: SEARCH_PER_GROUP,
                 recent_runs: SEARCH_RECENT_RUNS,
-                property_runs: SEARCH_PROPERTY_RUNS,
+                property_runs: found.property_runs_read,
             },
         })
     }
