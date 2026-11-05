@@ -12,6 +12,16 @@ export function replaceAddress(path: string): void {
   if (window.location.pathname + window.location.search !== path) window.history.replaceState({}, '', path);
 }
 
+/** Calls `fn` whenever the address changes by a link followed in the page (`navigate`) or by Back and Forward. Returns the unsubscribe function. */
+export function onAddressChange(fn: () => void): () => void {
+  window.addEventListener('popstate', fn);
+  window.addEventListener(NAV_EVENT, fn);
+  return () => {
+    window.removeEventListener('popstate', fn);
+    window.removeEventListener(NAV_EVENT, fn);
+  };
+}
+
 function useLocationPart(read: () => string): string {
   const [value, setValue] = useState(read);
   useEffect(() => {

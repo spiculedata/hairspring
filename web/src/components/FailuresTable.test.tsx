@@ -67,10 +67,37 @@ describe('FailuresTable', () => {
     expect(html).not.toMatch(/confirm|fixed|resolved|verified|badge/i);
   });
 
+  it('adds a State column, in the confirmation words, only when the server sent a finding (a list filtered by state)', () => {
+    const withFinding = renderToString(
+      <FailuresTable failures={[failure({ finding: { status: 'confirmed', checks: 2, environment_pinned: false } }), failure({ id: 'f_2', finding: { status: 'candidate', checks: 0, environment_pinned: false } })]} />,
+    );
+    expect(text(withFinding)).toContain('State');
+    expect(text(withFinding)).toContain('Confirmed');
+    expect(text(withFinding)).toContain('Candidate');
+    expect(withFinding).toContain('Server state: confirmed');
+    const without = renderToString(<FailuresTable failures={[failure()]} />);
+    expect(text(without)).not.toContain('State');
+    expect(without.match(/<th[ >]/g)).toHaveLength(7);
+    expect(withFinding.match(/<th[ >]/g)).toHaveLength(8);
+  });
+
+  it('shows a state this browser does not know as Unknown, not as a rung', () => {
+    const html = renderToString(<FailuresTable failures={[failure({ finding: { status: 'brand_new' as never, checks: 1, environment_pinned: false } })]} />);
+    expect(text(html)).toContain('Unknown');
+  });
+
   it('marks the step columns optional so a phone can drop them, and uses the runs table rules for reflow', () => {
     const html = renderToString(<FailuresTable failures={[failure()]} />);
     expect(html).toContain('class="runs failures"');
     expect(html.match(/class="num opt"/g)).toHaveLength(4);
     expect(readSource('styles.css')).toMatch(/table\.failures[^{]*\{[^}]*overflow-wrap:\s*anywhere/);
+  });
+});
+
+describe('FailuresTable on a narrow screen', () => {
+  it('sits in a labelled scroll region, so a wide table scrolls inside it and not the page', () => {
+    const html = renderToString(<FailuresTable failures={[failure({ finding: { status: 'not_reproducible', checks: 0, environment_pinned: false } })]} />);
+    expect(html).toMatch(/role="region"[^>]*aria-label="Failures"/);
+    expect(html).toContain('class="table-scroll"');
   });
 });

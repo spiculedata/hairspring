@@ -31,6 +31,13 @@ describe('RunsTable', () => {
     expect(html).toMatch(/<span class="muted steps-note">5,111 steps<\/span>/);
   });
 
+  it('says no run matches when the list is empty because of filters, and does not tell the reader to start one', () => {
+    const html = renderToString(<RunsTable runs={[]} filtered />);
+    expect(html).toContain('No runs match these filters.');
+    expect(html).not.toContain('No runs yet');
+    expect(html).not.toContain('hairspring test');
+  });
+
   it('says what an empty list means and what to do', () => {
     const html = renderToString(<RunsTable runs={[]} />);
     expect(html).toContain('No runs yet');

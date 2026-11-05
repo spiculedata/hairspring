@@ -1,10 +1,14 @@
+import { RUNS_FILTERED_EMPTY } from '../lists/listWording';
 import type { Run } from '../types';
 import { StatusBadge } from './StatusBadge';
 import { Link } from './Layout';
 import { TimeStamp } from './TimeStamp';
 
-/** The runs list. The Steps column is optional: the stylesheet drops it on a phone. */
-export function RunsTable({ runs }: { runs: readonly Run[] }) {
+/**
+ * The runs list. The Steps column is optional: the stylesheet drops it on a phone. `filtered` says the list is narrowed
+ * by filters, so an empty list means nothing matched and not that no run was ever started.
+ */
+export function RunsTable({ runs, filtered = false }: { runs: readonly Run[]; filtered?: boolean }) {
   return (
     <table className="runs">
       <thead>
@@ -36,7 +40,13 @@ export function RunsTable({ runs }: { runs: readonly Run[] }) {
         {runs.length === 0 && (
           <tr>
             <td colSpan={5} className="muted">
-              No runs yet. Start one above, or run <code>hairspring test</code>.
+              {filtered ? (
+                RUNS_FILTERED_EMPTY
+              ) : (
+                <>
+                  No runs yet. Start one above, or run <code>hairspring test</code>.
+                </>
+              )}
             </td>
           </tr>
         )}

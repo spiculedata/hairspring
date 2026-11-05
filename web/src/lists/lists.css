@@ -1,0 +1,24 @@
+/* Filter bars and "Load more" on the Runs and Failures lists. Colours come from the tokens in styles.css only. */
+.list-filters { align-items: flex-start; gap: .75rem 1rem; }
+.list-filters label, .list-filters .filter-field > label { display: grid; gap: .2rem; font-size: .85rem; color: var(--text-muted); }
+.filter-field { display: grid; gap: .2rem; min-width: 0; }
+.filter-field select, .filter-field input { min-width: 0; width: 100%; max-width: 100%; }
+.filter-field .filter-hint, .filter-field .filter-problem { font-size: .8rem; max-width: 22rem; overflow-wrap: anywhere; }
+.filter-field input[aria-invalid="true"] { border-color: var(--fail); box-shadow: 0 0 0 1px var(--fail); }
+.filter-actions { align-self: flex-end; }
+.filter-actions button.secondary { background: var(--surface); color: var(--text); border-color: var(--border-strong); }
+.filter-note { flex-basis: 100%; margin: 0; font-size: .85rem; }
+.list-filters select:focus-visible, .list-filters input:focus-visible, .list-filters button:focus-visible, .load-more button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.load-more button { min-height: 2.5rem; }
+.load-more button[aria-disabled="true"] { opacity: .5; cursor: default; }
+.load-more p[tabindex="-1"]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* The State column holds a badge that does not wrap by default. Let it wrap between words only (a cell breaks anywhere
+   otherwise); the table region scrolls sideways on a narrow screen. */
+table.failures .badge { white-space: normal; overflow-wrap: normal; word-break: normal; }
+/* Phones: one control per line, each as wide as the screen allows, so nothing makes the page scroll sideways. */
+@media (max-width: 640px) {
+  .list-filters { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .filter-field .filter-hint, .filter-field .filter-problem { max-width: none; }
+  .filter-actions { align-self: stretch; }
+  .filter-actions button, .load-more button { width: 100%; }
+}
