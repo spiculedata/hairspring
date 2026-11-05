@@ -33,5 +33,6 @@ with the next pinned Hermit update. Changing the lockfile changes the built bina
 pin.
 
 `cargo audit` on the Hermit lockfile additionally reports an unused older `ruzstd` copy (0.8.3, reached only through an
-`addr2line` feature Hermit does not call) and warnings for unmaintained or yanked crates. These are noted and are not
-exploitable through Hairspring.
+`addr2line` feature Hermit does not call) and warnings for unmaintained or yanked crates. These are noted. We have not found them reachable
+through Hairspring, but we have not audited every use (the `tokio` warning is about a function Hermit calls with owned
+descriptors).
