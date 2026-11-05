@@ -39,9 +39,10 @@ pub struct ServeArgs {
     /// Reverse proxies (addresses or networks, comma-separated, e.g. `10.0.0.5,2001:db8::/64`) whose
     /// X-Forwarded-For header names the client a request is counted under for the rate limit. Only requests whose
     /// connection comes from one of these use the header, and only its right-most address that is not itself a
-    /// listed proxy; the proxy must overwrite, not append to, any X-Forwarded-For the client sent. Off by default
-    /// (forwarding headers are ignored). `0.0.0.0/0`, `::/0` and unspecified addresses are refused. Alternative to
-    /// the HAIRSPRING_TRUSTED_PROXY environment variable.
+    /// listed proxy (anything further left is ignored); the proxy should overwrite any X-Forwarded-For the client sent. Off by default
+    /// (forwarding headers are ignored). Networks wider than /8 (IPv4) or /32 (IPv6), unspecified addresses and
+    /// ranges starting at them, and IPv4-mapped or IPv4-compatible IPv6 entries are refused. Alternative to the
+    /// HAIRSPRING_TRUSTED_PROXY environment variable.
     #[arg(long, value_name = "ADDR[,ADDR...]")]
     pub trusted_proxy: Option<String>,
 }
@@ -233,6 +234,27 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(env.starts_with("HAIRSPRING_TRUSTED_PROXY: "), "{env}");
+    }
+
+    #[test]
+    fn a_bad_trusted_proxy_value_is_not_repeated_in_full() {
+        let pasted = format!("{}-TAIL-OF-A-TOKEN", "t".repeat(32));
+        let flag = trusted_proxies_from(Some(&pasted), None)
+            .unwrap_err()
+            .to_string();
+        assert!(flag.starts_with("--trusted-proxy: "), "{flag}");
+        assert!(!flag.contains("TAIL-OF-A-TOKEN"), "{flag}");
+        let env = trusted_proxies_from(None, Some(format!("{pasted}\n\u{1b}[2J")))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            !env.contains("TAIL-OF-A-TOKEN") && !env.contains('\u{1b}'),
+            "{env:?}"
+        );
+        let broad = trusted_proxies_from(None, Some("10.0.0.0/7".to_owned()))
+            .unwrap_err()
+            .to_string();
+        assert!(broad.contains("too broad"), "{broad}");
     }
 
     #[test]

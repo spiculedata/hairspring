@@ -109,20 +109,24 @@ list it trusts.
 - Only a request whose connection comes from a listed proxy has its `X-Forwarded-For` header read. From anywhere
   else the header is ignored and the connecting address is used, exactly as without the flag.
 - The header is read from the right: entries that are themselves listed proxies are skipped, and the first entry
-  that is not is the client address. The left-most entry, which the client can write, is never believed on its own
-  account. Several `X-Forwarded-For` headers are read as one list, in order.
-- The connecting address is used instead when the header is missing, longer than 1024 bytes in total, lists more
-  than 16 addresses, contains anything that is not a plain IP address (a port, brackets, `unknown`, a zone), or lists
-  only trusted proxies.
+  that is not is the client address. Reading stops there; anything further left is written by the client, is never
+  examined and cannot change the result. Several `X-Forwarded-For` headers are read as one list, in order.
+- The connecting address is used instead when the header is missing, when an entry read on the way to the client
+  address is not a plain IP address (a port, brackets, `unknown`, a zone, an empty entry), when finding the client
+  address would need more than 16 entries or 1024 bytes counted from the right, or when every entry is a listed
+  proxy. The total size of the header is not limited by this check (the HTTP server limits it), and a long header
+  does not cause a fallback by itself.
 - The standard `Forwarded` header and `X-Real-IP` are not read.
 - The client address keys the anonymous rate-limit bucket (IPv4 address or IPv6 /64, as before), the check that
   refuses a valid token while its address's anonymous bucket is over the limit, the same check at `/api/health`, and,
   when the server has no tokens, the per-caller event-stream cap. The open-mode `Host` and `Origin` checks never
   look at forwarding headers, and open mode still listens on loopback only.
-- `0.0.0.0/0`, `::/0`, any `/0`, and entries naming the unspecified address (`0.0.0.0`, `::`) are refused at startup,
-  since they would let any client choose the address it is counted under. So are a network with bits set past its
-  prefix (`10.0.0.5/24`), an IPv4-mapped IPv6 entry (write it as IPv4), and anything that is not an address or a
-  network in the forms above.
+- Refused at startup, with a message that names the setting: any network wider than /8 (IPv4) or /32 (IPv6), which
+  includes `0.0.0.0/0` and `::/0`; the unspecified address (`0.0.0.0`, `::`) and any range starting at it
+  (`0.0.0.0/8`, `::/96`); a network with bits set past its prefix (`10.0.0.5/24`); an IPv4-mapped (`::ffff:10.0.0.5`)
+  or IPv4-compatible (`::10.0.0.5`) IPv6 entry (write it as IPv4); and anything that is not an address or a network
+  in the forms above. A repeated entry is listed once. An error message repeats at most the first 16 characters of
+  the entry, with control characters escaped.
 
 The proxy must **overwrite** any `X-Forwarded-For` the client sent with the address it saw, not append to it. For
 nginx:
@@ -149,17 +153,22 @@ hairspring.example.com {
 }
 ```
 
-and start the server with `--trusted-proxy 127.0.0.1` (or the proxy's address on your private network). When there
+Caddy 2.5 and later already replace `X-Forwarded-For` from clients it does not trust unless its own `trusted_proxies`
+option is set, so the `header_up` line is harmless but may be redundant; check your Caddy version. Nginx closes a
+connection to the server after `proxy_read_timeout` (60 seconds by default) without data, which can end a quiet event
+stream; raise it for the `/api/` event streams (for example `proxy_read_timeout 1h;` in the location that serves
+them).
+
+Start the server with `--trusted-proxy 127.0.0.1` (or the proxy's address on your private network). When there
 is more than one proxy (a load balancer in front of nginx, say), the one facing clients overwrites, the inner ones
 append, and every one of them is listed.
 
 What remains:
 
 - **A proxy that appends instead of overwriting** still puts the address it saw right-most, so a client cannot
-  choose its bucket. But the client can send a header that is too long, has too many entries or is malformed, which
-  makes the server fall back to the proxy's address; its requests then land in the proxy's shared anonymous bucket,
-  and a flood of them refuses valid tokens arriving through the proxy, as without the flag. Configure the proxy to
-  overwrite.
+  choose its bucket, and whatever the client wrote to the left of that address is ignored. Overwriting is still
+  the recommended configuration: it keeps the header short and does not depend on every proxy in the chain appending
+  correctly. A proxy that passes the header through without adding anything is the case described next.
 - **Listing an address a client can send from**, or a proxy that passes a client's header through unchanged, lets
   that client choose any address. It can then spread guesses over many buckets, and fill the limiter's table. The
   table holds at most 10,000 windows; when it is full of live windows the oldest tenth of the anonymous ones is

@@ -5,10 +5,20 @@ use axum::http::HeaderMap;
 use std::fmt;
 use std::net::IpAddr;
 
-/// Largest combined `X-Forwarded-For` value read, in bytes; a longer one is ignored and the peer address is used.
+/// Most bytes of `X-Forwarded-For` examined, counted from the right and across headers; needing more to find the
+/// client means the peer address is used. Text further left than the first address that is not a trusted proxy is
+/// never examined, so it is not counted. The total header size is not capped here: the HTTP server bounds it, and
+/// falling back on a long header would let a client send one.
 const MAX_FORWARDED_BYTES: usize = 1024;
-/// Most addresses read from `X-Forwarded-For`; a header with more is ignored and the peer address is used.
+/// Most entries examined from the right, across headers; needing more to find the client means the peer address is
+/// used.
 const MAX_FORWARDED_HOPS: usize = 16;
+/// Narrowest prefix accepted for an IPv4 network.
+const MIN_V4_PREFIX: u8 = 8;
+/// Narrowest prefix accepted for an IPv6 network.
+const MIN_V6_PREFIX: u8 = 32;
+/// Longest part of a rejected entry repeated in an error message, in characters.
+const SHOWN_ENTRY_CHARS: usize = 16;
 const X_FORWARDED_FOR: &str = "x-forwarded-for";
 
 /// Proxy addresses and networks whose `X-Forwarded-For` header is believed. Empty by default: then forwarding headers
@@ -27,17 +37,21 @@ struct Net {
 impl TrustedProxies {
     /// Parses a comma-separated list of addresses (`10.0.0.5`, `2001:db8::5`) and networks (`10.0.0.0/24`,
     /// `2001:db8::/64`). A blank list trusts no proxy. Refused: an empty entry, anything that is not an address or a
-    /// network in that form, a network with bits set past its prefix, an IPv4-mapped IPv6 entry (write it as IPv4),
-    /// and any entry that covers every address or names the unspecified address (`0.0.0.0/0`, `::/0`, `0.0.0.0`,
-    /// `::`), since trusting those would let any client choose the address it is counted under.
+    /// network in that form, a network with bits set past its prefix, an IPv4-mapped or IPv4-compatible IPv6 entry
+    /// (write it as IPv4), a network wider than /8 (IPv4) or /32 (IPv6), and any entry that is, or is a range starting
+    /// at, the unspecified address (`0.0.0.0`, `::`, `0.0.0.0/8`, `::/96`), since trusting a range that broad would
+    /// let a client choose the address it is counted under. A repeated entry is listed once.
     pub fn parse(spec: &str) -> Result<TrustedProxies, String> {
         if spec.trim().is_empty() {
             return Ok(TrustedProxies::default());
         }
-        let nets = spec
-            .split(',')
-            .map(|entry| Net::parse(entry.trim()))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut nets: Vec<Net> = Vec::new();
+        for entry in spec.split(',') {
+            let net = Net::parse(entry.trim())?;
+            if !nets.contains(&net) {
+                nets.push(net);
+            }
+        }
         Ok(TrustedProxies { nets })
     }
 
@@ -54,43 +68,46 @@ impl TrustedProxies {
 
     /// The address to count a request under. If `peer` is not a trusted proxy, `peer`. Otherwise the right-most
     /// address in `X-Forwarded-For` (several such headers are read as one list, in order) that is not itself a trusted
-    /// proxy. Falls back to `peer` when the header is missing, longer than [`MAX_FORWARDED_BYTES`], lists more than
-    /// [`MAX_FORWARDED_HOPS`] addresses, has any entry that is not a plain IP address, or lists only trusted proxies.
+    /// proxy. Entries are read from the right and reading stops at that address: anything further left is written by
+    /// the client and is not examined, so it cannot cause a fallback. Falls back to `peer` when the header is
+    /// missing, an entry read on the way is not a plain IP address, finding the client needs more than
+    /// [`MAX_FORWARDED_BYTES`] bytes or [`MAX_FORWARDED_HOPS`] entries, or every entry is a trusted proxy.
     pub fn client_ip(&self, peer: IpAddr, headers: &HeaderMap) -> IpAddr {
         if !self.contains(peer) {
             return peer;
         }
-        forwarded_hops(headers)
-            .and_then(|hops| hops.into_iter().rev().find(|hop| !self.contains(*hop)))
-            .unwrap_or(peer)
+        self.first_untrusted_hop(headers).unwrap_or(peer)
     }
-}
 
-/// Every address in the `X-Forwarded-For` headers, in order (none if there is no header), or `None` if any of them
-/// cannot be used.
-fn forwarded_hops(headers: &HeaderMap) -> Option<Vec<IpAddr>> {
-    let mut bytes = 0;
-    let mut hops = Vec::new();
-    for value in headers.get_all(X_FORWARDED_FOR) {
-        bytes += value.len();
-        if bytes > MAX_FORWARDED_BYTES {
-            return None;
-        }
-        for entry in value.to_str().ok()?.split(',') {
-            if hops.len() == MAX_FORWARDED_HOPS {
-                return None;
+    /// The right-most `X-Forwarded-For` entry that is not a trusted proxy, or `None` if there is none within the
+    /// bounds or an entry on the way is unusable.
+    fn first_untrusted_hop(&self, headers: &HeaderMap) -> Option<IpAddr> {
+        let values: Vec<_> = headers.get_all(X_FORWARDED_FOR).iter().collect();
+        let mut bytes = 0;
+        let mut hops = 0;
+        for value in values.into_iter().rev() {
+            for entry in value.to_str().ok()?.rsplit(',') {
+                hops += 1;
+                bytes += entry.len();
+                if hops > MAX_FORWARDED_HOPS || bytes > MAX_FORWARDED_BYTES {
+                    return None;
+                }
+                let hop: IpAddr = entry.trim_matches([' ', '\t']).parse().ok()?;
+                if !self.contains(hop) {
+                    return Some(hop);
+                }
             }
-            hops.push(entry.trim_matches([' ', '\t']).parse().ok()?);
         }
+        None
     }
-    Some(hops)
 }
 
 impl Net {
     fn parse(entry: &str) -> Result<Net, String> {
+        let shown = shown_entry(entry);
         let malformed = || {
             format!(
-                "`{entry}` is not an IP address or a network such as 10.0.0.0/24 or 2001:db8::/64"
+                "`{shown}` is not an IP address or a network such as 10.0.0.0/24 or 2001:db8::/64"
             )
         };
         let (addr, prefix) = match entry.split_once('/') {
@@ -101,7 +118,12 @@ impl Net {
         if let IpAddr::V6(v6) = addr {
             if let Some(v4) = v6.to_ipv4_mapped() {
                 return Err(format!(
-                    "`{entry}` is an IPv4-mapped address; write it as {v4}"
+                    "`{shown}` is an IPv4-mapped address; write it as {v4}"
+                ));
+            }
+            if is_ipv4_compatible(v6) {
+                return Err(format!(
+                    "`{shown}` is an IPv4-compatible address (deprecated); write the IPv4 address instead"
                 ));
             }
         }
@@ -113,15 +135,28 @@ impl Net {
                 .ok_or_else(malformed)?,
         };
         let spoofable =
-            " so any client could choose the address it is counted under; name the proxy's own \
+            " so a client could choose the address it is counted under; name the proxy's own \
                          address or network";
         if prefix == 0 {
-            return Err(format!("`{entry}` covers every address,{spoofable}"));
+            return Err(format!("`{shown}` covers every address,{spoofable}"));
+        }
+        let min = if addr.is_ipv4() {
+            MIN_V4_PREFIX
+        } else {
+            MIN_V6_PREFIX
+        };
+        if prefix < min {
+            return Err(format!(
+                "`{shown}` is too broad (the widest network accepted is /{MIN_V4_PREFIX} for IPv4 and \
+                 /{MIN_V6_PREFIX} for IPv6),{spoofable}"
+            ));
         }
         if addr.is_unspecified() {
-            return Err(format!(
-                "`{entry}` names the unspecified address,{spoofable}"
-            ));
+            return Err(if prefix == max {
+                format!("`{shown}` is the unspecified address,{spoofable}")
+            } else {
+                format!("`{shown}` is a range starting at the unspecified address,{spoofable}")
+            });
         }
         let net = Net {
             addr: masked(addr, prefix),
@@ -129,7 +164,7 @@ impl Net {
         };
         if net.addr != addr {
             return Err(format!(
-                "`{entry}` has bits set past its /{prefix} prefix; did you mean {}/{prefix}?",
+                "`{shown}` has bits set past its /{prefix} prefix; did you mean {}/{prefix}?",
                 net.addr
             ));
         }
@@ -139,6 +174,25 @@ impl Net {
     fn contains(&self, ip: IpAddr) -> bool {
         ip.is_ipv4() == self.addr.is_ipv4() && masked(ip, self.prefix) == self.addr
     }
+}
+
+/// `::a.b.c.d` other than `::` and `::1`: the deprecated IPv4-compatible form.
+fn is_ipv4_compatible(v6: std::net::Ipv6Addr) -> bool {
+    v6.octets()[..12].iter().all(|b| *b == 0) && !v6.is_unspecified() && !v6.is_loopback()
+}
+
+/// The start of an entry for an error message: at most [`SHOWN_ENTRY_CHARS`] characters, control characters escaped,
+/// with `...` when cut, so that a value pasted in by mistake is not repeated in full.
+fn shown_entry(entry: &str) -> String {
+    let mut shown: String = entry
+        .chars()
+        .take(SHOWN_ENTRY_CHARS)
+        .flat_map(|c| c.escape_debug())
+        .collect();
+    if entry.chars().count() > SHOWN_ENTRY_CHARS {
+        shown.push_str("...");
+    }
+    shown
 }
 
 /// A prefix length written in plain decimal digits, without a sign or a leading zero.
@@ -238,15 +292,7 @@ mod tests {
 
     #[test]
     fn entries_that_would_trust_everyone_are_refused() {
-        for spec in [
-            "0.0.0.0/0",
-            "::/0",
-            "0.0.0.0",
-            "::",
-            "10.0.0.5,0.0.0.0/0",
-            "0.0.0.0/8",
-            "::/1",
-        ] {
+        for spec in ["0.0.0.0/0", "::/0", "0.0.0.0", "::", "10.0.0.5,0.0.0.0/0"] {
             let err = TrustedProxies::parse(spec).unwrap_err();
             assert!(
                 err.contains("every") || err.contains("unspecified"),
@@ -259,6 +305,74 @@ mod tests {
     fn a_zero_prefix_on_any_address_is_refused() {
         let err = TrustedProxies::parse("10.0.0.0/0").unwrap_err();
         assert!(err.contains("every"), "{err}");
+    }
+
+    #[test]
+    fn very_broad_networks_are_refused_with_the_minimum_named() {
+        for spec in [
+            "10.0.0.0/7",
+            "128.0.0.0/1",
+            "0.0.0.0/1",
+            "2001::/16",
+            "::/1",
+            "8000::/31",
+        ] {
+            let err = TrustedProxies::parse(spec).unwrap_err();
+            assert!(
+                err.contains("/8") && err.contains("/32") && err.contains("broad"),
+                "{spec}: {err}"
+            );
+            assert!(!err.contains("names the unspecified"), "{spec}: {err}");
+        }
+        for spec in ["10.0.0.0/8", "2001:db8::/32", "10.0.0.0/9"] {
+            assert!(TrustedProxies::parse(spec).is_ok(), "{spec}");
+        }
+    }
+
+    #[test]
+    fn ranges_starting_at_the_unspecified_address_are_described_accurately() {
+        for spec in ["0.0.0.0/8", "0.0.0.0/24", "::/96", "::/127"] {
+            let err = TrustedProxies::parse(spec).unwrap_err();
+            assert!(err.contains("range"), "{spec}: {err}");
+            assert!(!err.contains("names the unspecified"), "{spec}: {err}");
+            assert!(!err.contains("every address"), "{spec}: {err}");
+        }
+        for spec in ["0.0.0.0", "::"] {
+            let err = TrustedProxies::parse(spec).unwrap_err();
+            assert!(err.contains("is the unspecified address"), "{spec}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_bad_entry_is_shortened_and_its_control_characters_escaped_in_the_error() {
+        let long = format!("{}SECRETTAIL", "a".repeat(40));
+        let err = TrustedProxies::parse(&long).unwrap_err();
+        assert!(!err.contains("SECRETTAIL"), "{err}");
+        assert!(err.len() < 200, "{err}");
+        let err = TrustedProxies::parse("10.0.0.5\n\x1b[31mx").unwrap_err();
+        assert!(!err.contains('\n') && !err.contains('\x1b'), "{err:?}");
+        let err = TrustedProxies::parse("10.0.0.0/8, 10.0.0.5/33").unwrap_err();
+        assert!(
+            err.contains("10.0.0.5/33"),
+            "short entries are still shown: {err}"
+        );
+    }
+
+    #[test]
+    fn duplicate_entries_are_listed_once() {
+        let p = proxies(
+            "10.0.0.5, 10.0.0.5/32, 10.0.0.0/24, 10.0.0.0/24, 2001:db8::/32, 2001:db8::/32",
+        );
+        assert_eq!(p.to_string(), "10.0.0.5/32, 10.0.0.0/24, 2001:db8::/32");
+    }
+
+    #[test]
+    fn ipv4_compatible_ipv6_entries_are_refused() {
+        for spec in ["::1.2.3.4", "::102:304", "::10.0.0.5/128", "::a00:5"] {
+            let err = TrustedProxies::parse(spec).unwrap_err();
+            assert!(err.contains("IPv4-compatible"), "{spec}: {err}");
+        }
+        assert!(TrustedProxies::parse("::1").is_ok(), "loopback stays valid");
     }
 
     #[test]
@@ -346,21 +460,68 @@ mod tests {
     }
 
     #[test]
-    fn a_malformed_header_falls_back_to_the_peer() {
+    fn a_malformed_right_most_entry_falls_back_to_the_peer() {
         let p = proxies(PROXY);
         for bad in [
             "unknown",
             "198.51.100.1:4000",
             "[2001:db8::1]",
             "198.51.100.1,",
-            ", 198.51.100.1",
-            "garbage, 198.51.100.1",
+            "198.51.100.2, garbage",
             "198.51.100.1;198.51.100.2",
             "for=198.51.100.1",
             "fe80::1%eth0",
         ] {
             assert_eq!(p.client_ip(ip(PROXY), &xff(&[bad])), ip(PROXY), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn entries_left_of_the_first_untrusted_hop_are_never_examined() {
+        let p = proxies("10.0.0.5, 10.1.0.0/16");
+        let client = ip("198.51.100.1");
+        for left in [
+            "garbage",
+            "",
+            "a;b",
+            "[2001:db8::1]",
+            "999.1.1.1",
+            "203.0.113.66:80",
+            "not-an-address, , ,",
+        ] {
+            let header = format!("{left}, 198.51.100.1");
+            assert_eq!(p.client_ip(ip(PROXY), &xff(&[&header])), client, "{left:?}");
+            let header = format!("{left}, 198.51.100.1, 10.1.2.3");
+            assert_eq!(p.client_ip(ip(PROXY), &xff(&[&header])), client, "{left:?}");
+        }
+        // A whole earlier header is left alone too, even one that is not text.
+        let mut h = HeaderMap::new();
+        h.append(
+            X_FORWARDED_FOR,
+            HeaderValue::from_bytes(b"\xff\xfe").unwrap(),
+        );
+        h.append(X_FORWARDED_FOR, HeaderValue::from_static("198.51.100.1"));
+        assert_eq!(p.client_ip(ip(PROXY), &h), client);
+    }
+
+    #[test]
+    fn a_long_or_crowded_left_side_does_not_cause_the_fallback() {
+        let p = proxies(PROXY);
+        let junk = "x".repeat(100_000);
+        let header = format!("{junk}, 198.51.100.1");
+        assert_eq!(p.client_ip(ip(PROXY), &xff(&[&header])), ip("198.51.100.1"));
+        let many = format!("{}, 198.51.100.1", hops(500));
+        assert_eq!(p.client_ip(ip(PROXY), &xff(&[&many])), ip("198.51.100.1"));
+    }
+
+    #[test]
+    fn a_malformed_entry_met_while_skipping_trusted_hops_falls_back_to_the_peer() {
+        // The malformed entry is the first one that must be read to find the client.
+        let p = proxies("10.0.0.5, 10.1.0.0/16");
+        assert_eq!(
+            p.client_ip(ip(PROXY), &xff(&["198.51.100.1, garbage, 10.1.2.3"])),
+            ip(PROXY)
+        );
     }
 
     #[test]
@@ -393,53 +554,78 @@ mod tests {
     }
 
     #[test]
-    fn a_malformed_header_among_several_falls_back_to_the_peer() {
+    fn a_malformed_right_most_header_among_several_falls_back_to_the_peer() {
         let p = proxies(PROXY);
         assert_eq!(
             p.client_ip(ip(PROXY), &xff(&["198.51.100.1", "nonsense"])),
             ip(PROXY)
         );
+        // Garbage in an earlier header is not read.
+        assert_eq!(
+            p.client_ip(ip(PROXY), &xff(&["nonsense", "198.51.100.1"])),
+            ip("198.51.100.1")
+        );
     }
 
     fn hops(n: usize) -> String {
         (0..n)
-            .map(|i| format!("198.51.100.{i}"))
+            .map(|i| format!("198.51.100.{}", i % 250))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    fn trusted_hops(n: usize) -> String {
+        (0..n)
+            .map(|i| format!("10.1.0.{}", i % 250))
             .collect::<Vec<_>>()
             .join(",")
     }
 
     #[test]
-    fn the_hop_count_is_bounded() {
-        let p = proxies(PROXY);
-        let last = ip(&format!("198.51.100.{}", MAX_FORWARDED_HOPS - 1));
+    fn the_examined_hop_count_is_bounded() {
+        let p = proxies("10.0.0.5, 10.1.0.0/16");
+        let client = "198.51.100.77";
+        // The client is the MAX_FORWARDED_HOPS-th entry from the right: still found.
+        let header = format!("{client},{}", trusted_hops(MAX_FORWARDED_HOPS - 1));
+        assert_eq!(p.client_ip(ip(PROXY), &xff(&[&header])), ip(client));
+        // One more trusted hop in front of it: too many entries to examine.
+        let header = format!("{client},{}", trusted_hops(MAX_FORWARDED_HOPS));
+        assert_eq!(p.client_ip(ip(PROXY), &xff(&[&header])), ip(PROXY));
+        // The bound counts across headers too.
+        let half = trusted_hops(MAX_FORWARDED_HOPS / 2 + 1);
         assert_eq!(
-            p.client_ip(ip(PROXY), &xff(&[&hops(MAX_FORWARDED_HOPS)])),
-            last
-        );
-        assert_eq!(
-            p.client_ip(ip(PROXY), &xff(&[&hops(MAX_FORWARDED_HOPS + 1)])),
+            p.client_ip(ip(PROXY), &xff(&[client, &half, &half])),
             ip(PROXY)
         );
-        // The bound counts across headers too.
-        let half = hops(MAX_FORWARDED_HOPS / 2 + 1);
-        assert_eq!(p.client_ip(ip(PROXY), &xff(&[&half, &half])), ip(PROXY));
     }
 
     #[test]
-    fn the_header_length_is_bounded() {
-        let p = proxies(PROXY);
-        let pad = |n: usize| format!("{}198.51.100.1", " ".repeat(n - "198.51.100.1".len()));
+    fn the_examined_length_is_bounded() {
+        let p = proxies("10.0.0.5, 10.1.0.0/16");
+        let pad = |n: usize, a: &str| format!("{}{a}", " ".repeat(n - a.len()));
         assert_eq!(
-            p.client_ip(ip(PROXY), &xff(&[&pad(MAX_FORWARDED_BYTES)])),
+            p.client_ip(
+                ip(PROXY),
+                &xff(&[&pad(MAX_FORWARDED_BYTES, "198.51.100.1")])
+            ),
             ip("198.51.100.1")
         );
         assert_eq!(
-            p.client_ip(ip(PROXY), &xff(&[&pad(MAX_FORWARDED_BYTES + 1)])),
+            p.client_ip(
+                ip(PROXY),
+                &xff(&[&pad(MAX_FORWARDED_BYTES + 1, "198.51.100.1")])
+            ),
             ip(PROXY)
         );
-        // The bound counts across headers too.
-        let half = pad(MAX_FORWARDED_BYTES / 2 + 1);
-        assert_eq!(p.client_ip(ip(PROXY), &xff(&[&half, &half])), ip(PROXY));
+        // The bound counts across headers too: a trusted hop and the client, together over the limit.
+        let half = MAX_FORWARDED_BYTES / 2 + 1;
+        assert_eq!(
+            p.client_ip(
+                ip(PROXY),
+                &xff(&[&pad(half, "198.51.100.1"), &pad(half, "10.1.2.3")])
+            ),
+            ip(PROXY)
+        );
     }
 
     #[test]
