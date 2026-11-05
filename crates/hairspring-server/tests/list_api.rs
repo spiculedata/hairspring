@@ -265,6 +265,38 @@ fn failures_page_and_filter_by_run_and_status() {
 }
 
 #[test]
+fn a_property_filter_answers_with_its_scope_and_other_lists_are_unchanged() {
+    let f = boot();
+    let addr = f.server.addr();
+    let list = |q: &str| get(addr, Some(READ), None, &format!("/api/failures?{q}")).json();
+    for q in ["", "status=candidate", &format!("run={}", f.runs[0])] {
+        let page = list(q);
+        assert!(page.get("scope").is_none(), "{q}: {page}");
+    }
+    let page = list("property=db.");
+    assert!(
+        ids(&page, "failures").is_empty(),
+        "no run stored a violation"
+    );
+    assert_eq!(
+        page["scope"],
+        serde_json::json!({ "recent_runs": hairspring_store::FAILURE_PROPERTY_RUNS, "cut_short": false })
+    );
+    let named = list(&format!("property=db.&run={}", f.runs[0]));
+    assert_eq!(named["scope"]["cut_short"], false);
+
+    let r = get(addr, Some(READ), Some(NDJSON), "/api/failures?property=db.");
+    let lines: Vec<Value> = r
+        .body
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 1, "only the control line: {}", r.body);
+    assert_eq!(lines[0]["_next"], Value::Null);
+    assert_eq!(lines[0]["page"]["scope"], page["scope"]);
+}
+
+#[test]
 fn a_cursor_is_a_control_line_in_the_ndjson_form() {
     let f = boot();
     let r = get(

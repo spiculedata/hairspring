@@ -7,7 +7,7 @@ use common::pg_support::*;
 use hairspring_store::*;
 use postgres::Client;
 
-const CURRENT_VERSION: i32 = 6;
+const CURRENT_VERSION: i32 = 7;
 
 fn recorded_version(c: &mut Client, schema: &str) -> i32 {
     c.query_one(
@@ -168,7 +168,10 @@ fn a_schema_newer_than_this_build_is_refused_untouched() {
     let err = PgStore::connect_in_schema(&url, &schema, 1)
         .err()
         .expect("must refuse");
-    assert!(err.to_string().contains('6'), "{err}");
+    assert!(
+        err.to_string().contains(&(CURRENT_VERSION + 1).to_string()),
+        "{err}"
+    );
     assert_eq!(recorded_version(&mut c, &schema), CURRENT_VERSION + 1);
     assert!(table_exists(&mut c, &schema, "failure_checks"));
 }
@@ -257,13 +260,19 @@ fn downgrading_a_version_five_schema_drops_the_checks_and_the_version_four_table
         },
     )
     .unwrap();
-    assert_eq!((dry.from_version, dry.applied), (6, false));
+    assert_eq!(
+        (dry.from_version, dry.applied),
+        (i64::from(CURRENT_VERSION), false)
+    );
     let mut c = admin(&url);
     assert_eq!(recorded_version(&mut c, &schema), CURRENT_VERSION);
     assert!(table_exists(&mut c, &schema, "failure_checks"));
 
     let report = downgrade_postgres(&url, &schema, &DowngradeOptions::default()).unwrap();
-    assert_eq!((report.from_version, report.to_version), (6, 2));
+    assert_eq!(
+        (report.from_version, report.to_version),
+        (i64::from(CURRENT_VERSION), 2)
+    );
     assert_eq!(recorded_version(&mut c, &schema), 2);
     for t in ["failure_checks", "run_digest_use", "run_coverage"] {
         assert!(!table_exists(&mut c, &schema, t), "{t} is dropped");

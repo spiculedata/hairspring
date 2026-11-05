@@ -1,17 +1,23 @@
-//! Types of the offline downgrade from schema version 3, 4, 5 or 6 back to version 2 (a release note tells operators to
-//! back up first; nothing is downgraded automatically). Branch runs, which only exist because of version 3, are kept
+//! Types of the offline downgrade from schema version 3, 4, 5, 6 or 7 back to version 2 (a release note tells operators
+//! to back up first; nothing is downgraded automatically). Branch runs, which only exist because of version 3, are kept
 //! by default as ordinary runs that no tree refers to; `drop_branch_runs` deletes them in the same transaction.
 //! Version 4 only added the digest allowance and coverage tables, and version 5 the stored confirmation checks, which
 //! a downgrade drops with the tree tables. Version 6 only corrects stored data (`runs.mode`), so it has nothing to drop.
+//! Version 7 only added indexes to version 2 tables; a downgrade drops them, so the result is a plain version 2 schema.
 
 /// The version a downgrade leads to.
 pub const DOWNGRADE_TARGET_VERSION: i64 = 2;
 /// The versions a downgrade can start from.
-pub(crate) const DOWNGRADE_SOURCE_VERSIONS: [i64; 4] = [3, 4, 5, 6];
+pub(crate) const DOWNGRADE_SOURCE_VERSIONS: [i64; 5] = [3, 4, 5, 6, 7];
 /// The first version that has the tables of [`V4_TABLES_DROP_ORDER`].
 pub(crate) const FIRST_VERSION_WITH_V4_TABLES: i64 = 4;
 /// The first version that has the tables of [`V5_TABLES_DROP_ORDER`].
 pub(crate) const FIRST_VERSION_WITH_V5_TABLES: i64 = 5;
+/// The first version that has the indexes of [`V7_INDEXES`].
+pub(crate) const FIRST_VERSION_WITH_V7_INDEXES: i64 = 7;
+
+/// The indexes version 7 added, on tables a version 2 schema keeps.
+pub(crate) const V7_INDEXES: [&str; 2] = ["failures_created", "run_properties_violation"];
 
 /// The tables version 5 added, dropped before the rest: they refer to `failures`.
 pub(crate) const V5_TABLES_DROP_ORDER: [&str; 1] = ["failure_checks"];

@@ -67,7 +67,7 @@ fn make_v3_database(path: &Path) -> String {
 }
 
 /// The version this build creates: version 5 only adds a table to version 4.
-const CURRENT_VERSION: i64 = 6;
+const CURRENT_VERSION: i64 = 7;
 
 /// A genuine version 4 database: nothing of version 5.
 fn make_v4_database(path: &Path) {
@@ -145,7 +145,10 @@ fn a_database_newer_than_this_build_is_refused_untouched() {
     conn.pragma_update(None, "user_version", CURRENT_VERSION + 1)
         .unwrap();
     let err = SqliteStore::open(&path).err().expect("must refuse");
-    assert!(err.to_string().contains('6'), "{err}");
+    assert!(
+        err.to_string().contains(&(CURRENT_VERSION + 1).to_string()),
+        "{err}"
+    );
     assert_eq!(user_version(&conn), CURRENT_VERSION + 1);
     for t in NEW_TABLES {
         assert!(table_exists(&conn, t), "{t} left alone");

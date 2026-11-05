@@ -7,7 +7,7 @@ import { FINISHED } from '../runOutcome';
 import { runStateEntry } from '../statusMap';
 import { SEARCH_LABEL, SWEEP_LABEL } from '../startRunWording';
 import { formatCount } from '../wording';
-import { MAX_PROPERTY_PREFIX_BYTES, MAX_TARGET_BYTES, type FilterProblem, type RunModeFilter } from './filters';
+import { MAX_PROPERTY_PREFIX_BYTES, MAX_TARGET_BYTES, PROPERTY_FILTER_RUNS, type FilterProblem, type RunModeFilter } from './filters';
 import type { FindingStatus, RunState } from '../types';
 
 export const FILTER_ALL = 'All';
@@ -32,7 +32,7 @@ export const runStateOption = (state: RunState): string => (state === 'passed' ?
 export const runModeOption = (mode: RunModeFilter): string => (mode === 'search' ? SEARCH_LABEL : SWEEP_LABEL);
 export const findingOption = (status: FindingStatus): string => FINDING_LABELS[status];
 
-export const PROPERTY_FILTER_HINT = 'Failures of runs in which a property whose id starts with this text is stored as failed.';
+export const PROPERTY_FILTER_HINT = `Failures of the ${formatCount(PROPERTY_FILTER_RUNS)} newest runs in which a property whose id starts with this text is stored as failed. For an older run, give its run id as well.`;
 export const STATUS_FILTER_NOTE =
   'A state is worked out from each failure’s stored checks, so filtering by it can take longer on a long list. A page can hold fewer failures than usual: load more to carry on.';
 

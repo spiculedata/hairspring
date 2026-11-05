@@ -10,6 +10,8 @@ pub fn run_all_listing(make: &dyn Fn() -> Arc<dyn Store>) {
     run_filters_match_exactly_and_combine(&*make());
     failures_come_newest_first_and_page_without_gaps(&*make());
     failure_filters_match_the_run_and_the_violated_property_prefix(&*make());
+    the_property_filter_looks_at_the_newest_runs_only(&*make());
+    the_property_window_orders_runs_by_stored_time_then_storing_order(&*make());
 }
 
 fn start(s: &dyn Store, target: &str, mode: &str, now: i64) -> RunRecord {
@@ -184,13 +186,24 @@ fn failures_come_newest_first_and_page_without_gaps(s: &dyn Store) {
 }
 
 /// A finished run whose properties were stored, with one failure.
-fn failed_run_with_properties(
+pub fn failed_run_with_properties(
     s: &dyn Store,
     target: &str,
     worker: &str,
     props: &[(&str, &str)],
 ) -> (RunRecord, String) {
-    let r = start(s, target, "search", 1);
+    failed_run_at(s, 1, target, worker, props)
+}
+
+/// The same, for a run stored with `created_at`.
+pub fn failed_run_at(
+    s: &dyn Store,
+    created_at: i64,
+    target: &str,
+    worker: &str,
+    props: &[(&str, &str)],
+) -> (RunRecord, String) {
+    let r = start(s, target, "search", created_at);
     s.enqueue_job(&r.id, "run", "{}", 2).unwrap();
     let job = s.lease_job(worker, 600, 10).unwrap().unwrap();
     s.mark_running(&r.id, 10).unwrap();
@@ -269,6 +282,7 @@ fn failure_filters_match_the_run_and_the_violated_property_prefix(s: &dyn Store)
     let with = |run: Option<&str>, prefix: Option<&str>| FailureFilter {
         run_id: run.map(str::to_owned),
         property_prefix: prefix.map(str::to_owned),
+        ..FailureFilter::default()
     };
 
     assert_eq!(
@@ -311,5 +325,96 @@ fn failure_filters_match_the_run_and_the_violated_property_prefix(s: &dyn Store)
         failure_ids(s, &no_filter(), 0, 10),
         vec![f3, f2, f1],
         "no filter lists every failure, newest first (created in the order the jobs finished)"
+    );
+}
+
+fn in_window(prefix: &str, runs: u32, run: Option<&str>) -> FailureFilter {
+    FailureFilter {
+        run_id: run.map(str::to_owned),
+        property_prefix: Some(prefix.to_owned()),
+        property_runs: runs,
+    }
+}
+
+/// The property filter reads the violations of the newest `property_runs` runs only, whatever their state, so a failure
+/// of an older run is not matched; naming a run looks at that run whatever its age.
+fn the_property_filter_looks_at_the_newest_runs_only(s: &dyn Store) {
+    let (old, f_old) = failed_run_with_properties(s, "old", "w1", &[("db.x", "violation")]);
+    let (mid, _f_mid) = failed_run_with_properties(s, "mid", "w2", &[("db.x", "pass")]);
+    let (_new, f_new) = failed_run_with_properties(s, "new", "w3", &[("db.x", "violation")]);
+    assert_eq!(
+        FailureFilter::default().property_runs,
+        FAILURE_PROPERTY_RUNS
+    );
+    assert_eq!(
+        failure_ids(s, &in_window("db.", FAILURE_PROPERTY_RUNS, None), 0, 10),
+        vec![f_new.clone(), f_old.clone()]
+    );
+    assert_eq!(
+        failure_ids(s, &in_window("db.", 3, None), 0, 10),
+        vec![f_new.clone(), f_old.clone()]
+    );
+    assert_eq!(
+        failure_ids(s, &in_window("db.", 2, None), 0, 10),
+        vec![f_new.clone()],
+        "the oldest run is outside a window of two"
+    );
+    assert_eq!(
+        failure_ids(s, &in_window("db.", 1, None), 0, 10),
+        vec![f_new.clone()]
+    );
+    assert!(failure_ids(s, &in_window("db.", 0, None), 0, 10).is_empty());
+    assert_eq!(
+        failure_ids(s, &in_window("db.", 3, None), 1, 10),
+        vec![f_old.clone()],
+        "the offset counts matching failures only"
+    );
+
+    // A run with no failure and no properties still takes a place in the window.
+    start(s, "queued", "search", 1);
+    assert!(failure_ids(s, &in_window("db.", 1, None), 0, 10).is_empty());
+    assert_eq!(
+        failure_ids(s, &in_window("db.", 2, None), 0, 10),
+        vec![f_new.clone()]
+    );
+
+    // Naming a run looks at that run, however old, and only at it.
+    assert_eq!(
+        failure_ids(s, &in_window("db.", 1, Some(&old.id)), 0, 10),
+        vec![f_old.clone()]
+    );
+    assert_eq!(
+        failure_ids(s, &in_window("db.", 0, Some(&old.id)), 0, 10),
+        vec![f_old],
+        "the window does not apply to a named run"
+    );
+    assert!(failure_ids(s, &in_window("db.", 1, Some(&mid.id)), 0, 10).is_empty());
+    assert!(failure_ids(s, &in_window("db.", 4, Some("run_0000000000000000")), 0, 10).is_empty());
+    assert!(
+        failure_ids(s, &in_window("zz", 4, None), 0, 10).is_empty(),
+        "a prefix no violation has matches nothing"
+    );
+}
+
+/// The window is the newest runs in the list order of runs: stored time, then the order they were stored in. A run
+/// stored last with an earlier time is older than the others.
+fn the_property_window_orders_runs_by_stored_time_then_storing_order(s: &dyn Store) {
+    let (_a, f_a) = failed_run_at(s, 100, "a", "w1", &[("p.one", "violation")]);
+    let (_b, f_b) = failed_run_at(s, 100, "b", "w2", &[("p.one", "violation")]);
+    let (_late, f_late) = failed_run_at(s, 50, "late", "w3", &[("p.one", "violation")]);
+    assert_eq!(
+        failure_ids(s, &in_window("p.", 1, None), 0, 10),
+        vec![f_b.clone()],
+        "of two runs stored in the same millisecond, the one stored later is newer"
+    );
+    assert_eq!(
+        failure_ids(s, &in_window("p.", 2, None), 0, 10),
+        vec![f_b.clone(), f_a.clone()],
+        "the run stored last with an earlier time is the oldest"
+    );
+    assert_eq!(
+        failure_ids(s, &in_window("p.", 3, None), 0, 10),
+        vec![f_late, f_b, f_a],
+        "failures keep their own order: the failure stored last is newest"
     );
 }

@@ -51,7 +51,7 @@ A body that does not end in a control line was cut short and should be treated a
 
 Fields of the JSON form that describe the page rather than an item (a property table's `claim`, `notes`, `headline`,
 `counts_by_status`, `total`, `guest_note`; a trial page's `run_id` and `scanned_trials`; a coverage report's `trials` and
-`downsampled`) are kept, under `page` on the control line, so that labels such as "unverified worker data" are not lost:
+`downsampled`; a failures page's `scope` when it has a `property` filter) are kept, under `page` on the control line, so that labels such as "unverified worker data" are not lost:
 
 Abbreviated example (`...` stands for fields left out here; real lines are complete JSON):
 

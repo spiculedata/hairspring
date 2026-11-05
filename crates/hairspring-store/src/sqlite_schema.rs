@@ -3,11 +3,12 @@
 //! A database is created at version 1 and then migrated like any older one, so a fresh database and a migrated one
 //! cannot differ. Migration runs inside one `BEGIN IMMEDIATE` transaction that re-reads the version, so several
 //! processes opening the same old file at once migrate it exactly once and none of them sees a half-migrated file.
+use crate::downgrade::V7_INDEXES;
 use crate::run_mode::{mode_of_config, SEARCH_MODE, SWEEP_MODE};
 use crate::types::{Result, StoreError};
 use rusqlite::Connection;
 
-pub(crate) const SCHEMA_VERSION: i64 = 6;
+pub(crate) const SCHEMA_VERSION: i64 = 7;
 
 const SCHEMA_V1: &str = "
 CREATE TABLE runs (
@@ -164,6 +165,16 @@ fn backfill_run_modes(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 7 adds two indexes and nothing else; no row is rewritten. `failures_created` serves the failures list, which
+/// is ordered newest first (`created_at`, then `rowid`, which every SQLite index holds) and was sorted whole on every
+/// request. `run_properties_violation` holds only the violations, so the property filter of that list reads the
+/// violations of a run instead of every property the run's catalogue has (a guest decides that number, up to 16384).
+/// Building them takes the write lock for as long as the build lasts; readers carry on.
+const MIGRATE_V6_TO_V7: &str = "
+CREATE INDEX IF NOT EXISTS failures_created ON failures(created_at);
+CREATE INDEX IF NOT EXISTS run_properties_violation ON run_properties(run_id, idx) WHERE status = 'violation';
+";
+
 /// The tables a version 3 database must have.
 const V3_TABLES: [&str; 4] = ["run_identity", "trees", "trial_lineage", "tree_branches"];
 /// The tables version 4 added.
@@ -207,10 +218,11 @@ fn ensure_secret_column(conn: &Connection) -> Result<()> {
 /// write rows; a database that lost a table or an index is reported, not repaired (the children query names its
 /// index, so a missing one would otherwise fail later, at the first read).
 fn verify_current(conn: &Connection) -> Result<()> {
-    verify_v5_objects(conn, SCHEMA_VERSION)
+    verify_v5_objects(conn, SCHEMA_VERSION)?;
+    verify_objects(conn, SCHEMA_VERSION, &[], &V7_INDEXES)
 }
 
-/// Versions 5 and 6 have the same tables and indexes (version 6 only rewrites data).
+/// Versions 5 and 6 have the same tables and indexes (version 6 only rewrites data); version 7 adds indexes to them.
 fn verify_v5_objects(conn: &Connection, version: i64) -> Result<()> {
     let tables: Vec<&str> = V3_TABLES
         .into_iter()
@@ -271,7 +283,7 @@ fn upgrade(conn: &Connection, from: i64) -> Result<()> {
     match from {
         3 => verify_v3(conn)?,
         4 => verify_v4(conn)?,
-        5 => verify_v5_objects(conn, 5)?,
+        5 | 6 => verify_v5_objects(conn, from)?,
         _ => conn.execute_batch(MIGRATE_V2_TO_V3)?,
     }
     if from <= 3 {
@@ -280,7 +292,10 @@ fn upgrade(conn: &Connection, from: i64) -> Result<()> {
     if from <= 4 {
         conn.execute_batch(MIGRATE_V4_TO_V5)?;
     }
-    backfill_run_modes(conn)?;
+    if from <= 5 {
+        backfill_run_modes(conn)?;
+    }
+    conn.execute_batch(MIGRATE_V6_TO_V7)?;
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }

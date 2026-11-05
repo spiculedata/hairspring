@@ -4,7 +4,16 @@
 //! `substr`, never `LIKE`, so `%` and `_` in a value are themselves on SQLite and on PostgreSQL alike. Paging is by
 //! offset over a total order (the stored time, then the order of insertion), so the same filter pages the same way on
 //! either backend.
+//!
+//! The property filter is bounded: it looks for violations in the newest [`FAILURE_PROPERTY_RUNS`] runs only (or in the
+//! one run named by the run filter), never in every run ever stored. Each run of that window is one seek into the
+//! partial index of violations (`run_properties_violation`, schema version 7), so its cost depends on the window and on
+//! the violations those runs hold, not on how many failures or runs the database keeps.
 use crate::types::RunState;
+
+/// Runs whose stored violations the property filter of the failures list looks at: the newest this many runs. A
+/// failure of an older run is not matched by a property prefix, and the service says so in its answer.
+pub const FAILURE_PROPERTY_RUNS: u32 = 1000;
 
 /// Which runs to list. Every field that is set must match; a target is an exact, case-sensitive name.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -16,12 +25,25 @@ pub struct RunFilter {
 }
 
 /// Which failures to list. Every field that is set must match.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FailureFilter {
     pub run_id: Option<String>,
     /// A failure holds no property id of its own. This matches the failures of runs in which a property whose id starts
-    /// with this text is stored as a violation.
+    /// with this text is stored as a violation, among the newest `property_runs` runs (or the run of `run_id`, of any
+    /// age, when that is set).
     pub property_prefix: Option<String>,
+    /// How many of the newest runs the property filter looks at ([`FAILURE_PROPERTY_RUNS`] unless a test lowers it).
+    pub property_runs: u32,
+}
+
+impl Default for FailureFilter {
+    fn default() -> FailureFilter {
+        FailureFilter {
+            run_id: None,
+            property_prefix: None,
+            property_runs: FAILURE_PROPERTY_RUNS,
+        }
+    }
 }
 
 /// A `WHERE` clause (empty, or starting with a space) and the text values its placeholders stand for, in order.
@@ -84,18 +106,54 @@ pub(crate) fn run_clause(filter: &RunFilter, marker: fn(usize) -> String) -> Cla
     b.finish()
 }
 
-pub(crate) fn failure_clause(filter: &FailureFilter, marker: fn(usize) -> String) -> Clause {
+/// What differs between the backends in the failures list.
+pub(crate) struct FailureDialect {
+    /// Numbers placeholders: `?1` on SQLite, `$1` on PostgreSQL.
+    pub marker: fn(usize) -> String,
+    /// The column that orders rows stored in the same millisecond: `rowid` on SQLite, `seq` on PostgreSQL. The property
+    /// window uses it, so it is the same runs on both backends.
+    pub order: &'static str,
+    /// Whether to pin the plan of the property filter the PostgreSQL way. Its planner is free to flatten subqueries, and
+    /// on small or freshly loaded tables it may hash the window against a scan of every catalogue row, or the matched
+    /// runs against a scan of every failure: the unbounded reads the window exists to avoid. So each run of the window
+    /// is looked at in a `LATERAL` subquery with a `LIMIT` (which cannot be flattened), and the matched runs are handed
+    /// to the failures as an array (`= ANY(ARRAY(...))`, worked out once, then looked up through `failures_run`).
+    /// SQLite runs a correlated `EXISTS` once per row of its outer query and an `IN (...)` subquery once, then looks the
+    /// result up through `failures_run`, so it needs neither.
+    pub postgres: bool,
+}
+
+/// The `WHERE` clause of the failures list.
+pub(crate) fn failure_clause(filter: &FailureFilter, dialect: &FailureDialect) -> Clause {
+    let (marker, order) = (dialect.marker, dialect.order);
     let mut b = Builder::new(marker);
     if let Some(run_id) = &filter.run_id {
         b.equals("failures.run_id", run_id);
     }
     if let Some(prefix) = &filter.property_prefix {
+        let window = match &filter.run_id {
+            Some(run_id) => format!("SELECT id FROM runs WHERE id = {}", b.bind(run_id)),
+            None => format!(
+                "SELECT id FROM runs ORDER BY created_at DESC, {order} DESC LIMIT {}",
+                filter.property_runs
+            ),
+        };
         let chars = prefix.chars().count();
         let marker = b.bind(prefix);
-        b.conditions.push(format!(
-            "EXISTS (SELECT 1 FROM run_catalog c JOIN run_properties p ON p.run_id = c.run_id AND p.idx = c.idx \
-             WHERE c.run_id = failures.run_id AND p.status = 'violation' AND substr(c.prop_id, 1, {chars}) = {marker})"
-        ));
+        // The window is a separate, uncorrelated subquery, read once: each of its runs is one range of the partial
+        // index of violations, and the failures are then read through `failures_run` for the runs that matched.
+        let violated = format!(
+            "SELECT 1 FROM run_properties p JOIN run_catalog c ON c.run_id = p.run_id AND c.idx = p.idx \
+             WHERE p.run_id = w.id AND p.status = 'violation' AND substr(c.prop_id, 1, {chars}) = {marker}"
+        );
+        b.conditions.push(if dialect.postgres {
+            format!(
+                "failures.run_id = ANY(ARRAY(SELECT w.id FROM ({window}) w \
+                 CROSS JOIN LATERAL ({violated} LIMIT 1) v))"
+            )
+        } else {
+            format!("failures.run_id IN (SELECT w.id FROM ({window}) w WHERE EXISTS ({violated}))")
+        });
     }
     b.finish()
 }
@@ -112,6 +170,12 @@ mod tests {
     fn question(n: usize) -> String {
         format!("?{n}")
     }
+
+    const SQLITE_LIKE: FailureDialect = FailureDialect {
+        marker: question,
+        order: "rowid",
+        postgres: false,
+    };
 
     #[test]
     fn no_filter_is_no_where_clause() {
@@ -137,10 +201,10 @@ mod tests {
     fn a_prefix_is_compared_by_characters_not_matched_as_a_pattern() {
         let c = failure_clause(
             &FailureFilter {
-                run_id: None,
                 property_prefix: Some("ünï_%".into()),
+                ..FailureFilter::default()
             },
-            question,
+            &SQLITE_LIKE,
         );
         assert!(c.sql.contains("substr(c.prop_id, 1, 5) = ?1"), "{}", c.sql);
         assert!(!c.sql.contains("LIKE"));

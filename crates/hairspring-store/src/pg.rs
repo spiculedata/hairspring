@@ -230,6 +230,18 @@ impl PgStore {
         query::explain(&mut *self.client()?, query, form, tree_id, node)
     }
 
+    /// The plan PostgreSQL chooses for [`Store::list_failures_page`] with this filter, one line per step, planned with
+    /// the real bound values and not run. For tests that assert the plan; not part of the supported interface.
+    #[doc(hidden)]
+    pub fn explain_failures_page(
+        &self,
+        filter: &FailureFilter,
+        offset: u64,
+        limit: u32,
+    ) -> Result<Vec<String>> {
+        crate::pg_listing::explain_failures(&mut *self.client()?, filter, offset, limit)
+    }
+
     /// The form the current rule gives subtree queries on this tree. For tests; not a supported interface.
     #[doc(hidden)]
     pub fn tree_query_form(&self, tree_id: &str) -> Result<TreeQueryForm> {

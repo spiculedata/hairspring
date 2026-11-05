@@ -15,6 +15,8 @@ export type RunModeFilter = (typeof RUN_MODE_FILTERS)[number];
 /** Longest target name and longest property id prefix, both in bytes, as the server counts them. */
 export const MAX_TARGET_BYTES = 64;
 export const MAX_PROPERTY_PREFIX_BYTES = 128;
+/** How many of the newest runs the server's property filter looks at (`FAILURE_PROPERTY_RUNS` in hairspring-store). */
+export const PROPERTY_FILTER_RUNS = 1000;
 
 const RUN_ID = /^run_[0-9a-fA-F]{16}$/;
 /** Control characters; the server refuses them in a target or a prefix. */

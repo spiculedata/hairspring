@@ -122,6 +122,24 @@
   `hairspring 0.1.0 (unknown)`, and the build never fails for want of git. No wall-clock time is used. The line still
   starts `hairspring <version>`, which is what `scripts/install.sh` checks. The Dockerfile accepts the two values as
   build arguments, and the draft release notes give a checksum command that works with only one binary downloaded.
+- Schema version 7 adds two indexes, on both stores, and nothing else: `failures_created` (the order of the failures
+  list) and `run_properties_violation` (a partial index of the stored violations). Opening a version 6 database
+  creates them in the transaction that sets the version; no row is rewritten. On PostgreSQL this blocks writes to
+  `failures` and `run_properties` while the indexes build (0.05 to 0.18 s each on a store of 300000 failures; SQLite
+  0.09 to 0.25 s), and it must be done by the role that owns the tables; a role that only reads and writes rows can
+  still open a version 7 schema. An older release refuses a version 7 database. There is no offline downgrade from 7
+  to 6 (reset the stored version by hand); the downgrade to version 2 drops the indexes. See "Failure list indexes" in
+  docs/architecture.md.
+- The `property` filter of `GET /api/failures` now looks at the newest 1000 runs only (or at the run named by `run`,
+  however old), so its cost no longer grows with the stored history. A failure of an older run is not listed by it.
+  With a `property` filter the answer carries `"scope": {"recent_runs": 1000, "cut_short": ...}`, where `cut_short` says
+  that older runs were left out; without one the answer is unchanged. The web UI's hint for the filter says so.
+  Measured on a generated store of 100000 runs and 300000 failures (release builds, median of warm requests): the
+  failures list without a filter took 100 ms on SQLite and 17 ms on PostgreSQL and now takes under 1 ms; `property=`
+  took 0.8 s on SQLite for any prefix and 44 ms to 5.4 s on PostgreSQL and now takes 2 to 39 ms and 9 to 152 ms;
+  `status=confirmed` took 0.36 s and 55 ms and now takes 2 ms and 14 ms. Every other list, filter and cursor answers
+  byte for byte as before on that store.
+
 - The server keeps in memory the figures of a finished run that cost a pass over its stored rows: who reported its
   trials, its property statistics, its sweep counts, its trial count and its coverage series. An entry is served only
   while the run row read for the request is unchanged since the entry was worked out; trial rows cannot be added to a

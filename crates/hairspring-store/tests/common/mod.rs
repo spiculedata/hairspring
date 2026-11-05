@@ -24,6 +24,7 @@ pub mod tree_support;
 mod trials;
 pub mod v1_schema;
 pub mod v2_schema;
+pub mod v7_lists;
 
 fn new_run(s: &dyn Store, target: &str, now: i64) -> RunRecord {
     s.create_run(

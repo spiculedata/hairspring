@@ -255,6 +255,20 @@ fn expect_changed(changed: usize, what: &str, id: &str) -> Result<()> {
     }
 }
 
+impl SqliteStore {
+    /// The steps of the plan SQLite chooses for [`Store::list_failures_page`] with this filter, one per line. For tests
+    /// that assert the plan; not part of the supported interface.
+    #[doc(hidden)]
+    pub fn explain_failures_page(
+        &self,
+        filter: &FailureFilter,
+        offset: u64,
+        limit: u32,
+    ) -> Result<Vec<String>> {
+        self.read(|c| crate::sqlite_listing::explain_failures(c, filter, offset, limit))
+    }
+}
+
 impl Store for SqliteStore {
     fn create_run(&self, new: &NewRun, now: i64) -> Result<RunRecord> {
         let id = new_id("run");

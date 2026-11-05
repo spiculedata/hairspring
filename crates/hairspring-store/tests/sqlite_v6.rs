@@ -4,7 +4,7 @@ use hairspring_store::*;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
-const CURRENT_VERSION: i64 = 6;
+const CURRENT_VERSION: i64 = 7;
 const SWEEP_CONFIG: &str = r#"{"target":"t","seed":1,"budget":null,"mode":"sweep"}"#;
 const SEARCH_CONFIG: &str = r#"{"target":"t","seed":1,"budget":null,"mode":"search"}"#;
 

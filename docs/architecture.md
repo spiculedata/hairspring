@@ -287,7 +287,8 @@ tree tables in the same transaction as the version bump.
 
 **Downgrade to version 2** (offline; back up first, nothing is downgraded automatically):
 `hairspring_store::downgrade_sqlite` and `downgrade_postgres` (also `cargo run -p hairspring-store --example
-store_downgrade`) drop the four tree tables (and the tables of versions 4 and 5, if present) and set the version to 2.
+store_downgrade`) drop the four tree tables (and the tables of versions 4 and 5 and the indexes of version 7, if
+present) and set the version to 2.
 Branch runs, which exist only because of version 3,
 are listed first and kept by default as ordinary runs; `--drop-branch-runs` deletes them, with their trials, jobs,
 events and failures, in the same transaction and removes the blobs nothing else refers to. `--dry-run` only reports.
@@ -375,7 +376,7 @@ Opening a version 4 database adds the table and its index in the same transactio
 database that lost one of its own tables or indexes is refused rather than repaired, on both backends, and a current
 database is only looked at (no DDL). An older release refuses a version 5 database. **Back up first; stop every older
 server and worker before upgrading.** The offline downgrade (`hairspring_store::downgrade_sqlite` and
-`downgrade_postgres`, also `cargo run -p hairspring-store --example store_downgrade`) now accepts versions 3, 4, 5 and 6
+`downgrade_postgres`, also `cargo run -p hairspring-store --example store_downgrade`) now accepts versions 3 to 7
 and drops the version 5 table first, so stored checks are lost by a downgrade.
 
 ## Stored run mode (schema version 6)
@@ -391,6 +392,102 @@ refuses a version 6 database; a downgrade from version 6 to 2 keeps the correcte
 older server and worker before upgrading.** A version 5 server left running after the upgrade keeps storing sweeps as
 `search`, and the backfill does not run again to correct them. Version 6 has the same tables and columns as version 5,
 so there is no offline downgrade from 6 to 5: that step is resetting the stored schema version to 5 by hand.
+
+## Failure list indexes (schema version 7)
+
+Version 7 adds two indexes and nothing else: no table, no column, no row is rewritten, and there is no backfill.
+
+- `failures_created` on `failures(created_at)` on SQLite (every SQLite index also holds the `rowid`) and
+  `failures(created_at, seq)` on PostgreSQL. The failures list is ordered by those columns, newest first, and before
+  this index every request sorted the whole table, whatever its filter or `limit`. The list now reads the index
+  backwards and stops at the end of the page. `Store::list_recent_failures` (the MCP `list_failures` tool) reads it too.
+- `run_properties_violation` on `run_properties(run_id, idx) WHERE status = 'violation'`, a partial index holding only
+  the violations. It serves the `property` filter of the failures list, which is now bounded (below): for each run it
+  looks at, it reads that run's violations instead of every property in the run's catalogue, which a guest decides (up
+  to 16384).
+
+**The bounded `property` filter.** A failure holds no property id, so the filter looks for runs that store a matching
+violation. It used to look at every failure ever stored and, for each, at its run's catalogue, so its cost grew with the
+history the database keeps: about 0.8 s on SQLite for any prefix, and 44 ms to 5.4 s on PostgreSQL depending on the
+prefix, on the store measured below. It now looks only at the newest `FAILURE_PROPERTY_RUNS` runs (1000; exported by
+`hairspring_store`), by the order of the runs list (stored time, then the order of storing), whatever their
+state. Each of those runs is one range of `run_properties_violation`, each violation one primary-key read of
+`run_catalog` to compare the prefix, and the failures of the runs that match are read through `failures_run`. With a
+`run` filter as well, the filter looks at that run only, however old. A failure of an older run is not listed even if
+it matches. The answer says so: with a `property` filter it carries
+`"scope": {"recent_runs": 1000, "cut_short": <bool>}`, where `cut_short` is true when older runs are stored than the
+ones the filter looked at (always false with `run`). Without a `property` filter there is no `scope` and the answer is
+unchanged. In NDJSON the `scope` is under `page` on the control line. To find failures of an older run, give its run id.
+On PostgreSQL the plan is pinned: each run of the window is looked at in a `LATERAL` subquery with a `LIMIT`, and the
+matched runs are handed to the failures as an array, so the planner cannot choose a scan of every catalogue row or every
+failure, which it did on small tables when it was free to.
+
+The cost is now set by the window and by the violations its runs hold, not by how many failures or runs are stored. The
+worst case is a window whose runs each hold many violations and no match: every violation of every run in the window is
+read once. On the store below, where the newest 100 runs each hold 16384 properties and 169 violations, a prefix that
+matches nothing reads about 17000 violations: 36 to 39 ms on SQLite and 144 to 152 ms on PostgreSQL.
+
+Measured on the generated store of the survey (100000 runs, 300000 failures, 60000 stored checks, 100 runs with 16384
+properties, one run of 200000 trials and one of 50000), release builds of the previous `main` and of this change, same
+machine and data, server started fresh, median of 15 warm requests (5 for those over 0.5 s), two runs each; your figures will differ:
+
+| Request | SQLite before | SQLite after | PostgreSQL before | PostgreSQL after |
+|---|---:|---:|---:|---:|
+| Request (ms, two runs each) | SQLite before | SQLite after | PostgreSQL before | PostgreSQL after |
+|---|---:|---:|---:|---:|
+| no filter (first page) | 100 / 106 | 0.3 / 0.3 | 17 / 16 | 0.5 / 0.5 |
+| `limit=500` | 183 / 178 | 1.2 / 1.1 | 21 / 19 | 1.3 / 1.2 |
+| `cursor=50000` | 274 / 266 | 1.1 / 0.8 | 67 / 46 | 2.4 / 2.3 |
+| `cursor=100000` (deepest allowed) | 281 / 287 | 3.7 / 1.4 | 65 / 52 | 4.5 / 5.2 |
+| `run=` (a run with 3 failures) | 0.2 / 0.2 | 0.3 / 0.2 | 0.5 / 0.5 | 0.5 / 0.5 |
+| `property=db.p0` (840 matches in the window) | 803 / 832 | 2.9 / 2.4 | 49 / 44 | 10 / 11 |
+| `property=db.p1` (300 matches in the window) | 871 / 882 | 3.2 / 2.2 | 5369 / 4944 | 9.6 / 9.0 |
+| `property=zzz` (no match) | 831 / 800 | 36 / 39 | 3008 / 2855 | 152 / 144 |
+| `property=db.p0&limit=500` | 883 / 835 | 3.5 / 3.2 | 70 / 61 | 11 / 12 |
+| `status=candidate` | 175 / 177 | 1.0 / 1.0 | 29 / 26 | 6.5 / 6.4 |
+| `status=confirmed` (reads 1000) | 371 / 364 | 1.9 / 1.9 | 56 / 55 | 14 / 14 |
+| `status=verified` (none; reads 1000) | 426 / 358 | 1.9 / 1.9 | 58 / 54 | 12 / 14 |
+| `status=confirmed&property=db.p0` | 2695 / 1719 | 6.4 / 6.3 | 475 / 456 | 28 / 27 |
+
+Every other list read the same before and after: the bodies of 139 requests (the whole list, run, status and cursor
+combinations up to position 100000, and `property` pages that lie inside the window) were identical apart from the
+added `scope`. The ones that differ are `property` pages past the failures of the newest 1000 runs, which are now empty
+and end the list, and `status=confirmed&property=db.p0`, which now finds the 42 confirmed failures of the window and
+ends the list, where before it returned 50 and a cursor to carry on into older runs.
+
+Not added, because the measurements did not justify it: an index on `run_catalog(prop_id, run_id)` (the window reads
+each run's catalogue by primary key, so a prefix index across all runs would only serve an unbounded search), and an
+index for a run's contributors (the `GROUP BY` over a run's trial rows). Since the result cache, a finished run's
+contributors are worked out once per server process: the first read of the 200000-trial run took about 0.3 to 0.5 s in
+all on SQLite and 0.1 to 0.2 s on PostgreSQL, and the next took 1 to 3 ms; an open run of 50000 trials answered in 11 to 15
+ms. An index on a table of millions of trial rows, paid on every trial written, would not repay that.
+
+**Upgrading.** Opening a version 6 database creates both indexes, with `CREATE INDEX IF NOT EXISTS`, in the
+transaction that sets the version to 7, on both backends; a version 6 database that lost one of its own tables or
+indexes is refused rather than repaired, and a version 7 database missing either index is refused at open, not
+rebuilt. An older release refuses a version 7 database ("database schema version 7 is not supported (expected 6)").
+**Back up first; stop every older server and worker before upgrading.**
+
+- *How long.* Building an index reads the whole table once. On the store above the migration took 0.09 s
+  (`failures_created`, 300000 rows) and 0.12 to 0.25 s (`run_properties_violation`, 2.4 million property rows, 36880
+  violations) on SQLite, and 0.05 to 0.10 s and 0.15 to 0.18 s on PostgreSQL. Opening the store took 0.8 s longer on
+  SQLite (a cold 2 GB file) and 0.3 s longer on PostgreSQL than an open with nothing to migrate. Expect the time to
+  grow with the number of failures and property rows.
+- *Locks.* SQLite holds its write lock for the whole migration; readers carry on, writers wait (up to the busy
+  timeout). PostgreSQL's `CREATE INDEX` (not `CONCURRENTLY`, which cannot run inside a transaction) takes a `SHARE`
+  lock on `failures` and on `run_properties` until the migration commits: reads carry on, and every insert, update or
+  delete of failures or property rows waits. Upgrade at a quiet time; on a large table, or to avoid that wait, an
+  operator can build the two indexes beforehand with `CREATE INDEX CONCURRENTLY` under the same names and
+  definitions, and the migration then finds them and only sets the version.
+- *Rights.* Creating an index needs ownership of the table on PostgreSQL. The migration must therefore be run, once,
+  by the role that owns the schema's tables (or by one with rights to create indexes on them). Opening a current
+  (version 7) schema issues no DDL, so a role that may only read and write rows can open it, as before; such a role
+  opening a version 6 schema gets the database's refusal ("must be owner of table ...") and the schema stays at
+  version 6.
+- *Downgrade.* There is no offline downgrade from 7 to 6. Version 7 has the tables and columns of version 6, so
+  that step is setting the stored schema version back to 6 by hand (`PRAGMA user_version = 6` on SQLite,
+  `UPDATE schema_version SET version = 6` on PostgreSQL); dropping the two indexes is optional, as a version 6 build
+  ignores them. The offline downgrade to version 2 accepts version 7 and drops the two indexes.
 
 ## Paging and filters on the runs and failures lists
 
@@ -421,7 +518,7 @@ repeats the value, as `{"error": "`state` is not valid"}`):
 | `/api/runs` | `target` | The exact target name (1 to 64 bytes, no control characters; a non-ASCII name takes more than one byte per character). |
 | `/api/runs` | `mode` | The mode the run was stored with: `search` or `sweep`. |
 | `/api/failures` | `run` | A run id: only that run's failures. |
-| `/api/failures` | `property` | A property id prefix (1 to 128 bytes). A failure holds no property id of its own, so this matches failures of runs in which a property with such an id is stored as a violation. Matching is exact and case-sensitive; `%` and `_` are ordinary characters. |
+| `/api/failures` | `property` | A property id prefix (1 to 128 bytes). A failure holds no property id of its own, so this matches failures of runs in which a property with such an id is stored as a violation, among the newest 1000 runs (or the run named by `run`, however old); the answer then carries a `scope` that says whether older runs were left out (see "Failure list indexes", above). Matching is exact and case-sensitive; `%` and `_` are ordinary characters. |
 | `/api/failures` | `status` | `candidate`, `rerun_repeated`, `confirmed`, `verified`, `not_reproducible` or `control_failed`: where the stored checks leave the failure. |
 
 A failure's state is worked out from its stored checks, not kept on its row, so a `status` filter reads the checks of
@@ -564,8 +661,8 @@ unescaped.
 
 ## Retention (`hairspring gc`)
 
-`hairspring gc` removes old runs and what only they refer to. It adds no table or column (the schema stays at
-version 6) and works the same on SQLite and PostgreSQL: both stores implement `Store::retention_scan` and
+`hairspring gc` removes old runs and what only they refer to. It adds no table or column (it needed no schema
+change) and works the same on SQLite and PostgreSQL: both stores implement `Store::retention_scan` and
 `Store::retention_delete`, and one conformance suite runs against both.
 
 **Report first.** Without `--apply` the command changes nothing and prints what it would remove: runs (by state),

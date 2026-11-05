@@ -64,7 +64,7 @@ pub use digest_allowance::*;
 pub use downgrade::*;
 pub use lineage::*;
 pub use lineage_fields::{is_bounded_json, is_sha256_hex, nesting_depth};
-pub use listing::{FailureFilter, RunFilter};
+pub use listing::{FailureFilter, RunFilter, FAILURE_PROPERTY_RUNS};
 #[cfg(feature = "postgres")]
 pub use pg::PgStore;
 #[cfg(feature = "postgres")]
