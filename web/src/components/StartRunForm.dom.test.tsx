@@ -209,6 +209,7 @@ describe('StartRunForm access', () => {
     const note = container.querySelector('.start-access-note') as HTMLElement;
     expect(button.disabled).toBe(true);
     expect(note.textContent).toBe(denied.note);
+    expect(note.getAttribute('role')).toBe('status');
     expect(button.getAttribute('aria-describedby')).toBe(note.id);
   });
 

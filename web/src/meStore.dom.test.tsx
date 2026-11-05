@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, setToken } from './api';
+import { api, ME_TIMEOUT_MS, setToken } from './api';
 import type { Me } from './me';
 import { resetMeForTests, useMe } from './meStore';
 
@@ -80,6 +80,57 @@ describe('useMe', () => {
     await waitFor(() => expect(text(container, 'a')).toBe('admin'));
     await act(async () => releaseOld(json(read)));
     expect(text(container, 'a')).toBe('admin');
+  });
+
+  it('does not let a slow failure for the old token overwrite the answer for the new one', async () => {
+    let failOld: (e: Error) => void = () => undefined;
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise<Response>((_resolve, reject) => (failOld = reject)))
+      .mockImplementationOnce(async () => json(admin));
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = render(<Show id="a" />);
+    act(() => setToken('admin-token-0123456789'));
+    await waitFor(() => expect(text(container, 'a')).toBe('admin'));
+    await act(async () => failOld(new TypeError('offline')));
+    expect(text(container, 'a')).toBe('admin');
+  });
+
+  it('reads loading straight after the token changes, not the previous token answer', async () => {
+    let releaseNew: (r: Response) => void = () => undefined;
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(async () => json(admin))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => (releaseNew = resolve)));
+    vi.stubGlobal('fetch', fetchMock);
+    const { container } = render(<Show id="a" />);
+    await waitFor(() => expect(text(container, 'a')).toBe('admin'));
+    act(() => setToken('read-token-0123456789'));
+    expect(text(container, 'a')).toBe('loading');
+    await act(async () => releaseNew(json(read)));
+    expect(text(container, 'a')).toBe('read');
+  });
+
+  it('gives up on a request that hangs and reports unavailable', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          (_url: string, init?: RequestInit) =>
+            new Promise<Response>((_resolve, reject) => {
+              init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+            }),
+        ),
+      );
+      const { container } = render(<Show id="a" />);
+      await act(async () => vi.advanceTimersByTimeAsync(ME_TIMEOUT_MS - 1));
+      expect(text(container, 'a')).toBe('loading');
+      await act(async () => vi.advanceTimersByTimeAsync(1));
+      expect(text(container, 'a')).toBe('unavailable');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('is unavailable, not a guessed role, when the server has no /api/me, fails, or sends a wrong shape', async () => {

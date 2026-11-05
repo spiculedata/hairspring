@@ -173,7 +173,7 @@ export function StartRunForm({ targets, start, onStarted, access = { canStart: t
           {pending ? STARTING : isSweep ? START_SWEEP : START_RUN}
         </button>
         {access.note !== undefined && (
-          <span id={ACCESS_NOTE_ID} className="start-access-note muted">
+          <span id={ACCESS_NOTE_ID} className="start-access-note muted" role="status">
             {access.note}
           </span>
         )}

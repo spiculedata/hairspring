@@ -34,7 +34,8 @@
 
 - The web UI asks `GET /api/me` for the caller's role once per page load, and again after the token changes. When the
   role cannot start runs (`read`), the Runs page disables Start run and Start sweep and says so in one line, instead
-  of waiting for a 403. If the server cannot answer, the button stays available and the server still decides.
+  of waiting for a 403. If the server cannot answer, or takes longer than 5 seconds, the button stays available and
+  the server still decides.
 
 ### Changed
 
