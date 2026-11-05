@@ -186,6 +186,15 @@ the default), Light and Dark. The choice is saved in your browser's local storag
 is not shared between browsers or machines. If the browser blocks storage (some private windows do), the choice still
 works but lasts only until you close or reload the page.
 
+To show your organisation's name in the top bar, start the server with `hairspring serve --organisation "Acme Ltd"` or
+set `HAIRSPRING_ORGANISATION`. It is plain text of at most 80 characters (no logo, no markup); an empty value, or no
+setting, shows nothing, and a name with a line break, another control character or an invisible formatting character
+is refused when the server starts. The browser reads it from `GET /api/health`, which adds an `organisation` field
+only for a caller with a valid token (or any caller when the server has no tokens), so a probe without a token still
+gets just `status` and `version`. A health request that carries a token counts against the same per-client rate
+limit as the other endpoints; once that limit is used up the `organisation` field is left out (the answer is still
+200), so health cannot be used to guess tokens. A request without a token is never limited.
+
 ## Start a run or a sweep from the web UI
 
 With `hairspring serve` running, the Runs page of the web UI has a form that starts a run through `POST /api/runs`. Pick

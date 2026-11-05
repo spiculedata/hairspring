@@ -22,6 +22,12 @@
 - `scripts/check-embedded-ui.sh` checks that a release binary serves the web UI built from the repository's `web/`
   source, and fails on an older UI. The release workflow runs it after each binary is built, `make release` runs it
   after the build, and `make check-ui` runs it on its own.
+- `hairspring serve --organisation NAME` (or `HAIRSPRING_ORGANISATION`) shows an organisation name in the web UI's top
+  bar. It is plain text of at most 80 characters, with no logo. `GET /api/health` carries it as `organisation`, only for
+  a caller with a valid token (or any caller when the server has no tokens), and leaves the field out when no name is
+  set. A health request that carries a token counts against the same per-client rate limit as other endpoints, and the
+  field is left out (the answer is still 200) once that limit is used up, so health cannot be used to guess tokens.
+  A request without a token is never limited.
 
 ### Changed
 

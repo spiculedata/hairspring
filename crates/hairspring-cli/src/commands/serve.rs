@@ -24,6 +24,26 @@ pub struct ServeArgs {
     /// File with one `token:role` per line (alternative to the HAIRSPRING_TOKENS environment variable).
     #[arg(long)]
     pub tokens_file: Option<PathBuf>,
+    /// Name of your organisation, shown in the top bar of the web UI (plain text, at most 80 characters; an empty
+    /// value shows none). Alternative to the HAIRSPRING_ORGANISATION environment variable.
+    #[arg(long)]
+    pub organisation: Option<String>,
+}
+
+const ORGANISATION_ENV: &str = "HAIRSPRING_ORGANISATION";
+
+/// The organisation name to show: the flag if given (an empty flag switches the name off), else the environment
+/// variable. A name that is not valid is an error that names where it came from and does not repeat the value.
+pub(crate) fn organisation_from(
+    flag: Option<&str>,
+    env: Option<String>,
+) -> CmdResult<Option<String>> {
+    let (raw, source) = match (flag, env) {
+        (Some(flag), _) => (flag.to_owned(), "--organisation".to_owned()),
+        (None, Some(env)) => (env, ORGANISATION_ENV.to_owned()),
+        (None, None) => return Ok(None),
+    };
+    hairspring_server::parse_organisation(&raw).map_err(|e| format!("{source}: {e}").into())
 }
 
 /// A readable-by-others secrets file is a leak waiting to happen; say so (Unix only).
@@ -72,6 +92,10 @@ pub fn run(ctx: &Ctx, args: &ServeArgs, out: &mut dyn Write) -> CmdResult<i32> {
     config.embedded_workers = args.workers;
     config.rate_limit_per_min = args.rate_limit;
     config.register_limit = args.register_limit;
+    config.organisation = organisation_from(
+        args.organisation.as_deref(),
+        std::env::var(ORGANISATION_ENV).ok(),
+    )?;
     config.handle_ctrl_c = true;
     let server = start(config, ctx.service()?, ctx.engine.clone())
         .map_err(|e| format!("cannot start the server: {e}"))?;
@@ -101,8 +125,41 @@ pub fn run_mcp_stdio(ctx: &Ctx) -> CmdResult<i32> {
 
 #[cfg(test)]
 mod tests {
-    use super::loose_permissions_warning;
+    use super::{loose_permissions_warning, organisation_from};
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn the_flag_wins_over_the_environment_and_either_may_be_absent() {
+        let name = |flag: Option<&str>, env: Option<&str>| {
+            organisation_from(flag, env.map(str::to_owned)).unwrap()
+        };
+        assert_eq!(name(None, None), None);
+        assert_eq!(
+            name(Some("Flag Ltd"), Some("Env Ltd")).as_deref(),
+            Some("Flag Ltd")
+        );
+        assert_eq!(name(None, Some("Env Ltd")).as_deref(), Some("Env Ltd"));
+        assert_eq!(name(Some("  Acme  "), None).as_deref(), Some("Acme"));
+        assert_eq!(
+            name(Some(""), Some("Env Ltd")),
+            None,
+            "an empty flag switches the name off"
+        );
+        assert_eq!(name(None, Some("  ")), None);
+    }
+
+    #[test]
+    fn a_name_that_is_not_valid_is_an_error_naming_the_setting() {
+        let flag = organisation_from(Some("a\nb"), None)
+            .unwrap_err()
+            .to_string();
+        assert!(flag.contains("--organisation"), "{flag}");
+        let env = organisation_from(None, Some("x".repeat(81)))
+            .unwrap_err()
+            .to_string();
+        assert!(env.contains("HAIRSPRING_ORGANISATION"), "{env}");
+        assert!(!env.contains("xxxx"), "the value is not repeated: {env}");
+    }
 
     #[test]
     fn warns_only_for_files_others_can_read() {

@@ -35,14 +35,28 @@ export function isNavActive(to: string, path: string): boolean {
   return within(to);
 }
 
-export function Layout({ path, children, announcement }: { path: string; children: ReactNode; announcement?: string }) {
+export function Layout({
+  path,
+  children,
+  announcement,
+  organisation,
+}: {
+  path: string;
+  children: ReactNode;
+  announcement?: string;
+  /** The organisation's name from the server's configuration. Shown in the top bar when there is one, and nowhere otherwise. */
+  organisation?: string;
+}) {
   return (
     <>
       <a className="skip-link" href="#main">
         Skip to content
       </a>
       <header className="topbar">
-        <span className="brand">Hairspring</span>
+        <div className="topbar-id">
+          <span className="brand">Hairspring</span>
+          {organisation !== undefined && organisation !== '' && <span className="org-name">{organisation}</span>}
+        </div>
         <ThemeSwitch />
       </header>
       <div className="sr-only" role="status" aria-live="polite">
