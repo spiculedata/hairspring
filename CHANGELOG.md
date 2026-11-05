@@ -113,6 +113,45 @@
   Capabilities still show from the `trusted` and `caps_json` fields it does send. A response with no list of workers
   shows an error instead of "Loading workers". Capability text is cut by character, never through the middle of one.
 
+- A .NET guest SDK (`sdks/dotnet`, C#, base class library only, Linux and macOS) and a .NET language fixture. See
+  `docs/dotnet-sdk.md`; `docs/support-matrix.md` gives its status.
+- `docs/support-matrix.md` lists, per language, whether it passed the acceptance test under Hermit and on what
+  configuration. The results apply only to that configuration.
+- A Java service fixture (`svc.jar`) with an idempotency race. The Java lost-update fixture takes `--k=N`, the
+  iterations per worker (1 to 5,000; the default stays 1,000). `K=<n>` and an `a-prime` JVM flag profile are available
+  for the fixture's native checks, and a manual workflow, `java-native-k`, runs the fixture natively at a chosen K and
+  profile.
+- Web UI: one status badge and one status table render run states, property statuses and replay results; a word the
+  table does not know shows as a neutral "Unknown", and run states such as "Queued" and "Failed" are now capitalised.
+- Web UI: a Failures page listing stored failures, newest first, and a failure page with a read-only Confirmation ladder
+  and a table of its checks. Neither starts a confirmation.
+- Web UI: the Runs page can start a sweep as well as a search, with a Trials field for a sweep. The run page has a "What
+  this run shows" and "What it does not show" panel, and a "Coverage over trials" chart (thinned to at most 2,000
+  points, with "Show as a table").
+- Web UI: an Overview page at `/` with the newest runs and failures that need attention and, when the server has no
+  stored runs, a first-run guide. A Glossary page at `/glossary` with inline definitions on the failure page.
+- Web UI: an app shell with side navigation and a System, Light or Dark theme switch. Polling pauses while the tab is
+  hidden and refreshes when it is shown again, and a banner appears when the browser is offline or the server cannot be
+  reached; the property, trial and strip loaders use the same loop. Failed requests back off up to 30 seconds.
+- Web UI: the trial page has section navigation, taller thread lanes and an output viewer with line numbers and a find
+  box. The failure and trial pages link to each other and have Copy link and Copy summary; a summary holds ids, names
+  and figures, not program output.
+- The service layer checks tree edge and command fields (digests, and a command that must be a non-empty JSON object of
+  at most 64 KiB with no NUL and at most 32 levels) and refuses malformed worker input with a typed error naming the
+  field. No server route calls these checks yet.
+- The GitHub Action (`integrations/github-action`) can be used from another repository, pinned by commit SHA. It
+  installs the release binary for the runner (Linux x64, macOS arm64) after checking it against the release's
+  `SHA256SUMS`, makes one run and one report (`format`: `sarif`, `junit` or `text`), and takes `seeds` for a sweep
+  range. Behaviour on GitHub's own runners has not been tested. `docker-compose.yml` now has the `.env.example` it
+  refers to; its placeholders are shorter than the 16-character token minimum, so an unedited copy is refused at
+  startup.
+- `scripts/hermit-upstream-report.sh` prints a read-only report of what changed in upstream Hermit since the pinned
+  commit (whether the replay patch still applies, new upstream commits, open upstream issues), with a `--self-test` that
+  needs no network and runs in CI. A weekly workflow, `hermit-upstream.yml`, runs it and keeps the report in the job
+  summary and as an artefact. Nothing is changed or opened by either.
+- CI runs the PostgreSQL store, service and CLI tests against a PostgreSQL 16 service container, and a missing database
+  fails the job instead of skipping the tests.
+
 ### Changed
 
 - `hairspring --version` names the build: `hairspring 0.1.0 (f819c1a 2026-10-24)` is the crate version, the short
@@ -242,6 +281,25 @@
   suite runs axe-core (a new dev dependency of `web/`) on the markup rules; colour contrast and target size are not
   checked there.
 
+- Schema version 6: a new run stores its mode, so sweeps are listed as sweeps by `GET /api/runs` and `GET
+  /api/runs/{id}`. Opening a version 5 database sets the stored mode of past runs whose configuration says sweep to
+  `sweep` (data only, no table or column changes). Older releases refuse a version 6 database, so back it up first; the
+  previous release recorded sweeps as `search`. See "Stored run mode" in `docs/architecture.md`.
+- Web UI: plainer result wording ("No failure seen", "Stopped early", "Failed again on replay"; a run that ran no trials
+  never reads as a pass), colour tokens with an indigo accent and a contrast test, a wider figures column and a Runs
+  table that fits a phone, and page titles, a skip link and absolute times with the relative time beneath.
+- Java is marked supported on a Java-specific configuration in `docs/support-matrix.md`, with the configuration it
+  passed on and the caveat that a replay matched only from the same paths as the recording.
+- A sweep keeps a failure row for each property's first failing seed, not only for the lowest failing seed, and handles
+  Ctrl-C.
+- Every SQLite write transaction in the store starts with `BEGIN IMMEDIATE`, so a wait for another writer happens at the
+  start of the transaction, under the 5 second busy timeout, instead of failing at once with `SQLITE_BUSY`.
+- wasmtime is updated to 49.0.5, which fixes RUSTSEC-2026-0422, RUSTSEC-2026-0423 and RUSTSEC-2026-0424. The `wasm`
+  backend uses only the core-module API, so the advisories were not reachable from it.
+- The .NET SDK used for the fixture build record is pinned: `scripts/record-global.json` holds the exact version, and
+  `global.json` at the repository root sets a floor of 10.0.100, so a newer SDK on a runner image is no longer used by
+  the record.
+
 ### Fixed
 
 - A process target whose program (`command[0]`) cannot be started is now a configuration error with a message naming
@@ -288,7 +346,40 @@
   input read as before. The environment-mismatch message (409, `environment_mismatch`) follows the same rule and now
   also ends in `...` when it was cut, as does a property id longer than 500 characters in a `GET /api/search` answer.
 
+- The Java SDK reopens a regular-file stderr only when `/proc/self/fdinfo/2` says it was opened for writing; with no
+  fdinfo (macOS) or a read-only descriptor the file is never written.
+- A trial that runs past its time limit no longer leaves temporary files in the host temp directory when `--base-env` is
+  `minimal` or `empty`: each Hermit trial gets a private directory that the engine removes itself. With the default base
+  environment, Hermit's private guest `/tmp` and `/etc/group` copy can still be left behind.
+- A strict verify accepts a guest that exits 0 (it passed `--verify-allow=failure`, which refused one) and reports why a
+  verify did not run; it also requires that the verify run failed the way the recording did. Its Fail wording in the
+  checks table and the line for several failed properties were corrected, and the staging file
+  `.hermit-verify-summary-*` is removed from the working directory after a verify is killed, except one Hermit put in
+  `ignored/` of an enclosing git work tree.
+- The service fixture's build record is shown in the CI step summary even when the record script fails.
+- C SDK: the events file (`HAIRSPRING_EVENTS_FILE`) is opened non-blocking and must be a regular file; a FIFO or a
+  device is refused, the event is counted in `end.dropped` and the report falls back to stderr. Before, a FIFO with no
+  reader hung.
+- C SDK: with g++ in C++ on ELF x86-64 and aarch64, call sites inside C++ templates are catalogued; with g++ 13.3 they
+  were missing from the `catalog` and `assert` lines, and a file with both an inline-function site and an
+  ordinary-function site was rejected.
+- Trial-directory clean-up uses `O_DIRECTORY` and `O_NOFOLLOW` values chosen for each listed Linux architecture (x86,
+  x86-64, riscv, loongarch, arm, aarch64, powerpc), stops the build on any other Linux architecture instead of using
+  numbers that mean other flags, and walks directories through `/proc/self/fd`.
+- The web UI rounds rates as the CLI report does (upper bounds up, lower bounds down, `<0.01%` below 0.01%), so 0 hits
+  in 300 rated trials reads 1.00% in both. Rate text prints counts without thousands separators, as the server's does.
+- The service-layer check refuses a `command_json` in which any object repeats a key, with an error distinct from
+  malformed JSON. No server route calls it yet.
+
 ### Documentation
 
 - `docs/supply-chain.md` and SECURITY.md note a known advisory (RUSTSEC-2026-0344, `ruzstd`) in the pinned Hermit
   build, when it can be reached, and that the fix will ship with the next pinned Hermit update.
+- The Developer Certificate of Origin (`DCO`) and a sign-off statement in `CONTRIBUTING.md`: contributions are accepted
+  under Apache-2.0 with a `Signed-off-by` line on every commit. There is no automated check yet.
+- README and `docs/quickstart.md`: a web UI tour with screenshots (`docs/images/ui/`) and
+  `scripts/capture-ui-screenshots.mjs`, which regenerates them in a scratch directory.
+- `docs/quickstart.md` runs the install scripts with `bash` (they are not executable files), uses the `wrk_` and `run_`
+  id prefixes the server issues, and the README names all 13 MCP tools.
+- `docs/architecture.md` documents the per-token worker registration limit (`--register-limit`, 100 an hour by default,
+  `0` disables). SECURITY.md says why anonymous IPv6 limiting stays at a /64.
