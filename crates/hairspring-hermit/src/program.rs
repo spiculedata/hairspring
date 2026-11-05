@@ -36,11 +36,15 @@ const GUEST_VIEW_FLAGS: [&str; 10] = [
 
 /// The exit status Hermit gives a program it cannot start, as GNU `env` does.
 const HERMIT_PROGRAM_NOT_FOUND_EXIT: i32 = 127;
-/// How Hermit says it could not start the program: a path that is not there, and a bare name not on the guest `PATH`.
-const HERMIT_NOT_FOUND_MESSAGES: [(&str, &str); 2] = [
-    ("Program ", " does not exist or is not accessible"),
-    ("Could not resolve program ", " in the guest PATH"),
-];
+/// How Hermit says it could not start `program`: a path that is not there (named as given), and a bare name not on the
+/// guest `PATH` (named in quotes). Matching the whole phrase with the target's own program means a guest that prints
+/// these words about some other program is not taken for Hermit.
+fn hermit_not_found_phrases(program: &str) -> [String; 2] {
+    [
+        format!("Program {program} does not exist or is not accessible"),
+        format!("Could not resolve program {program:?} in the guest PATH"),
+    ]
+}
 
 /// Targets already warned about in this process, so a run that looks the program up several times warns once.
 static WARNED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
@@ -54,20 +58,16 @@ fn changes_guest_view(hermit_args: &[String]) -> bool {
     })
 }
 
-/// The line of Hermit's standard error that says it could not start the program, when the trial ended with Hermit's
-/// "program not found" status.
-pub(crate) fn hermit_refused_program(t: &Trial) -> Option<String> {
+/// The line of Hermit's standard error that says it could not start the target's program (`command[0]`), when the
+/// trial ended with Hermit's "program not found" status.
+pub(crate) fn hermit_refused_program(p: &ProcessSpec, t: &Trial) -> Option<String> {
     if t.exit_code != Some(HERMIT_PROGRAM_NOT_FOUND_EXIT) {
         return None;
     }
+    let phrases = hermit_not_found_phrases(p.command.first()?);
     t.stderr
         .lines()
-        .find(|line| {
-            HERMIT_NOT_FOUND_MESSAGES.iter().any(|(start, rest)| {
-                line.find(start)
-                    .is_some_and(|at| line[at + start.len()..].contains(rest))
-            })
-        })
+        .find(|line| phrases.iter().any(|phrase| line.contains(phrase.as_str())))
         .map(|line| line.trim().to_string())
 }
 
@@ -361,19 +361,26 @@ mod tests {
         }
     }
 
+    fn refused(program: &str, t: &Trial) -> Option<String> {
+        let scheduler = Default::default();
+        let env = std::collections::BTreeMap::new();
+        let command = vec![program.to_string()];
+        hermit_refused_program(&spec(&command, &env, None, &scheduler), t)
+    }
+
     #[test]
     fn hermits_own_refusal_to_start_the_program_is_recognised() {
         let missing = trial(
             127,
             "Error: Program /opt/app/svc does not exist or is not accessible. Check the path and any --mount or --bind target.\n",
         );
-        let line = hermit_refused_program(&missing).expect("recognised");
+        let line = refused("/opt/app/svc", &missing).expect("recognised");
         assert!(line.contains("/opt/app/svc does not exist"), "{line}");
         let unresolved = trial(
             127,
             "Error: Could not resolve program \"mytool\" in the guest PATH. Check PATH or use an absolute executable path.\n",
         );
-        assert!(hermit_refused_program(&unresolved).is_some());
+        assert!(refused("mytool", &unresolved).is_some());
         let scheduler = Default::default();
         let env = std::collections::BTreeMap::new();
         let command = vec!["/opt/app/svc".to_string()];
@@ -387,12 +394,35 @@ mod tests {
     #[test]
     fn a_program_that_exits_127_itself_is_not_taken_for_a_missing_one() {
         assert_eq!(
-            hermit_refused_program(&trial(127, "sh: frobnicate: command not found\n")),
+            refused(
+                "/bin/sh",
+                &trial(127, "sh: frobnicate: command not found\n")
+            ),
             None
         );
-        assert_eq!(hermit_refused_program(&trial(127, "")), None);
+        assert_eq!(refused("/bin/sh", &trial(127, "")), None);
         // Hermit's words with another status are the program's own output.
         let words = "Error: Program /x does not exist or is not accessible.\n";
-        assert_eq!(hermit_refused_program(&trial(1, words)), None);
+        assert_eq!(refused("/x", &trial(1, words)), None);
+    }
+
+    #[test]
+    fn hermits_words_about_another_program_are_the_guests_own_output() {
+        let other_path = trial(
+            127,
+            "Error: Program /opt/other does not exist or is not accessible.\n",
+        );
+        assert_eq!(refused("/bin/sh", &other_path), None);
+        let other_name = trial(
+            127,
+            "Error: Could not resolve program \"helper\" in the guest PATH.\n",
+        );
+        assert_eq!(refused("mytool", &other_name), None);
+        // A prefix of the program's name is not the program.
+        let prefix = trial(
+            127,
+            "Error: Program /opt/app/svc does not exist or is not accessible.\n",
+        );
+        assert_eq!(refused("/opt/app/sv", &prefix), None);
     }
 }

@@ -231,7 +231,7 @@ impl HermitBackend {
     /// Classifies a trial. A timeout is only a violation when the target says a hang is the bug. Hermit's own refusal to
     /// start the program is a configuration error, whatever else the trial printed.
     pub(crate) fn verdict(&self, p: &ProcessSpec, t: &Trial, timeout: Duration) -> Verdict {
-        if let Some(line) = crate::program::hermit_refused_program(t) {
+        if let Some(line) = crate::program::hermit_refused_program(p, t) {
             return Verdict::Infra(crate::program::refused_program_message(p, &line));
         }
         match classify(t, timeout.as_secs()) {

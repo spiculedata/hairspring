@@ -244,15 +244,17 @@
 
 ### Fixed
 
-- A process target whose program (`command[0]`) cannot be started is now a configuration error: exit 2 with
-  `target NAME: program PATH not found or not executable`, instead of exit code 127 on every seed reported as a
-  failure. Before any trial runs, the program is looked up on the host the way Hermit starts it by default: a name with
+- A process target whose program (`command[0]`) cannot be started is now a configuration error with a message naming
+  the target and the program, `target NAME: program PATH not found or not executable` (exit 2), found before any trial
+  runs. With the pinned Hermit a missing program was already an error, worded as a Hermit failure. Before any trial
+  runs, the program is looked up on the host the way Hermit starts it by default: a name with
   a `/` relative to the target's `cwd`, a bare name on the guest's `PATH` (the target's own `PATH` if it sets one).
   When `hermit_args` contain `--mount`, `--bind`, `--tmp`, `--image`, `--env` (`-e`), `--base-env`, `--workdir`,
   `--config` or `--from`, the guest may see other files or another `PATH`, so a program missing on the host is only a
   warning and Hermit decides. After a trial, Hermit's own refusal to start the program (exit 127 with its "does not
-  exist or is not accessible" or "Could not resolve program" message) is reported as the same configuration error; a
-  program that exits 127 itself is still judged by its exit status. The checks run where the backend runs, so a remote
+  exist or is not accessible" or "Could not resolve program" message about the target's own program) is reported as the
+  same configuration error, with Hermit's line added; a program that exits 127 itself is still judged by its exit
+  status. The checks run where the backend runs, so a remote
   worker checks its own machine.
 - `hairspring doctor --process-backend` no longer blames `perf_event_paranoid` when the kernel refuses a hardware
   counter on a machine with no hardware PMU registered (no `cpu` or `cpu_core` under

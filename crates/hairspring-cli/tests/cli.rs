@@ -736,6 +736,21 @@ fn a_program_that_exits_127_itself_is_still_a_failure() {
 }
 
 #[test]
+fn a_program_that_prints_hermits_words_about_another_program_is_still_a_failure() {
+    let (d, hermit) = process_project("guest-says-missing");
+    std::fs::write(
+        d.join("hairspring.toml"),
+        "[target.svc]\nkind = \"process\"\ncommand = [\"/bin/sh\", \"-c\", \"echo 'Error: Program /opt/other does not exist or is not accessible.' >&2; exit 127\"]\n[target.svc.budget]\nmax_trials = 2\n",
+    )
+    .unwrap();
+    let o = hairspring_env(&d, &["test", "svc"], &hermit);
+    let both = format!("{}{}", out(&o), err(&o));
+    assert_eq!(o.status.code(), Some(1), "{both}");
+    assert!(out(&o).contains("FAILED"), "{both}");
+    assert!(!both.contains("not found or not executable"), "{both}");
+}
+
+#[test]
 fn hermit_args_that_change_the_guest_view_only_warn_about_a_program_missing_on_the_host() {
     let (d, _) = process_project("guest-view");
     // Hermit would find the program through the PATH it is given; this one just passes.
