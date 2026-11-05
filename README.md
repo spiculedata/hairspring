@@ -42,7 +42,7 @@ $ hairspring replay .hairspring/bundles/pubsub-buggy-d3858727.hairspring   # exi
 | **Shrink** | Delta-debugging to a 1-minimal trace that preserves the *same* failure |
 | **Replay** | One-file text bundles; replay is exact, checked against the program version |
 | **Check determinism** | `hairspring doctor` runs the same seed twice and reports the first divergence |
-| **Use it from anywhere** | CLI, REST + live events, web UI, **MCP server for AI agents**, GitHub Action, Claude Code plugin |
+| **Use it from anywhere** | CLI, REST + live events ([HTTP API reference](docs/api.md)), web UI, **MCP server for AI agents**, GitHub Action ([Hairspring in CI](docs/ci.md)), Claude Code plugin |
 | **Scale out** | SQLite locally; PostgreSQL + remote workers for teams; Docker Compose included |
 
 ## Backends: how much determinism do you get?
@@ -73,7 +73,7 @@ New to Hairspring? Start with the [wiki](https://github.com/spiculedata/hairspri
 then Running your own software. Pre-release binaries are on the
 [releases page](https://github.com/spiculedata/hairspring/releases). This README and `docs/` describe the `main` branch,
 which is ahead of the pre-release: [docs/upgrading.md](docs/upgrading.md) lists what the pre-release lacks and how to
-tell which build you have. To run a server for a team, see [docs/deploy.md](docs/deploy.md).
+tell which build you have. To run a server for a team, see [docs/deploy.md](docs/deploy.md); to run it in CI, see [docs/ci.md](docs/ci.md); for the HTTP API, see [docs/api.md](docs/api.md).
 
 Questions and bugs: [open an issue](https://github.com/spiculedata/hairspring/issues/new/choose) and include the output of
 `hairspring --version`, `uname -a` and, if you use the process backend, `hairspring doctor --process-backend`. Security problems: do not open an issue; see
