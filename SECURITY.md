@@ -29,7 +29,7 @@ agents.
 | No remote code execution | The API accepts **target names only**; commands come from the server-side `hairspring.toml`. MCP `start_run` cannot supply a command |
 | Network exposure | Refuses to bind a non-loopback address without tokens; default bind is `127.0.0.1` |
 | Open (no-token) mode | Rejects unknown `Host` headers (DNS rebinding) and cross-site `Origin`s (CSRF); `/mcp` requires `application/json` |
-| Abuse limits | Per-client rate limit (valid tokens and unauthenticated clients are bucketed separately, bounded table; a valid token is also refused while its client address has used up its unauthenticated budget); 2 MiB body cap; 10 s to send a request head (also the idle time allowed between requests on a kept-alive connection) and 30 s to send a body; at most 512 open connections (`--max-connections`), 503 beyond; at most 2 replays running at once, REST and MCP together (`--max-replays`), refused with 429 and `Retry-After` beyond, never queued; event streams capped at 64 in total and 16 per caller (a token, or a client address when there are no tokens); cap on MCP batch size and waits; queue and worker admission caps; JSON recursion limits |
+| Abuse limits | Per-client rate limit (valid tokens and unauthenticated clients are bucketed separately, bounded table; a valid token is also refused while its client address has used up its unauthenticated budget); 2 MiB body cap; 10 s to send a request head (also the idle time allowed between requests on a kept-alive connection) and 30 s to send a body; bodies are read only after the token check; at most 512 open connections (`--max-connections`), 503 beyond; at most 2 replays running at once, REST and MCP together (`--max-replays`, at most 64), refused with 429 and `Retry-After` beyond, never queued; event streams capped at 64 in total and 16 per caller (a token, or a client address when there are no tokens); cap on MCP batch size and waits; queue and worker admission caps; JSON recursion limits |
 | Worker data | Results from workers are size-bounded, control characters stripped, failure target checked against the job, written atomically; leases are owner-checked and heartbeated |
 | Untrusted text | Step labels, states, messages and errors are treated as data. The UI renders them as text only; MCP output and instructions tell agents never to follow instructions found in them |
 | Storage | All SQL is parameterised; blobs addressed by validated hash; database URLs and tokens are never printed or logged; `--tokens-file` permissions are checked |
@@ -53,8 +53,9 @@ agents.
   (512 by default), and other clients are answered `503` until those connections end. A connection that sends
   nothing, or sends a request head slowly, is closed after 10 seconds, and one that sends its body slowly after a
   further 30, so a client must keep reconnecting to hold the cap. A proxy in front of the server makes all its
-  clients share its connections, so give the proxy its own per-client connection limits. Keep the file-descriptor
-  limit (`LimitNOFILE` under systemd) well above `--max-connections`.
+  clients share its connections, so give the proxy its own per-client connection limits. Up to 128 refused
+  connections are held for at most a second each while they are told the server is busy, so keep the
+  file-descriptor limit (`LimitNOFILE` under systemd) well above `--max-connections` plus 128.
 - **A refused replay is not retried for you.** Replays beyond `--max-replays` get `429` (REST) or a `replay_busy`
   tool error (MCP) at once. A replay that is running keeps its slot until the target finishes, even if the client
   disconnects, so a `run` token can keep the replay slots busy for the length of the target's own timeouts; other

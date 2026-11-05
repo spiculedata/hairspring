@@ -21,11 +21,11 @@ pub struct ServeArgs {
     /// Workers one token may register per hour (0 disables the limit). Counted in memory: a restart resets the count.
     #[arg(long, default_value_t = 100)]
     pub register_limit: u32,
-    /// Open connections allowed at once (1 to 1000000); a connection beyond it is answered 503 and closed. Keep it
-    /// below the process's file-descriptor limit.
+    /// Open connections allowed at once (1 to 1000000); a connection beyond it is answered 503 and closed (just closed
+    /// while more than 128 are being refused at once). Keep it below the process's file-descriptor limit.
     #[arg(long, default_value_t = hairspring_server::DEFAULT_MAX_CONNECTIONS)]
     pub max_connections: usize,
-    /// Replays allowed to run on the server at once, REST and MCP together (at least 1). A replay beyond it is
+    /// Replays allowed to run on the server at once, REST and MCP together (1 to 64). A replay beyond it is
     /// refused with 429 and `Retry-After`, not queued.
     #[arg(long, default_value_t = hairspring_mcp::DEFAULT_MAX_REPLAYS)]
     pub max_replays: usize,

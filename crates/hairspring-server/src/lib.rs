@@ -1,6 +1,8 @@
 //! Hairspring server: REST API, SSE, MCP endpoint, bearer-token auth and the embedded web UI.
 mod api;
 mod auth;
+#[cfg(test)]
+mod body_order_tests;
 mod conn;
 mod error;
 mod limits;
@@ -48,6 +50,8 @@ const DEFAULT_BODY_READ_TIMEOUT: Duration = Duration::from_secs(30);
 pub const DEFAULT_MAX_CONNECTIONS: usize = 512;
 /// Largest connection cap accepted.
 const MAX_MAX_CONNECTIONS: usize = 1_000_000;
+/// Largest replay cap accepted. Each replay holds a blocking thread while the target runs.
+pub const MAX_MAX_REPLAYS: usize = 64;
 /// Content-Security-Policy for API and MCP responses that do not set their own: nothing may load, nothing may frame.
 const API_CSP: &str = "default-src 'none'; frame-ancestors 'none'";
 /// Default registrations per token per window: far above a fleet restarting, far below the worker cap.
@@ -133,8 +137,8 @@ impl ServerConfig {
         if !(1..=MAX_MAX_CONNECTIONS).contains(&self.max_connections) {
             return Err(invalid("the connection cap must be between 1 and 1000000"));
         }
-        if self.max_replays == 0 {
-            return Err(invalid("the replay cap must be at least 1"));
+        if !(1..=MAX_MAX_REPLAYS).contains(&self.max_replays) {
+            return Err(invalid("the replay cap must be between 1 and 64"));
         }
         if self.header_read_timeout.is_zero() || self.body_read_timeout.is_zero() {
             return Err(invalid("read timeouts must be longer than zero"));
@@ -379,10 +383,10 @@ fn router(state: AppState) -> Router {
         .route("/mcp", post(api::mcp))
         .fallback(ui::handler)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
-        // Below the open-mode guard and the rate limit, so a refused request is not read first.
+        // Only wraps the body; it is read by the handler's extractor, after the token check.
         .layer(middleware::from_fn_with_state(
             state.clone(),
-            limits::read_body_in_time,
+            limits::time_body,
         ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -468,6 +472,7 @@ pub fn start(config: ServerConfig, svc: Service, engine: Engine) -> io::Result<R
     let limits = conn::ConnLimits {
         header_read_timeout: config.header_read_timeout,
         max_connections: config.max_connections,
+        max_refusals: conn::MAX_REFUSALS,
     };
     let workers = spawn_workers(config.embedded_workers, &svc, &engine, &stopping);
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
@@ -515,14 +520,14 @@ mod tests {
     use hairspring_store::{SqliteStore, Store};
 
     const TOKEN: &str = "read-token-0123456789abcdef";
-    const LIMIT: u32 = 2;
+    pub(crate) const LIMIT: u32 = 2;
     const WINDOW: Duration = Duration::from_millis(600);
 
     fn state_with_window(window: Duration) -> AppState {
         state_with(window, Auth::from_spec(&format!("{TOKEN}:read")).unwrap())
     }
 
-    fn state_with(window: Duration, auth: Auth) -> AppState {
+    pub(crate) fn state_with(window: Duration, auth: Auth) -> AppState {
         let registry = Arc::new(default_registry());
         let engine = Engine::new(registry.clone(), Config::from_registry(&registry));
         let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());

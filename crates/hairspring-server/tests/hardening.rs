@@ -130,12 +130,9 @@ fn connections_beyond_the_cap_are_refused_until_one_closes() {
     let mut third = connect(srv.addr());
     let refused = read_until_closed(&mut third);
 
-    // Assert: told the server is busy (or simply closed), never served.
-    assert!(
-        refused.is_empty() || refused.starts_with("HTTP/1.1 503"),
-        "{refused}"
-    );
-    assert!(!refused.contains(" 200 "), "{refused}");
+    // Assert: told the server is busy, with a time to come back, and never served.
+    assert!(refused.starts_with("HTTP/1.1 503"), "{refused}");
+    assert!(refused.contains("retry-after: 1"), "{refused}");
 
     // A slot frees up when a connection closes.
     drop(idle_one);
@@ -159,6 +156,8 @@ fn limits_that_would_refuse_everything_are_refused_at_start() {
     };
     assert!(attempt(&|c| c.max_connections = 0).is_some());
     assert!(attempt(&|c| c.max_replays = 0).is_some());
+    assert!(attempt(&|c| c.max_replays = hairspring_server::MAX_MAX_REPLAYS + 1).is_some());
+    assert!(attempt(&|c| c.max_replays = hairspring_server::MAX_MAX_REPLAYS).is_none());
     assert!(attempt(&|c| c.header_read_timeout = Duration::ZERO).is_some());
     assert!(attempt(&|c| c.body_read_timeout = Duration::ZERO).is_some());
     assert!(attempt(&|_| {}).is_none());
@@ -252,4 +251,79 @@ fn read_until_closed_within(s: &mut TcpStream, limit: Duration) -> String {
         }
     }
     String::from_utf8_lossy(&got).into_owned()
+}
+
+#[test]
+fn every_connection_over_the_cap_is_told_the_server_is_busy() {
+    // Arrange: one slot, held by an idle client.
+    let srv = boot(|c| c.max_connections = 1);
+    let _idle = connect(srv.addr());
+    std::thread::sleep(Duration::from_millis(200));
+
+    // Act: several refused clients that have each already sent a request.
+    let clients: Vec<TcpStream> = (0..8)
+        .map(|_| {
+            let mut s = connect(srv.addr());
+            s.write_all(b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+                .unwrap();
+            s
+        })
+        .collect();
+    let replies: Vec<String> = clients
+        .into_iter()
+        .map(|mut s| read_until_closed(&mut s))
+        .collect();
+
+    // Assert
+    for r in &replies {
+        assert!(r.starts_with("HTTP/1.1 503"), "{r:?}");
+    }
+}
+
+const TOKEN: &str = "run-token-0123456789abcdef";
+
+fn boot_with_tokens() -> RunningServer {
+    boot(|c| c.auth = Auth::from_spec(&format!("{TOKEN}:run")).unwrap())
+}
+
+/// Sends a request head that promises a large body and asks to be told to go ahead first, then reads the reply
+/// without sending any of the body.
+fn head_promising_a_large_body(addr: SocketAddr, authorization: Option<&str>) -> String {
+    let mut s = connect(addr);
+    let auth = authorization
+        .map(|a| format!("Authorization: {a}\r\n"))
+        .unwrap_or_default();
+    s.write_all(
+        format!(
+            "POST /api/runs HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n{auth}\
+Content-Length: 2000000\r\nExpect: 100-continue\r\n\r\n"
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    let mut buf = [0u8; 4096];
+    let n = s.read(&mut buf).expect("a reply without sending the body");
+    String::from_utf8_lossy(&buf[..n]).into_owned()
+}
+
+#[test]
+fn a_wrong_or_missing_token_gets_401_before_the_body_is_sent() {
+    // Arrange
+    let srv = boot_with_tokens();
+
+    for auth in [None, Some("Bearer wrong-token-0123456789abcdef")] {
+        // Act
+        let reply = head_promising_a_large_body(srv.addr(), auth);
+
+        // Assert: refused at once, not told to go ahead and send the body.
+        assert!(reply.starts_with("HTTP/1.1 401"), "{auth:?}: {reply}");
+        assert!(!reply.contains("100 Continue"), "{auth:?}: {reply}");
+    }
+}
+
+#[test]
+fn a_valid_token_is_told_to_send_its_body() {
+    let srv = boot_with_tokens();
+    let reply = head_promising_a_large_body(srv.addr(), Some(&format!("Bearer {TOKEN}")));
+    assert!(reply.starts_with("HTTP/1.1 100 Continue"), "{reply}");
 }

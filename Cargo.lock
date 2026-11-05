@@ -856,7 +856,6 @@ dependencies = [
  "hairspring-service",
  "hairspring-store",
  "hairspring-worker",
- "http-body-util",
  "hyper",
  "hyper-util",
  "rust-embed",

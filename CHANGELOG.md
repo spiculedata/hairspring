@@ -101,11 +101,13 @@
 - Server hardening. The server now closes a connection that has not sent a complete request head within 10 seconds
   (this is also the idle time allowed between requests on a kept-alive connection), answers `408` and closes the
   connection when a request body has not arrived within 30 seconds, and allows at most 512 open connections
-  (`hairspring serve --max-connections N`); a connection beyond that is answered `503` and closed. These deadlines do
-  not apply while a response is being produced or sent, so event streams and long replays are unaffected. The server
-  speaks HTTP/1.1 only; cleartext HTTP/2 is no longer accepted.
+  (`hairspring serve --max-connections N`); a connection beyond that is answered `503` with `Retry-After: 1` and
+  closed (while more than 128 connections are being refused at once, further ones are closed without a reply). These
+  deadlines do not apply while a response is being produced or sent, so event streams and long replays are
+  unaffected. A request body is still read only after its token has been checked, so a request with a missing or
+  wrong token is answered `401` without its body being read. The server speaks HTTP/1.1 only.
 - At most 2 replays run on the server at once, REST `/api/replay` and MCP `replay_bundle` together
-  (`hairspring serve --max-replays N`). A replay over the limit is refused at once: REST answers `429` with
+  (`hairspring serve --max-replays N`, 1 to 64). A replay over the limit is refused at once: REST answers `429` with
   `Retry-After: 5`, and the MCP tool returns a tool error with the code `replay_busy`.
 - One caller (a token, or a client address when the server has no tokens) may hold at most 16 of the 64 event-stream
   slots; past that the stream request is answered `429`.

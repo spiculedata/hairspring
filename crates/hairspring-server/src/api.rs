@@ -300,9 +300,10 @@ pub async fn replay(
     ApiJson(body): ApiJson<ReplayBody>,
 ) -> Result<Json<Value>, ApiError> {
     caller.need(Role::Run)?; // replay executes target code, so it needs more than read access
-                             // A replay holds a blocking thread for as long as the target runs, so only a few may run at once; the rest are
-                             // refused now rather than queued. The permit moves into the task, so the slot stays taken until the replay ends
-                             // even if the client goes away.
+
+    // A replay holds a blocking thread for as long as the target runs, so only a few may run at once; the rest are
+    // refused now rather than queued. The permit moves into the task, so the slot stays taken until the replay ends
+    // even if the client goes away.
     let permit = s.replays.try_acquire().ok_or_else(|| {
         ApiError::too_many_requests(
             "too many replays are running; try again shortly",
