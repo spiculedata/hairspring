@@ -43,11 +43,21 @@ fn counts(s: &Section) -> Value {
     })
 }
 
+/// The JSON key of a reason the store kept a run for. The store's `active` (found queued or running when it checked)
+/// gets its own key, because `active` in `kept` already counts the runs the selection skipped as still queued or
+/// running.
+fn kept_key(reason: &str) -> String {
+    match reason {
+        "active" => "active_when_checked".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
 fn kept_reasons(s: &Section) -> Map<String, Value> {
     s.report
         .kept
         .iter()
-        .map(|(k, v)| ((*k).to_owned(), json!(v)))
+        .map(|(k, v)| (kept_key(k), json!(v)))
         .collect()
 }
 

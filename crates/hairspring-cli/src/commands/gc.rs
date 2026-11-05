@@ -20,6 +20,9 @@ use std::path::Path;
 const MS_PER_HOUR: i64 = 3_600_000;
 /// Hex digits of the run-set digest shown in the report.
 const DIGEST_LEN: usize = 16;
+/// Said when another `gc` holds the store's retention lock.
+pub const ANOTHER_GC: &str =
+    "another hairspring gc is running against this database; nothing was looked at or removed. Run it again when that one has finished";
 
 /// Parses `30d`, `12h` or `2w` into milliseconds. A whole number above zero and one of those three units.
 pub fn parse_age(text: &str) -> Result<i64, String> {
@@ -121,6 +124,11 @@ pub fn run(ctx: &Ctx, args: &GcArgs, out: &mut dyn Write, err: &mut dyn Write) -
     let cutoff = cutoff_for(args.cutoff, &args.older_than, now_ms())?;
     let states = selected_states(args);
     let store = ctx.store()?;
+    // One gc at a time per database: held until this function returns.
+    let Some(_gc_lock) = store.retention_lock()? else {
+        writeln!(err, "hairspring: {ANOTHER_GC}")?;
+        return Ok(crate::EXIT_ERROR);
+    };
     let (ids, skipped) = select(&*store, cutoff, &states)?;
 
     let plan = store.retention_delete(&ids, cutoff, true)?;

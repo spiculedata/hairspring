@@ -493,8 +493,11 @@ whole. The command works the same on SQLite and PostgreSQL (`HAIRSPRING_DATABASE
 What it does not do: the database file does not shrink (SQLite reuses the space; run `VACUUM` to give it back), files
 outside the bundle directory are never touched, and a symbolic link is never followed. Run `--apply` when no worker is
 running jobs: a failure found while `gc` runs, whose bundle text is identical to one being removed, can be left
-without its stored bundle. On SQLite even the report
-holds the database's write lock while it counts, so writes from a server or worker wait for it. After a removal, the web UI and API answer 404 for that run, and the UI says "This run does not exist
+without its stored bundle. The report takes no lock that a server or worker waits for: its counts are an estimate as of
+the moment it read them, and `--apply` checks everything again. An apply holds its locks in short batches, but each
+batch reads the whole trials table, so on a large store run it off-peak. Only one `gc` runs against a database at a
+time: a second one says "another hairspring gc is running against this database", changes nothing and exits with
+status 2. After a removal, the web UI and API answer 404 for that run, and the UI says "This run does not exist
 here. It may have been removed."; it does not yet say that retention removed it. See
 [Retention](architecture.md#retention-hairspring-gc) for the rules and the failure cases.
 

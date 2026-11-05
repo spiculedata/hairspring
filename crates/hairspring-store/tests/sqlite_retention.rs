@@ -70,3 +70,66 @@ fn a_blob_a_trial_is_being_stored_against_is_not_removed() {
     drop(s);
     std::fs::remove_dir_all(path.parent().unwrap()).ok();
 }
+
+/// A dry run takes no write lock: it finishes, with the right counts, while another connection holds the database's
+/// write lock (it would otherwise wait out the busy timeout and fail), and that writer can still commit.
+#[test]
+fn a_dry_run_reads_while_another_connection_holds_the_write_lock() {
+    let path = temp_db("dry");
+    let s = SqliteStore::open(&path).unwrap();
+    let old = new_run(&s, "sim");
+    let mut b = batch(&passes(2), 0);
+    b.trials[0].output = Some(b"old output".to_vec());
+    let job = ingest_batch(&s, &old.id, &b);
+    assert!(s.complete_job(&job.id, "w").unwrap());
+    finish(&s, &old.id);
+
+    let writer = Connection::open(&path).unwrap();
+    writer
+        .execute_batch(
+            "BEGIN IMMEDIATE; INSERT INTO blobs(hash,data) VALUES ('written meanwhile', CAST('x' AS BLOB));",
+        )
+        .unwrap();
+    let started = std::time::Instant::now();
+    let report = s
+        .retention_delete(std::slice::from_ref(&old.id), i64::MAX, true)
+        .unwrap();
+    assert!(
+        started.elapsed() < BUSY_TIMEOUT,
+        "the dry run did not wait for the writer"
+    );
+    writer.execute_batch("COMMIT").unwrap();
+
+    assert_eq!(report.run_ids, vec![old.id.clone()]);
+    assert_eq!((report.trials, report.blobs), (2, 1));
+    assert!(s.get_run(&old.id).unwrap().is_some(), "nothing was removed");
+    assert!(s.get_blob("written meanwhile").unwrap().is_some());
+    drop(s);
+    std::fs::remove_dir_all(path.parent().unwrap()).ok();
+}
+
+/// Two gc commands on one database take turns: the second cannot take the retention lock until the first lets go,
+/// whichever connection or process asks.
+#[test]
+fn only_one_holder_of_the_retention_lock_at_a_time() {
+    let path = temp_db("lock");
+    let first = SqliteStore::open(&path).unwrap();
+    let second = SqliteStore::open(&path).unwrap();
+    let held = first.retention_lock().unwrap().expect("free at first");
+    assert!(second.retention_lock().unwrap().is_none());
+    assert!(first.retention_lock().unwrap().is_none(), "not re-entrant");
+    let other = temp_db("lock-other");
+    let elsewhere = SqliteStore::open(&other).unwrap();
+    assert!(
+        elsewhere.retention_lock().unwrap().is_some(),
+        "another database is not affected"
+    );
+    drop(held);
+    assert!(second.retention_lock().unwrap().is_some());
+    let memory = SqliteStore::open_in_memory().unwrap();
+    let a = memory.retention_lock().unwrap();
+    assert!(a.is_some(), "an in-memory database has nothing to share");
+    drop((first, second, elsewhere));
+    std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    std::fs::remove_dir_all(other.parent().unwrap()).ok();
+}

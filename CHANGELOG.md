@@ -21,7 +21,10 @@
   still the ones that were read and hashed. `--json` prints one JSON document; exit 2 for an error, a refused
   `--apply`, an apply that removed fewer runs than the report showed, or a removal that stopped part-way. Run
   `--apply` when no worker is running jobs: a new failure whose bundle text is identical to one being removed can be
-  left without its stored bundle. No schema
+  left without its stored bundle. The report takes no lock that a worker or the server waits for (its counts are an
+  estimate as of one snapshot, which the apply checks again); the apply works in short batches, each checking the
+  blobs of its runs together, but each batch reads the whole trials table, so run it off-peak on a large store. Only
+  one `gc` runs against a database at a time; a second one says another is running and exits 2. No schema
   change; SQLite and PostgreSQL behave the same. The database file does not shrink, and the UI still shows a removed
   run as "may have been removed" (no "expired" state yet). See "Retention" in `docs/architecture.md`.
 - `GET /api/me` returns the caller's role (`read`, `run` or `admin`), what that role may do, and whether the server is

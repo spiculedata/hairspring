@@ -140,6 +140,23 @@ fn the_reasons_the_apply_kept_runs_are_reported() {
     assert_eq!(v["would_remove"]["runs"], 2);
 }
 
+/// The selection skips runs still queued or running (`active`); the store may also find a selected run active again
+/// when it checks. Both counts are reported, under their own keys.
+#[test]
+fn runs_skipped_as_active_and_runs_found_active_when_checked_are_both_counted() {
+    let skipped = BTreeMap::from([("active".to_owned(), 2)]);
+    let h = header(&skipped);
+    let planned = section(&["run_a"], &[("active", 1)]);
+    let applied = section(&[], &[("active", 3)]);
+    let mut doc = Vec::new();
+    gc_report::write_json(&mut doc, &h, &planned, Some(&applied), None, &[]).unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&doc).unwrap();
+    assert_eq!(v["kept"]["active"], 2, "{v}");
+    assert_eq!(v["kept"]["active_when_checked"], 1, "{v}");
+    assert_eq!(v["kept_when_removing"]["active_when_checked"], 3, "{v}");
+    assert_eq!(v["kept_when_removing"].get("active"), None, "{v}");
+}
+
 #[test]
 fn a_dry_run_names_the_exact_arguments_that_remove_what_it_shows() {
     let skipped = BTreeMap::new();

@@ -221,3 +221,230 @@ fn a_blob_a_trial_is_being_stored_against_is_not_removed() {
     );
     assert_eq!(report.blobs, 0, "{report:?}");
 }
+
+/// A unit that fails on PostgreSQL is reported with the database's own message and SQLSTATE, so a deadlock, a foreign
+/// key that kept a row, and a missing table can be told apart.
+#[test]
+fn a_failed_unit_reports_the_database_message_and_sqlstate() {
+    let Some(url) = url() else { return };
+    let schema = new_schema("re");
+    let s = store(&url, &schema);
+    let old = new_run(&*s, "sim");
+    ingest_verdicts(&*s, &old.id, &passes(1));
+    finish(&*s, &old.id);
+    close_jobs(&*s, &old.id);
+    raw(&url, &schema)
+        .batch_execute("DROP TABLE run_coverage")
+        .unwrap();
+
+    let report = s
+        .retention_delete(std::slice::from_ref(&old.id), i64::MAX, false)
+        .unwrap();
+
+    let error = report.error.expect("the unit fails");
+    assert!(error.contains("SQLSTATE 42P01"), "{error}");
+    assert!(error.contains("run_coverage"), "{error}");
+    assert!(report.run_ids.is_empty());
+}
+
+/// A dry run takes no lock a writer waits for, and waits for none: it finishes while another transaction holds the
+/// candidate run's job rows, its run row and the tree row (as a finishing worker or a branch request would) and is
+/// storing a blob (as an ingest would). It used to take the job rows and then the blobs table lock.
+#[test]
+fn a_dry_run_finishes_while_writers_hold_what_an_apply_would_lock() {
+    let Some(url) = url() else { return };
+    let schema = new_schema("rd");
+    let s = store(&url, &schema);
+    let (root_run, tree) = finished_tree(&*s);
+    let old = new_run(&*s, "sim");
+    let mut b = batch(&passes(1), 0);
+    b.trials[0].output = Some(b"old output".to_vec());
+    let job = ingest_batch(&*s, &old.id, &b);
+    assert!(s.complete_job(&job.id, "w").unwrap());
+    finish(&*s, &old.id);
+
+    let mut holder = raw(&url, &schema);
+    let holder_pid = backend_pid(&mut holder);
+    let mut hold = holder.transaction().unwrap();
+    hold.batch_execute(&format!(
+        "SELECT id FROM jobs WHERE run_id IN ('{old}','{root}') FOR UPDATE; \
+         SELECT id FROM runs WHERE id IN ('{old}','{root}') FOR UPDATE; \
+         SELECT id FROM trees WHERE id='{tree}' FOR UPDATE; \
+         INSERT INTO blobs(hash,data) VALUES ('stored meanwhile','\\x00'::bytea) ON CONFLICT DO NOTHING;",
+        old = old.id,
+        root = root_run.id,
+        tree = tree.id
+    ))
+    .unwrap();
+    let mut watch = admin(&url);
+    let dry = {
+        let s = Arc::clone(&s);
+        let runs = vec![old.id.clone(), root_run.id.clone()];
+        std::thread::spawn(move || s.retention_delete(&runs, i64::MAX, true).unwrap())
+    };
+    wait_until("the dry run to finish without waiting", || {
+        assert_eq!(
+            blocked_by(&mut watch, holder_pid),
+            0,
+            "the dry run waited for the writer"
+        );
+        dry.is_finished()
+    });
+    hold.commit().unwrap();
+    let report = dry.join().unwrap();
+
+    assert_eq!(report.error, None);
+    assert_eq!(report.runs_deleted(), 2);
+    assert_eq!(report.trees_deleted, vec![tree.id.clone()]);
+    assert_eq!(report.blobs, 1);
+    assert!(s.get_run(&old.id).unwrap().is_some(), "nothing was removed");
+    assert!(s.get_tree(&tree.id).unwrap().is_some());
+}
+
+/// Two gc commands on one schema take turns; a store in another schema of the same database is not held up.
+#[test]
+fn only_one_holder_of_the_retention_lock_at_a_time() {
+    let Some(url) = url() else { return };
+    let schema = new_schema("rk");
+    let first = store(&url, &schema);
+    let second = store(&url, &schema);
+    let held = first.retention_lock().unwrap().expect("free at first");
+    assert!(second.retention_lock().unwrap().is_none());
+    assert!(first.retention_lock().unwrap().is_none());
+    let elsewhere = store(&url, &new_schema("rk"));
+    assert!(elsewhere.retention_lock().unwrap().is_some());
+    drop(held);
+    let again = second.retention_lock().unwrap();
+    assert!(again.is_some(), "released when dropped");
+}
+
+/// Workers ingest (output shared with old runs, and their own), lease and finish jobs, while a report loop and an apply
+/// of old runs that share that output run at the same time. No call fails (a deadlock would abort one of them), and no
+/// trial is left naming a blob that is gone. Each side runs until the others have done their share; nothing sleeps.
+#[test]
+fn workers_a_report_and_an_apply_at_once_never_deadlock_or_lose_a_blob() {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    const OLD_RUNS: usize = 60;
+    const ROUNDS_PER_WORKER: u64 = 4;
+    let Some(url) = url() else { return };
+    let schema = new_schema("rs");
+    let s = Arc::new(PgStore::connect_in_schema(&url, &schema, 16).unwrap());
+    let shared = b"output old and live runs share".to_vec();
+    let mut old_ids = Vec::new();
+    for i in 0..OLD_RUNS {
+        let r = if i % 5 == 0 {
+            run_with_identity(&*s, "a\n")
+        } else {
+            new_run(&*s, "sim")
+        };
+        let mut b = batch(&passes(3), 0);
+        b.trials[0].output = Some(shared.clone());
+        b.trials[1].output = Some(format!("old unique {i}").into_bytes());
+        let job = ingest_batch(&*s, &r.id, &b);
+        assert!(s.complete_job(&job.id, "w").unwrap());
+        if i % 5 == 0 {
+            let t = make_tree(&*s, &r, Some(sha256_hex(b"a\n")));
+            add(&*s, &t.id, &root(&r.id, 0));
+        }
+        finish(&*s, &r.id);
+        close_jobs(&*s, &r.id);
+        old_ids.push(r.id);
+    }
+    let applied = Arc::new(AtomicBool::new(false));
+    let errors = Arc::new(AtomicU64::new(0));
+    let fail = |errors: &AtomicU64, what: &str, e: &dyn std::fmt::Display| {
+        eprintln!("{what}: {e}");
+        errors.fetch_add(1, Ordering::Relaxed);
+    };
+    let mut workers = Vec::new();
+    for w in 0..6 {
+        let (s, applied, errors, shared) = (
+            Arc::clone(&s),
+            applied.clone(),
+            errors.clone(),
+            shared.clone(),
+        );
+        workers.push(std::thread::spawn(move || {
+            let worker = format!("w{w}");
+            let mut round = 0u64;
+            while round < ROUNDS_PER_WORKER || !applied.load(Ordering::Relaxed) {
+                let r = new_run(&*s, "sim");
+                s.enqueue_job(&r.id, "run", "{}", 2).unwrap();
+                let job = s
+                    .lease_run_job(&r.id, &worker, 600, 10)
+                    .unwrap()
+                    .expect("its own job");
+                for k in 0..3u64 {
+                    let mut b = batch(&passes(2), k * 2);
+                    b.trials[0].output = Some(shared.clone());
+                    b.trials[1].output = Some(format!("live {w} {round} {k}").into_bytes());
+                    match s.ingest_trials(&job.id, &worker, true, &b, 11) {
+                        Ok(IngestOutcome::Applied { .. }) => {}
+                        Ok(o) => fail(&errors, "ingest outcome", &format!("{o:?}")),
+                        Err(e) => fail(&errors, "ingest", &e),
+                    }
+                }
+                let res = JobResult {
+                    state: RunState::Passed,
+                    steps: 1,
+                    trials: 6,
+                    error: None,
+                    failure: None,
+                    more_failures: vec![],
+                    stats: Default::default(),
+                    event_payload_json: "{}".into(),
+                };
+                if let Err(e) = s.finish_job(&job.id, &worker, &res, 20) {
+                    fail(&errors, "finish", &e);
+                }
+                round += 1;
+            }
+        }));
+    }
+    let reporter = {
+        let (s, applied, errors, ids) = (
+            Arc::clone(&s),
+            applied.clone(),
+            errors.clone(),
+            old_ids.clone(),
+        );
+        std::thread::spawn(move || {
+            let mut reports = 0u64;
+            while reports < 2 || !applied.load(Ordering::Relaxed) {
+                match s.retention_delete(&ids, 100, true) {
+                    Ok(r) if r.error.is_none() => {}
+                    Ok(r) => fail(&errors, "report", &format!("{:?}", r.error)),
+                    Err(e) => fail(&errors, "report", &e),
+                }
+                reports += 1;
+            }
+        })
+    };
+    let mut deleted = 0;
+    for chunk in old_ids.chunks(7) {
+        let r = s.retention_delete(chunk, 100, false).unwrap();
+        deleted += r.run_ids.len();
+        if let Some(e) = r.error {
+            fail(&errors, "apply", &e);
+        }
+    }
+    applied.store(true, Ordering::Relaxed);
+    reporter.join().unwrap();
+    for w in workers {
+        w.join().unwrap();
+    }
+
+    assert_eq!(errors.load(Ordering::Relaxed), 0, "see the lines above");
+    assert_eq!(deleted, OLD_RUNS);
+    let dangling: i64 = raw(&url, &schema)
+        .query_one(
+            "SELECT count(*) FROM trials t WHERE (t.output_ref IS NOT NULL AND NOT EXISTS \
+             (SELECT 1 FROM blobs b WHERE b.hash = t.output_ref)) OR (t.detail_ref IS NOT NULL AND NOT EXISTS \
+             (SELECT 1 FROM blobs b WHERE b.hash = t.detail_ref))",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert_eq!(dangling, 0, "a trial names a removed blob");
+    assert!(s.get_blob(&sha256_hex(&shared)).unwrap().is_some());
+}

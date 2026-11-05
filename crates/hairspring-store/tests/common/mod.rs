@@ -9,8 +9,8 @@ pub mod leases;
 pub mod listing;
 #[cfg(feature = "postgres")]
 pub mod pg_support;
-pub mod search;
 pub mod retention;
+pub mod search;
 pub mod terminal_events;
 pub mod tree;
 pub mod tree_attempts;

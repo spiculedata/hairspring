@@ -126,7 +126,7 @@ fn a_tree_with_rows_for_runs_outside_the_unit_is_not_deleted() {
     {
         let mut conn = s.conn();
         let tx = write_tx(&mut conn).unwrap();
-        let err = Ops { tx: &tx }
+        let err = Ops::new(&tx, false)
             .delete_unit(Some(&tree), std::slice::from_ref(&tree))
             .unwrap_err();
         assert!(err.to_string().contains("not judged with it"), "{err}");

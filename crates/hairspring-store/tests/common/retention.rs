@@ -20,7 +20,121 @@ pub fn run_all_retention(make: &dyn Fn() -> Arc<dyn Store>) {
     a_blob_named_by_a_kept_check_stays(&*make());
     a_blob_named_only_by_a_kept_tree_edge_stays(&*make());
     deleting_twice_removes_nothing_the_second_time(&*make());
+    blobs_shared_across_many_runs_go_once_nothing_left_refers_to_them(&*make());
+    a_blob_inside_a_kept_checks_artefacts_stays_wherever_it_appears(&*make());
+    a_blob_named_only_by_the_removed_runs_own_check_goes(&*make());
+    trial_output_and_detail_a_kept_run_shares_stay(&*make());
     a_tree_is_one_unit(make);
+}
+
+/// Stored output and detail are shared by content too: the old run's copy goes with it only when no trial of a run
+/// that stays names the same blob, whichever column names it.
+fn trial_output_and_detail_a_kept_run_shares_stay(s: &dyn Store) {
+    let with_trials = |at: i64, output: &[u8], detail: &[u8]| {
+        let run = new_run(s, at - 1);
+        let mut b = batch(&passes(2), 0);
+        b.trials[0].output = Some(output.to_vec());
+        b.trials[1].detail = Some(detail.to_vec());
+        let job = ingest_batch(s, &run.id, &b);
+        assert!(s.complete_job(&job.id, "w").unwrap());
+        assert!(s
+            .finish_run(&run.id, RunState::Passed, 1, 2, None, at)
+            .unwrap());
+        run
+    };
+    let old = with_trials(OLD, b"output both have", b"detail both have");
+    let kept = with_trials(NEW, b"detail both have", b"output both have");
+    let lone = with_trials(OLD, b"output of the lone run", b"detail of the lone run");
+    let dry = delete(s, &ids(&[&old, &lone, &kept]), true);
+    let report = delete(s, &ids(&[&old, &lone, &kept]), false);
+    assert_eq!((dry.blobs, report.blobs), (2, 2), "only the lone run's");
+    for shared in [b"output both have".as_slice(), b"detail both have"] {
+        assert!(s.get_blob(&sha256_hex(shared)).unwrap().is_some());
+    }
+    assert!(s
+        .get_blob(&sha256_hex(b"output of the lone run"))
+        .unwrap()
+        .is_none());
+}
+
+/// More runs than one transaction of an apply takes, sharing blobs with each other and with a run that stays. The dry
+/// run (one snapshot, nothing removed) and the apply (several transactions) agree, and only the blobs nothing left
+/// refers to go.
+fn blobs_shared_across_many_runs_go_once_nothing_left_refers_to_them(s: &dyn Store) {
+    const RUNS: usize = 45;
+    let kept = finished(s, RunState::Failed, NEW);
+    let (_, kept_shared) = failure_with_bundle(s, &kept.id, b"the kept run and two old runs");
+    let mut old = Vec::new();
+    let mut own = Vec::new();
+    let mut shared = String::new();
+    for i in 0..RUNS {
+        let run = finished(s, RunState::Failed, OLD);
+        shared = failure_with_bundle(s, &run.id, b"every old run").1;
+        own.push(failure_with_bundle(s, &run.id, format!("old run {i}").as_bytes()).1);
+        if i == 0 || i == RUNS - 1 {
+            failure_with_bundle(s, &run.id, b"the kept run and two old runs");
+        }
+        old.push(run.id);
+    }
+    let mut named = old.clone();
+    named.push(kept.id.clone());
+
+    let dry = delete(s, &named, true);
+    let done = delete(s, &named, false);
+
+    let sorted = |mut r: RetentionReport| {
+        r.applied = false;
+        r.bundle_hashes.sort();
+        r.run_ids.sort();
+        r
+    };
+    assert_eq!(sorted(done.clone()), sorted(dry), "the dry run matches");
+    assert_eq!(done.runs_deleted(), RUNS as u64);
+    assert_eq!(done.error, None);
+    assert_eq!(
+        (done.blobs, done.bundle_blobs),
+        (RUNS as u64 + 1, RUNS as u64 + 1),
+        "the shared bundle and each run's own"
+    );
+    assert!(s.get_blob(&shared).unwrap().is_none());
+    assert!(own.iter().all(|h| s.get_blob(h).unwrap().is_none()));
+    assert!(
+        s.get_blob(&kept_shared).unwrap().is_some(),
+        "the kept run still names it"
+    );
+}
+
+/// A stored check's artefact list is searched as text: a hash counts wherever it appears, inside a longer string or
+/// a longer run of hex digits too.
+fn a_blob_inside_a_kept_checks_artefacts_stays_wherever_it_appears(s: &dyn Store) {
+    let old = finished(s, RunState::Failed, OLD);
+    let kept = finished(s, RunState::Failed, NEW);
+    let (_, first) = failure_with_bundle(s, &old.id, b"first old bundle");
+    let (_, second) = failure_with_bundle(s, &old.id, b"second old bundle");
+    let (_, free) = failure_with_bundle(s, &old.id, b"named by nothing");
+    let (kept_failure, _) = failure_with_bundle(s, &kept.id, b"kept bundle");
+    let artefacts = format!("[\"path/{first}.out\",\"a{second}0b\"]");
+    confirm(s, &kept_failure.id, "conf_inside", &artefacts);
+    let dry = delete(s, &ids(&[&old]), true);
+    let report = delete(s, &ids(&[&old]), false);
+    assert_eq!(report.bundle_hashes, vec![free.clone()]);
+    assert_eq!(dry.bundle_hashes, vec![free.clone()]);
+    assert!(s.get_blob(&first).unwrap().is_some());
+    assert!(s.get_blob(&second).unwrap().is_some());
+    assert!(s.get_blob(&free).unwrap().is_none());
+}
+
+/// A check that goes with its failure is not a reference, in the dry run or the apply.
+fn a_blob_named_only_by_the_removed_runs_own_check_goes(s: &dyn Store) {
+    let old = finished(s, RunState::Failed, OLD);
+    let (f, bundle) = failure_with_bundle(s, &old.id, b"named by its own check");
+    confirm(s, &f.id, "conf_own", &format!("[\"{bundle}\"]"));
+    let dry = delete(s, &ids(&[&old]), true);
+    assert_eq!(dry.bundle_hashes, vec![bundle.clone()]);
+    let report = delete(s, &ids(&[&old]), false);
+    assert_eq!(report.bundle_hashes, vec![bundle.clone()]);
+    assert_eq!(report.checks, 1);
+    assert!(s.get_blob(&bundle).unwrap().is_none());
 }
 
 fn new_run(s: &dyn Store, created: i64) -> RunRecord {

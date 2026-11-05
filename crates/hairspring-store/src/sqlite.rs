@@ -347,6 +347,11 @@ impl Store for SqliteStore {
         crate::sqlite_retention::scan(&self.conn(), cutoff_ms)
     }
 
+    fn retention_lock(&self) -> Result<Option<crate::RetentionLock>> {
+        let path = self.conn().path().map(str::to_owned);
+        crate::sqlite_retention::try_lock(path.as_deref())
+    }
+
     fn retention_delete(
         &self,
         run_ids: &[String],

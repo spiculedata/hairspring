@@ -535,8 +535,10 @@ transaction that deletes the run:
 selected; otherwise every run of the tree is kept (reported as `tree_kept`). A tree goes in one transaction in the
 order the foreign keys need: stored check results, nodes, branches, the tree, then each run's own rows (coverage,
 digest use, property rows, catalog, identity, trials, failures, jobs, events) and the run. A run outside any tree is its
-own unit. If one unit fails, its transaction is rolled back, the command stops, and the report says what had been
-committed before it (exit 2).
+own unit. An apply puts whole units into batches of about 20 runs (a tree is never split, so a batch can hold more), one
+transaction per batch. If a batch fails, its transaction is rolled back, the command stops, and the report says what
+earlier batches had committed (exit 2). An error from PostgreSQL is reported with the database's message and SQLSTATE
+(for example `40P01` for a deadlock, `23503` for a foreign key that kept a row), never the row values.
 
 On PostgreSQL the tree's row is locked (`FOR NO KEY UPDATE`, which conflicts with the lock that adding a branch or a
 node takes) before its runs are read, so a branch cannot be added to a tree while `gc` is deciding about it: the branch
@@ -544,22 +546,61 @@ is either added first, and then judged with the tree (and keeps it), or refused 
 line of defence, tree rows are deleted only for the runs that were judged, and if the tree still has a row for any
 other run, the unit is rolled back and reported as an error; nothing of it is removed. A run outside any tree is asked
 again, once it is locked, whether it has joined a tree since; if it has, it is kept (`tree_kept`). SQLite has one writer
-at a time and `gc` holds the write lock for each unit, so none of this can interleave there.
+at a time and an apply holds the write lock for each batch, so none of this can interleave there.
 
 **Blobs are shared, so they are removed last and only when nothing refers to them.** A bundle, trial output or detail,
 or tree edge is deleted only if no remaining trial row, failure or tree node refers to its hash, and no remaining stored
 check names the hash in its artefact list. A bundle that another failure also uses stays. Storing a trial's kept output
-writes the blob and the trial that names it in one transaction; on PostgreSQL `gc` takes `LOCK TABLE blobs IN SHARE ROW
-EXCLUSIVE MODE` before its reference checks, which waits for every transaction that is storing a blob and holds new ones
-until the unit commits, so it always sees the trial. On SQLite the single write lock does the same.
+writes the blob and the trial that names it in one transaction; on PostgreSQL an apply takes `LOCK TABLE blobs IN SHARE
+ROW EXCLUSIVE MODE` before its reference checks, which waits for every transaction that is storing a blob and holds new
+ones until the batch commits, so it always sees the trial. It takes that lock only after the batch's rows are deleted,
+so it is held for the reference checks and the blob deletes alone. On SQLite the single write lock does the same.
 
-**A dry run is exact.** It does the same deletes inside one transaction and rolls it back, so its counts are what an
-apply of the same runs removes at that moment. On PostgreSQL it needs the right to delete. It holds its locks until it
-ends: on SQLite the write lock for the whole dry run, so a worker or server writing to the same file waits (up to the
-5 second busy timeout, then that write fails with a clear error); on PostgreSQL the rows of the runs and trees it looks
-at and, from the first unit it would remove, the `blobs` table lock, so storing trial output waits for it. An apply
-holds the same locks one unit at a time. An apply removes only runs the report listed, one unit per transaction; it
-never selects new runs.
+The reference checks are set based. A batch gathers the hashes its runs referred to and then reads each referring table
+once for all of them: `trials` (output and detail), `failures`, tree nodes, and the stored checks' artefact lists (each
+list is read once and every hash-length window of it looked up in the set). Nothing indexes `trials.output_ref`,
+`trials.detail_ref` or `failures.bundle_hash`, so the `trials` read is a whole-table read: each batch still costs
+O(trials), but once per batch rather than once per blob. An index on those columns would make it proportional to the
+batch instead; that is a schema change and is not part of `gc`. Run `--apply` off-peak on a large store. The candidate
+hashes are checked at most 5000 to a statement, so a large dry run does not need more query memory than the database
+gives one statement.
+
+Measured on a laptop (Apple M3 Max), release build, PostgreSQL 16.6 in a local container with its default settings.
+Each store held N finished runs of 50 trials, each trial with its own stored output (so N x 50 blobs, none shared),
+and `gc` was asked about all N. Meanwhile a second connection stored a new blob every 10 ms; "writer waited" is the
+longest any one of those writes took.
+
+| | N | Before: time | Before: writer waited | Now: time | Now: writer waited |
+|---|---|---|---|---|---|
+| PostgreSQL report (dry run) | 200 | 52.4 s | 52.2 s | 2.5 s | 0.01 s |
+| PostgreSQL apply | 200 | 198.4 s | 5.3 s | 2.9 s | 0.01 s |
+| SQLite report (dry run) | 200 | 12.4 s | 5.4 s, 2 writes failed (busy) | 0.03 s | 0.0002 s |
+| SQLite apply | 200 | 22.8 s | 5.4 s, 1 write failed (busy) | 0.3 s | 0.2 s |
+| PostgreSQL report (dry run) | 2000 | not run (see below) | | 41.1 s | 0.3 s |
+| PostgreSQL apply | 2000 | not run (see below) | | 31.8 s | 0.04 s |
+| SQLite report (dry run) | 2000 | not run (see below) | | 0.7 s | 0.0003 s |
+| SQLite apply | 2000 | not run (see below) | | 6.4 s | 0.2 s |
+
+At N = 2000 the earlier version was measured on parts only: removing one run took 0.85 s on PostgreSQL (a writer
+waited 0.81 s) and 0.39 s on SQLite; a report on 20 runs took 15.6 s on PostgreSQL (a writer waited all of it) and 7.4 s
+on SQLite (one write failed after the 5 second busy timeout). Its cost grew with blobs times trials, so whole runs at
+that size would have taken hours. The report is now slower on PostgreSQL than the apply because it counts each run's
+rows with its own statements; it holds nothing a writer waits for while it does. The SQLite apply's writer waits are
+the batch transactions (about 3 ms of work per run judged) plus SQLite's busy-wait back-off.
+
+**A dry run is an estimate that blocks nobody.** It reads one consistent snapshot (on PostgreSQL a `REPEATABLE READ
+READ ONLY` transaction; on SQLite a read transaction, which in WAL mode never takes the write lock) and takes no row or
+table lock, so workers and the server write as usual meanwhile. It applies the same rules to that snapshot, counts the
+rows each unit would lose, and counts the blobs that nothing outside the runs it would remove refers to, in one pass per
+table for the whole report. Its counts are what an apply of the same runs would remove if nothing changed in between;
+the apply checks every run and every blob again under its locks, and says so when it removes less. An apply removes
+only runs the report listed; it never selects new runs.
+
+**One `gc` at a time.** Before it reads anything, `gc` takes the database's retention lock and holds it until it exits:
+on PostgreSQL a session advisory lock (`pg_try_advisory_lock`, keyed by the schema), on SQLite an exclusive lock on the
+file `<database>-gc.lock` beside the database, which is created if needed and left in place. A second `gc` (a report or
+an apply) does not wait: it prints "another hairspring gc is running against this database", changes nothing and exits
+with status 2. The operating system or the database releases the lock if the process dies.
 
 **A run that stopped qualifying between the check and the removal.** The apply checks every run again as it removes
 it. A run that no longer qualifies (a job was queued for it, for example) is kept, and the output lists it under "kept
@@ -583,7 +624,7 @@ only by you. The failure cases:
   exit status is 2. The run, its failures and its stored bundle are already gone together, so nothing refers to the
   file. A later `gc` cannot find it, because the stored bundle that identified it is gone: delete it by hand.
 - The process stops between the commit and the file removal: same result, with the same remedy.
-- The process stops before the commit: nothing changed for that unit. Run it again.
+- The process stops before the commit: nothing changed for that batch. Run it again.
 
 **What is not deleted.** The database file does not shrink: SQLite reuses the freed pages (run `VACUUM` to return the
 space) and PostgreSQL reclaims it by vacuuming. Bundle files outside `--bundle-dir`, exported or copied bundles,

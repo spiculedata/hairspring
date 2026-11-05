@@ -415,6 +415,40 @@ fn apply_removes_exactly_what_the_report_showed() {
     assert!(p.run_exists(&queued) && p.run_exists(&fresh) && unrelated.exists());
 }
 
+/// While another gc holds the database's retention lock, a second one (a report or an apply) does nothing and says
+/// why; once the lock is released it runs.
+#[test]
+fn a_second_gc_while_one_is_running_is_refused_and_changes_nothing() {
+    let p = Project::new("busy");
+    let passed = p.old_run(RunState::Passed, Some("bundle b"));
+    let args = p.apply_args(&["--older-than", "1h"]);
+    let holder = p.store();
+    let lock = holder
+        .retention_lock()
+        .unwrap()
+        .expect("nothing else holds it");
+
+    for attempt in [
+        vec!["--older-than".to_owned(), "1h".to_owned()],
+        args.clone(),
+    ] {
+        let o = p.gc(&attempt);
+        let (out, err) = text(&o);
+        assert_eq!(o.status.code(), Some(2), "{out}{err}");
+        assert!(
+            err.contains("another hairspring gc is running against this database"),
+            "{err}"
+        );
+        assert!(out.is_empty(), "no report: {out}");
+        assert!(p.run_exists(&passed));
+    }
+
+    drop(lock);
+    let o = p.gc(&args);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    assert!(!p.run_exists(&passed));
+}
+
 #[test]
 fn a_running_run_is_never_removed_whatever_states_are_asked_for() {
     let p = Project::new("running");

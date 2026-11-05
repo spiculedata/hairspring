@@ -66,11 +66,11 @@ pub use listing::{FailureFilter, RunFilter};
 pub use pg::PgStore;
 #[cfg(feature = "postgres")]
 pub use pg_downgrade::downgrade_postgres;
+pub use retention::{KeptReason, RetentionCandidate, RetentionLock, RetentionReport};
 pub use search::{
     FailureHit, PropertyHit, RunHit, ScheduleHit, SearchHits, SearchQuery, SeedHit,
     SEARCH_PROPERTY_RUNS, SEARCH_RECENT_RUNS,
 };
-pub use retention::{KeptReason, RetentionCandidate, RetentionReport};
 pub use sqlite::{SqliteStore, BUSY_TIMEOUT};
 pub use sqlite_downgrade::downgrade_sqlite;
 pub use trials::*;
@@ -367,14 +367,19 @@ pub trait Store: Send + Sync {
     /// and changes nothing. A run is deleted only if it is finished, has no queued or running job, and is older than
     /// `cutoff_ms`; each of those is re-checked inside the transaction that deletes. A trial tree is deleted whole,
     /// and only when all of its runs are named and pass; otherwise it is kept whole. A run is never deleted halfway:
-    /// each tree or run goes in one transaction. If one fails, the pass stops and the report holds `error` and what
-    /// had already been committed.
+    /// whole trees and runs go in batches, one transaction each. If one fails, the pass stops and the report holds
+    /// `error` and what had already been committed. A dry run takes no lock a writer waits for: it reads one snapshot,
+    /// so its report is an estimate that an apply checks again.
     fn retention_delete(
         &self,
         run_ids: &[String],
         cutoff_ms: i64,
         dry_run: bool,
     ) -> Result<RetentionReport>;
+    /// Takes the store's retention lock, so that two `gc` commands never work on the same database at once. It is held
+    /// until the returned value is dropped (or the process ends). `None` when another holder has it. On PostgreSQL it
+    /// is a session advisory lock for the store's schema; on SQLite a lock on a file next to the database.
+    fn retention_lock(&self) -> Result<Option<RetentionLock>>;
 
     // workers
     fn set_worker_trusted(&self, id: &str, trusted: bool) -> Result<()>;
