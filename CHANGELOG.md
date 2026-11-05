@@ -115,6 +115,13 @@
 
 ### Changed
 
+- `hairspring --version` names the build: `hairspring 0.1.0 (f819c1a 2026-10-24)` is the crate version, the short
+  commit and that commit's date, so two builds of the same crate version can be told apart (`v0.1-RC1` and later
+  builds all printed `hairspring 0.1.0`). The commit comes from git at build time, or from `HAIRSPRING_BUILD_COMMIT`
+  and `HAIRSPRING_BUILD_DATE`, which the release workflow sets and checks; without either it prints
+  `hairspring 0.1.0 (unknown)`, and the build never fails for want of git. No wall-clock time is used. The line still
+  starts `hairspring <version>`, which is what `scripts/install.sh` checks. The Dockerfile accepts the two values as
+  build arguments, and the draft release notes give a checksum command that works with only one binary downloaded.
 - The server keeps in memory the figures of a finished run that cost a pass over its stored rows: who reported its
   trials, its property statistics, its sweep counts, its trial count and its coverage series. An entry is served only
   while the run row read for the request is unchanged since the entry was worked out; trial rows cannot be added to a

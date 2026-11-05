@@ -3,10 +3,19 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use hairspring_engine::config::MAX_TRIALS_CAP;
 use std::path::PathBuf;
 
+/// What `hairspring --version` prints after the program name: the crate version, then the commit it was built from and
+/// that commit's date, for example `0.1.0 (f819c1a 2026-10-24)`, or `0.1.0 (unknown)`. See build.rs.
+pub const VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("HAIRSPRING_BUILD_ID"),
+    ")"
+);
+
 #[derive(Parser)]
 #[command(
     name = "hairspring",
-    version,
+    version = VERSION,
     about = "Deterministic simulation testing: explore, shrink, replay."
 )]
 pub struct Cli {

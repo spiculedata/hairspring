@@ -14,6 +14,11 @@ WORKDIR /src
 COPY . .
 # The UI is embedded into the server binary at compile time.
 COPY --from=web /web/dist ./web/dist
+# .git is not copied in, so `hairspring --version` prints `(unknown)` unless the commit is passed in:
+#   docker build --build-arg HAIRSPRING_BUILD_COMMIT="$(git rev-parse HEAD)" \
+#     --build-arg HAIRSPRING_BUILD_DATE="$(git show -s --format=%cs HEAD)" .
+ARG HAIRSPRING_BUILD_COMMIT=""
+ARG HAIRSPRING_BUILD_DATE=""
 RUN cargo build --release --locked -p hairspring-cli -p hairspring-dapr
 
 # ---- runtime ----

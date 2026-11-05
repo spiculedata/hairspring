@@ -812,6 +812,23 @@ t_cli_download_verifies_installs_and_runs_doctor() {
   assert_no_tripwire
 }
 
+t_cli_download_accepts_a_version_line_with_the_build_commit() {
+  new_sandbox "$1"
+  make_release "$SB/rel" hairspring-linux-x86_64
+  installer_run "HAIRSPRING_RELEASE_BASE_URL=file://$SB/rel" "FAKE_HS_VERSION=0.1.0 (f819c1a 2026-10-24)" -- --version v0.1.0 --prefix "$SB/prefix"
+  assert_rc 0
+  assert_out_has "version: hairspring 0.1.0 (f819c1a 2026-10-24)"
+  assert_exists "$SB/prefix/bin/hairspring"
+}
+
+t_cli_download_accepts_a_version_line_with_an_unknown_build() {
+  new_sandbox "$1"
+  make_release "$SB/rel" hairspring-linux-x86_64
+  installer_run "HAIRSPRING_RELEASE_BASE_URL=file://$SB/rel" "FAKE_HS_VERSION=0.1.0 (unknown)" -- --version v0.1.0 --prefix "$SB/prefix"
+  assert_rc 0
+  assert_out_has "version: hairspring 0.1.0 (unknown)"
+}
+
 t_cli_download_only_follows_https_redirects_with_tls_1_2() {
   new_sandbox "$1"
   make_release "$SB/rel" hairspring-linux-x86_64

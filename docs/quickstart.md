@@ -50,6 +50,15 @@ export HAIRSPRING_HERMIT="$HOME/.local/share/hairspring/hermit/bin/hermit"
 hairspring doctor --process-backend
 ```
 
+`hairspring --version` (or `-V`) prints one line: the crate version, then the commit the binary was built from and that
+commit's date, for example `hairspring 0.1.0 (f819c1a 2026-10-24)`. Two builds with the same crate version can differ,
+so quote the whole line in a bug report. The commit comes from git at build time, or from `HAIRSPRING_BUILD_COMMIT` and
+`HAIRSPRING_BUILD_DATE` when they are set (the release workflow sets them; the Dockerfile takes them as
+`--build-arg`, since the image build does not see `.git`). When neither is available, for example a build from a
+source archive, the line is `hairspring 0.1.0 (unknown)`. The
+date is the commit's date, not the time of the build, so building the same commit again prints the same line. Scripts
+that need only the version can take the second word.
+
 What the Hermit installer pins and verifies (the pins are in one file, `scripts/hermit.pin`, which the installer reads and
 refuses to run without):
 
