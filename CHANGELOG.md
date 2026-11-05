@@ -4,6 +4,11 @@
 
 ### Added
 
+- `GET /api/workers` also reports, for each worker, a `state` (`busy`, `idle` or `not_seen_recently`), the parsed
+  `capabilities`, the jobs it holds (`current_jobs`, at most three, and the count `leased_jobs`), and the response has a
+  `queue` with the number of jobs waiting and the number held. The `read` role is enough; `id` is still left out for
+  that role, and no secret, digest, job payload, error text or guest output is returned. Existing fields are unchanged.
+  Both stores answer the same way (two new read-only queries on the job table; no schema change).
 - `GET /api/me` returns the caller's role (`read`, `run` or `admin`), what that role may do, and whether the server is
   in open mode. It needs a valid token like the other read endpoints (401 otherwise) and never includes the token or a
   digest of it.

@@ -256,6 +256,48 @@ read endpoints, so a missing or wrong token gets the same 401. The reply:
   then treated as `admin`.
 - The reply never contains the token, a digest of it, or any other secret.
 
+## Workers and the queue: `GET /api/workers`
+
+`GET /api/workers` lists the workers the server knows and the queue behind them. The `read` role is enough. The list
+is not paged: the server holds at most 1000 workers (see `docs/architecture.md`), and a worker that has not been heard
+from for 24 hours is removed when the table is full. A trimmed example:
+
+```json
+{
+  "workers": [
+    {
+      "id": "wrk-…",
+      "name": "remote-1",
+      "caps_json": "{\"backends\":[\"sim\"]}",
+      "registered_at": 1730000000000,
+      "last_seen": 1730000060000,
+      "trusted": false,
+      "state": "busy",
+      "capabilities": { "backends": ["sim"] },
+      "current_jobs": [
+        { "run_id": "run-…", "kind": "run", "lease_until": 1730000180000, "attempts": 1 }
+      ],
+      "leased_jobs": 1
+    }
+  ],
+  "queue": { "queued": 1, "running": 1 }
+}
+```
+
+- `state` is `busy` when the worker holds a lease that has not ended, `idle` when it holds none and the server heard
+  from it within one lease length (`lease_secs`, 120 seconds by default), and `not_seen_recently` otherwise. It is
+  worked out when you ask; nothing is stored.
+- `trusted` is the flag an administrator sets (`POST /api/workers/{id}/trust`, unchanged). Remote workers start
+  untrusted; the server's own workers are trusted.
+- `capabilities` is what the worker sent when it registered, when that was valid JSON, and `null` otherwise. The
+  original text is `caps_json`. Capabilities are the worker's own statement and are not checked.
+- `current_jobs` names up to three jobs the worker holds, oldest first: the run, the kind of job, when the lease ends
+  and how many times the job has been leased. `leased_jobs` counts all of them.
+- `queue.queued` is the number of jobs waiting for a worker and `queue.running` the number held under a live lease.
+- `id` is left out unless the token has the `run` role or more, because a worker id is a credential for the worker
+  endpoints. The reply never contains a worker secret or its digest, a job payload, an error text or guest output.
+- With `Accept: application/x-ndjson` each worker is one line and `queue` is on the closing control line under `page`.
+
 ## Start a run or a sweep from the web UI
 
 With `hairspring serve` running, the Runs page of the web UI has a form that starts a run through `POST /api/runs`. Pick

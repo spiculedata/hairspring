@@ -407,6 +407,14 @@ impl Store for SqliteStore {
         self.jobs_queued_job_count()
     }
 
+    fn leased_jobs(&self, now: i64, limit: u32) -> Result<Vec<LiveLease>> {
+        self.jobs_leased_jobs(now, limit)
+    }
+
+    fn leased_job_count(&self, now: i64) -> Result<u64> {
+        self.jobs_leased_job_count(now)
+    }
+
     fn add_event(&self, run_id: &str, kind: &str, payload_json: &str, now: i64) -> Result<i64> {
         let conn = self.conn();
         conn.execute(

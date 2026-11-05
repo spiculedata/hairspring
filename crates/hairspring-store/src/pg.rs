@@ -523,6 +523,33 @@ impl Store for PgStore {
             .get::<_, i64>(0) as u64)
     }
 
+    fn leased_jobs(&self, now: i64, limit: u32) -> Result<Vec<LiveLease>> {
+        let rows = self.client()?.query(
+            "SELECT run_id, kind, lease_owner, lease_until, attempts FROM jobs WHERE status='running' AND lease_owner IS NOT NULL AND lease_until >= $1 ORDER BY created_at, seq LIMIT $2",
+            &[&now, &i64::from(limit)],
+        )?;
+        Ok(rows
+            .iter()
+            .map(|r| LiveLease {
+                run_id: r.get("run_id"),
+                kind: r.get("kind"),
+                lease_owner: r.get("lease_owner"),
+                lease_until: r.get("lease_until"),
+                attempts: r.get::<_, i32>("attempts") as u32,
+            })
+            .collect())
+    }
+
+    fn leased_job_count(&self, now: i64) -> Result<u64> {
+        Ok(self
+            .client()?
+            .query_one(
+                "SELECT COUNT(*) FROM jobs WHERE status='running' AND lease_owner IS NOT NULL AND lease_until >= $1",
+                &[&now],
+            )?
+            .get::<_, i64>(0) as u64)
+    }
+
     fn fail_job(&self, id: &str, worker_id: &str, error: &str, _now: i64) -> Result<bool> {
         let n = self.client()?.execute(
             "UPDATE jobs SET last_error=$1, lease_until=NULL, status = CASE WHEN attempts >= $2 THEN 'failed' ELSE 'queued' END
