@@ -76,6 +76,45 @@ fn without_tokens_the_name_is_served_as_the_other_endpoints_are() {
     assert_eq!(health(server.addr(), None)["organisation"], "Acme Ltd");
 }
 
+fn boot_limited(limit: u32, organisation: Option<&str>) -> RunningServer {
+    let registry = Arc::new(default_registry());
+    let engine = Engine::new(registry.clone(), Config::from_registry(&registry));
+    let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut cfg = ServerConfig::new("127.0.0.1:0".parse().unwrap(), tokens());
+    cfg.embedded_workers = 0;
+    cfg.rate_limit_per_min = limit;
+    cfg.organisation = organisation.map(str::to_owned);
+    start(cfg, Service::new(store), engine).unwrap()
+}
+
+#[test]
+fn guessing_tokens_through_health_is_limited_and_never_confirms_the_name() {
+    let server = boot_limited(2, Some("Acme Ltd"));
+    for guess in 0..50 {
+        let body = health(server.addr(), Some(&format!("wrong-token-{guess:016}")));
+        assert!(body.get("organisation").is_none(), "guess {guess}: {body}");
+    }
+    let body = health(server.addr(), Some(READ));
+    assert_eq!(body["status"], "ok", "health still answers");
+    assert!(
+        body.get("organisation").is_none(),
+        "the real token is not confirmed once the guessing limit is used up: {body}"
+    );
+}
+
+#[test]
+fn tokenless_health_is_never_limited() {
+    let server = boot_limited(2, Some("Acme Ltd"));
+    for _ in 0..20 {
+        assert_eq!(health(server.addr(), None)["status"], "ok");
+    }
+    assert_eq!(
+        health(server.addr(), Some(READ))["organisation"],
+        "Acme Ltd",
+        "tokenless probes do not use up the budget of a later token check"
+    );
+}
+
 #[test]
 fn a_name_is_trimmed_and_a_blank_name_is_none() {
     let server = boot(tokens(), Some("  Acme Ltd  ")).unwrap();

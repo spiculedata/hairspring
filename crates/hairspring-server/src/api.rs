@@ -4,9 +4,10 @@
 use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::ndjson::list_response;
+use crate::ratelimit::anonymous_key;
 use crate::AppState;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{FromRequest, Path, Query, Request, State};
+use axum::extract::{ConnectInfo, FromRequest, Path, Query, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -17,6 +18,7 @@ use hairspring_service::{Role, ServiceError, StartRun};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::net::SocketAddr;
 
 /// Runs blocking service work off the async executor.
 pub async fn blocking<T: Send + 'static>(
@@ -58,16 +60,39 @@ fn reject(rej: JsonRejection) -> ApiError {
 
 /// Liveness for probes, open to everyone. The organisation name, when one is configured, is added only for a caller
 /// the other endpoints would answer: a valid token (any role), or any caller when the server has no tokens.
-pub async fn health(State(s): State<AppState>, headers: HeaderMap) -> Json<Value> {
+///
+/// A request without an `Authorization` header is never limited, so probes keep working. One that carries a token
+/// is counted against the caller's anonymous limiter key, the bucket guesses at other endpoints use, and the name is
+/// left out once that bucket is used up. Health cannot be used to guess tokens faster than the limit allows.
+pub async fn health(
+    State(s): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Json<Value> {
     let mut body = json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") });
-    let authorization = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok());
-    let known = s.auth.is_open() || s.auth.authenticate(authorization).is_some();
-    if let (true, Some(name)) = (known, &s.organisation) {
-        body["organisation"] = json!(name.as_ref());
+    if let Some(name) = &s.organisation {
+        if may_see_organisation(&s, peer, headers.get(header::AUTHORIZATION)) {
+            body["organisation"] = json!(name.as_ref());
+        }
     }
     Json(body)
+}
+
+fn may_see_organisation(
+    s: &AppState,
+    peer: SocketAddr,
+    authorization: Option<&header::HeaderValue>,
+) -> bool {
+    if s.auth.is_open() {
+        return true;
+    }
+    let Some(authorization) = authorization else {
+        return false;
+    };
+    if !s.limiter.check(&anonymous_key(peer.ip())) {
+        return false;
+    }
+    s.auth.authenticate(authorization.to_str().ok()).is_some()
 }
 
 pub async fn targets(
