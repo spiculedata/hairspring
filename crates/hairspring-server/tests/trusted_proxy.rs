@@ -167,10 +167,8 @@ fn a_header_that_cannot_be_used_counts_the_request_under_the_proxy() {
     // Arrange: the proxy's own address has used up its anonymous budget (requests with no forwarded address).
     let srv = boot_with_token(LOOPBACK_PROXY);
     assert_eq!(flood(srv.addr(), None), flooded());
-    let too_many: String = (0..17)
-        .map(|i| format!("198.51.100.{i}"))
-        .collect::<Vec<_>>()
-        .join(",");
+    // The client's entry is the 18th from the right: too many entries to examine to find it.
+    let too_many = format!("198.51.100.9{}", ",127.0.0.1".repeat(17));
     // Two addresses padded past the length bound (HTTP strips spaces at the ends of a value, not inside it).
     let too_long = format!("198.51.100.8,{}198.51.100.9", " ".repeat(1100));
 
