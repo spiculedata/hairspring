@@ -64,7 +64,7 @@ fn make_v3_schema(url: &str, schema: &str) -> String {
 }
 
 /// The version this build creates: version 5 only adds a table to version 4.
-const CURRENT_VERSION: i32 = 6;
+const CURRENT_VERSION: i32 = 7;
 
 /// A genuine version 4 schema: nothing of version 5.
 fn make_v4_schema(url: &str, schema: &str) {

@@ -339,8 +339,8 @@ state) is dropped at the next refresh, and rows read with **Load more** are show
 
 - **Runs**: state (a run the server stores as `passed` is listed as Finished, as in the table), run type (search or
   sweep, as stored) and an exact target name.
-- **Failures**: a run id, a property id prefix (failures of runs in which a property whose id starts with it is stored as
-  failed) and a state (Candidate, Rerun repeated, Confirmed, Verified, Not reproducible or Control failed). The state
+- **Failures**: a run id, a property id prefix (failures of the 1000 newest runs in which a property whose id starts
+  with it is stored as failed; to look at an older run, give its run id as well) and a state (Candidate, Rerun repeated, Confirmed, Verified, Not reproducible or Control failed). The state
   is worked out from each failure's stored checks, so the server reads a bounded number of failures per request: a
   page can hold fewer failures than usual, or none, with **Load more** still offered to read further back. When a state
   is chosen the table has a State column.

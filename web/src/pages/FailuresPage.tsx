@@ -1,11 +1,11 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { FailuresTable } from '../components/FailuresTable';
 import { Loading, LoadFailed } from '../components/Notices';
 import { UpdatedAt } from '../components/UpdatedAt';
 import { FailureFilterBar } from '../lists/FilterBars';
 import { failureFiltersFromSearch, failureFiltersToSearch, hasFailureFilters, type FailureFilters } from '../lists/filters';
-import { failuresPage } from '../lists/listApi';
-import { FAILURES_FILTERED_EMPTY, FAILURES_NONE_READ_YET, loadMoreFailures } from '../lists/listWording';
+import { failuresPage, type FailureScope } from '../lists/listApi';
+import { FAILURES_FILTERED_EMPTY, FAILURES_NONE_READ_YET, loadMoreFailures, propertyFilterCutShort } from '../lists/listWording';
 import { LoadMore } from '../lists/LoadMore';
 import { useListPages } from '../lists/useListPages';
 import { useAddressFilters } from '../lists/useAddressFilters';
@@ -23,8 +23,14 @@ const failureId = (failure: FailureSummary): string => failure.id;
  * loaded again every five seconds; older pages are added by asking for them. A change of filters mounts this again.
  */
 function FailuresList({ filters }: { filters: FailureFilters }) {
+  // The scope of the newest page: whether a property filter left older runs out.
+  const [scope, setScope] = useState<FailureScope | undefined>(undefined);
   const loadPage = useCallback(
-    (cursor: string | undefined, signal: AbortSignal) => failuresPage({ ...filters, cursor, limit: PAGE_SIZE }, signal),
+    async (cursor: string | undefined, signal: AbortSignal) => {
+      const page = await failuresPage({ ...filters, cursor, limit: PAGE_SIZE }, signal);
+      if (cursor === undefined) setScope(page.scope);
+      return page;
+    },
     [filters],
   );
   const list = useListPages({ loadPage, id: failureId, intervalMs: POLL_MS, rowsLeave: filters.status !== undefined });
@@ -34,6 +40,7 @@ function FailuresList({ filters }: { filters: FailureFilters }) {
     <>
       {list.error && <LoadFailed what="failures" message={list.error} network={list.networkError} />}
       <UpdatedAt at={list.updatedAt} />
+      {scope?.cutShort && <p className="muted">{propertyFilterCutShort(scope.recentRuns)}</p>}
       {rows === undefined && list.error === undefined && <Loading what="failures" />}
       {rows?.length === 0 && !list.hasMore && <p className="muted">{filtered ? FAILURES_FILTERED_EMPTY : NO_FAILURES_YET}</p>}
       {rows?.length === 0 && list.hasMore && <p className="muted">{FAILURES_NONE_READ_YET}</p>}

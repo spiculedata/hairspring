@@ -183,6 +183,8 @@ describe('FailureFilterBar', () => {
     const box = screen.getByLabelText('Property id prefix');
     const hint = document.getElementById(box.getAttribute('aria-describedby') ?? '');
     expect(hint?.textContent).toContain('property whose id starts with this text');
+    expect(hint?.textContent).toContain('the 1,000 newest runs');
+    expect(hint?.textContent).toContain('give its run id');
   });
 
   it('refuses a run id that is not one, and a prefix over the byte limit, without calling back', () => {

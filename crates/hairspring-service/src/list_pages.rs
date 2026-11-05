@@ -10,11 +10,15 @@
 //! the checks of the failures it passes over, one store read for each batch of [`STATUS_SCAN_BATCH`] failures. One
 //! request reads at most [`STATUS_SCAN_CAP`] failures; if that is not enough to fill a page, the page comes back short
 //! with a `next_cursor` that carries on from where it stopped.
+//!
+//! A `property` filter looks for stored violations in the newest [`FAILURE_PROPERTY_RUNS`] runs only (or in the run a
+//! `run` filter names, whatever its age), so its cost does not grow with the history the database keeps. The page then
+//! carries a `scope` saying how many runs that is and whether older runs exist that it did not look at.
 use crate::confirm_view::summary as finding_of;
 use crate::query::{page_size, parse_cursor};
 use crate::{summary, FailureSummary, Result, Service, ServiceError, MAX_LIST, MAX_TARGET_LEN};
 use hairspring_engine::confirm::FindingStatus;
-use hairspring_store::{FailureFilter, RunFilter, RunRecord, RunState};
+use hairspring_store::{FailureFilter, RunFilter, RunRecord, RunState, FAILURE_PROPERTY_RUNS};
 use serde::Serialize;
 
 /// Rows in a page when the caller gives no limit.
@@ -81,6 +85,19 @@ pub struct FailurePage {
     pub failures: Vec<FailureSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
+    /// How far a `property` filter looked; absent without one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<FailureScope>,
+}
+
+/// How far the `property` filter of a failures page looked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct FailureScope {
+    /// The newest runs whose stored violations the filter looks at ([`FAILURE_PROPERTY_RUNS`]).
+    pub recent_runs: u32,
+    /// True when older runs are stored than the ones the filter looked at, so a failure of an older run is not listed
+    /// even if one of its properties matches. Always false with a `run` filter, which looks at that run, however old.
+    pub cut_short: bool,
 }
 
 fn invalid(what: &str) -> ServiceError {
@@ -184,6 +201,16 @@ impl Service {
         scan_cap: u64,
         max_offset: u64,
     ) -> Result<FailurePage> {
+        self.failure_page_in(q, scan_cap, max_offset, FAILURE_PROPERTY_RUNS)
+    }
+
+    fn failure_page_in(
+        &self,
+        q: &FailureListQuery,
+        scan_cap: u64,
+        max_offset: u64,
+        property_runs: u32,
+    ) -> Result<FailurePage> {
         let filter = FailureFilter {
             run_id: run_id(q.run.as_deref())?,
             property_prefix: plain_text(
@@ -191,10 +218,42 @@ impl Service {
                 "property",
                 MAX_PROPERTY_PREFIX_BYTES,
             )?,
+            property_runs,
         };
         let want = finding(q.status.as_deref())?;
         let offset = offset_of(q.cursor.as_deref(), max_offset)?;
         let limit = page_size(q.limit, DEFAULT_LIST_PAGE, MAX_LIST_PAGE);
+        let scope = self.property_scope(&filter)?;
+        let page = self.failures_matching(&filter, want, offset, limit, scan_cap, max_offset)?;
+        Ok(FailurePage { scope, ..page })
+    }
+
+    /// The scope of a `property` filter: none without one. The window is cut short when a run is stored at the
+    /// position just past it; that is one read of the runs index, at most [`FAILURE_PROPERTY_RUNS`] entries in.
+    fn property_scope(&self, filter: &FailureFilter) -> Result<Option<FailureScope>> {
+        if filter.property_prefix.is_none() {
+            return Ok(None);
+        }
+        let cut_short = filter.run_id.is_none()
+            && !self
+                .store
+                .list_runs_page(&RunFilter::default(), u64::from(filter.property_runs), 1)?
+                .is_empty();
+        Ok(Some(FailureScope {
+            recent_runs: filter.property_runs,
+            cut_short,
+        }))
+    }
+
+    fn failures_matching(
+        &self,
+        filter: &FailureFilter,
+        want: Option<FindingStatus>,
+        offset: u64,
+        limit: usize,
+        scan_cap: u64,
+        max_offset: u64,
+    ) -> Result<FailurePage> {
         match want {
             Some(want) => {
                 let scan = Scan {
@@ -203,12 +262,12 @@ impl Service {
                     cap: scan_cap,
                     max_offset,
                 };
-                self.failures_in_state(&filter, want, scan)
+                self.failures_in_state(filter, want, scan)
             }
             None => {
                 let mut records =
                     self.store
-                        .list_failures_page(&filter, offset, (limit + 1) as u32)?;
+                        .list_failures_page(filter, offset, (limit + 1) as u32)?;
                 let more = records.len() > limit;
                 records.truncate(limit);
                 Ok(FailurePage {
@@ -216,6 +275,7 @@ impl Service {
                     next_cursor: more
                         .then(|| next_cursor(offset + limit as u64, max_offset))
                         .flatten(),
+                    scope: None,
                 })
             }
         }
@@ -257,6 +317,7 @@ impl Service {
                         return Ok(FailurePage {
                             failures,
                             next_cursor: next_cursor(position, max_offset),
+                            scope: None,
                         });
                     }
                     failures.push(FailureSummary {
@@ -270,6 +331,7 @@ impl Service {
                     return Ok(FailurePage {
                         failures,
                         next_cursor: next_cursor(position, max_offset),
+                        scope: None,
                     });
                 }
             }
@@ -277,6 +339,7 @@ impl Service {
                 return Ok(FailurePage {
                     failures,
                     next_cursor: None,
+                    scope: None,
                 });
             }
         }
@@ -463,6 +526,39 @@ mod tests {
             .failure_page_scanning(&query("confirmed", Some("2")), 2, 3)
             .unwrap();
         assert_eq!(beyond.next_cursor, None);
+    }
+
+    #[test]
+    fn the_scope_of_a_property_filter_is_cut_short_once_a_run_is_stored_past_the_window() {
+        let svc = service_with_runs(3);
+        let q = FailureListQuery {
+            property: Some("p.".into()),
+            ..FailureListQuery::default()
+        };
+        let scope = |runs: u32| {
+            svc.failure_page_in(&q, u64::MAX, u64::MAX, runs)
+                .unwrap()
+                .scope
+                .unwrap()
+        };
+        assert!(!scope(3).cut_short, "three runs fit a window of three");
+        assert!(!scope(4).cut_short);
+        assert!(scope(2).cut_short, "the third run is past a window of two");
+        assert_eq!(scope(2).recent_runs, 2);
+        assert!(scope(0).cut_short);
+        let named = FailureListQuery {
+            run: Some("run_0000000000000000".into()),
+            ..q.clone()
+        };
+        let page = svc.failure_page_in(&named, u64::MAX, u64::MAX, 0).unwrap();
+        assert!(
+            !page.scope.unwrap().cut_short,
+            "a named run is never cut short"
+        );
+        let plain = svc
+            .failure_page_in(&FailureListQuery::default(), u64::MAX, u64::MAX, 0)
+            .unwrap();
+        assert_eq!(plain.scope, None);
     }
 
     #[test]

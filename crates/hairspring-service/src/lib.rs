@@ -42,8 +42,8 @@ pub use confirm_view::{CheckGuest, CheckView, FailureChecks, FindingSummary};
 pub use digest_cap::DIGEST_CAPPED_REASON;
 pub use error::ServiceError;
 pub use list_pages::{
-    FailureListQuery, FailurePage, RunListQuery, RunPage, DEFAULT_LIST_PAGE, MAX_LIST_OFFSET,
-    MAX_LIST_PAGE, STATUS_SCAN_CAP,
+    FailureListQuery, FailurePage, FailureScope, RunListQuery, RunPage, DEFAULT_LIST_PAGE,
+    MAX_LIST_OFFSET, MAX_LIST_PAGE, STATUS_SCAN_CAP,
 };
 pub use query::{
     PropertyQuery, SeedQuery, StripQuery, TrialQuery, DEFAULT_PAGE, MAX_PAGE, MAX_PREFIX_BYTES,

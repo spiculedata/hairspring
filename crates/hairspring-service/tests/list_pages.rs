@@ -2,13 +2,18 @@
 //! holds a row twice or leaves one out.
 mod common;
 
-use common::setup;
+use common::fixture::failed_outcome;
+use common::{finish, lease_with_budget, props, setup, Recorder};
 use hairspring_engine::mode::RunMode;
+use hairspring_engine::trial_log::ReportedVerdict;
+use hairspring_props::AssertKind;
 use hairspring_service::{
-    FailureListQuery, RunListQuery, ServiceError, StartRun, DEFAULT_LIST_PAGE, MAX_LIST_OFFSET,
-    MAX_LIST_PAGE,
+    FailureListQuery, FailureScope, RunListQuery, ServiceError, StartRun, DEFAULT_LIST_PAGE,
+    MAX_LIST_OFFSET, MAX_LIST_PAGE,
 };
-use hairspring_store::{NewCheck, NewConfirmation, NewFailure, RunState, Store};
+use hairspring_store::{
+    NewCheck, NewConfirmation, NewFailure, NewRun, RunState, Store, FAILURE_PROPERTY_RUNS,
+};
 
 fn start(
     svc: &hairspring_service::Service,
@@ -483,4 +488,133 @@ fn an_error_never_echoes_the_value_it_refused() {
         Err(ServiceError::InvalidRequest(m)) => assert!(!m.contains(secret), "{m}"),
         other => panic!("{other:?}"),
     }
+}
+
+/// A finished run whose one trial violated `db.broken`, with the failure the run stored.
+fn violating_run(
+    svc: &hairspring_service::Service,
+    engine: &hairspring_engine::engine::Engine,
+    worker: &str,
+) -> (String, String) {
+    let job = lease_with_budget(svc, engine, worker, 1);
+    let report = Recorder::new().trial(
+        3,
+        &props("db.broken", AssertKind::Always, 0, 1),
+        ReportedVerdict::Violation,
+        false,
+    );
+    svc.ingest_trials(&job.job_id, worker, &[report]).unwrap();
+    finish(svc, &job, worker, failed_outcome(1));
+    let failures = svc
+        .failure_page(&fquery(|q| q.run = Some(job.run_id.clone())))
+        .unwrap();
+    assert_eq!(failures.failures.len(), 1, "the run stored its failure");
+    (job.run_id, failures.failures[0].id.clone())
+}
+
+/// Runs with nothing stored, newer than every run before them.
+fn filler_runs(store: &dyn Store, n: usize) {
+    for i in 0..n {
+        store
+            .create_run(
+                &NewRun {
+                    target: "lock-lease".into(),
+                    backend: "sim".into(),
+                    seed: i as u64,
+                    config_json: "{}".into(),
+                },
+                hairspring_store::now_ms() + 1_000 + i as i64,
+            )
+            .unwrap();
+    }
+}
+
+#[test]
+fn only_a_property_filter_adds_a_scope_and_it_is_not_cut_short_while_every_run_fits() {
+    let (svc, _store, engine) = setup();
+    let (run, failure) = violating_run(&svc, &engine, "w1");
+
+    let plain = svc.failure_page(&fquery(|_| {})).unwrap();
+    assert_eq!(plain.scope, None);
+    let json = serde_json::to_value(&plain).unwrap();
+    assert!(json.get("scope").is_none(), "{json}");
+    let by_run = svc
+        .failure_page(&fquery(|q| q.run = Some(run.clone())))
+        .unwrap();
+    assert_eq!(by_run.scope, None);
+
+    let page = svc
+        .failure_page(&fquery(|q| q.property = Some("db.".into())))
+        .unwrap();
+    assert_eq!(failure_ids(&page), vec![failure.clone()]);
+    assert_eq!(
+        page.scope,
+        Some(FailureScope {
+            recent_runs: FAILURE_PROPERTY_RUNS,
+            cut_short: false
+        })
+    );
+    let json = serde_json::to_value(&page).unwrap();
+    assert_eq!(
+        json["scope"],
+        serde_json::json!({ "recent_runs": FAILURE_PROPERTY_RUNS, "cut_short": false })
+    );
+    let with_status = svc
+        .failure_page(&fquery(|q| {
+            q.property = Some("db.".into());
+            q.status = Some("candidate".into());
+        }))
+        .unwrap();
+    assert_eq!(failure_ids(&with_status), vec![failure]);
+    assert_eq!(with_status.scope, page.scope, "a status scan says the same");
+    let none = svc
+        .failure_page(&fquery(|q| q.property = Some("zz".into())))
+        .unwrap();
+    assert!(none.failures.is_empty());
+    assert_eq!(none.scope, page.scope);
+}
+
+#[test]
+fn a_failure_of_a_run_older_than_the_window_is_not_matched_and_the_page_says_it_was_cut_short() {
+    let (svc, store, engine) = setup();
+    let (run, failure) = violating_run(&svc, &engine, "w1");
+    filler_runs(&*store, FAILURE_PROPERTY_RUNS as usize - 1);
+
+    // The violating run is the oldest of exactly FAILURE_PROPERTY_RUNS runs: inside the window, nothing left out.
+    let page = svc
+        .failure_page(&fquery(|q| q.property = Some("db.".into())))
+        .unwrap();
+    assert_eq!(failure_ids(&page), vec![failure.clone()]);
+    assert_eq!(page.scope.map(|s| s.cut_short), Some(false));
+
+    // One more run pushes it out.
+    filler_runs(&*store, 1);
+    let page = svc
+        .failure_page(&fquery(|q| q.property = Some("db.".into())))
+        .unwrap();
+    assert!(page.failures.is_empty(), "{:?}", failure_ids(&page));
+    assert_eq!(
+        page.scope,
+        Some(FailureScope {
+            recent_runs: FAILURE_PROPERTY_RUNS,
+            cut_short: true
+        })
+    );
+    assert_eq!(page.next_cursor, None);
+
+    // Naming the run looks at it whatever its age, and nothing was left out.
+    let named = svc
+        .failure_page(&fquery(|q| {
+            q.property = Some("db.".into());
+            q.run = Some(run.clone());
+        }))
+        .unwrap();
+    assert_eq!(failure_ids(&named), vec![failure.clone()]);
+    assert_eq!(named.scope.map(|s| s.cut_short), Some(false));
+
+    // The whole list still has the failure; only the property filter is bounded.
+    let all = svc
+        .failure_page(&fquery(|q| q.run = Some(run.clone())))
+        .unwrap();
+    assert_eq!(failure_ids(&all), vec![failure]);
 }

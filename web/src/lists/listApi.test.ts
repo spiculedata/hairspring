@@ -93,6 +93,16 @@ describe('failuresPage', () => {
     expect(calledWith(fetchMock)).toBe('/api/failures?status=verified&limit=3');
   });
 
+  it('gives the scope of a property filter, and ignores one of the wrong shape', async () => {
+    stub({ failures: [], scope: { recent_runs: 1000, cut_short: true } });
+    await expect(failuresPage({ property: 'db.' })).resolves.toEqual({ items: [], nextCursor: undefined, scope: { recentRuns: 1000, cutShort: true } });
+    for (const scope of [{ recent_runs: '1000', cut_short: true }, { recent_runs: 1000 }, 'x', null]) {
+      stub({ failures: [], scope });
+      const page = await failuresPage({ property: 'db.' });
+      expect(page.scope).toBeUndefined();
+    }
+  });
+
   it('refuses a body of the wrong shape as an error', async () => {
     for (const body of [{ failures: {} }, { failures: [{ id: 1 }] }, { failures: [], next_cursor: [] }, null]) {
       stub(body);
