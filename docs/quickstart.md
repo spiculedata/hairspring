@@ -195,6 +195,27 @@ gets just `status` and `version`. A health request that carries a token counts a
 limit as the other endpoints; once that limit is used up the `organisation` field is left out (the answer is still
 200), so health cannot be used to guess tokens. A request without a token is never limited.
 
+## Who am I: `GET /api/me`
+
+`GET /api/me` tells a caller who the server takes it to be and what it may do. It needs a valid token like the other
+read endpoints, so a missing or wrong token gets the same 401. The reply:
+
+```json
+{
+  "role": "run",
+  "open_mode": false,
+  "can": { "read": true, "run": true, "admin": false },
+  "roles": ["read", "run", "admin"]
+}
+```
+
+- `role` is the caller's role: `read` (look at runs, failures and targets), `run` (also start, cancel and replay runs
+  and sweeps, and act as a worker) or `admin` (also change worker trust). Each role includes the ones before it. `can`
+  spells out what that role allows, and `roles` lists the role names in order.
+- `open_mode` is `true` when the server has no API tokens and only accepts same-origin local requests. Every caller is
+  then treated as `admin`.
+- The reply never contains the token, a digest of it, or any other secret.
+
 ## Start a run or a sweep from the web UI
 
 With `hairspring serve` running, the Runs page of the web UI has a form that starts a run through `POST /api/runs`. Pick
