@@ -30,6 +30,7 @@ mod trial_class;
 mod trial_query;
 mod types;
 pub mod view;
+mod workers_view;
 
 pub use claim_view::ClaimView;
 pub use completion::{completion_of, RunCompletion};
@@ -51,6 +52,9 @@ pub use tree_input::{
 pub use types::*;
 pub use view::{
     Coverage, PropertyDetail, PropertyPage, PropertyRow, TrialDetail, TrialPage, TrialRow,
+};
+pub use workers_view::{
+    QueueSummary, WorkerJob, WorkerState, WorkerView, WorkersOverview, MAX_CURRENT_JOBS_SHOWN,
 };
 
 use hairspring_core::bundle::Bundle;

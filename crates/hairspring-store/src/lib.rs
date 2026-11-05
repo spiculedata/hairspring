@@ -204,6 +204,11 @@ pub trait Store: Send + Sync {
         now: i64,
     ) -> Result<FinishOutcome>;
     fn queued_job_count(&self) -> Result<u64>;
+    /// Jobs a worker holds a live lease on at `now` (running, owner set, lease not yet ended), oldest job first,
+    /// at most `limit`. A running job whose lease has ended is not listed: another worker may take it.
+    fn leased_jobs(&self, now: i64, limit: u32) -> Result<Vec<LiveLease>>;
+    /// How many jobs [`Store::leased_jobs`] would list without a limit.
+    fn leased_job_count(&self, now: i64) -> Result<u64>;
     /// Records a failure; requeues the job until [`MAX_JOB_ATTEMPTS`] is reached.
     fn fail_job(&self, id: &str, worker_id: &str, error: &str, now: i64) -> Result<bool>;
 

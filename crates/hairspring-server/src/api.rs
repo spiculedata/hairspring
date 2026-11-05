@@ -278,7 +278,9 @@ pub async fn replay(
     Ok(Json(serde_json::to_value(out).unwrap_or_default()))
 }
 
-/// Worker ids act as lease credentials for the worker endpoints, so only `run`+ callers may see them.
+/// The workers, each with its state, trust, capabilities and held jobs, and the queue behind them. The list is bounded
+/// by the server's worker limit, so it is not paged. Worker ids act as lease credentials for the worker endpoints, so
+/// only `run`+ callers may see them. Nothing here reads a secret, a secret digest, a job payload or guest output.
 pub async fn workers(
     State(s): State<AppState>,
     caller: Caller,
@@ -286,8 +288,9 @@ pub async fn workers(
 ) -> Result<Response, ApiError> {
     caller.need(Role::Read)?;
     let reveal_ids = caller.role.allows(Role::Run);
-    let workers = blocking(move || s.svc.list_workers()).await?;
-    let items: Vec<Value> = workers
+    let overview = blocking(move || s.svc.workers_overview()).await?;
+    let items: Vec<Value> = overview
+        .workers
         .into_iter()
         .map(|w| {
             let mut v = serde_json::to_value(w).unwrap_or_default();
@@ -299,7 +302,11 @@ pub async fn workers(
             v
         })
         .collect();
-    list_response(&headers, json!({ "workers": items }), "workers")
+    list_response(
+        &headers,
+        json!({ "workers": items, "queue": overview.queue }),
+        "workers",
+    )
 }
 
 /// MCP over HTTP: one JSON-RPC message (or batch) per POST.

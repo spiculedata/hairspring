@@ -135,6 +135,16 @@ pub struct Job {
     pub created_at: i64,
 }
 
+/// A job a worker holds right now. Only what a read-only view needs: no payload, no job id, no error text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveLease {
+    pub run_id: String,
+    pub kind: String,
+    pub lease_owner: String,
+    pub lease_until: i64,
+    pub attempts: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventRecord {
     pub id: i64,
