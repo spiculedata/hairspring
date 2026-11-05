@@ -347,6 +347,10 @@ fn the_property_filter_looks_at_the_newest_runs_only(s: &dyn Store) {
         FAILURE_PROPERTY_RUNS
     );
     assert_eq!(
+        FAILURE_PROPERTY_RUNS, 1000,
+        "docs/architecture.md and the web UI (PROPERTY_FILTER_RUNS) state this number"
+    );
+    assert_eq!(
         failure_ids(s, &in_window("db.", FAILURE_PROPERTY_RUNS, None), 0, 10),
         vec![f_new.clone(), f_old.clone()]
     );
