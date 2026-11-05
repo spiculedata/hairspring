@@ -85,8 +85,9 @@ impl Service {
 
     /// The verdict counts of a sweep's stored rows, whatever became of the run: the figures a report may state as
     /// counts even when it may not state a rate. `None` for a run that was not a sweep or holds no rows. Nothing the
-    /// worker said about its trial counts is read.
-    pub(crate) fn sweep_counts(&self, run: &RunRecord) -> Result<Option<SweepSummary>> {
+    /// worker said about its trial counts is read. A finished run's counts are read through [`Service::sweep_counts`],
+    /// which keeps them.
+    pub(crate) fn sweep_counts_from_rows(&self, run: &RunRecord) -> Result<Option<SweepSummary>> {
         if !mode_of(&run.config_json).is_sweep() {
             return Ok(None);
         }

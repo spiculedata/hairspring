@@ -48,11 +48,12 @@ impl Service {
     fn failure_evidence(
         &self,
         run_id: &str,
-        stats: &[PropertyStat],
+        stats: &[(u32, PropertyStat)],
         checked: &BTreeMap<u64, CheckedFailure>,
     ) -> Result<Vec<FailureEvidence>> {
         let seeds: BTreeSet<u64> = stats
             .iter()
+            .map(|(_, s)| s)
             .filter(|s| s.status == PropertyStatus::Violation)
             .filter_map(|s| s.first_failure.as_ref().map(|f| f.seed))
             .collect();
@@ -83,15 +84,12 @@ impl Service {
     pub(crate) fn claim_view(
         &self,
         run: &RunRecord,
-        stats: &[PropertyStat],
+        stats: &[(u32, PropertyStat)],
         completion: &RunCompletion,
         rated_trials: Option<u64>,
         label: Option<&Label>,
     ) -> Result<ClaimView> {
-        let trust = self.run_trust(&run.id)?.unwrap_or(crate::RunTrust {
-            workers: Vec::new(),
-            all_trusted: false,
-        });
+        let trust = self.trust_of(run)?;
         let checked = self.checked_failures(&run.id)?;
         let evidence = self.failure_evidence(&run.id, stats, &checked)?;
         let trusted_workers = self.list_workers()?.iter().filter(|w| w.trusted).count();
@@ -108,6 +106,7 @@ impl Service {
 
         let first_failure = stats
             .iter()
+            .map(|(_, s)| s)
             .filter(|s| s.status == PropertyStatus::Violation)
             .filter_map(|s| s.first_failure.as_ref().map(|f| f.seed))
             .min();

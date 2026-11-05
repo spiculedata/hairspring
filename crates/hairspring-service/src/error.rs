@@ -2,7 +2,7 @@ use hairspring_engine::EngineError;
 use hairspring_store::StoreError;
 use std::fmt;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ServiceError {
     /// The caller sent something invalid; safe to show to them.
     InvalidRequest(String),

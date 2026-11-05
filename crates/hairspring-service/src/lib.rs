@@ -21,6 +21,8 @@ mod output_view;
 mod properties;
 mod property_query;
 mod query;
+mod result_cache;
+mod run_facts;
 pub mod sanitize;
 mod scan;
 mod search;
@@ -128,6 +130,7 @@ pub struct Service {
     cfg: Arc<ServiceConfig>,
     progress_seen: Arc<Mutex<HashMap<String, Instant>>>,
     coverage_cache: Arc<coverage_cache::CoverageCache>,
+    run_facts: Arc<run_facts::RunFactsCache>,
 }
 
 /// 256 random bits from the operating system, as hex.
@@ -169,6 +172,7 @@ impl Service {
             cfg: Arc::new(ServiceConfig::default()),
             progress_seen: Arc::new(Mutex::new(HashMap::new())),
             coverage_cache: Arc::default(),
+            run_facts: Arc::new(run_facts::new_cache()),
         }
     }
 
@@ -252,7 +256,7 @@ impl Service {
     }
 
     pub fn get_run(&self, id: &str) -> Result<Option<RunDetail>> {
-        let Some(run) = self.store.get_run(id)? else {
+        let Some(run) = self.stored_run(id)? else {
             return Ok(None);
         };
         let failures = self

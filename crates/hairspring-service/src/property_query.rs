@@ -170,29 +170,32 @@ impl Service {
         let sort = parse_sort(q.sort.as_deref())?;
         let offset = parse_cursor(q.cursor.as_deref())?.unwrap_or(0) as usize;
         let limit = page_size(q.limit, DEFAULT_PAGE, MAX_PAGE);
-        let Some(run) = self.store.get_run(run_id)? else {
+        let Some(run) = self.stored_run(run_id)? else {
             return Ok(None);
         };
         let completion = self.completion_for(&run)?;
         let (summary, counts) = stored_summary(&run);
-        let trust = self.run_trust(run_id)?;
-        let unverified_worker_data = !trust.as_ref().is_some_and(|t| t.all_trusted);
-        let mut indexed = self.indexed_stats(run_id)?;
-        let all: Vec<PropertyStat> = indexed.iter().map(|(_, s)| s.clone()).collect();
+        let trust = self.trust_of(&run)?;
+        let unverified_worker_data = !trust.all_trusted;
+        let indexed = self.stats_of(&run)?;
         let mut counts_by_status: BTreeMap<String, u64> = BTreeMap::new();
-        for s in &all {
+        for (_, s) in indexed.iter() {
             *counts_by_status
                 .entry(status_name(s.status).to_owned())
                 .or_default() += 1;
         }
-        indexed.retain(|(_, s)| {
-            status.is_none_or(|w| s.status == w)
-                && kind.is_none_or(|w| s.kind == w)
-                && prefix.as_ref().is_none_or(|p| s.id.starts_with(p.as_str()))
-        });
-        indexed.sort_by(|a, b| order(sort, a, b));
-        let total = indexed.len();
-        let properties: Vec<PropertyRow> = indexed
+        let mut matching: Vec<&(u32, PropertyStat)> = indexed
+            .iter()
+            .filter(|(_, s)| {
+                status.is_none_or(|w| s.status == w)
+                    && kind.is_none_or(|w| s.kind == w)
+                    && prefix.as_ref().is_none_or(|p| s.id.starts_with(p.as_str()))
+            })
+            .collect();
+        matching.sort_by(|a, b| order(sort, a, b));
+        let total = matching.len();
+        // Only the rows of the page are worded.
+        let properties: Vec<PropertyRow> = matching
             .iter()
             .skip(offset)
             .take(limit)
@@ -201,17 +204,20 @@ impl Service {
         let next_cursor = (offset + limit < total).then(|| (offset + limit).to_string());
 
         let violations = counts_by_status.get("violation").copied().unwrap_or(0);
-        let first_seed = all
+        let first_seed = indexed
             .iter()
+            .map(|(_, s)| s)
             .filter(|s| s.status == PropertyStatus::Violation)
             .filter_map(|s| s.first_failure.as_ref().map(|f| f.seed))
             .min();
-        let workers = trust.as_ref().map(|t| t.workers.as_slice()).unwrap_or(&[]);
-        let claim = self.claim_view(&run, &all, &completion, counts.rated_trials, label)?;
-        let data = match trust.as_ref() {
-            Some(t) if t.workers.is_empty() => WorkerData::NoTrialData,
-            _ if unverified_worker_data => WorkerData::Unverified,
-            _ => WorkerData::Trusted,
+        let workers = trust.workers.as_slice();
+        let claim = self.claim_view(&run, &indexed, &completion, counts.rated_trials, label)?;
+        let data = if trust.workers.is_empty() {
+            WorkerData::NoTrialData
+        } else if unverified_worker_data {
+            WorkerData::Unverified
+        } else {
+            WorkerData::Trusted
         };
         let headline = qualified(
             headline(counts.rated_trials, violations, first_seed),
@@ -221,7 +227,7 @@ impl Service {
             run_id: run.id.clone(),
             headline,
             header: RunHeader {
-                trials_judged: self.store.count_trials(run_id)?,
+                trials_judged: self.trials_judged(&run)?,
                 trials_rated: counts.rated_trials,
                 trials_claimable: counts.claimable_trials,
                 distinct_schedules: run.distinct_schedules,
@@ -269,22 +275,19 @@ impl Service {
         };
         let after = parse_cursor(q.cursor.as_deref())?;
         let limit = page_size(q.limit, DEFAULT_PAGE, MAX_SEED_PAGE);
-        let Some(run) = self.store.get_run(run_id)? else {
+        let Some(run) = self.stored_run(run_id)? else {
             return Ok(None);
         };
         let completion = self.completion_for(&run)?;
-        let all_trusted = self.run_trust(run_id)?.is_some_and(|t| t.all_trusted);
-        let Some((_, stat)) = self
-            .indexed_stats(run_id)?
-            .into_iter()
-            .find(|(i, _)| *i == idx)
-        else {
+        let all_trusted = self.trust_of(&run)?.all_trusted;
+        let indexed = self.stats_of(&run)?;
+        let Some((_, stat)) = indexed.iter().find(|(i, _)| *i == idx) else {
             return Ok(None);
         };
         if seeds_kind == "none" {
             return Ok(Some(PropertyDetail {
                 run_id: run.id.clone(),
-                property: property_row(idx, &stat, &run, &completion, all_trusted),
+                property: property_row(idx, stat, &run, &completion, all_trusted),
                 seeds_kind,
                 seeds: Vec::new(),
                 next_cursor: None,
@@ -325,7 +328,7 @@ impl Service {
         };
         Ok(Some(PropertyDetail {
             run_id: run.id.clone(),
-            property: property_row(idx, &stat, &run, &completion, all_trusted),
+            property: property_row(idx, stat, &run, &completion, all_trusted),
             seeds_kind,
             seeds,
             next_cursor,

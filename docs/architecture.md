@@ -316,7 +316,8 @@ many trials rewrites no existing row. A run with no row in either table has used
 - `run_coverage`: the run's coverage series (`GET /api/runs/{id}/coverage`), worked out once when its job finishes and
   stored with it. A read of a finished run scans no trials, in this process or after a restart. A run finished before
   version 4, or whose stored series cannot be used, is scanned once on first read and then served from memory. A run
-  that is still open is scanned on every read.
+  that is still open is scanned again only when it holds a trial row, or an attempt, that the previous read did not
+  see (see "Result cache" below).
 
 `Store::reporters_of` names the worker behind each failing seed from the seed index, reading only the seed, sequence
 number and worker columns of the matching rows. The claim gate used to page through whole trial rows for this.
@@ -449,6 +450,50 @@ column types prevent it); before this change such a row failed the request only 
 one the list leaves `finding` out, as before.
 
 There is no `mine` filter: a run does not record who started it.
+
+## Result cache
+
+The service keeps in server memory the figures that cost a pass over a run's stored rows:
+
+- for a finished run (`passed`, `failed`, `error` or `cancelled`): who reported its trials, its property statistics
+  (what the run summary, the property table and a property's detail are built from), its sweep counts, how many trial
+  rows it holds, and its coverage series;
+- for a run that is still open: its coverage series only.
+
+**Validity.** A finished run's entry is kept with the run row it was worked out from, and is served only when the run
+row the request has just read is equal to it, field by field. Nothing the entry holds can change while that is true:
+the store refuses trial rows for a run that is not `queued` or `running`, and checks the state in the same transaction
+that would add them (under SQLite's write lock, or the run row's `FOR UPDATE` lock on PostgreSQL); a job's results
+(statistics, coverage, summary) are written in the transaction that ends the run, and a later `complete` for an ended
+run changes nothing. A new attempt of a job can only start while the run is open. A run removed by `hairspring gc`
+reads as no row, so the request answers 404 and the entry is dropped. What can still change for a finished run is not
+cached and is read on every request: the checks of its failures, the failures themselves, the trusted workers that
+exist, and the claim built from them. Changing a worker's trust changes no cached figure, because a run's contributor
+list records the trust each trial row was stored with, which is never rewritten.
+
+An open run's coverage series is kept under its attempt and its count of trial rows. Within one attempt rows are only
+added, and a new attempt removes the earlier rows and raises the attempt in one transaction, so an equal pair means
+the same rows. The count is read before the run row, and a series is kept only if the count and attempt read after the
+scan equal those read before it and the scan saw every counted row. Once a scan has been kept, polls with no new trial
+scan nothing; a new trial or a new attempt is scanned again. While trials keep arriving, a scan may see rows that came
+in after the count and is then not kept, so the next poll scans again.
+
+**Bound.** At most 32 finished runs' figures and about 64 MiB of them by estimate, and at most 64 coverage series and
+about 16 MiB of them. A run with the largest catalogue, 16384 ids, holds about 7 MB with short ids and messages, and
+about 23 MB when every id, message and location is as long as allowed, so two such runs fit. The least recently used
+entry goes first, and a value larger than the whole bound is not kept.
+
+**Concurrent requests.** The first request for an entry works it out without holding a lock, and other requests for
+the same run with the same validity token wait for it and are handed its outcome, so concurrent first requests work a
+run's figures out once. If that work fails, every waiting request gets the same error; it is not repeated once per
+waiting request. An open run's series that could not be kept is handed to the requests that waited for it only if the
+attempt read after the scan is the one read before it and the scan saw at least as many trial rows as were counted
+before it. Otherwise (a new attempt started during the scan, or the count was taken under an earlier attempt and the
+scan saw fewer rows), each waiting request scans for itself, side by side rather than one after another.
+
+**Lifetime.** The cache belongs to one server process. Restarting the server clears it, and two servers on one
+database each keep their own; the validity rule is checked against the store, so neither can serve the other's stale
+figures. There is no schema change.
 
 ## Search
 
