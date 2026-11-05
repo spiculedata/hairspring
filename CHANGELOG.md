@@ -115,6 +115,19 @@
 
 ### Changed
 
+- The server keeps in memory the figures of a finished run that cost a pass over its stored rows: who reported its
+  trials, its property statistics, its sweep counts, its trial count and its coverage series. An entry is served only
+  while the run row read for the request is unchanged since the entry was worked out; trial rows cannot be added to a
+  finished run, so they cannot change behind it, and a run removed by `hairspring gc` answers 404 as before. Checks of a
+  run's failures, worker trust and the claim built from them are still read on every request. At most 32 runs (about
+  64 MiB by estimate) and 64 coverage series are kept, least recently used first; concurrent first requests for one run
+  work its figures out once; restarting the server clears the cache. The coverage series of a run that is still open is
+  scanned again only when the run holds a new trial row or a new attempt. Responses are unchanged byte for byte. On a
+  generated run of 200000 trials and 16384 property ids, after the first request, `GET /api/runs/{id}` took 137 ms on
+  SQLite and 79 ms on PostgreSQL and now takes under 3 ms; the property table took 233 ms and 126 ms and now takes under
+  7 ms for any page or filter; a property's seed list still scans trials and dropped from 224 ms to 100 ms on SQLite and
+  from 144 ms to 86 ms on PostgreSQL; repeated coverage polls of an open run of 50000 trials with no new trial took
+  276 ms and 236 ms and now take about 2 to 3 ms. The first request for a finished run works all of its figures out at once and costs about what it did (148 ms against 135 ms on SQLite for the run above). No schema change.
 - `GET /api/failures` with a `status` filter reads the stored checks of the failures it scans in batches (one query per
   batch of up to 500 failures, with the ids as bound parameters) instead of one query per failure, and scans in
   batches of up to 500 failures instead of 100. Results, ordering, cursors and the scan cap of 1000 failures per

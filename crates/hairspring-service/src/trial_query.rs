@@ -1,17 +1,18 @@
 //! A run's trials: the list with its filters, one trial's detail and output, and the coverage series.
+use crate::coverage_cache::{held_still, CoverageToken, OpenRows};
 use crate::coverage_series;
 use crate::digest_cap::is_capped_reason;
 use crate::output_view::{OutputMeta, STREAMS};
 use crate::query::*;
+use crate::result_cache::Computed;
 use crate::scan::{failing_indexes, presence, Flow};
 use crate::trial_class::TrialClass;
 use crate::view::*;
 use crate::{Result, Service, ServiceError};
 use hairspring_props::record::TrialRecord as KeptRecord;
 use hairspring_props::TrialDigest;
-use hairspring_store::{KeptState, TrialRecord};
+use hairspring_store::{KeptState, RunRecord, TrialRecord};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 
 /// The properties that failed in one trial, named for a row.
 #[derive(Default)]
@@ -291,24 +292,62 @@ impl Service {
     ///
     /// The series of a finished run was worked out when its job finished and is read from the store; its trial rows
     /// no longer change. A run finished before the series was stored, or whose stored series cannot be used, is
-    /// scanned once and kept in memory. A run that is still open is scanned on every call.
+    /// scanned once and kept in memory. A run that is still open is scanned again only when it holds a trial row (or
+    /// an attempt) that the last scan did not see.
     pub fn coverage(&self, run_id: &str) -> Result<Option<Coverage>> {
-        let Some(run) = self.store.get_run(run_id)? else {
+        let Some(run) = self.stored_run(run_id)? else {
             return Ok(None);
         };
-        if !run.state.is_terminal() {
-            return self.scan_coverage(run_id).map(Some);
+        if run.state.is_terminal() {
+            return self.finished_coverage(&run).map(Some);
         }
-        if let Some(cached) = self.coverage_cache.get(run_id) {
-            return Ok(Some(Coverage::clone(&cached)));
-        }
-        let series = match self.stored_coverage(run_id)? {
-            Some(stored) => stored,
-            None => self.scan_coverage(run_id)?,
+        // The count is read before the run row, so the attempt read after it is the one the counted rows belong to:
+        // attempts only go up, and a new one removes the rows of the old one in the same transaction.
+        let trials = self.store.count_trials(run_id)?;
+        // A run that finished in between is still scanned correctly here; its next read takes the finished path.
+        let Some(run) = self.stored_run(run_id)? else {
+            return Ok(None);
         };
-        let series = Arc::new(series);
-        self.coverage_cache.insert(run_id, series.clone());
+        let before = OpenRows {
+            trials,
+            attempt: Some(run.ingest_attempt),
+        };
+        let token = CoverageToken::Open {
+            attempt: run.ingest_attempt,
+            trials,
+        };
+        let series = self
+            .coverage_cache
+            .series
+            .get_or_compute(run_id, &token, || {
+                let series = self.scan_coverage(run_id)?;
+                let after = OpenRows {
+                    trials: self.store.count_trials(run_id)?,
+                    attempt: self.store.get_run(run_id)?.map(|r| r.ingest_attempt),
+                };
+                let keep = held_still(before, after, series.trials);
+                Ok(Computed {
+                    value: series,
+                    keep,
+                })
+            })?;
         Ok(Some(Coverage::clone(&series)))
+    }
+
+    /// The series of a finished run: from memory while its row is unchanged, else the stored series, else a scan.
+    fn finished_coverage(&self, run: &RunRecord) -> Result<Coverage> {
+        let token = CoverageToken::Finished(Box::new(run.clone()));
+        let series = self
+            .coverage_cache
+            .series
+            .get_or_compute(&run.id, &token, || {
+                let series = match self.stored_coverage(&run.id)? {
+                    Some(stored) => stored,
+                    None => self.scan_coverage(&run.id)?,
+                };
+                Ok(Computed::kept(series))
+            })?;
+        Ok(Coverage::clone(&series))
     }
 
     /// The series the store kept when the run's job finished, if there is one this build can use.

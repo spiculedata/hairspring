@@ -1,4 +1,5 @@
-//! The coverage series of a finished run is served from memory; an open run's is always current.
+//! The coverage series of a finished run is served from memory; an open run's is always current, and is scanned again
+//! only when the run holds a trial row the last scan did not see.
 mod common;
 
 use common::*;
@@ -39,7 +40,7 @@ fn a_finished_runs_coverage_is_the_same_on_every_read() {
 }
 
 #[test]
-fn a_finished_run_is_scanned_once_and_an_open_run_every_time() {
+fn a_finished_run_is_scanned_once_and_an_open_run_once_per_new_trial() {
     let (svc, _store, engine) = setup();
     let job = lease_with_budget(&svc, &engine, &local(), 2);
     let mut rec = Recorder::new();
@@ -49,13 +50,17 @@ fn a_finished_run_is_scanned_once_and_an_open_run_every_time() {
 
     svc.coverage(&job.run_id).unwrap();
     svc.coverage(&job.run_id).unwrap();
-    assert_eq!(svc.coverage_scans(), 2, "an open run is never cached");
+    assert_eq!(svc.coverage_scans(), 1, "no new trial, no new scan");
 
     finish(&svc, &job, &local(), passed(2, Some(2)));
     svc.coverage(&job.run_id).unwrap();
     svc.coverage(&job.run_id).unwrap();
     svc.coverage(&job.run_id).unwrap();
-    assert_eq!(svc.coverage_scans(), 3, "a finished run is scanned once");
+    assert_eq!(
+        svc.coverage_scans(),
+        2,
+        "a finished run is scanned once, when it finishes"
+    );
 }
 
 #[test]

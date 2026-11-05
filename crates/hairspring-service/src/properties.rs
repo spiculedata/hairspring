@@ -1,6 +1,5 @@
 //! Property statistics: folded by the server from the stored per-trial digests, written when a job finishes, and
 //! read back as the same figures.
-use crate::completion_of;
 use crate::ingest::stored_row;
 use crate::types::{GuestStrings, PropertySummary, RunTrust};
 use crate::{Result, Service, ServiceError};
@@ -145,12 +144,31 @@ fn from_row(row: &RunPropertyRow, cat: &CatalogRowRecord) -> Option<PropertyStat
     })
 }
 
+/// The statistics the stored rows and their catalog entries describe, paired with their catalog index and sorted by id.
+pub(crate) fn from_rows(
+    rows: &[RunPropertyRow],
+    catalog: &[CatalogRowRecord],
+) -> Vec<(u32, PropertyStat)> {
+    let by_idx: BTreeMap<u32, &CatalogRowRecord> = catalog.iter().map(|c| (c.idx, c)).collect();
+    let mut stats: Vec<(u32, PropertyStat)> = rows
+        .iter()
+        .filter_map(|row| {
+            by_idx
+                .get(&row.idx)
+                .and_then(|c| from_row(row, c))
+                .map(|s| (row.idx, s))
+        })
+        .collect();
+    stats.sort_by(|a, b| a.1.id.cmp(&b.1.id));
+    stats
+}
+
 /// A run that did not complete its trials makes no must-hit claim: UNMET becomes unrated.
 pub(crate) fn withhold_unmet(stats: Vec<PropertyStat>) -> Vec<PropertyStat> {
     stats.into_iter().map(unmet_to_unrated).collect()
 }
 
-fn unmet_to_unrated(s: PropertyStat) -> PropertyStat {
+pub(crate) fn unmet_to_unrated(s: PropertyStat) -> PropertyStat {
     match s.status {
         PropertyStatus::Unmet => PropertyStat {
             status: PropertyStatus::Unrated,
@@ -217,66 +235,24 @@ impl Service {
         (rows, summary_json(folded))
     }
 
-    /// The statistics stored for a run, with intervals recomputed from the stored counts.
+    /// The statistics stored for a run, with intervals recomputed from the stored counts. Empty for an unknown run.
     pub fn property_stats(&self, run_id: &str) -> Result<Vec<PropertyStat>> {
-        Ok(self
-            .indexed_stats(run_id)?
-            .into_iter()
-            .map(|(_, s)| s)
-            .collect())
-    }
-
-    /// The same statistics paired with their catalog index, sorted by id.
-    pub(crate) fn indexed_stats(&self, run_id: &str) -> Result<Vec<(u32, PropertyStat)>> {
-        let catalog = self.store.get_catalog(run_id)?;
-        let by_idx: BTreeMap<u32, &CatalogRowRecord> = catalog.iter().map(|c| (c.idx, c)).collect();
-        let mut stats: Vec<(u32, PropertyStat)> = self
-            .store
-            .list_run_properties(run_id)?
-            .iter()
-            .filter_map(|row| {
-                by_idx
-                    .get(&row.idx)
-                    .and_then(|c| from_row(row, c))
-                    .map(|s| (row.idx, s))
-            })
-            .collect();
-        stats.sort_by(|a, b| a.1.id.cmp(&b.1.id));
-        if self.unmet_is_unverified(run_id)? {
-            stats = stats
-                .into_iter()
-                .map(|(idx, s)| (idx, unmet_to_unrated(s)))
-                .collect();
-        }
-        Ok(stats)
-    }
-
-    /// Whether the run's UNMET results must be withheld: it ended on its time or step limit and not every
-    /// contributing worker is trusted (the trust each trial row recorded when it was ingested). Decided on every
-    /// read rather than when the run finished, so runs stored before this rule existed are withheld too.
-    fn unmet_is_unverified(&self, run_id: &str) -> Result<bool> {
-        let Some(run) = self.store.get_run(run_id)? else {
-            return Ok(false);
+        let Some(run) = self.stored_run(run_id)? else {
+            return Ok(Vec::new());
         };
-        let completion = completion_of(&run);
-        if !matches!(completion, crate::RunCompletion::TimeOrStepLimited { .. }) {
-            return Ok(false);
-        }
-        let trusted = self.run_trust(run_id)?.is_some_and(|t| t.all_trusted);
-        Ok(!completion.allows_unmet(trusted))
+        Ok(self
+            .stats_of(&run)?
+            .iter()
+            .map(|(_, s)| s.clone())
+            .collect())
     }
 
     /// Who reported the run's trials, and whether all of them were trusted. `None` for an unknown run.
     pub fn run_trust(&self, run_id: &str) -> Result<Option<RunTrust>> {
-        if self.store.get_run(run_id)?.is_none() {
-            return Ok(None);
+        match self.stored_run(run_id)? {
+            Some(run) => Ok(Some(self.trust_of(&run)?)),
+            None => Ok(None),
         }
-        let workers = self.store.run_contributors(run_id)?;
-        let all_trusted = !workers.is_empty() && workers.iter().all(|w| w.trusted);
-        Ok(Some(RunTrust {
-            workers,
-            all_trusted,
-        }))
     }
 
     /// Counts by status, the ids that need attention, and the labels a reader needs to weigh them.
@@ -284,25 +260,24 @@ impl Service {
         if run.catalog_size == 0 {
             return Ok(None);
         }
-        let stats = self.property_stats(&run.id)?;
+        let indexed = self.stats_of(run)?;
+        let stats = || indexed.iter().map(|(_, s)| s);
         let mut counts: BTreeMap<String, u64> = BTreeMap::new();
-        for s in &stats {
+        for s in stats() {
             *counts.entry(status_name(s.status).to_owned()).or_default() += 1;
         }
         let listed = |want: PropertyStatus| -> Vec<String> {
-            stats
-                .iter()
+            stats()
                 .filter(|s| s.status == want)
                 .take(MAX_LISTED_IDS)
                 .map(|s| s.id.clone())
                 .collect()
         };
-        let first = stats
-            .iter()
+        let first = stats()
             .filter(|s| s.status == PropertyStatus::Violation)
             .filter_map(|s| s.first_failure.as_ref().map(|f| f.seed))
             .min();
-        let trusted = self.run_trust(&run.id)?.is_some_and(|t| t.all_trusted);
+        let trusted = self.trust_of(run)?.all_trusted;
         let completion = self.completion_for(run)?;
         Ok(Some(PropertySummary {
             catalog_size: run.catalog_size,
