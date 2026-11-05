@@ -3,6 +3,7 @@ use crate::validate::*;
 use crate::McpServer;
 use hairspring_engine::config::{Budget, MAX_TRIALS_CAP};
 use hairspring_engine::mode::RunMode;
+use hairspring_service::sanitize::public_text;
 use hairspring_service::{FailureDetail, Role, ServiceError, StartRun};
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
@@ -95,21 +96,15 @@ impl From<String> for Failed {
 impl From<ServiceError> for Failed {
     fn from(e: ServiceError) -> Self {
         match e {
-            // Caller-correctable problems are safe to show.
+            // Caller-correctable problems are safe to show (as one short line: see `reply_for`).
             ServiceError::InvalidRequest(m) => Failed::Tool(m),
             ServiceError::NotFound(w) => Failed::Tool(format!("not found: {w}")),
             ServiceError::Engine(hairspring_engine::EngineError::Backend(m)) => internal(m),
             // The caller can fix this (retry with `allow_environment_change`), so say what it is, briefly.
             ServiceError::Engine(e @ hairspring_engine::EngineError::EnvironmentMismatch(_)) => {
-                Failed::Coded(
-                    ENVIRONMENT_MISMATCH_CODE,
-                    hairspring_service::sanitize::public_text(&e.to_string()),
-                )
+                Failed::Coded(ENVIRONMENT_MISMATCH_CODE, e.to_string())
             }
-            // The text can repeat what the caller sent (a bundle's target and backend), so it is one short line.
-            ServiceError::Engine(e) => {
-                Failed::Tool(hairspring_service::sanitize::public_text(&e.to_string()))
-            }
+            ServiceError::Engine(e) => Failed::Tool(e.to_string()),
             // Storage and internal details (SQL text, paths, commands) stay in the server log.
             ServiceError::Store(e) => internal(e),
             ServiceError::Internal(m) => internal(m),
@@ -130,12 +125,14 @@ fn tool_error(message: String) -> Value {
     json!({ "content": [{ "type": "text", "text": message }], "isError": true })
 }
 
+/// Every failure's text passes through here on its way out. It can repeat what the caller sent (a bundle's seed or
+/// path, a target name, a run mode), so it is made one short line once, here, rather than at each place it is built.
 fn reply_for(failed: Failed) -> Reply {
     match failed {
-        Failed::Params(m) => Reply::Error(INVALID_PARAMS, m),
-        Failed::Tool(m) => Reply::Result(tool_error(m)),
+        Failed::Params(m) => Reply::Error(INVALID_PARAMS, public_text(&m)),
+        Failed::Tool(m) => Reply::Result(tool_error(public_text(&m))),
         Failed::Coded(code, m) => {
-            let mut v = tool_error(m);
+            let mut v = tool_error(public_text(&m));
             v["structuredContent"] = json!({ "code": code });
             Reply::Result(v)
         }
@@ -149,7 +146,7 @@ pub fn call(server: &McpServer, params: &Value, role: Role) -> Reply {
     let Some(tool) = TOOLS.iter().find(|t| t.name == name) else {
         return Reply::Error(
             INVALID_PARAMS,
-            hairspring_service::sanitize::public_text(&format!("unknown tool `{name}`")),
+            public_text(&format!("unknown tool `{name}`")),
         );
     };
     if !role.allows(tool.role) {
@@ -341,9 +338,11 @@ mod tests {
     use hairspring_engine::EngineError;
     use hairspring_service::Service;
 
+    /// The text a caller is sent for `e`.
     fn message(e: ServiceError) -> String {
-        match Failed::from(e) {
-            Failed::Tool(m) | Failed::Params(m) | Failed::Coded(_, m) => m,
+        match reply_for(Failed::from(e)) {
+            Reply::Result(v) => v["content"][0]["text"].as_str().unwrap().to_string(),
+            Reply::Error(_, m) => m,
         }
     }
 
@@ -354,7 +353,8 @@ mod tests {
             hostile,
         )));
         assert!(m.starts_with("environment mismatch"), "{m}");
-        assert!(m.chars().count() <= 500, "{}", m.len());
+        assert_eq!(m.chars().count(), 500, "{}", m.len());
+        assert!(m.ends_with("..."), "{m}");
         assert!(!m.contains('\n') && !m.contains('\u{202E}'));
     }
 
@@ -392,6 +392,36 @@ mod tests {
             assert!(m.chars().count() <= 500, "{}", m.len());
             assert!(!m.contains('\n') && !m.contains('\u{202E}'), "{m}");
         }
+    }
+
+    #[test]
+    fn a_refusal_that_repeats_caller_text_is_one_short_line() {
+        let hostile = format!(
+            "bundle has an invalid number `{}\u{202E}`",
+            "9".repeat(5000)
+        );
+        let m = message(ServiceError::InvalidRequest(hostile));
+        assert_eq!(m.chars().count(), 500, "{}", m.len());
+        assert!(
+            m.starts_with("bundle has an invalid number `999") && m.ends_with("..."),
+            "{m}"
+        );
+        assert!(!m.contains('\u{202E}'), "{m}");
+        let Reply::Error(_, params) =
+            reply_for(Failed::Params(format!("bad `{}`\n", "p".repeat(5000))))
+        else {
+            panic!("expected a protocol error")
+        };
+        assert!(
+            params.chars().count() == 500 && !params.contains('\n'),
+            "{params}"
+        );
+    }
+
+    #[test]
+    fn a_short_refusal_is_unchanged() {
+        let m = message(ServiceError::InvalidRequest("unknown target `nope`".into()));
+        assert_eq!(m, "unknown target `nope`");
     }
 
     #[test]

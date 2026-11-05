@@ -2,6 +2,7 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use hairspring_engine::EngineError;
+use hairspring_service::sanitize::public_text;
 use hairspring_service::ServiceError;
 use serde_json::json;
 
@@ -70,22 +71,18 @@ impl ApiError {
 impl From<ServiceError> for ApiError {
     fn from(e: ServiceError) -> ApiError {
         match e {
-            ServiceError::InvalidRequest(m) => ApiError::bad_request(m),
+            // The text can repeat what the caller sent (a bundle's seed or path, a target name), so it is one short line.
+            ServiceError::InvalidRequest(m) => ApiError::bad_request(public_text(&m)),
             ServiceError::NotFound(_) => ApiError::not_found(),
             ServiceError::Engine(EngineError::Backend(m)) => ApiError::internal(m),
             // The caller can fix this (retry with the override), so say what it is, briefly.
             ServiceError::Engine(e @ EngineError::EnvironmentMismatch(_)) => ApiError {
                 code: Some(ENVIRONMENT_MISMATCH_CODE),
-                ..ApiError::new(
-                    StatusCode::CONFLICT,
-                    hairspring_service::sanitize::public_text(&e.to_string()),
-                )
+                ..ApiError::new(StatusCode::CONFLICT, public_text(&e.to_string()))
             },
             // The text can repeat what the caller sent (a replayed bundle's target and backend), so it is cut to one
             // short line like any other text that is shown back.
-            ServiceError::Engine(e) => {
-                ApiError::bad_request(hairspring_service::sanitize::public_text(&e.to_string()))
-            }
+            ServiceError::Engine(e) => ApiError::bad_request(public_text(&e.to_string())),
             ServiceError::Store(e) => ApiError::internal(e),
             ServiceError::Internal(m) => ApiError::internal(m),
         }
@@ -125,9 +122,34 @@ mod tests {
             "{}",
             e.message
         );
-        assert!(e.message.chars().count() <= 500, "{}", e.message.len());
+        assert_eq!(e.message.chars().count(), 500, "{}", e.message.len());
+        assert!(e.message.ends_with("..."), "{}", e.message);
         assert!(!e.message.contains('\n') && !e.message.contains('\u{202E}'));
         assert_ne!(e.message, "internal error");
+    }
+
+    #[test]
+    fn a_refusal_that_repeats_caller_text_is_one_short_line() {
+        let hostile = format!(
+            "bundle has an invalid number `{}\u{202E}`",
+            "9".repeat(5000)
+        );
+        let e = ApiError::from(ServiceError::InvalidRequest(hostile));
+        assert_eq!(e.status, StatusCode::BAD_REQUEST);
+        assert_eq!(e.message.chars().count(), 500, "{}", e.message.len());
+        assert!(
+            e.message.starts_with("bundle has an invalid number `999")
+                && e.message.ends_with("..."),
+            "{}",
+            e.message
+        );
+        assert!(!e.message.contains('\u{202E}'), "{}", e.message);
+    }
+
+    #[test]
+    fn a_short_refusal_is_unchanged() {
+        let e = ApiError::from(ServiceError::InvalidRequest("unknown target `nope`".into()));
+        assert_eq!(e.message, "unknown target `nope`");
     }
 
     #[test]

@@ -123,3 +123,11 @@
   `group` role, so their names are announced. No result wording changed. A test over the main pages in the web UI's test
   suite runs axe-core (a new dev dependency of `web/`) on the markup rules; colour contrast and target size are not
   checked there.
+
+### Fixed
+
+- Error messages from the REST API and the MCP tools that repeat part of a request (an unknown target, a bundle's
+  seed or path, a run mode, a field of a request body that could not be read) are now one line with no control or
+  bidirectional characters and at most 500 characters. A message that was cut ends in `...`. Messages for ordinary
+  input read as before. The environment-mismatch message (409, `environment_mismatch`) follows the same rule and now
+  also ends in `...` when it was cut, as does a property id longer than 500 characters in a `GET /api/search` answer.

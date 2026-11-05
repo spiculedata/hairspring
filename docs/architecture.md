@@ -493,8 +493,9 @@ checks that the SQLite statement is a single index range with no temporary sort
 (`crates/hairspring-store/src/sqlite_search.rs`).
 
 The answer never contains guest output, kept output, bundle text or a failure message. A property id comes from the
-program under test, so it is cut to one line of at most 500 characters and sits under a `guest` object. An error names
-`q` and never repeats the text, including text that was not valid UTF-8 once unescaped.
+program under test, so it is cut to one line of at most 500 characters (ending in `...` when it was cut) and sits
+under a `guest` object. An error names `q` and never repeats the text, including text that was not valid UTF-8 once
+unescaped.
 
 ## Bundles
 
