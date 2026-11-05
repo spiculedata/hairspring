@@ -81,14 +81,18 @@ it after the role, separated by one space: `token:run ci bot`. Entries without a
 - Only you can set a label, in this file or in `HAIRSPRING_TOKENS`. A caller cannot choose or change one.
 - A label is 1 to 64 characters: ASCII letters and digits, space, `.`, `_` and `-`. No commas or colons (a comma ends
   the entry), no leading, trailing or doubled spaces, and no other characters, so a label cannot hold control or
-  direction-changing characters or look like another label.
-- Labels must differ from each other, ignoring case, and a label must not contain any configured token. A label that
-  does is refused at start, with an error that names the entry by its position and does not repeat the token.
+  direction-changing characters. Exactly one space separates the label from the role; a tab, a second space or any
+  other whitespace there is refused.
+- Labels must differ from every other label, ignoring case, and a label must not contain any configured token. A
+  label that does is refused at start. Errors read `entry N: ...` and do not repeat the token, the label or the role
+  text. N counts entries, not file lines: blank and comment lines are not counted, and a line with commas counts as
+  several entries.
 - A label is not a secret and does not prove who is calling: two people who share a token share its label. Do not put
   a password, a token or personal data in one.
 - The label appears in the server's log lines for creating a run, starting a replay, registering a worker and changing
   a worker's trust, as `label (t:<key>)`, never the token. `GET /api/me` returns it as `label` to the holder of that
-  token only. It is not in any other response.
+  token only. It is not in any other response. Actions taken through MCP over HTTP are not yet logged with the label.
+  The `t:<key>` is a prefix of the token's SHA-256 digest, so use tokens made by `hairspring token`.
 - An older server refuses a labelled entry (it reads `run ci bot` as an unknown role), so it fails closed.
 - Open mode (no tokens) has no labels.
 

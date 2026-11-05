@@ -51,7 +51,9 @@ agents.
   next to the token's key, never the token. Do not put a secret or personal data in a label. A label is restricted to
   ASCII letters, digits, space, `.`, `_` and `-`, at most 64 characters, must differ from every other label, and is
   refused if it contains a configured token. Those log lines cover REST calls; actions taken through MCP over HTTP
-  are not yet logged with the label.
+  are not yet logged with the label. The `t:<key>` in a log line is a prefix of the token's SHA-256 digest, so use
+  tokens made by `hairspring token`: a weak, operator-chosen 16-character token could be guessed offline by someone
+  who can read the logs.
 - **Run tokens are a trust domain.** A worker id is not bound to the token that registered it, and a malicious
   `run` token can lease jobs and report arbitrary (but bounded) results. Give `run` tokens only to workers you trust.
 - **Hermit is third-party code** (a small, fast-moving fork). It is unaudited by us and executes the program

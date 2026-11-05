@@ -42,8 +42,10 @@ fn ct_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
 /// `token:role` or `token:role label`. The label starts after the first ASCII space. A token holds no whitespace, so
 /// the split cannot fall inside one, and a label holds no `:` or `,`, so the role is still what follows the last `:`.
 fn parse_item(item: &str) -> Result<Parsed, String> {
+    // Exactly one space separates the label, and the label is not trimmed: a second space, a tab or another kind
+    // of whitespace makes the label invalid, as it made the role invalid before labels existed.
     let (head, label) = match item.split_once(' ') {
-        Some((head, label)) => (head, Some(label.trim())),
+        Some((head, label)) => (head, Some(label)),
         None => (item, None),
     };
     let (token, role) = head
@@ -54,8 +56,8 @@ fn parse_item(item: &str) -> Result<Parsed, String> {
             "tokens must be at least {MIN_TOKEN_LEN} characters with no whitespace"
         ));
     }
-    let role = Role::parse(role)
-        .ok_or_else(|| format!("unknown role `{role}` (use read, run or admin)"))?;
+    // The text in the role slot can be the tail of a token that holds a colon, so it is not repeated.
+    let role = Role::parse(role).ok_or("unknown role (use read, run or admin)")?;
     if let Some(label) = label {
         token_label::check_shape(label)?;
     }
@@ -106,7 +108,8 @@ impl Auth {
     }
 
     /// Parses `token:role,token:role label`. Tokens must be at least 16 characters. A label is optional and set only
-    /// here (see [`token_label`]). An error names the entry by position and never repeats a token.
+    /// here (see [`token_label`]). An error names the entry by position (entries are counted, not file lines: a
+    /// line with commas is several entries) and repeats neither a token, a label nor the text in the role slot.
     pub fn from_spec(spec: &str) -> Result<Auth, String> {
         let mut parsed: Vec<Parsed> = Vec::new();
         for (n, item) in spec
@@ -477,6 +480,42 @@ mod tests {
             assert!(!err.contains(label), "{err}");
             assert!(err.starts_with("entry 1:"), "{err}");
         }
+    }
+
+    #[test]
+    fn extra_or_unusual_whitespace_before_a_label_is_refused_as_it_was_before_labels() {
+        for gap in [" ", "\t", "\u{2028}", "\u{a0}", " \t", "\u{200b}"] {
+            let spec = format!("{TOKEN}:run {gap}ci");
+            assert!(Auth::from_spec(&spec).is_err(), "{spec:?}");
+        }
+        assert!(Auth::from_spec(&format!("{TOKEN}:run ci")).is_ok());
+    }
+
+    #[test]
+    fn an_unknown_role_message_does_not_echo_the_text_in_the_role_slot() {
+        // A token with a colon: its tail lands in the role slot when the role is missing or wrong.
+        let colon_token = "abcdefghijklmnopqr:SECRETTAIL-0123456789";
+        for spec in [
+            colon_token.to_string(),
+            format!("{TOKEN}:ro\u{202e}le"),
+            format!("{TOKEN}:bogus"),
+        ] {
+            let err = Auth::from_spec(&spec).err().expect("refused");
+            assert!(
+                !err.contains("SECRETTAIL") && !err.contains("bogus") && !err.contains('\u{202e}'),
+                "{err}"
+            );
+        }
+        let err = Auth::from_spec(colon_token).err().unwrap();
+        assert_eq!(err, "entry 1: unknown role (use read, run or admin)");
+    }
+
+    #[test]
+    fn an_entry_number_counts_entries_not_file_lines() {
+        let err = Auth::from_spec(&format!("{TOKEN}:run,,{OTHER}:bogus"))
+            .err()
+            .unwrap();
+        assert!(err.starts_with("entry 2:"), "{err}");
     }
 
     #[test]

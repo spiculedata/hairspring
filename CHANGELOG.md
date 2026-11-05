@@ -10,7 +10,9 @@
   configured token; otherwise the server does not start, and the error does not repeat the token. Only the operator
   can set a label. `GET /api/me` returns `label` to the holder of that token and to no one else, and the server's log
   lines for creating a run, starting a replay, registering a worker and changing a worker's trust now name the caller
-  as `label (t:<key>)` or, without a label, by the key alone. A label is not a secret and not proof of identity.
+  as `label (t:<key>)` or, without a label, by the key alone. A replay is logged once a replay slot is held. Actions
+  taken through MCP over HTTP are not yet logged with the label. A label is not a secret and not proof of identity.
+  The message for an unknown role no longer repeats the text in the role slot.
 - `hairspring serve --trusted-proxy ADDR[,ADDR...]` (or `HAIRSPRING_TRUSTED_PROXY`) names reverse proxies, by
   address or network, whose `X-Forwarded-For` header gives the client address for the rate limit, for the check that
   refuses a valid token while its address's anonymous budget is used up, and, without tokens, for the per-caller

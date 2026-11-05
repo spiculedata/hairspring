@@ -515,6 +515,86 @@ fn a_tokens_file_with_old_and_labelled_lines_serves_the_label_to_its_own_token_a
     );
 }
 
+/// Every stderr line up to and including the first one that contains `needle`.
+fn stderr_until(rx: &std::sync::mpsc::Receiver<String>, needle: &str) -> Vec<String> {
+    let mut seen = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let line = rx
+            .recv_timeout(left)
+            .unwrap_or_else(|_| panic!("never saw `{needle}`; saw {seen:?}"));
+        seen.push(line.clone());
+        if line.contains(needle) {
+            return seen;
+        }
+    }
+}
+
+#[test]
+fn replay_register_and_trust_are_logged_with_the_label_and_never_the_token() {
+    let d = scratch("serve-label-logs");
+    let (read, run, admin) = (
+        "read-token-0123456789abcdef",
+        "run-token-0123456789abcdef",
+        "admin-token-0123456789abcdef",
+    );
+    let mut g = spawn(
+        &d,
+        &["serve", "--addr", "127.0.0.1:0", "--workers", "0"],
+        &[(
+            "HAIRSPRING_TOKENS",
+            &format!("{read}:read,{run}:run ci bot,{admin}:admin alice"),
+        )],
+    );
+    let stderr = collect_stderr(&mut g);
+    let base = url_of(&wait_for_line(&mut g, "listening on"));
+    let post = |path: &str, token: &str, body: &str| {
+        http("POST", &format!("{base}{path}"), Some(token), Some(body))
+    };
+
+    // Requests that never reach a replay slot must not be logged as a replay starting.
+    assert_eq!(post("/api/replay", read, "{\"bundle\":\"x\"}").0, 403);
+    assert_eq!(post("/api/replay", run, "not json").0, 400);
+    assert_eq!(post("/api/replay", run, "{\"bundle\":\"garbage\"}").0, 400);
+    let (status, body) = post("/api/worker/register", run, "{\"name\":\"w1\"}");
+    assert_eq!(status, 200, "{body}");
+    let worker = serde_json::from_str::<serde_json::Value>(&body).unwrap()["worker_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        post(
+            &format!("/api/workers/{worker}/trust"),
+            run,
+            "{\"trusted\":true}"
+        )
+        .0,
+        403
+    );
+    assert_eq!(
+        post(
+            &format!("/api/workers/{worker}/trust"),
+            admin,
+            "{\"trusted\":true}"
+        )
+        .0,
+        200
+    );
+
+    let seen = stderr_until(&stderr, " trust set to true by alice (t:");
+    let has = |needle: &str| seen.iter().filter(|l| l.contains(needle)).count();
+    assert_eq!(has("replay started by ci bot (t:"), 1, "{seen:?}");
+    assert_eq!(has(&format!("worker {worker} registered by ci bot (t:")), 1);
+    assert_eq!(has("trust set to"), 1, "{seen:?}");
+    assert_eq!(has("replay started"), 1, "{seen:?}");
+    assert!(
+        seen.iter()
+            .all(|l| ![read, run, admin].iter().any(|t| l.contains(t))),
+        "{seen:?}"
+    );
+}
+
 #[test]
 fn serve_refuses_a_label_that_holds_a_token_and_does_not_print_the_token() {
     let d = scratch("serve-bad-label");

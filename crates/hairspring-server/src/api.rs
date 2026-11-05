@@ -328,11 +328,13 @@ pub async fn replay(
 ) -> Result<Json<Value>, ApiError> {
     caller.need(Role::Run)?; // replay executes target code, so it needs more than read access
 
-    caller.log_action("replay started");
+    // Logged from inside the slot, so a replay refused for want of a slot (429) is not logged as started.
+    let line = caller.action_line("replay started");
     let options = hairspring_service::ReplayOptions {
         allow_environment_change: body.allow_environment_change,
     };
     let out = replay_in_slot(&s.replays, move || {
+        eprintln!("{line}");
         s.svc.replay_bundle_with(&s.engine, &body.bundle, options)
     })
     .await?;
