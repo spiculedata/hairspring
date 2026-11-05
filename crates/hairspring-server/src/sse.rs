@@ -54,7 +54,8 @@ pub async fn events(
         return Err(ApiError::not_found());
     }
     let (svc, id) = (s.svc.clone(), run_id.clone());
-    blocking(move || svc.get_run(&id))
+    // The run's own row only: the full detail (failures, findings, properties) is not needed to know it exists.
+    blocking(move || Ok(svc.store().get_run(&id)?))
         .await?
         .ok_or_else(ApiError::not_found)?;
     // Keyed like the rate limit: the token, or the client address when there are no tokens.
@@ -179,12 +180,14 @@ impl RunFeed for ServiceFeed {
     }
 
     fn is_terminal(&self) -> bool {
+        // The run's own row only; see the note at connect.
         self.state
             .svc
+            .store()
             .get_run(&self.run_id)
             .ok()
             .flatten()
-            .map(|d| d.run.state.is_terminal())
+            .map(|run| run.state.is_terminal())
             .unwrap_or(true)
     }
 }

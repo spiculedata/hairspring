@@ -685,6 +685,13 @@ impl Store for PgStore {
         checks::list(&mut *self.client()?, failure_id)
     }
 
+    fn list_checks_of_failures(
+        &self,
+        failure_ids: &[&str],
+    ) -> Result<BTreeMap<String, Vec<CheckRecord>>> {
+        checks::list_many(&mut *self.client()?, failure_ids)
+    }
+
     fn reporters_of(&self, run_id: &str, seeds: &[u64]) -> Result<BTreeMap<u64, String>> {
         explorer::reporters_of(&mut *self.client()?, run_id, seeds)
     }

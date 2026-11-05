@@ -7,8 +7,10 @@
 //! one: a client that loads further pages should drop ids it already holds.
 //!
 //! A failure's confirmation state is derived from its stored checks, not stored on its row, so a `status` filter reads
-//! the checks of the failures it passes over. One request reads at most [`STATUS_SCAN_CAP`] failures; if that is not
-//! enough to fill a page, the page comes back short with a `next_cursor` that carries on from where it stopped.
+//! the checks of the failures it passes over, one store read for each batch of [`STATUS_SCAN_BATCH`] failures. One
+//! request reads at most [`STATUS_SCAN_CAP`] failures; if that is not enough to fill a page, the page comes back short
+//! with a `next_cursor` that carries on from where it stopped.
+use crate::confirm_view::summary as finding_of;
 use crate::query::{page_size, parse_cursor};
 use crate::{summary, FailureSummary, Result, Service, ServiceError, MAX_LIST, MAX_TARGET_LEN};
 use hairspring_engine::confirm::FindingStatus;
@@ -25,8 +27,9 @@ pub const MAX_LIST_OFFSET: u64 = 100_000;
 const MAX_PROPERTY_PREFIX_BYTES: usize = crate::MAX_PREFIX_BYTES;
 /// Failures whose checks one status-filtered request reads before it stops and hands back a cursor.
 pub const STATUS_SCAN_CAP: u64 = 1000;
-/// Failures fetched from the store at a time while scanning for a status.
-const STATUS_SCAN_BATCH: u32 = 100;
+/// Failures fetched from the store at a time while scanning for a status, and the most whose checks one store read
+/// covers. A batch never runs past the scan cap, so the cap still bounds the failures a request reads.
+const STATUS_SCAN_BATCH: u32 = hairspring_store::CHECK_READ_BATCH as u32;
 const RUN_ID_PREFIX: &str = "run_";
 const RUN_ID_HEX: usize = 16;
 const MODES: [&str; 2] = ["search", "sweep"];
@@ -236,12 +239,18 @@ impl Service {
         let mut position = offset;
         let mut scanned = 0u64;
         loop {
-            let batch = self
-                .store
-                .list_failures_page(filter, position, STATUS_SCAN_BATCH)?;
-            let last_batch = batch.len() < STATUS_SCAN_BATCH as usize;
+            let wanted = (scan_cap - scanned).clamp(1, u64::from(STATUS_SCAN_BATCH)) as u32;
+            let batch = self.store.list_failures_page(filter, position, wanted)?;
+            let last_batch = batch.len() < wanted as usize;
+            // One read of the checks for the whole batch, so a check row the store cannot decode fails the page even
+            // if it belongs to a failure past the end of it (SQLite can hold such a row; PostgreSQL's column types
+            // prevent it). Each failure's finding is still worked out only when the scan reaches it, so a failure
+            // past the end of the page whose checks decode but do not make a finding cannot fail the request.
+            let ids: Vec<&str> = batch.iter().map(|f| f.id.as_str()).collect();
+            let mut checks = self.store.list_checks_of_failures(&ids)?;
             for record in &batch {
-                let found = self.finding_summary(&record.id)?;
+                let records = checks.remove(&record.id).unwrap_or_default();
+                let found = finding_of(&records)?;
                 if found.status == want.as_str() {
                     if failures.len() == limit {
                         // One more match than the page holds: the next page starts at it.
@@ -348,17 +357,22 @@ mod tests {
             .unwrap();
         assert_eq!(page.failures.len(), DEFAULT_LIST_PAGE as usize);
         assert_eq!(page.next_cursor.as_deref(), Some("50"));
-        let all = svc
-            .failure_page_scanning(
-                &FailureListQuery {
-                    limit: Some(MAX_LIST_PAGE),
-                    ..query("candidate", None)
-                },
-                u64::MAX,
-                u64::MAX,
-            )
+        // Pages of the most rows each, starting where the last stopped: the second reaches into a third store batch.
+        let big = |cursor: &str| FailureListQuery {
+            limit: Some(MAX_LIST_PAGE),
+            ..query("candidate", Some(cursor))
+        };
+        let second = svc
+            .failure_page_scanning(&big("500"), u64::MAX, u64::MAX)
             .unwrap();
-        assert_eq!((all.failures.len(), all.next_cursor), (207, None));
+        assert_eq!(
+            (second.failures.len(), second.next_cursor.as_deref()),
+            (500, Some("1000"))
+        );
+        let last = svc
+            .failure_page_scanning(&big("1000"), u64::MAX, u64::MAX)
+            .unwrap();
+        assert_eq!((last.failures.len(), last.next_cursor), (7, None));
     }
 
     fn service_with_runs(n: usize) -> Service {

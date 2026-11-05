@@ -8,6 +8,8 @@ use crate::types::{Result, StoreError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+/// Most failure ids one query of [`crate::Store::list_checks_of_failures`] binds; more are read in further queries.
+pub const CHECK_READ_BATCH: usize = 500;
 /// Most checks one confirmation may hold (the pipeline has four kinds).
 pub const MAX_CHECKS_PER_CONFIRMATION: usize = 8;
 /// Most checks one failure may hold across all its confirmations. A confirmation that would pass it drops the oldest

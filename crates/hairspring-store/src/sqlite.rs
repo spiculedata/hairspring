@@ -571,6 +571,13 @@ impl Store for SqliteStore {
         checks::list(&self.conn(), failure_id)
     }
 
+    fn list_checks_of_failures(
+        &self,
+        failure_ids: &[&str],
+    ) -> Result<BTreeMap<String, Vec<CheckRecord>>> {
+        checks::list_many(&self.conn(), failure_ids)
+    }
+
     fn put_run_identity(&self, identity: &RunIdentity) -> Result<IdentityOutcome> {
         lineage::put_identity(&mut self.conn(), identity)
     }
