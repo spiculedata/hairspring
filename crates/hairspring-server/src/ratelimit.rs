@@ -258,9 +258,13 @@ mod tests {
         assert!(limiter.is_over(&anonymous_key(v6(9, 77))));
     }
 
-    /// Gives each caller a distinct start time, so "the oldest" is never a tie.
+    /// Gives each caller a distinct start time, so "the oldest" is never a tie: spins until the clock has moved
+    /// past the previous caller's start, however coarse the clock is or loaded the machine.
     fn pause_between_callers() {
-        std::thread::sleep(Duration::from_millis(1));
+        let before = Instant::now();
+        while Instant::now() <= before {
+            std::hint::spin_loop();
+        }
     }
 
     fn anon(i: u32) -> String {
@@ -307,19 +311,34 @@ mod tests {
 
     #[test]
     fn a_new_anonymous_caller_is_admitted_by_evicting_exactly_the_oldest_tenth() {
-        let limiter = RateLimiter::with_capacity(5, LONG, 100);
+        let limiter = RateLimiter::with_capacity(1, LONG, 100);
         for i in 0..100 {
+            // Two calls each put every caller over its limit of one, so `is_over` can tell who kept a window.
             assert!(limiter.check(&anon(i)));
+            assert!(!limiter.check(&anon(i)));
             pause_between_callers();
         }
         assert_eq!(limiter.len(), 100);
         assert!(limiter.check(&anon(1_000)));
         assert_eq!(limiter.len(), 91, "ten evicted, one added");
-        // The oldest ten went; the eleventh oldest kept its one count, so four of its five calls remain.
-        for i in 0..4 {
-            assert!(limiter.check(&anon(10)), "call {i}");
+        // The oldest ten lost their windows entirely; `is_over` neither counts nor stores, so it cannot disturb this.
+        for i in 0..10 {
+            assert!(
+                !limiter.is_over(&anon(i)),
+                "oldest caller {i} should have been evicted"
+            );
         }
-        assert!(!limiter.check(&anon(10)));
+        // Every other caller, the newest included, kept its accumulated count.
+        for i in 10..100 {
+            assert!(
+                limiter.is_over(&anon(i)),
+                "caller {i} should have kept its window"
+            );
+        }
+        assert!(
+            !limiter.is_over(&anon(1_000)),
+            "the new caller has used one of its one call"
+        );
     }
 
     #[test]
