@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Beginner's guide (wiki)
+    url: https://github.com/spiculedata/hairspring/wiki
+    about: Installation, a first run, running your own software, and troubleshooting. Check Troubleshooting before opening an issue. Security reports go through SECURITY.md, not an issue.

@@ -67,6 +67,18 @@ What we do **not** claim: bit-exact replay of arbitrary programs on macOS (there
 this), a general-purpose deterministic hypervisor, or that Hermit (a young open-source
 project) is production-hardened. See [Limitations](#limitations).
 
+## Getting started and getting help
+
+New to Hairspring? Start with the [wiki](https://github.com/spiculedata/hairspring/wiki): Installation, Your first run,
+then Running your own software. Pre-release binaries are on the
+[releases page](https://github.com/spiculedata/hairspring/releases). This README and `docs/` describe the `main` branch,
+which is ahead of the pre-release: [docs/upgrading.md](docs/upgrading.md) lists what the pre-release lacks and how to
+tell which build you have. To run a server for a team, see [docs/deploy.md](docs/deploy.md).
+
+Questions and bugs: [open an issue](https://github.com/spiculedata/hairspring/issues/new/choose) and include the output of
+`hairspring --version`, `uname -a` and, if you use the process backend, `hairspring doctor --process-backend`. Security problems: do not open an issue; see
+[SECURITY.md](SECURITY.md).
+
 ## Quick start
 
 ```bash
@@ -254,6 +266,10 @@ workflows or gRPC.
 #   HAIRSPRING_DB_PASSWORD, HAIRSPRING_ADMIN_TOKEN, HAIRSPRING_WORKER_TOKEN
 docker compose up --build -d      # PostgreSQL + server + 2 workers
 ```
+
+`.env.example` lists the three variables. The image has no Hermit and no `hairspring.toml`, so out of the box it runs
+only the built-in simulation targets; process targets need workers on Linux x86-64 hosts with Hermit. Tokens, remote
+workers, PostgreSQL, systemd, backups and upgrades are covered in [docs/deploy.md](docs/deploy.md).
 
 Roles: `read` (inspect results), `run` (start and cancel runs, replay bundles, act as a worker), `admin`. Tokens are
 SHA-256 hashed in memory and compared in constant time; the server refuses to listen on a non-loopback
