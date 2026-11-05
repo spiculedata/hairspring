@@ -121,6 +121,175 @@ that does not finish within `trial_timeout_secs` is reported as inconclusive, ne
   small budget says only that those seeds did not fail. Raise `max_trials`, or run the `fixed` mode for comparison
   (the same program with a mutex).
 
+## Tour of the web UI
+
+A walk through the web UI, from finding a failure to deciding what to trust. Every picture comes from a scratch server
+that held a few runs of the built-in simulation targets (`pubsub-buggy`, `pubsub-atomic` and `lock-lease`). Simulation
+targets declare no named properties and cannot be confirmed, so the pages show those states as they are. A populated
+property table, the coverage charts and a failure with recorded checks need the `process` backend with Hermit on Linux
+x86-64; those were not captured here, and the text below says what they would add.
+
+Start the server and open it:
+
+```bash
+hairspring test pubsub-buggy --seed 5     # something to look at
+hairspring serve                          # then open http://127.0.0.1:7878
+```
+
+With no tokens the server listens on loopback only and the UI opens at once. With tokens (`--tokens-file` or
+`HAIRSPRING_TOKENS`) the UI asks for one, keeps it for that browser tab only, and uses the token's role: a `read` token
+can look at everything, and starting a run needs the `run` role.
+
+### 1. Start from Overview
+
+![The Overview page in the light theme: failed runs and the newest failures under "Needs attention", then recent runs with status badges and a count of workers, beside a side navigation.](images/ui/overview-light.png)
+
+*Overview (light theme). The organisation name beside "Hairspring" was set with `--organisation`. Simulation data.*
+
+**Needs attention** lists runs that failed or errored among the newest 20, and the newest stored failures. It never says
+that anything is fine: when both lists are empty it says which runs it looked at. The side navigation has Overview, Runs,
+Failures, Targets and Workers. On a phone it becomes a row of links under the top bar.
+
+![The same Overview page in the dark theme.](images/ui/overview-dark.png)
+
+*The same page in the dark theme. The Colour theme switch (System, Light, Dark) is at the top right; the choice is
+saved in your browser only.*
+
+![The top bar in the dark theme: the Hairspring name and organisation, the search box, and the System, Light and Dark buttons with Dark pressed.](images/ui/theme-switch-dark.png)
+
+*The top bar close up, dark theme, with Dark chosen.*
+
+### 2. Start a run, or a sweep
+
+![The Runs page: a form with a Target menu set to pubsub-atomic, Run type set to "Measure how often (sweep)", a Trials box holding 5, the budget the server will enforce, then the filter bar and the list of runs.](images/ui/runs-start-form-light.png)
+
+*The Runs page with the Start run form filled in for a sweep. Simulation data.*
+
+"Find a failure" is a search that ends at its first failure, so it has no rate. "Measure how often" is a sweep that runs
+the whole budget and stores every trial. The form shows the budget the server will enforce before you press the button,
+and opens the run's page once the server accepts it.
+
+![The Runs page with a read token: the Start run button is greyed out and a line beside it says the read role cannot start runs or sweeps.](images/ui/runs-read-only-light.png)
+
+*With a `read` token, Start run is disabled and says why.*
+
+![The Runs page with the state filter set to Failed, listing three failed runs.](images/ui/runs-filtered-light.png)
+
+*Filters are kept in the address (here `/runs?state=failed`), so a filtered list can be bookmarked. Runs: state, run
+type and target. Failures: run id, property id prefix and state.*
+
+The list refreshes by itself every few seconds, and **Load more** adds older rows (Load more and the 100,000-row limit were checked in the web tests, not captured here). A sweep started from the form appears
+in the list, and its page opens as soon as the server accepts it:
+
+![The Runs page after a sweep started from the form: the newest run is a lock-lease run that failed, above a finished pubsub-atomic sweep of 10 trials and, below it, two failed searches and a failed sweep of pubsub-buggy.](images/ui/runs-list-light.png)
+
+*The list after a sweep was started from the form. Simulation data.*
+
+### 3. Read a run
+
+![A run page for pubsub-buggy: Failed, a panel of what the run shows and does not show, four tabs, an empty property table and a coverage section.](images/ui/run-properties-light.png)
+
+*A run page, Properties tab. Simulation data: no named properties, so the table is empty.*
+
+The panel at the top states only what the server reports for the run: how many trials ran, the first failing seed, and,
+for a finished sweep, the counts and the rate. "What it does not show" says what the numbers do not mean, for example
+that no failure of the run is confirmed. The **Properties** tab holds the property table and **Coverage over trials**,
+three small charts of what was reached and seen. For a simulation target there is nothing to count, and the page says so
+in one sentence. The tab is kept in the address (`?tab=failures`), so a tab can be linked.
+
+![The same run page on the Failures tab, listing the run's one failure record.](images/ui/run-failures-tab-light.png)
+
+*The Failures tab lists the run's failure records; open one to see its steps.*
+
+![The run page in the dark theme at 390 pixels wide: the facts, the outcome panel and the start of the tab row, under a top bar with the theme switch and the search box.](images/ui/run-phone-dark.png)
+
+*A phone-width window (390 pixels, dark theme): the navigation is a row under the top bar and the tab row scrolls
+sideways. The light theme is [run-phone-light.png](images/ui/run-phone-light.png).*
+
+### 4. Look at the failure
+
+![The Failures page filtered to the Candidate state, listing three failures with their target, state, message, run, original and shortest step counts.](images/ui/failures-list-light.png)
+
+*The Failures page, newest first, filtered to Candidate. Simulation data.*
+
+Open a failure from Failures, from a run's Failures tab, or from the search box. The failure page shows the shortest
+failing steps and the bundle text. **Replay** runs the stored steps once more on the server and says whether this bundle
+fails again. **Copy link**, **Copy summary** and **Copy bundle** put text on your clipboard (the page says "Copied", or
+asks you to copy by hand if the browser refuses), and **Download bundle** saves the file for `hairspring replay` on
+another machine.
+
+![The failure page after pressing Replay: a badge reads "Failed again on replay" with a line saying one replay is not a confirmation.](images/ui/failure-replay-light.png)
+
+*After Replay. "Failed again on replay" is one replay on this server. It is not a confirmation and does not say how
+often the failure happens or that it is fixed.*
+
+### 5. What the confirmation ladder means
+
+![The failure page for pubsub-buggy: the Confirmation section shows Candidate as the current step, with Rerun repeated, Confirmed and Verified marked Not reached, and the text "No checks recorded. This failure has not been confirmed."](images/ui/failure-confirmation-light.png)
+
+*The Confirmation section of a simulation failure: Candidate, with no checks. Simulation data.*
+
+The server works the ladder out from the checks stored for the failure: **Candidate** (no check has repeated it),
+**Rerun repeated** (same-seed reruns repeat it, no replay yet), **Confirmed** (the reruns and the replay of its bundle
+repeat it) and **Verified** (confirmed, and Hermit's strict verify agrees). No step says the failure is fixed. Two states are ends of the
+ladder, not rungs: "Control failed" (the reruns repeat the failure, but the fixed build still fails at this seed) and
+"Not reproducible" (a rerun or the replay did not repeat it on the environment it was recorded in). The page cannot start a confirmation: run `hairspring confirm <failure id>` for that. It needs the
+`process` backend with Hermit, which runs on Linux x86-64, so a simulation failure stays a candidate and the page shows
+the command it would need. The checks table, which lists each recorded check, appears once a failure has checks. It was
+not captured here because that needs Hermit.
+
+![The failure page with the word Confirmation pressed: a box defines it as recorded checks that a failure repeats, with a Glossary link.](images/ui/failure-term-popover-light.png)
+
+*A word with a dotted underline opens its definition when pressed or activated from the keyboard.*
+
+### 6. The seed explorer and the trial page
+
+![The seed explorer for a sweep of pubsub-buggy: a strip of 20 judged trials all marked failed, a count by class and a table filter.](images/ui/seeds-explorer-light.png)
+
+*The seed explorer (the run's "Seeds and trials" tab links to it): one mark per judged trial, with filters for verdict,
+property and schedule fingerprint. In this simulation sweep all 20 trials failed.*
+
+![A trial page: "Seed 1 failed", a note that no detail was kept for this trial, and the schedule figures from its row.](images/ui/trial-light.png)
+
+*A trial page, opened from a row of the explorer. This simulation trial kept no detail, and the page says so.*
+
+### 7. Targets, workers, search and the glossary
+
+![The Targets page listing lock-lease, pubsub-atomic and pubsub-buggy with their kind, budget and description.](images/ui/targets-light.png)
+
+*Targets: name, kind, budget and description, as the server lists them.*
+
+![The Workers page with a read token: a queue line, then a table with embedded-0 (Idle, Trusted) and remote-1 (Idle, Untrusted), their capabilities, what they hold and when they were last seen.](images/ui/workers-light.png)
+
+*Workers. State is Busy (a job lease that has not ended), Idle or Not seen recently. Trust is set by an administrator.
+Capabilities are the worker's own statement and are not checked. A `read` token sees no Id column, because a worker id
+is a credential for the worker endpoints.*
+
+![The search box with "run_" typed in and a list of matching runs under it.](images/ui/search-results-light.png)
+
+*The search box finds ids and names from the start of the text (at least 2 characters). Down, Up and Enter move through
+and open a match; Escape closes the list.*
+
+![The Glossary page with the first entries: Bundle, Confirmation, Control, Deterministic, Finding.](images/ui/glossary-light.png)
+
+*The Glossary page at `/glossary`.*
+
+### Regenerating the pictures
+
+`scripts/capture-ui-screenshots.mjs` rebuilds every picture here in a scratch directory. It creates its own tokens, runs
+a few simulation searches and sweeps, starts `hairspring serve` and a worker on a loopback port, drives Chromium through
+Playwright, and stops the two processes it started. It writes nothing to tracked files. The usage is in the header of
+the script; in short:
+
+```bash
+(cd web && npm ci && npm run build) && cargo build -p hairspring-cli
+mkdir -p /tmp/hs-shots/pw && (cd /tmp/hs-shots/pw && npm init -y && npm i playwright)
+node scripts/capture-ui-screenshots.mjs --port 7931 --scratch /tmp/hs-shots --out /tmp/hs-shots/shots
+```
+
+Look at each picture for paths, names and tokens before you commit it, and shrink the files (`pngquant` or `oxipng`)
+if they are large.
+
 ## The Overview page
 
 With `hairspring serve` running, the web UI opens on the Overview page (the address `/`). The list of runs, with the form
@@ -408,7 +577,7 @@ from for 24 hours is removed when the table is full. A trimmed example:
   `GET /api/runs` and `GET /api/failures`.
 - `q` given more than once: the last one is used, as with the other query parameters.
 
-The endpoint is meant for a search box in the web UI's top bar, which is a separate change. See "Search" in
+The web UI's top-bar search box uses this endpoint (see "The search box" above). See "Search" in
 [architecture.md](architecture.md) for what each group costs.
 
 ## Start a run or a sweep from the web UI
@@ -550,4 +719,4 @@ An SDK adds named properties (`always`, `sometimes`, `reachable`) that are track
 | `Hermit was not found` | `HAIRSPRING_HERMIT` is unset and `hermit` is not on `PATH`. Export the path the installer printed |
 | `Inherited descriptor cleanup failed ... close_range` | The environment (an emulated or restricted container) does not implement `close_range`. Run on a native Linux host |
 | `environment mismatch` on replay | The loader changed since the bundle was recorded. See determinism.md |
-| `no stored run` or a 404 for a run you had a link to | The run may have been removed by `hairspring gc`. The UI does not yet say so; check with whoever runs it |
+| `no stored run` or a 404 for a run you had a link to | The run may have been removed by `hairspring gc`. The UI says "This run does not exist here. It may have been removed." but not why; check with whoever runs it |

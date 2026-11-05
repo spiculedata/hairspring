@@ -11,7 +11,10 @@ property, **shrinks it to a minimal trace, and hands you a bundle that replays i
 the deterministic-simulation testing used by FoundationDB and TigerBeetle. It is open source and runs on your
 laptop or your own servers.
 
-<p align="center"><img src="docs/images/failure-view.png" alt="A minimal 8-step reproduction of a duplicate-delivery bug, with Replay and state inspection" width="760"></p>
+<p align="center"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/ui/failure-confirmation-dark.png">
+  <img src="docs/images/ui/failure-confirmation-light.png" alt="The failure page for pubsub-buggy: a minimal 8-step reproduction of a duplicate-delivery bug, with Replay, Download bundle and a Confirmation section that reads Candidate, no checks recorded" width="760">
+</picture></p>
 
 ```text
 $ hairspring test pubsub-buggy --seed 5
@@ -77,6 +80,8 @@ hairspring test lock-lease --seed 7
 hairspring doctor lock-lease     # is the target deterministic?
 hairspring serve                 # REST API, live UI and MCP at http://127.0.0.1:7878
 ```
+
+Then open <http://127.0.0.1:7878> for the web UI; see [The web UI](#the-web-ui) below.
 
 Without `make ui` the server still works (API and MCP); it shows a placeholder page instead of the UI.
 `scripts/install.sh` builds the CLI and installs it to `~/.local/bin` (or, with `--version <tag>`, downloads a release
@@ -169,6 +174,56 @@ property statistics are then incomplete, its verdict counts are not). `sweep_par
 when the sweep ended in an error or was cancelled: its counts are those of whatever ran, so a client that states a rate
 must check it and the run's state. REST and MCP accept a first seed near the top of the 64-bit range and wrap round
 to 0, while the CLI refuses such a sweep. Without a mode a run is a search, as before.
+
+## The web UI
+
+`hairspring serve` serves the web UI at `/` on the same address as the API. With no tokens configured it accepts only
+loopback connections and opens straight away. With tokens configured (see [Run it for a team](#run-it-for-a-team)) it
+asks for one and keeps it for that browser tab only. A `read` token can look at everything except worker ids; starting a run needs `run`.
+
+<p align="center"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/ui/overview-dark.png">
+  <img src="docs/images/ui/overview-light.png" alt="The Overview page: failed runs and newest failures that need attention, recent runs with status badges, and a count of workers, beside a side navigation with Overview, Runs, Failures, Targets and Workers" width="760">
+</picture></p>
+
+*Overview, with the organisation name set by `hairspring serve --organisation`. The data is from the built-in
+simulation targets.*
+
+A quick tour (the [quickstart](docs/quickstart.md#tour-of-the-web-ui) has the same walk with more pictures):
+
+- **Overview**: what needs attention (failed runs, the newest failures), the latest runs and the workers.
+- **Runs**: every stored run, with filters, **Load more**, and a form to start a search ("Find a failure") or a sweep
+  ("Measure how often"). With a `read` token the form is disabled and says why.
+- **A run's page**: its facts, what it shows and does not show, and tabs for Properties, Seeds and trials, Failures and
+  Activity.
+- **Failures**: the shortest failing steps, **Replay**, **Copy bundle**, and a Confirmation section showing how far
+  the failure has been checked.
+- **Targets**, **Workers** (state, trust, capabilities, queue) and a **Glossary**. The top bar has a search box for ids,
+  and a Light, Dark or System colour theme.
+
+<p align="center"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/ui/runs-start-form-dark.png">
+  <img src="docs/images/ui/runs-start-form-light.png" alt="The Runs page with the Start run form set to a sweep of pubsub-atomic with 5 trials, the budget the server will enforce, and the filter bar above the list of runs" width="760">
+</picture></p>
+
+*The Runs page. The form shows the budget the server will enforce before you start.*
+
+<p align="center"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/ui/run-properties-dark.png">
+  <img src="docs/images/ui/run-properties-light.png" alt="A run page: pubsub-buggy, Failed, with a panel listing what the run shows and does not show, four tabs, an empty property table and the coverage section saying every count stayed at zero" width="760">
+</picture></p>
+
+*A run page (light and dark themes both exist; GitHub shows the one that matches your setting). Simulation
+targets declare no named properties, so the property table is empty and the coverage chart says so; a `process`
+target with the guest SDK fills both.*
+
+<p align="center"><img src="docs/images/ui/failures-list-light.png" alt="The Failures page filtered to the Candidate state, listing three failures with target, state, message, run, original and shortest step counts" width="760"></p>
+
+*The Failures page filtered to Candidate. A candidate is a failure no check has repeated yet. Confirming one needs the
+`process` backend with Hermit on Linux x86-64, so none of these simulation failures can be confirmed.*
+
+The screenshots were taken by [`scripts/capture-ui-screenshots.mjs`](scripts/capture-ui-screenshots.mjs) against a
+scratch server; the quickstart says how to regenerate them.
 
 ## For AI agents (MCP)
 
