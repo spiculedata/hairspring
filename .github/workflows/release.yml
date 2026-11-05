@@ -73,7 +73,9 @@ jobs:
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           echo "HAIRSPRING_BUILD_COMMIT=$GITHUB_SHA" >> "$GITHUB_ENV"
-          echo "HAIRSPRING_BUILD_DATE=$(git show -s --format=%cs "$GITHUB_SHA")" >> "$GITHUB_ENV"
+          # On its own line so a failing git stops the step; inside echo's argument the failure would be ignored.
+          date="$(git show -s --format=%cs "$GITHUB_SHA")"
+          echo "HAIRSPRING_BUILD_DATE=$date" >> "$GITHUB_ENV"
       - name: Test
         run: cargo test --locked -p hairspring-cli
       - name: Build
@@ -133,7 +135,9 @@ jobs:
       - name: Record the build commit
         run: |
           echo "HAIRSPRING_BUILD_COMMIT=$GITHUB_SHA" >> "$GITHUB_ENV"
-          echo "HAIRSPRING_BUILD_DATE=$(git show -s --format=%cs "$GITHUB_SHA")" >> "$GITHUB_ENV"
+          # On its own line so a failing git stops the step; inside echo's argument the failure would be ignored.
+          date="$(git show -s --format=%cs "$GITHUB_SHA")"
+          echo "HAIRSPRING_BUILD_DATE=$date" >> "$GITHUB_ENV"
       - name: Test
         run: cargo test --locked -p hairspring-cli
       - name: Build

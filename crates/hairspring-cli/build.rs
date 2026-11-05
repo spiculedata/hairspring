@@ -36,20 +36,28 @@ fn main() {
             .then(|| git(&manifest_dir, &["rev-parse", "HEAD"]))
             .flatten()
     });
-    if let Some(raw) = commit.as_deref() {
-        if build_id::short_commit(raw).is_none() {
-            println!("cargo:warning=ignoring {COMMIT_ENV}/git commit {raw:?}: not a commit id; the build id is unknown");
-        }
+    // Only a value that passed validation (hex digits only) is ever handed to git, and after the options, so an override
+    // such as `--output=FILE` cannot reach git as an option.
+    let valid_commit = commit
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| build_id::short_commit(c).is_some());
+    if let (Some(raw), None) = (commit.as_deref(), valid_commit) {
+        println!("cargo:warning=ignoring {COMMIT_ENV}/git commit {raw:?}: not a commit id; the build id is unknown");
     }
     let date = non_empty_env(DATE_ENV).or_else(|| {
-        let commit = commit.as_deref()?;
         git(
             &manifest_dir,
-            &["show", "-s", "--format=%cs", commit.trim()],
+            &["show", "-s", "--format=%cs", valid_commit?, "--"],
         )
     });
+    if let (Some(_), Some(raw)) = (valid_commit, date.as_deref()) {
+        if build_id::commit_date(raw).is_none() {
+            println!("cargo:warning=ignoring {DATE_ENV}/git commit date {raw:?}: not YYYY-MM-DD; the date is unknown");
+        }
+    }
 
-    let id = build_id::build_id(commit.as_deref(), date.as_deref());
+    let id = build_id::build_id(valid_commit, date.as_deref());
     println!("cargo:rustc-env=HAIRSPRING_BUILD_ID={id}");
 }
 
@@ -92,11 +100,23 @@ fn watch_head(manifest_dir: &Path) {
     let head = git_dir.join("HEAD");
     watch_if_exists(&head);
     watch_if_exists(&common_dir.join("packed-refs"));
+    watch_if_exists(&common_dir.join("reftable"));
     let branch_ref = std::fs::read_to_string(&head)
         .ok()
         .and_then(|text| text.trim().strip_prefix("ref: ").map(str::to_string));
     if let Some(branch_ref) = branch_ref {
-        watch_if_exists(&common_dir.join(branch_ref));
+        // A packed branch has no loose ref file until the next commit writes one, which changes neither HEAD nor
+        // packed-refs. Watching the nearest directory that exists (cargo scans a directory for changes) catches it.
+        // The search stays inside refs/: watching the git directory itself would rerun on every index change.
+        let refs = common_dir.join("refs");
+        let target = common_dir.join(branch_ref);
+        if let Some(existing) = target
+            .ancestors()
+            .take_while(|p| p.starts_with(&refs))
+            .find(|p| p.exists())
+        {
+            watch_if_exists(existing);
+        }
     }
 }
 
