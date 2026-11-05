@@ -9,9 +9,12 @@ export const COVERAGE_NOTE =
 
 export const COVERAGE_EMPTY = 'No trial has been judged yet, so there is no coverage to draw.';
 
-/** Said instead of the charts when every count stayed at zero: three flat lines say nothing a sentence does not. */
+/**
+ * Said instead of the charts when every count stayed at zero: three flat lines say nothing a sentence does not. It says
+ * what was recorded, not what exists: a count of zero is not a finding that nothing is there.
+ */
 export const coverageNothingSeen = (trials: number): string =>
-  `Nothing was seen in any of the ${COUNT.format(trials)} ${trials === 1 ? 'trial' : 'trials'}: no property ids were reached or seen true, and no distinct schedules were counted.`;
+  `Every count stayed at zero over ${COUNT.format(trials)} ${trials === 1 ? 'trial' : 'trials'}: no property ids reached, no property ids seen true and no distinct schedules. This records that none were counted, not that none exist.`;
 
 export const AXIS_LABEL = 'Trial number';
 export const SHOW_TABLE = 'Show as a table';
@@ -21,7 +24,6 @@ export const PANEL_LABELS: Readonly<Record<PanelKey, string>> = {
   ids_true: 'Property ids seen true',
   schedules: 'Distinct schedules',
 };
-
 
 /** Said when points were left out. The server thins a very long series; the page thins again to stay readable. */
 export function downsampledNote(shown: number, total: number, serverThinned: boolean): string {

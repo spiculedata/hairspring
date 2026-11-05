@@ -78,13 +78,13 @@ export function OverviewPage() {
   return (
     <>
       <h1>{OVERVIEW_HEADING}</h1>
-      {runs.error && <LoadFailed what="runs" message={runs.error} />}
+      {runs.error && <LoadFailed what="runs" message={runs.error} network={runs.networkError} />}
       {runs.error && runs.data !== undefined && <p className="muted">{lastGoodLoad('runs')}</p>}
-      {failures.error && <LoadFailed what="failures" message={failures.error} />}
+      {failures.error && <LoadFailed what="failures" message={failures.error} network={failures.networkError} />}
       {failures.error && failures.data !== undefined && <p className="muted">{lastGoodLoad('failures')}</p>}
-      {workers.error && <LoadFailed what="workers" message={workers.error} />}
+      {workers.error && <LoadFailed what="workers" message={workers.error} network={workers.networkError} />}
       {workers.error && workers.data !== undefined && <p className="muted">{lastGoodLoad('workers')}</p>}
-      {showGuide && targets.error && <LoadFailed what="targets" message={targets.error} />}
+      {showGuide && targets.error && <LoadFailed what="targets" message={targets.error} network={targets.networkError} />}
       <UpdatedAt at={runs.updatedAt} />
       {showGuide && <FirstRunGuide targets={targets.data} targetsFailed={targets.error !== undefined} />}
       {showAttention && (

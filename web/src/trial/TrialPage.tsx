@@ -22,7 +22,7 @@ function Loaded({ runId, seq }: { runId: string; seq: number }) {
   useReportMissing(detail.notFound);
 
   if (detail.notFound) return <NotFound what="trial" />;
-  if (detail.error && !detail.data) return <LoadFailed what="this trial" message={detail.error} />;
+  if (detail.error && !detail.data) return <LoadFailed what="this trial" message={detail.error} network={detail.networkError} />;
   if (!detail.data) return <Loading what="trial" />;
   const onDownload = (stream: StreamName) => {
     setDownloadError(undefined);
@@ -56,7 +56,7 @@ export function SeedPage({ runId, seed }: { runId: string; seed: string }) {
   const lookup = usePolling(() => trialApi.seqOfSeed(runId, seed).then((seq) => ({ seq })), LOOKUP_RETRY_MS, () => true);
   useReportMissing(lookup.notFound);
   if (lookup.notFound) return <NotFound what="run" />;
-  if (lookup.error && !lookup.data) return <LoadFailed what="this seed" message={lookup.error} />;
+  if (lookup.error && !lookup.data) return <LoadFailed what="this seed" message={lookup.error} network={lookup.networkError} />;
   if (!lookup.data) return <Loading what="seed" />;
   if (lookup.data.seq === undefined) {
     return (

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { startPolling } from './pollLoop';
-import { isNotFound } from './pollPolicy';
+import { isNetworkFailure, isNotFound } from './pollPolicy';
 import { useTokenVersion } from './useTokenVersion';
 
 export interface Polled<T> {
@@ -8,6 +8,8 @@ export interface Polled<T> {
   error: string | undefined;
   /** The last request was a 404: the thing polled no longer exists, and polling has stopped. */
   notFound: boolean;
+  /** The last failure was no response at all (the request got no answer), not an error status from the server. */
+  networkError: boolean;
   /** When data last arrived (ms since the epoch); kept through later errors. Undefined until the first load. */
   updatedAt: number | undefined;
   reload: () => void;
@@ -21,6 +23,7 @@ export function usePolling<T>(load: () => Promise<T>, intervalMs: number, stop?:
   const [data, setData] = useState<T>();
   const [error, setError] = useState<string>();
   const [notFound, setNotFound] = useState(false);
+  const [networkError, setNetworkError] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number>();
   const loadRef = useRef(load);
   const stopRef = useRef(stop);
@@ -41,14 +44,16 @@ export function usePolling<T>(load: () => Promise<T>, intervalMs: number, stop?:
           setUpdatedAt(Date.now());
           setError(undefined);
           setNotFound(false);
+          setNetworkError(false);
         },
         onError: (e) => {
           setError(e instanceof Error ? e.message : String(e));
           setNotFound(isNotFound(e));
+          setNetworkError(isNetworkFailure(e));
         },
       }),
     [intervalMs, tick, tokenVersion],
   );
 
-  return { data, error, notFound, updatedAt, reload };
+  return { data, error, notFound, networkError, updatedAt, reload };
 }

@@ -53,6 +53,12 @@ describe('FailureActions', () => {
     expect([...container.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Copy link', 'Copy summary']);
   });
 
+  it('offers copy bundle too when the bundle is given, and only then', () => {
+    stubTrials([]);
+    const { container } = render(<FailureActions record={record} bundle="bundle text" />);
+    expect([...container.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Copy link', 'Copy summary', 'Copy bundle']);
+  });
+
   describe('when the run changes', () => {
     const other: FailureSummary = { ...record, id: 'f_def', run_id: 'run_fedcba9876543210' };
 

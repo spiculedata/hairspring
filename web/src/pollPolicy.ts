@@ -44,3 +44,9 @@ export function backoffDelay(baseMs: number, failures: number): number {
  * answering with a refusal such as a 401, 404 or 429.
  */
 export const isConnectivityFailure = (error: unknown): boolean => !(error instanceof ApiError) || error.status >= 500;
+
+/**
+ * Whether a failure is the browser saying no response arrived at all (fetch rejects with a TypeError), as opposed to the
+ * server answering with an error status. Only this kind may be put down to the connection; a 500 is the server's own answer.
+ */
+export const isNetworkFailure = (error: unknown): boolean => error instanceof TypeError;

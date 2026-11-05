@@ -11,8 +11,10 @@ export interface CopyItem {
   text: () => string;
 }
 
-async function writeToClipboard(text: string): Promise<CopyState> {
+async function writeToClipboard(read: () => string): Promise<CopyState> {
   try {
+    // Reading the text is inside the try: a text() that throws is a failed copy, and says so.
+    const text = read();
     if (navigator.clipboard === undefined) throw new Error('no clipboard');
     await navigator.clipboard.writeText(text);
     return 'copied';
@@ -30,7 +32,7 @@ export function CopyButtons({ items }: { items: readonly CopyItem[] }) {
   return (
     <>
       {items.map((item) => (
-        <button key={item.label} type="button" onClick={() => void writeToClipboard(item.text()).then(setState)}>
+        <button key={item.label} type="button" onClick={() => void writeToClipboard(item.text).then(setState)}>
           {item.label}
         </button>
       ))}

@@ -3,6 +3,7 @@ import { readSource } from './readSource';
 
 const styles = readSource('styles.css');
 const shell = readSource('shell/shell.css');
+const explorer = readSource('explorer/explorer.css');
 const rule = (css: string, selector: string): string => {
   const start = css.indexOf(`\n${selector} {`);
   if (start < 0) throw new Error(`no rule for ${selector}`);
@@ -24,5 +25,13 @@ describe('content column', () => {
   it('keeps a long line of preformatted text inside its own scrolling box', () => {
     expect(rule(styles, 'pre')).toMatch(/overflow:\s*auto/);
     expect(rule(styles, 'pre')).toMatch(/max-width:\s*100%/);
+  });
+
+  it('writes the pre declarations with a space after each semicolon', () => {
+    expect(rule(styles, 'pre')).not.toMatch(/;\S/);
+  });
+
+  it('draws a table inside a scroll box without a top margin that would leave a gap above its first row', () => {
+    expect(explorer).toMatch(/\.table-scroll > table \{[^}]*margin-top:\s*0/);
   });
 });

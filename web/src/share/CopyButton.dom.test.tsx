@@ -48,6 +48,22 @@ describe('CopyButton', () => {
   });
 });
 
+describe('CopyButton when the text cannot be read', () => {
+  it('says it could not copy when text() throws, instead of leaving the press without feedback', async () => {
+    stubClipboard(async () => undefined);
+    render(
+      <CopyButton
+        label="Copy link"
+        text={() => {
+          throw new Error('no text');
+        }}
+      />,
+    );
+    await click();
+    expect(screen.getByRole('status').textContent).toContain('Could not copy');
+  });
+});
+
 describe('CopyButtons', () => {
   const items = [
     { label: 'Copy link', text: () => 'a' },

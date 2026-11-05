@@ -44,7 +44,7 @@ function Loaded({ id }: { id: string }) {
   const onOpen = useCallback((trial: number) => setFilters((f) => ({ ...f, from: trial })), []);
 
   if (detail.notFound) return <NotFound what="run" />;
-  if (detail.error && !run) return <LoadFailed what="this run" message={detail.error} />;
+  if (detail.error && !run) return <LoadFailed what="this run" message={detail.error} network={detail.networkError} />;
   if (!run) return <Loading what="seeds" />;
   return (
     <SeedExplorerView

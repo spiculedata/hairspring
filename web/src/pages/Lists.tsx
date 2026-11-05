@@ -13,7 +13,7 @@ export function Targets() {
   return (
     <>
       <h1>Targets</h1>
-      {t.error && <LoadFailed what="targets" message={t.error} />}
+      {t.error && <LoadFailed what="targets" message={t.error} network={t.networkError} />}
       <UpdatedAt at={t.updatedAt} />
       <ScrollRegion label="Targets" hint={SCROLL_HINT} maxHeight={TABLE_MAX_HEIGHT}>
         <table>
@@ -41,7 +41,7 @@ export function Workers() {
   return (
     <>
       <h1>Workers</h1>
-      {w.error && <LoadFailed what="workers" message={w.error} />}
+      {w.error && <LoadFailed what="workers" message={w.error} network={w.networkError} />}
       <UpdatedAt at={w.updatedAt} />
       <ScrollRegion label="Workers" hint={SCROLL_HINT} maxHeight={TABLE_MAX_HEIGHT}>
         <table>

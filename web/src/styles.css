@@ -88,7 +88,7 @@ button.linklike { background: none; color: var(--fg); border: 0; padding: .15rem
 .badge-good::before { content: '✓' / ''; } .badge-bad::before { content: '✕' / ''; } .badge-busy::before { content: '●' / ''; } .badge-idle::before { content: '◌' / ''; } .badge-gap::before { content: '△' / ''; }
 .muted { color: var(--muted); } .error { color: var(--bad); }
 .facts { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; } .facts dt { color: var(--muted); } .facts dd { margin: 0; }
-pre { max-width: 100%; overflow: auto;background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: .6rem; font-size: .8rem; }
+pre { max-width: 100%; overflow: auto; background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: .6rem; font-size: .8rem; }
 .log { max-height: 18rem; } .state { margin: .25rem 0 .5rem 1.5rem; white-space: pre-wrap; }
 .timeline { list-style: none; padding: 0; counter-reset: s; } .timeline li { border-left: 2px solid var(--line); padding: .15rem 0 .15rem .75rem; margin-left: .5rem; }
 .step-n { display: inline-block; min-width: 1.6rem; color: var(--muted); font-variant-numeric: tabular-nums; }

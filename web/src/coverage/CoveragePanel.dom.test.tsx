@@ -42,7 +42,9 @@ describe('CoveragePanel', () => {
     };
     vi.spyOn(api, 'coverage').mockResolvedValue(flat);
     render(<CoveragePanel runId="run_1" live={false} />);
-    await waitFor(() => expect(screen.getByText(/nothing was seen in any of the 4 trials/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/every count stayed at zero over 4 trials/i)).toBeTruthy());
+    expect(document.body.textContent).toContain('This records that none were counted, not that none exist');
+    expect(document.body.textContent).not.toMatch(/nothing was seen/i);
     expect(screen.queryAllByRole('img')).toHaveLength(0);
   });
 

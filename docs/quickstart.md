@@ -166,6 +166,13 @@ state) is dropped at the next refresh, and rows read with **Load more** are show
   page can hold fewer failures than usual, or none, with **Load more** still offered to read further back. When a state
   is chosen the table has a State column.
 - There is no "mine" filter: a run does not record who started it.
+While that banner is showing, a section whose request got no answer says "Could not load X until the connection
+returns" and leaves the announcing to the banner. A section whose request was answered with an error by the server (a
+500, say) still shows that error, because the connection is not what failed for it.
+
+The copy buttons on a page (Copy link, Copy summary and, on the failure page, Copy bundle) share one status message: it
+says **Copied**, or says the copy did not work and to select the text and copy it yourself. Text too wide for the
+window scrolls inside its own box; click or tab into the box to scroll it from the keyboard.
 
 A Glossary page at `/glossary` defines the words the pages use (seed, trial, sweep, bundle and so on). On the failure
 page, a word with a dotted underline, such as Confirmation, opens its definition when pressed or activated from the
@@ -204,6 +211,9 @@ Under the charts, **Show as a table** lists the same points as figures.
   very long series; the page says that too.
 - A run that is still going is refreshed every few seconds, and loaded once more when it ends.
 - A run with no judged trial says so instead of drawing an empty chart.
+- A run whose three counts all stayed at zero shows one sentence instead of three flat charts: "Every count stayed at
+  zero over N trials: no property ids reached, no property ids seen true and no distinct schedules. This records that
+  none were counted, not that none exist."
 
 ## Side navigation and colour theme
 

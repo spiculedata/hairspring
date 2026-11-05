@@ -26,7 +26,7 @@ export function FailurePage({ id }: { id: string }) {
   useReportMissing(detail.notFound);
 
   if (detail.notFound) return <NotFound what="failure" />;
-  if (detail.error) return <LoadFailed what="this failure" message={detail.error} retries={false} />;
+  if (detail.error) return <LoadFailed what="this failure" message={detail.error} network={detail.networkError} retries={false} />;
   if (!detail.data) return <Loading what="failure" />;
   const { record, steps, bundle } = detail.data;
   const stepsToShow = replay?.steps ?? steps;

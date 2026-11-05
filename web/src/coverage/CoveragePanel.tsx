@@ -25,7 +25,7 @@ export function CoveragePanel({ runId, live }: { runId: string; live: boolean })
   return (
     <section className="coverage" aria-labelledby="coverage-title">
       <h2 id="coverage-title">{COVERAGE_TITLE}</h2>
-      {error && <LoadFailed what="coverage" message={error} retries={live} />}
+      {error && <LoadFailed what="coverage" message={error} network={coverage.networkError} retries={live} />}
       {!data && !error && <Loading what="coverage" />}
       {data && data.points.length === 0 && <p className="muted">{COVERAGE_EMPTY}</p>}
       {data && data.points.length > 0 && isAllZero(data.points) && <p className="muted">{coverageNothingSeen(data.trials)}</p>}
