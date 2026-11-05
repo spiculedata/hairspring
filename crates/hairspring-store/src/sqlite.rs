@@ -5,6 +5,7 @@ use crate::run_mode::mode_of_config;
 use crate::sqlite_checks as checks;
 use crate::sqlite_explorer as explorer;
 use crate::sqlite_lineage as lineage;
+use crate::sqlite_read_pool::ReadPool;
 use crate::sqlite_run_end as run_end;
 use crate::sqlite_schema;
 use crate::sqlite_tree_query as query;
@@ -72,7 +73,20 @@ fn is_busy(e: &rusqlite::Error) -> bool {
     )
 }
 
+/// Read-only connections a store on a database file opens besides its writer, unless told otherwise.
+pub const DEFAULT_READ_CONNECTIONS: usize = 4;
+
+/// A store on one SQLite database. Writes go to one connection, behind a mutex, so they run one at a time. A store on a
+/// file also holds a few read-only connections ([`DEFAULT_READ_CONNECTIONS`] unless opened with
+/// [`SqliteStore::open_with_read_connections`]), so reads run side by side, with each other and with a write, as WAL
+/// mode allows. Every read call runs in one read transaction: it sees one committed snapshot, and that snapshot
+/// includes every write that had returned before the call began. An in-memory database cannot be shared between
+/// connections, so an in-memory store reads and writes through its one connection, as does a store opened with no
+/// read connections.
 pub struct SqliteStore {
+    // Field order is drop order: the read connections close before the writer, so the writer is the last connection
+    // and its close checkpoints the WAL.
+    pub(crate) readers: Option<ReadPool>,
     conn: Mutex<Connection>,
     /// How subtree queries are answered; the store's own rule unless a caller changes it.
     query_rule: Mutex<TreeQueryRule>,
@@ -137,13 +151,30 @@ pub(crate) fn job_from_row(r: &Row<'_>) -> rusqlite::Result<Job> {
 }
 
 impl SqliteStore {
+    /// Opens (creating if need be) the database file at `path` with [`DEFAULT_READ_CONNECTIONS`] read connections.
     pub fn open(path: &Path) -> Result<SqliteStore> {
+        SqliteStore::open_with_read_connections(path, DEFAULT_READ_CONNECTIONS)
+    }
+
+    /// Opens the database file at `path` with `readers` read-only connections besides the writer; with none, reads
+    /// share the writer's connection. The writer opens first and runs the open-time checks and the schema migration,
+    /// so the read connections only ever see the current schema. A path that names no file (an in-memory or temporary
+    /// database) gets no read connections, since another connection would see a different database.
+    pub fn open_with_read_connections(path: &Path, readers: usize) -> Result<SqliteStore> {
         let conn = Connection::open(path)?;
         // The timeout must be in place before the first statement that takes a lock: switching to WAL needs one, and
         // without a busy handler it fails at once with "database is locked" when another process is opening the file.
         conn.busy_timeout(BUSY_TIMEOUT)?;
         enable_wal(&conn)?;
-        SqliteStore::init(conn)
+        let file = conn
+            .path()
+            .filter(|p| !p.is_empty())
+            .map(std::path::PathBuf::from);
+        let mut store = SqliteStore::init(conn)?;
+        if let Some(file) = file.filter(|_| readers > 0) {
+            store.readers = Some(ReadPool::open(&file, readers)?);
+        }
+        Ok(store)
     }
 
     pub fn open_in_memory() -> Result<SqliteStore> {
@@ -155,6 +186,7 @@ impl SqliteStore {
         conn.pragma_update(None, "foreign_keys", "ON")?;
         sqlite_schema::migrate(&conn)?;
         Ok(SqliteStore {
+            readers: None,
             conn: Mutex::new(conn),
             query_rule: Mutex::new(TreeQueryRule::StoreDefault),
         })
@@ -169,8 +201,8 @@ impl SqliteStore {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Runs `f` on the store's own connection, so tests can inspect or seed an in-memory database with raw SQL. Not
-    /// part of the supported interface.
+    /// Runs `f` on the store's writer connection, so tests can inspect or seed a database with raw SQL. What it commits
+    /// is seen by the next read call. Not part of the supported interface.
     #[doc(hidden)]
     pub fn with_connection<R>(&self, f: impl FnOnce(&mut Connection) -> R) -> R {
         f(&mut self.conn())
@@ -186,13 +218,14 @@ impl SqliteStore {
         tree_id: &str,
         node: u64,
     ) -> Result<Vec<String>> {
-        query::explain(&self.conn(), query, form, tree_id, node)
+        self.read(|c| query::explain(c, query, form, tree_id, node))
     }
 
     /// The form the current rule gives subtree queries on this tree. For tests; not a supported interface.
     #[doc(hidden)]
     pub fn tree_query_form(&self, tree_id: &str) -> Result<TreeQueryForm> {
-        let tree = lineage::get_tree(&self.conn(), tree_id)?
+        let tree = self
+            .read(|c| lineage::get_tree(c, tree_id))?
             .ok_or_else(|| StoreError::NotFound(format!("tree {tree_id}")))?;
         Ok(query::form_for(self.rule(), tree.node_count))
     }
@@ -218,20 +251,23 @@ impl Store for SqliteStore {
     }
 
     fn get_run(&self, id: &str) -> Result<Option<RunRecord>> {
-        Ok(self
-            .conn()
-            .query_row("SELECT * FROM runs WHERE id=?", [id], run_from_row)
-            .optional()?)
+        self.read(|c| {
+            Ok(
+                c.query_row("SELECT * FROM runs WHERE id=?", [id], run_from_row)
+                    .optional()?,
+            )
+        })
     }
 
     fn list_runs(&self, limit: u32) -> Result<Vec<RunRecord>> {
-        let conn = self.conn();
-        let mut stmt =
-            conn.prepare("SELECT * FROM runs ORDER BY created_at DESC, rowid DESC LIMIT ?")?;
-        let rows = stmt
-            .query_map([limit], run_from_row)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows)
+        self.read(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT * FROM runs ORDER BY created_at DESC, rowid DESC LIMIT ?")?;
+            let rows = stmt
+                .query_map([limit], run_from_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
     }
 
     fn list_runs_page(
@@ -240,11 +276,11 @@ impl Store for SqliteStore {
         offset: u64,
         limit: u32,
     ) -> Result<Vec<RunRecord>> {
-        crate::sqlite_listing::list_runs(&self.conn(), filter, offset, limit)
+        self.read(|c| crate::sqlite_listing::list_runs(c, filter, offset, limit))
     }
 
     fn search(&self, q: &crate::SearchQuery) -> Result<crate::SearchHits> {
-        crate::sqlite_search::run(&self.conn(), q)
+        self.read(|c| crate::sqlite_search::run(c, q))
     }
 
     fn mark_running(&self, id: &str, now: i64) -> Result<()> {
@@ -308,30 +344,34 @@ impl Store for SqliteStore {
     }
 
     fn get_failure(&self, id: &str) -> Result<Option<FailureRecord>> {
-        Ok(self
-            .conn()
-            .query_row("SELECT * FROM failures WHERE id=?", [id], failure_from_row)
-            .optional()?)
+        self.read(|c| {
+            Ok(
+                c.query_row("SELECT * FROM failures WHERE id=?", [id], failure_from_row)
+                    .optional()?,
+            )
+        })
     }
 
     fn list_failures(&self, run_id: &str) -> Result<Vec<FailureRecord>> {
-        let conn = self.conn();
-        let mut stmt =
-            conn.prepare("SELECT * FROM failures WHERE run_id=? ORDER BY created_at, rowid")?;
-        let rows = stmt
-            .query_map([run_id], failure_from_row)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows)
+        self.read(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT * FROM failures WHERE run_id=? ORDER BY created_at, rowid")?;
+            let rows = stmt
+                .query_map([run_id], failure_from_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
     }
 
     fn list_recent_failures(&self, limit: u32) -> Result<Vec<FailureRecord>> {
-        let conn = self.conn();
-        let mut stmt =
-            conn.prepare("SELECT * FROM failures ORDER BY created_at DESC, rowid DESC LIMIT ?")?;
-        let rows = stmt
-            .query_map([limit], failure_from_row)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows)
+        self.read(|conn| {
+            let mut stmt = conn
+                .prepare("SELECT * FROM failures ORDER BY created_at DESC, rowid DESC LIMIT ?")?;
+            let rows = stmt
+                .query_map([limit], failure_from_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
     }
 
     fn list_failures_page(
@@ -340,11 +380,11 @@ impl Store for SqliteStore {
         offset: u64,
         limit: u32,
     ) -> Result<Vec<FailureRecord>> {
-        crate::sqlite_listing::list_failures(&self.conn(), filter, offset, limit)
+        self.read(|c| crate::sqlite_listing::list_failures(c, filter, offset, limit))
     }
 
     fn retention_scan(&self, cutoff_ms: i64) -> Result<Vec<crate::RetentionCandidate>> {
-        crate::sqlite_retention::scan(&self.conn(), cutoff_ms)
+        self.read(|c| crate::sqlite_retention::scan(c, cutoff_ms))
     }
 
     fn retention_lock(&self) -> Result<Option<crate::RetentionLock>> {
@@ -371,10 +411,12 @@ impl Store for SqliteStore {
     }
 
     fn get_blob(&self, hash: &str) -> Result<Option<Vec<u8>>> {
-        Ok(self
-            .conn()
-            .query_row("SELECT data FROM blobs WHERE hash=?", [hash], |r| r.get(0))
-            .optional()?)
+        self.read(|c| {
+            Ok(
+                c.query_row("SELECT data FROM blobs WHERE hash=?", [hash], |r| r.get(0))
+                    .optional()?,
+            )
+        })
     }
 
     fn enqueue_job(&self, run_id: &str, kind: &str, payload_json: &str, now: i64) -> Result<Job> {
@@ -447,20 +489,21 @@ impl Store for SqliteStore {
     }
 
     fn list_events(&self, run_id: &str, after_id: i64, limit: u32) -> Result<Vec<EventRecord>> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare("SELECT id,run_id,ts,kind,payload_json FROM events WHERE run_id=? AND id>? ORDER BY id LIMIT ?")?;
-        let rows = stmt
-            .query_map(params![run_id, after_id, limit], |r| {
-                Ok(EventRecord {
-                    id: r.get(0)?,
-                    run_id: r.get(1)?,
-                    ts: r.get(2)?,
-                    kind: r.get(3)?,
-                    payload_json: r.get(4)?,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows)
+        self.read(|conn| {
+            let mut stmt = conn.prepare("SELECT id,run_id,ts,kind,payload_json FROM events WHERE run_id=? AND id>? ORDER BY id LIMIT ?")?;
+            let rows = stmt
+                .query_map(params![run_id, after_id, limit], |r| {
+                    Ok(EventRecord {
+                        id: r.get(0)?,
+                        run_id: r.get(1)?,
+                        ts: r.get(2)?,
+                        kind: r.get(3)?,
+                        payload_json: r.get(4)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
     }
 
     fn ingest_trials(
@@ -475,11 +518,11 @@ impl Store for SqliteStore {
     }
 
     fn count_trials(&self, run_id: &str) -> Result<u64> {
-        trials::count_trials(&self.conn(), run_id)
+        self.read(|c| trials::count_trials(c, run_id))
     }
 
     fn get_trial(&self, run_id: &str, seq: u64) -> Result<Option<TrialRecord>> {
-        trials::get_trial(&self.conn(), run_id, seq)
+        self.read(|c| trials::get_trial(c, run_id, seq))
     }
 
     fn list_trials(
@@ -488,7 +531,7 @@ impl Store for SqliteStore {
         after_seq: Option<u64>,
         limit: u32,
     ) -> Result<Vec<TrialRecord>> {
-        trials::list_trials(&self.conn(), run_id, after_seq, limit)
+        self.read(|c| trials::list_trials(c, run_id, after_seq, limit))
     }
 
     fn list_trial_digests(
@@ -497,7 +540,7 @@ impl Store for SqliteStore {
         after_seq: Option<u64>,
         limit: u32,
     ) -> Result<Vec<TrialDigestRow>> {
-        trials::list_trial_digests(&self.conn(), run_id, after_seq, limit)
+        self.read(|c| trials::list_trial_digests(c, run_id, after_seq, limit))
     }
 
     fn list_trial_strip_rows(
@@ -506,31 +549,31 @@ impl Store for SqliteStore {
         after_seq: Option<u64>,
         limit: u32,
     ) -> Result<Vec<TrialStripRow>> {
-        trials::list_trial_strip_rows(&self.conn(), run_id, after_seq, limit)
+        self.read(|c| trials::list_trial_strip_rows(c, run_id, after_seq, limit))
     }
 
     fn get_catalog(&self, run_id: &str) -> Result<Vec<CatalogRowRecord>> {
-        trials::get_catalog(&self.conn(), run_id)
+        self.read(|c| trials::get_catalog(c, run_id))
     }
 
     fn list_run_properties(&self, run_id: &str) -> Result<Vec<RunPropertyRow>> {
-        trials::list_run_properties(&self.conn(), run_id)
+        self.read(|c| trials::list_run_properties(c, run_id))
     }
 
     fn run_contributors(&self, run_id: &str) -> Result<Vec<Contributor>> {
-        trials::run_contributors(&self.conn(), run_id)
+        self.read(|c| trials::run_contributors(c, run_id))
     }
 
     fn reporters_of(&self, run_id: &str, seeds: &[u64]) -> Result<BTreeMap<u64, String>> {
-        explorer::reporters_of(&self.conn(), run_id, seeds)
+        self.read(|c| explorer::reporters_of(c, run_id, seeds))
     }
 
     fn run_digest_use(&self, run_id: &str) -> Result<DigestUse> {
-        explorer::load_digest_use(&self.conn(), run_id)
+        self.read(|c| explorer::load_digest_use(c, run_id))
     }
 
     fn run_coverage_json(&self, run_id: &str) -> Result<Option<String>> {
-        explorer::run_coverage_json(&self.conn(), run_id)
+        self.read(|c| explorer::run_coverage_json(c, run_id))
     }
 
     fn set_worker_trusted(&self, id: &str, trusted: bool) -> Result<()> {
@@ -538,7 +581,7 @@ impl Store for SqliteStore {
     }
 
     fn worker_trusted(&self, id: &str) -> Result<Option<bool>> {
-        trials::worker_trusted(&self.conn(), id)
+        self.read(|c| trials::worker_trusted(c, id))
     }
 
     fn register_worker_with_secret(
@@ -568,7 +611,7 @@ impl Store for SqliteStore {
     }
 
     fn list_failure_checks(&self, failure_id: &str) -> Result<Vec<CheckRecord>> {
-        checks::list(&self.conn(), failure_id)
+        self.read(|c| checks::list(c, failure_id))
     }
 
     fn list_checks_of_failures(
@@ -583,7 +626,7 @@ impl Store for SqliteStore {
     }
 
     fn get_run_identity(&self, run_id: &str) -> Result<Option<RunIdentity>> {
-        lineage::get_identity(&self.conn(), run_id)
+        self.read(|c| lineage::get_identity(c, run_id))
     }
 
     fn create_tree(&self, new: &NewTree, now: i64) -> Result<TreeOutcome> {
@@ -591,11 +634,11 @@ impl Store for SqliteStore {
     }
 
     fn get_tree(&self, id: &str) -> Result<Option<TreeRecord>> {
-        lineage::get_tree(&self.conn(), id)
+        self.read(|c| lineage::get_tree(c, id))
     }
 
     fn tree_of_run(&self, run_id: &str) -> Result<Option<String>> {
-        lineage::tree_of_run(&self.conn(), run_id)
+        self.read(|c| lineage::tree_of_run(c, run_id))
     }
 
     fn add_tree_node(&self, tree_id: &str, new: &NewNode, now: i64) -> Result<NodeOutcome> {
@@ -603,11 +646,11 @@ impl Store for SqliteStore {
     }
 
     fn get_tree_node(&self, tree_id: &str, node: u64) -> Result<Option<NodeRecord>> {
-        lineage::get_node(&self.conn(), tree_id, node)
+        self.read(|c| lineage::get_node(c, tree_id, node))
     }
 
     fn tree_node_of_trial(&self, run_id: &str, seq: u64) -> Result<Option<NodeRecord>> {
-        lineage::node_of_trial(&self.conn(), run_id, seq)
+        self.read(|c| lineage::node_of_trial(c, run_id, seq))
     }
 
     fn set_node_verified(&self, tree_id: &str, node: u64, verified: Verified) -> Result<()> {
@@ -629,15 +672,15 @@ impl Store for SqliteStore {
         after: Option<u64>,
         limit: u32,
     ) -> Result<NodePage> {
-        query::descendants(&self.conn(), self.rule(), tree_id, node, after, limit)
+        self.read(|c| query::descendants(c, self.rule(), tree_id, node, after, limit))
     }
 
     fn subtree_tally(&self, tree_id: &str, node: u64) -> Result<Vec<VerdictCount>> {
-        query::tally(&self.conn(), self.rule(), tree_id, node)
+        self.read(|c| query::tally(c, self.rule(), tree_id, node))
     }
 
     fn subtree_first_failing(&self, tree_id: &str, node: u64) -> Result<Option<u64>> {
-        query::first_failing(&self.conn(), self.rule(), tree_id, node)
+        self.read(|c| query::first_failing(c, self.rule(), tree_id, node))
     }
 
     fn tree_children(
@@ -647,11 +690,11 @@ impl Store for SqliteStore {
         after: Option<u64>,
         limit: u32,
     ) -> Result<NodePage> {
-        query::children(&self.conn(), tree_id, node, after, limit)
+        self.read(|c| query::children(c, tree_id, node, after, limit))
     }
 
     fn tree_ancestors(&self, tree_id: &str, node: u64) -> Result<Vec<NodeRecord>> {
-        query::ancestors(&self.conn(), tree_id, node)
+        self.read(|c| query::ancestors(c, tree_id, node))
     }
 
     fn add_tree_branch(&self, new: &NewBranch, now: i64) -> Result<BranchOutcome> {
@@ -659,11 +702,11 @@ impl Store for SqliteStore {
     }
 
     fn get_tree_branch(&self, run_id: &str) -> Result<Option<BranchRecord>> {
-        lineage::get_branch(&self.conn(), run_id)
+        self.read(|c| lineage::get_branch(c, run_id))
     }
 
     fn find_tree_branch(&self, tree_id: &str, command_hash: &str) -> Result<Option<BranchRecord>> {
-        lineage::find_branch(&self.conn(), tree_id, command_hash)
+        self.read(|c| lineage::find_branch(c, tree_id, command_hash))
     }
 
     fn record_branch_verify(&self, run_id: &str, matched: bool) -> Result<()> {
@@ -675,7 +718,7 @@ impl Store for SqliteStore {
     }
 
     fn worker_secret_hash(&self, id: &str) -> Result<Option<String>> {
-        trials::worker_secret_hash(&self.conn(), id)
+        self.read(|c| trials::worker_secret_hash(c, id))
     }
 
     fn register_worker(&self, name: &str, caps_json: &str, now: i64) -> Result<WorkerRecord> {
@@ -703,10 +746,9 @@ impl Store for SqliteStore {
     }
 
     fn worker_count(&self) -> Result<u64> {
-        Ok(self
-            .conn()
-            .query_row("SELECT COUNT(*) FROM workers", [], |r| r.get::<_, i64>(0))?
-            as u64)
+        self.read(|c| {
+            Ok(c.query_row("SELECT COUNT(*) FROM workers", [], |r| r.get::<_, i64>(0))? as u64)
+        })
     }
 
     fn prune_workers(&self, before: i64) -> Result<u64> {
@@ -716,20 +758,21 @@ impl Store for SqliteStore {
     }
 
     fn list_workers(&self) -> Result<Vec<WorkerRecord>> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare("SELECT id,name,caps_json,registered_at,last_seen,trusted FROM workers ORDER BY registered_at, rowid")?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(WorkerRecord {
-                    id: r.get(0)?,
-                    name: r.get(1)?,
-                    caps_json: r.get(2)?,
-                    registered_at: r.get(3)?,
-                    last_seen: r.get(4)?,
-                    trusted: r.get(5)?,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows)
+        self.read(|conn| {
+            let mut stmt = conn.prepare("SELECT id,name,caps_json,registered_at,last_seen,trusted FROM workers ORDER BY registered_at, rowid")?;
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok(WorkerRecord {
+                        id: r.get(0)?,
+                        name: r.get(1)?,
+                        caps_json: r.get(2)?,
+                        registered_at: r.get(3)?,
+                        last_seen: r.get(4)?,
+                        trusted: r.get(5)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
     }
 }

@@ -673,6 +673,67 @@ Gaps for a later slice: the UI cannot tell "removed by retention" from "never ex
 there is no audit entry for a removal; and `--older-than` is the only age rule (nothing keeps the most recent N runs per
 target, or exempts a run).
 
+## SQLite connections
+
+A SQLite store on a database file holds one writer connection and four read-only connections
+(`hairspring_store::DEFAULT_READ_CONNECTIONS`; `SqliteStore::open_with_read_connections` takes another number, and 0
+sends reads to the writer). There is no command-line setting. PostgreSQL is unchanged: it already has a pool.
+
+- **Which connection.** Every `Store` method that only reads runs on a read connection. Every method that writes, or
+  reads and writes in one transaction (leasing a job, finishing one, ingesting trials, adding a confirmation or a tree
+  node, retention), runs on the writer, behind its mutex, as before. The retention report (`gc` without `--apply`)
+  also stays on the writer, because it keeps its working lists in temporary tables, which a read-only connection
+  cannot create; it still takes no SQLite lock a writer waits for, but other writes from the same process wait for
+  the writer's mutex while it runs, as they did before. The retention lock file is unchanged.
+- **What a read sees.** A read call runs in one read transaction, so all of its statements see one committed
+  snapshot. The snapshot is taken by the call's first statement, so it includes every write that had returned before
+  the call began, whichever connection the call gets. A read that started before a write may return the state from
+  before it.
+- **Read only.** Each read connection has `PRAGMA query_only=ON`, so a write through one fails with `SQLITE_READONLY`
+  (the conformance suite runs on a database file to catch a write sent to a reader). Read connections also have the
+  writer's 5 second busy timeout and `foreign_keys=ON`.
+- **Waiting.** When all four are busy, a read waits in a queue and reads are served in the order they arrived; the
+  pool never opens more. A write never waits for the read connections. In WAL mode a read does not wait for a write;
+  the busy timeout covers the rare cases where SQLite makes it wait (for example, recovering the WAL index after a
+  crash).
+- **Panics.** The pool's lock is held only to hand a connection out or take it back. A connection comes back when its
+  holder drops, including when a read panics; its transaction is rolled back first, and a connection that cannot be
+  rolled back is closed and replaced when next needed.
+- **Open and close.** The writer opens first and runs the WAL check and the schema migration; the read connections
+  open after, against the current schema, and an error opening one fails the open. The read connections close before
+  the writer, so the writer is the last connection and its close checkpoints the WAL.
+- **In memory.** An in-memory database cannot be shared between connections, so an in-memory store (as most tests
+  use) reads and writes through its one connection, as before.
+- **Checkpoints.** SQLite's automatic checkpoint (when the WAL passes 1000 pages) runs on the writer as it commits. A
+  checkpoint cannot copy frames newer than the oldest snapshot still being read, and the WAL starts again from the
+  beginning only when no read is using it, so a long read, or reads that overlap without a gap, let the WAL file grow
+  until they end. Read calls are short (the longest are list scans of a few seconds), so in practice the WAL is reset
+  between them.
+- **Memory statistics.** By default SQLite counts every allocation under one process-wide mutex. With several read
+  connections busy at once that mutex dominated: three heavy reads side by side took longer than the same three one
+  after another. The `hairspring` binary turns the statistics off as its first statement
+  (`hairspring_store::disable_sqlite_memory_statistics`, which must run before any thread uses SQLite); nothing reads
+  them. A program that embeds the store calls it itself, or keeps SQLite's default.
+
+Measured on a database of 100,000 runs and 300,000 failures (a release build, `hairspring serve --workers 0
+--rate-limit 0`, macOS on a 14-core Apple M3 Max), times in milliseconds. The four `/api/runs` lines are two runs of each build (a range
+where they differ); the heavy filter lines are one run. "Heavy filter" is
+`GET /api/failures?status=confirmed`, which reads a stored check result for each failure it scans.
+
+| Load | Before (one connection) p50 / p95 / max | After p50 / p95 / max |
+|---|---|---|
+| `GET /api/runs`, 1 client, 30 requests | 0.5 / 0.6 / 0.7–0.9 | 0.5 / 0.5–0.6 / 0.7 |
+| `GET /api/runs`, 8 clients × 20 | 1.3–1.4 / 1.6 / 2.2 | 1.1–1.2 / 1.6 / 2.0–2.4 |
+| `GET /api/runs`, 1 client × 15, while 3 clients loop the heavy filter | 264–371 / 553–685 / 560–902 | 0.6–0.7 / 0.7–0.8 / 1.0–1.1 |
+| `GET /api/runs`, 8 clients × 20, while 3 clients loop the heavy filter | 5.5–193 / 434–729 / 739–924 | 2.4–2.6 / 2.9 / 3.0 |
+| Heavy filter, 1 at a time (5 requests) | 1763–1819 | 1730–1792 |
+| Heavy filter, 2 / 3 / 4 at once (time until all finish) | 3614 / 5434 / 7278 | 2679 / 3955 / 6582 |
+
+With the read connections but without turning the statistics off, 2 / 3 / 4 heavy filters at once took 5046 / 8611 /
+12640 ms, slower than one connection; turning them off brought that to the figures above. Four at once still contend
+on SQLite's shared page cache (the bundled build shares one cache between connections), so they gain less than two or
+three.
+
 ## Connection and request limits
 
 The server speaks HTTP/1.1 only and applies these limits before any token is checked:

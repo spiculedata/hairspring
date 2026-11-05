@@ -129,6 +129,14 @@
   generated run of 200000 trials the first byte took 0.4 s on SQLite (0.26 s to 0.76 s on PostgreSQL) and now takes under 1 ms (about 57 ms on PostgreSQL, where the
   first read of stored events is the rest), and eight simultaneous connects no longer take memory in proportion to the
   run's size.
+- A SQLite store on a database file now reads through four read-only connections besides its one writer, so reads no
+  longer wait for one another or for a write. Each read call sees one committed snapshot that includes every write that
+  had returned before it began. A read of `/api/runs` while three clients looped the failures `status=confirmed` filter
+  took 0.6 to 0.7 ms at the median instead of 264 to 371 ms (two runs of each, on 100,000 runs and 300,000
+  failures; docs/architecture.md has the figures). In-memory stores keep a single connection; writes, retention and
+  the schema are unchanged. The `hairspring` binary also turns off SQLite's process-wide memory statistics at start-up,
+  whose mutex made heavy reads on several connections slower side by side than one after another. PostgreSQL is
+  unaffected.
 - Server hardening. The server now closes a connection that has not sent a complete request head within 10 seconds
   (this is also the idle time allowed between requests on a kept-alive connection), answers `408` and closes the
   connection when a request body has not arrived within 30 seconds, and allows at most 512 open connections
