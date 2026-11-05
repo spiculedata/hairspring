@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1-RC2 (2026-11-05)
+
 ### Added
 
 - Token labels. An entry in `--tokens-file` or `HAIRSPRING_TOKENS` may carry a label after the role, separated by one
@@ -414,3 +416,17 @@
   id prefixes the server issues, and the README names all 13 MCP tools.
 - `docs/architecture.md` documents the per-token worker registration limit (`--register-limit`, 100 an hour by default,
   `0` disables). SECURITY.md says why anonymous IPv6 limiting stays at a /64.
+- New guides: `docs/ci.md` (Hairspring in CI: a workflow with the GitHub Action, the same job without it, a regression
+  sweep and its exit codes, process targets on a self-hosted Linux x86-64 runner, other CI systems, replaying a CI
+  failure) and `docs/api.md` (an HTTP API reference with every route, the role it needs, paging and filters, the event
+  stream and the error and limit codes). The REST sections that were in `docs/quickstart.md` moved to `docs/api.md`,
+  and the quickstart now shows how to check a single downloaded binary against `SHA256SUMS`.
+- `docs/deploy.md` (operating a server: tokens, remote workers, PostgreSQL, systemd units, logs, backups, retention,
+  reverse proxy, security checklist) and `docs/upgrading.md` (telling builds apart, the schema-version error, upgrading
+  safely, uninstalling). The bug report template asks for the `hairspring --version` line and the output of `hairspring
+  doctor --process-backend`, and the issue chooser links to the wiki.
+- Four guides under `docs/guides/` (is my machine suitable for the `process` backend, building a Linux executable to
+  test, testing a service with a driver command, testing logic with the `wasm` backend), and corrected install snippets
+  for the Go, Rust, .NET and Python SDKs.
+- The README links to the CI guide, the HTTP API reference, the operating and upgrading pages and a getting-help
+  section.
