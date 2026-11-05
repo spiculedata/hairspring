@@ -3,6 +3,7 @@ mod confirm_text;
 pub mod doctor;
 pub mod gc;
 mod gc_files;
+mod gc_report;
 pub mod init;
 pub mod inspect;
 pub mod json_out;

@@ -4,12 +4,20 @@
 //! A bundle file is `<target>-<first 8 hex digits of the bundle's hash>.hairspring` and holds the bundle text. `gc`
 //! touches a file only when all of these hold: it is a direct child of the bundle directory (never a path from the
 //! database), it is a regular file and not a symbolic link, its name ends in `-<8 digits>.hairspring` with the digits
-//! of a bundle that was just deleted, and its contents hash to that bundle's full hash. A file that merely looks
-//! like a bundle file but holds something else is never removed.
+//! of a bundle that was just deleted, and the contents read from the opened file hash to that bundle's full hash. A
+//! file that merely looks like a bundle file but holds something else is never removed.
+//!
+//! Between finding a file and removing it, the directory or the file could be swapped. Just before each removal the
+//! bundle directory must still be the same directory (device and inode) and not a symbolic link, and the file must
+//! still be the same file, opened and hashed again. The standard library has no way to remove a file relative to an
+//! open directory, so a short window remains between that last check and the removal: someone able to rename the
+//! bundle directory (write access to the directory above it) could swap it in that window. See "Retention" in
+//! `docs/architecture.md`.
 use hairspring_store::sha256_hex;
 use std::collections::BTreeMap;
-use std::fs;
-use std::io;
+use std::fs::{self, File};
+use std::io::{self, Read};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 const EXTENSION: &str = ".hairspring";
@@ -17,10 +25,28 @@ const HASH_PREFIX_LEN: usize = 8;
 /// Bundles are small text files; a larger file is not one and is left alone.
 const MAX_BUNDLE_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
+/// Which file (or directory) a path named when it was looked at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileId {
+    dev: u64,
+    ino: u64,
+}
+
+impl FileId {
+    fn of(m: &fs::Metadata) -> FileId {
+        FileId {
+            dev: m.dev(),
+            ino: m.ino(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BundleFile {
     pub path: PathBuf,
     pub bytes: u64,
+    hash: String,
+    id: FileId,
 }
 
 /// What the bundle directory holds for the deleted bundles.
@@ -31,6 +57,22 @@ pub struct BundleFiles {
     pub bytes: u64,
     /// Things looked at and left alone, with the reason.
     pub skipped: Vec<String>,
+    /// The bundle directory the files were found in.
+    dir: Option<FileId>,
+}
+
+/// The bundle directory as it is now: `Ok(None)` when it is missing, a note when it is not a plain directory.
+fn dir_id(dir: &Path) -> io::Result<Result<Option<FileId>, String>> {
+    match fs::symlink_metadata(dir) {
+        Ok(m) if m.file_type().is_symlink() => Ok(Err(format!(
+            "{} is a symbolic link, so no bundle files in it were looked at",
+            dir.display()
+        ))),
+        Ok(m) if !m.is_dir() => Ok(Err(format!("{} is not a directory", dir.display()))),
+        Ok(m) => Ok(Ok(Some(FileId::of(&m)))),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Ok(None)),
+        Err(e) => Err(e),
+    }
 }
 
 /// The files in `dir` that are copies of the bundles with these hashes. A missing directory holds none; a directory
@@ -40,24 +82,14 @@ pub fn find(dir: &Path, hashes: &[String]) -> io::Result<BundleFiles> {
     if hashes.is_empty() {
         return Ok(found);
     }
-    match fs::symlink_metadata(dir) {
-        Ok(m) if m.file_type().is_symlink() => {
-            found.skipped.push(format!(
-                "{} is a symbolic link, so no bundle files in it were looked at",
-                dir.display()
-            ));
+    let id = match dir_id(dir)? {
+        Ok(Some(id)) => id,
+        Ok(None) => return Ok(found),
+        Err(note) => {
+            found.skipped.push(note);
             return Ok(found);
         }
-        Ok(m) if !m.is_dir() => {
-            found
-                .skipped
-                .push(format!("{} is not a directory", dir.display()));
-            return Ok(found);
-        }
-        Ok(_) => {}
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(found),
-        Err(e) => return Err(e),
-    }
+    };
     let by_prefix: BTreeMap<&str, &str> = hashes
         .iter()
         .filter(|h| h.len() >= HASH_PREFIX_LEN && h.is_char_boundary(HASH_PREFIX_LEN))
@@ -79,13 +111,29 @@ pub fn find(dir: &Path, hashes: &[String]) -> io::Result<BundleFiles> {
         };
         let path = dir.join(name);
         match inspect(&path, full) {
-            Inspected::Match(bytes) => {
+            Ok((bytes, file_id)) => {
                 found.bytes += bytes;
-                found.files.push(BundleFile { path, bytes });
+                found.files.push(BundleFile {
+                    path,
+                    bytes,
+                    hash: (*full).to_owned(),
+                    id: file_id,
+                });
             }
-            Inspected::Skip(why) => found.skipped.push(format!("{}: {why}", path.display())),
+            Err(why) => found.skipped.push(format!("{}: {why}", path.display())),
         }
     }
+    // What was read must have come from the directory that was checked.
+    if dir_id(dir)? != Ok(Some(id)) {
+        return Ok(BundleFiles {
+            skipped: vec![format!(
+                "{} changed while it was being read, so no bundle files in it were looked at",
+                dir.display()
+            )],
+            ..BundleFiles::default()
+        });
+    }
+    found.dir = Some(id);
     Ok(found)
 }
 
@@ -97,29 +145,33 @@ fn prefix_of(name: &str) -> Option<&str> {
         .then_some(digits)
 }
 
-enum Inspected {
-    Match(u64),
-    Skip(&'static str),
-}
-
-fn inspect(path: &Path, full_hash: &str) -> Inspected {
-    let Ok(meta) = fs::symlink_metadata(path) else {
-        return Inspected::Skip("could not be read");
-    };
-    if meta.file_type().is_symlink() {
-        return Inspected::Skip("is a symbolic link, left alone");
+/// Opens the file at `path` without trusting the path: it must not be a symbolic link, the opened file must be the
+/// regular file the path named a moment before, and the bytes read from the opened file must hash to `full_hash`.
+/// Returns its size and identity, or why it is left alone.
+fn inspect(path: &Path, full_hash: &str) -> Result<(u64, FileId), &'static str> {
+    let named = fs::symlink_metadata(path).map_err(|_| "could not be read")?;
+    if named.file_type().is_symlink() {
+        return Err("is a symbolic link, left alone");
     }
-    if !meta.is_file() {
-        return Inspected::Skip("is not a regular file, left alone");
+    if !named.is_file() {
+        return Err("is not a regular file, left alone");
     }
-    if meta.len() > MAX_BUNDLE_FILE_BYTES {
-        return Inspected::Skip("is too large to be a bundle, left alone");
+    if named.len() > MAX_BUNDLE_FILE_BYTES {
+        return Err("is too large to be a bundle, left alone");
     }
-    match fs::read(path) {
-        Ok(bytes) if sha256_hex(&bytes) == full_hash => Inspected::Match(meta.len()),
-        Ok(_) => Inspected::Skip("does not hold the deleted bundle, left alone"),
-        Err(_) => Inspected::Skip("could not be read"),
+    let file = File::open(path).map_err(|_| "could not be read")?;
+    let opened = file.metadata().map_err(|_| "could not be read")?;
+    if !opened.is_file() || FileId::of(&opened) != FileId::of(&named) {
+        return Err("changed while it was being read, left alone");
     }
+    let mut bytes = Vec::new();
+    file.take(MAX_BUNDLE_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "could not be read")?;
+    if sha256_hex(&bytes) != full_hash {
+        return Err("does not hold the deleted bundle, left alone");
+    }
+    Ok((bytes.len() as u64, FileId::of(&opened)))
 }
 
 /// What `remove` did.
@@ -131,26 +183,50 @@ pub struct Removal {
     pub failed: Vec<String>,
 }
 
-/// Removes the files `find` returned. It looks at each once more first (a path that has since become a symbolic link
-/// or a directory is left alone) and goes on after a failure; the result lists what could not be removed. A file
-/// already gone is not a failure, so removal can be repeated.
-pub fn remove(files: &[BundleFile]) -> Removal {
+/// Removes the files `find` returned from `dir`. Just before each removal it checks again that `dir` is the directory
+/// `find` read (not a symbolic link, same device and inode) and that the path still names the same file holding the
+/// same bundle; anything else is left alone and listed. It goes on after a failure. A file already gone is not a
+/// failure, so removal can be repeated.
+pub fn remove(dir: &Path, found: &BundleFiles) -> Removal {
     let mut done = Removal::default();
-    for BundleFile { path, bytes } in files {
+    for BundleFile {
+        path,
+        bytes,
+        hash,
+        id,
+    } in &found.files
+    {
+        match dir_id(dir) {
+            Ok(Ok(now)) if now.is_some() && now == found.dir => {}
+            _ => {
+                done.failed.push(format!(
+                    "{}: the bundle directory is no longer the one that was read, left alone",
+                    path.display()
+                ));
+                continue;
+            }
+        }
         match fs::symlink_metadata(path) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
             Err(e) => {
                 done.failed.push(format!("{}: {e}", path.display()));
                 continue;
             }
-            Ok(m) if !m.is_file() => {
+            Ok(_) => {}
+        }
+        match inspect(path, hash) {
+            Ok((_, now)) if now == *id => {}
+            Ok(_) => {
                 done.failed.push(format!(
-                    "{}: no longer a regular file, left alone",
+                    "{}: no longer the file that was read, left alone",
                     path.display()
                 ));
                 continue;
             }
-            Ok(_) => {}
+            Err(why) => {
+                done.failed.push(format!("{}: {why}", path.display()));
+                continue;
+            }
         }
         match fs::remove_file(path) {
             Ok(()) => {
@@ -165,145 +241,5 @@ pub fn remove(files: &[BundleFile]) -> Removal {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "hairspring-gc-files-{name}-{}-{}",
-            std::process::id(),
-            hairspring_store::now_ms()
-        ));
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn write_bundle(dir: &Path, target: &str, text: &str) -> (PathBuf, String) {
-        let hash = sha256_hex(text.as_bytes());
-        let path = dir.join(format!("{target}-{}{EXTENSION}", &hash[..HASH_PREFIX_LEN]));
-        fs::write(&path, text).unwrap();
-        (path, hash)
-    }
-
-    #[test]
-    fn a_missing_directory_holds_nothing() {
-        let found = find(Path::new("/nonexistent/hairspring-gc"), &["a".repeat(64)]).unwrap();
-        assert_eq!(found, BundleFiles::default());
-    }
-
-    #[test]
-    fn only_files_that_hold_a_deleted_bundle_are_found() {
-        let d = scratch("find");
-        let (gone, gone_hash) = write_bundle(&d, "svc", "seed 1\n");
-        let (kept, _) = write_bundle(&d, "svc", "seed 2\n");
-        // Named like the deleted bundle's file but holding something else.
-        let imposter = d.join(format!(
-            "other-{}{EXTENSION}",
-            &gone_hash[..HASH_PREFIX_LEN]
-        ));
-        fs::write(&imposter, "not the bundle").unwrap();
-        fs::write(d.join("notes.txt"), "seed 1\n").unwrap();
-        let found = find(&d, &[gone_hash]).unwrap();
-        assert_eq!(found.files.len(), 1);
-        assert_eq!(found.files[0].path, gone);
-        assert_eq!(found.bytes, 7);
-        assert_eq!(found.skipped.len(), 1, "{:?}", found.skipped);
-        assert!(found.skipped[0].contains("does not hold the deleted bundle"));
-        assert!(kept.exists() && imposter.exists());
-        fs::remove_dir_all(d).ok();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_symbolic_link_is_never_followed_or_removed_by_find() {
-        let d = scratch("link");
-        let outside = scratch("link-outside");
-        let (real, hash) = write_bundle(&outside, "svc", "seed 3\n");
-        let link = d.join(real.file_name().unwrap());
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-        let found = find(&d, &[hash]).unwrap();
-        assert!(found.files.is_empty());
-        assert!(found.skipped[0].contains("symbolic link"));
-        assert!(real.exists() && link.exists());
-        fs::remove_dir_all(d).ok();
-        fs::remove_dir_all(outside).ok();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_bundle_directory_that_is_a_symbolic_link_is_not_entered() {
-        let outside = scratch("dirlink-outside");
-        let (real, hash) = write_bundle(&outside, "svc", "seed 4\n");
-        let parent = scratch("dirlink");
-        let link = parent.join("bundles");
-        std::os::unix::fs::symlink(&outside, &link).unwrap();
-        let found = find(&link, &[hash]).unwrap();
-        assert!(found.files.is_empty());
-        assert!(found.skipped[0].contains("symbolic link"));
-        assert!(real.exists());
-        fs::remove_dir_all(parent).ok();
-        fs::remove_dir_all(outside).ok();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn removal_leaves_a_path_that_became_a_symbolic_link() {
-        let d = scratch("swap");
-        let outside = scratch("swap-outside");
-        let victim = outside.join("precious.txt");
-        fs::write(&victim, "keep me").unwrap();
-        let (path, hash) = write_bundle(&d, "svc", "seed 5\n");
-        let found = find(&d, &[hash]).unwrap();
-        fs::remove_file(&path).unwrap();
-        std::os::unix::fs::symlink(&victim, &path).unwrap();
-        let done = remove(&found.files);
-        assert_eq!(done.removed, 0);
-        assert_eq!(done.failed.len(), 1);
-        assert!(victim.exists(), "the target of the link is untouched");
-        fs::remove_dir_all(d).ok();
-        fs::remove_dir_all(outside).ok();
-    }
-
-    #[test]
-    fn removal_counts_what_it_removed_and_can_be_repeated() {
-        let d = scratch("remove");
-        let (a, ha) = write_bundle(&d, "svc", "seed 6\n");
-        let (b, hb) = write_bundle(&d, "svc", "seed 7\n");
-        let found = find(&d, &[ha, hb]).unwrap();
-        assert_eq!(found.files.len(), 2);
-        let done = remove(&found.files);
-        assert_eq!((done.removed, done.bytes, done.failed.len()), (2, 14, 0));
-        assert!(!a.exists() && !b.exists());
-        assert_eq!(
-            remove(&found.files),
-            Removal::default(),
-            "already gone is not a failure"
-        );
-        fs::remove_dir_all(d).ok();
-    }
-
-    #[test]
-    fn a_failed_removal_is_reported_and_the_rest_still_go() {
-        let d = scratch("fail");
-        let (a, ha) = write_bundle(&d, "svc", "seed 8\n");
-        let (b, hb) = write_bundle(&d, "svc", "seed 9\n");
-        let found = find(&d, &[ha, hb]).unwrap();
-        // A directory where a file was expected cannot be removed as a file.
-        fs::remove_file(&a).unwrap();
-        fs::create_dir(&a).unwrap();
-        let done = remove(&found.files);
-        assert_eq!(done.removed, 1);
-        assert_eq!(done.failed.len(), 1, "{:?}", done.failed);
-        assert!(!b.exists() && a.exists());
-        fs::remove_dir_all(d).ok();
-    }
-
-    #[test]
-    fn names_that_are_not_bundle_files_are_ignored() {
-        assert_eq!(prefix_of("svc-0123abcd.hairspring"), Some("0123abcd"));
-        assert_eq!(prefix_of("svc-0123abc.hairspring"), None);
-        assert_eq!(prefix_of("svc-0123abcg.hairspring"), None);
-        assert_eq!(prefix_of("svc0123abcd.hairspring"), None);
-        assert_eq!(prefix_of("svc-0123abcd.txt"), None);
-    }
-}
+#[path = "gc_files_tests.rs"]
+mod tests;

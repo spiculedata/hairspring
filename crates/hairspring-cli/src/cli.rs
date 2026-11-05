@@ -197,7 +197,7 @@ impl GcState {
 
 #[derive(Args)]
 #[command(
-    after_help = "Without --apply this only reports what it would remove, and changes nothing. To remove, run it again with --apply and --expect-runs N, where N is the number of runs the report shows: the removal goes ahead only if the count still matches.\n\nWhat goes: the selected runs with their failures, stored check results, trials, events, jobs and trial trees; the stored bundles and trial output that nothing else refers to; and bundle files in --bundle-dir that are copies of the bundles removed. Queued and running runs, and runs with a queued or running job, are never removed. A trial tree is removed whole or not at all. By default failed runs are kept (they hold the evidence): add --state failed to include them.\n\nRun it when no worker is finishing jobs. The database file does not shrink (SQLite reuses the space; run VACUUM to give it back).\n\nExit codes:\n  0 reported, or removed what was reported\n  2 error, a refused --apply (nothing removed), or a removal that stopped part-way or could not remove a bundle file; the output says what was removed"
+    after_help = "Without --apply this only reports what it would remove, and changes nothing. The report ends with the arguments that remove exactly what it shows: --apply --cutoff T --expect-runs N --expect-digest D. With them the same runs are looked at again (the cutoff is fixed, not recomputed), and the removal goes ahead only if the runs found are the runs the report showed: same count, same digest of their ids.\n\nWhat goes: the selected runs with their failures, stored check results, trials, events, jobs and trial trees; the stored bundles and trial output that nothing else refers to; and bundle files in --bundle-dir that are copies of the bundles removed. Queued and running runs, and runs with a queued or running job, are never removed. A trial tree is removed whole or not at all. By default failed runs are kept (they hold the evidence): add --state failed to include them.\n\nRun it when no worker is running jobs. The cutoff is measured with this computer's clock. The database file does not shrink (SQLite reuses the space; run VACUUM to give it back).\n\nExit codes:\n  0 reported, or removed everything the report showed\n  2 error, a refused --apply (nothing removed), a removal that removed fewer runs than the report showed (the output says why each was kept), stopped part-way, or could not remove a bundle file; the output says what was removed"
 )]
 pub struct GcArgs {
     /// Only runs that finished (or, if they never did, were created) longer ago than this: a whole number and h, d or
@@ -207,12 +207,19 @@ pub struct GcArgs {
     /// The states to remove, comma separated or repeated (default: passed, error, cancelled).
     #[arg(long = "state", value_enum, value_delimiter = ',')]
     pub states: Vec<GcState>,
-    /// Remove what the report shows. Needs --expect-runs.
+    /// Remove what the report shows. Needs --cutoff, --expect-runs and --expect-digest from the report.
     #[arg(long)]
     pub apply: bool,
+    /// The cutoff a report printed (milliseconds since 1970, UTC), instead of --older-than before now. It may not be
+    /// later than --older-than allows.
+    #[arg(long)]
+    pub cutoff: Option<i64>,
     /// With --apply: the number of runs the report shows. Nothing is removed if the count is different.
     #[arg(long, requires = "apply")]
     pub expect_runs: Option<u64>,
+    /// With --apply: the digest of the runs the report shows. Nothing is removed if the runs found are different.
+    #[arg(long, requires = "apply")]
+    pub expect_digest: Option<String>,
     /// Print one JSON document instead of text.
     #[arg(long)]
     pub json: bool,

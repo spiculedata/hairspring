@@ -1,4 +1,5 @@
-//! `hairspring gc`: reports first, removes only with `--apply --expect-runs N`, and leaves everything it should alone.
+//! `hairspring gc`: reports first, removes only with the report's `--apply --cutoff T --expect-runs N --expect-digest D`, and
+//! leaves everything it should alone.
 use hairspring_store::{now_ms, NewFailure, NewRun, RunState, SqliteStore, Store};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -81,7 +82,7 @@ impl Project {
         self.store().get_run(id).unwrap().is_some()
     }
 
-    fn gc(&self, args: &[&str]) -> Output {
+    fn gc<S: AsRef<std::ffi::OsStr>>(&self, args: &[S]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_hairspring"))
             .arg("--db")
             .arg(&self.db)
@@ -93,6 +94,30 @@ impl Project {
             .output()
             .expect("binary runs")
     }
+
+    /// `args` followed by the arguments that a dry run with `args` says remove exactly what it reports.
+    fn apply_args(&self, args: &[&str]) -> Vec<String> {
+        let mut dry = args.to_vec();
+        dry.push("--json");
+        let o = self.gc(&dry);
+        assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+        let mut all: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
+        all.extend(
+            json(&o)["apply_args"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| a.as_str().unwrap().to_owned()),
+        );
+        all
+    }
+}
+
+/// Replaces the value after `flag` in `args`.
+fn with(mut args: Vec<String>, flag: &str, value: &str) -> Vec<String> {
+    let at = args.iter().position(|a| a == flag).unwrap() + 1;
+    args[at] = value.to_owned();
+    args
 }
 
 impl Drop for Project {
@@ -138,7 +163,12 @@ fn by_default_it_reports_and_removes_nothing() {
         "{out}"
     );
     assert!(out.contains("bundle files"), "{out}");
-    assert!(out.contains("--apply --expect-runs 2"), "{out}");
+    assert!(
+        out.contains("To remove exactly these 2 runs, run again with --apply --cutoff "),
+        "{out}"
+    );
+    assert!(out.contains(" --expect-runs 2 --expect-digest "), "{out}");
+    assert!(out.contains("by this computer's clock; cutoff "), "{out}");
     assert!(out.contains("the database file does not shrink"), "{out}");
     assert!(p.run_exists(&a) && p.run_exists(&b));
     assert_eq!(std::fs::read_dir(&p.bundles).unwrap().count(), 1);
@@ -179,7 +209,21 @@ fn apply_without_the_expected_count_is_refused_after_printing_the_report() {
         out.contains("would remove (--apply was refused"),
         "the report comes first: {out}"
     );
-    assert!(err.contains("--expect-runs 1"), "{err}");
+    assert!(err.contains("without --cutoff "), "{err}");
+    assert!(err.contains(" --expect-runs 1 --expect-digest "), "{err}");
+    assert!(p.run_exists(&a));
+    // The count alone is not enough either.
+    let o = p.gc(&["--older-than", "1h", "--apply", "--expect-runs", "1"]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(text(&o).1.contains("without --cutoff "), "{}", text(&o).1);
+    assert!(p.run_exists(&a));
+    // Nor the count and the digest without the cutoff they were found with.
+    let mut args = p.apply_args(&["--older-than", "1h"]);
+    let at = args.iter().position(|a| a == "--cutoff").unwrap();
+    args.drain(at..at + 2);
+    let o = p.gc(&args);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(text(&o).1.contains("without --cutoff "), "{}", text(&o).1);
     assert!(p.run_exists(&a));
 }
 
@@ -188,29 +232,91 @@ fn apply_with_a_different_count_is_refused() {
     let p = Project::new("wrongcount");
     let a = p.old_run(RunState::Passed, None);
     let b = p.old_run(RunState::Passed, None);
-    let o = p.gc(&["--older-than", "1h", "--apply", "--expect-runs", "1"]);
+    let args = p.apply_args(&["--older-than", "1h"]);
+    let o = p.gc(&with(args.clone(), "--expect-runs", "1"));
     assert_eq!(o.status.code(), Some(2));
     assert!(
         text(&o)
             .1
-            .contains("--expect-runs is 1 but the report found 2"),
+            .contains("--expect-runs is 1 but the report found 2 runs"),
         "{}",
         text(&o).1
     );
     assert!(p.run_exists(&a) && p.run_exists(&b));
-    let o = p.gc(&[
-        "--older-than",
-        "1h",
-        "--apply",
-        "--expect-runs",
-        "3",
-        "--json",
-    ]);
+    let mut args = with(args, "--expect-runs", "3");
+    args.push("--json".into());
+    let o = p.gc(&args);
     assert_eq!(o.status.code(), Some(2));
     assert!(json(&o)["refused"]
         .as_str()
         .unwrap()
         .contains("nothing was removed"));
+}
+
+/// The count matches but the runs do not: one run of the report is gone and another old run has appeared.
+#[test]
+fn apply_is_refused_when_the_runs_differ_although_the_count_matches() {
+    let p = Project::new("otherruns");
+    let a = p.old_run(RunState::Passed, None);
+    let args = p.apply_args(&["--older-than", "1h"]);
+    p.store()
+        .retention_delete(std::slice::from_ref(&a), i64::MAX, false)
+        .unwrap();
+    let z = p.old_run(RunState::Passed, None);
+    let o = p.gc(&args);
+    let (_, err) = text(&o);
+    assert_eq!(o.status.code(), Some(2), "{err}");
+    assert!(
+        err.contains("these are not the runs the report showed"),
+        "{err}"
+    );
+    assert!(p.run_exists(&z), "the run the report did not show stays");
+}
+
+#[test]
+fn a_cutoff_later_than_the_age_allows_is_refused() {
+    let p = Project::new("latecutoff");
+    let a = p.old_run(RunState::Passed, None);
+    let soon = (now_ms() - 60_000).to_string();
+    let o = p.gc(&["--older-than", "1h", "--cutoff", &soon]);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(
+        text(&o).1.contains("later than --older-than 1h allows"),
+        "{}",
+        text(&o).1
+    );
+    assert!(p.run_exists(&a));
+}
+
+/// The apply uses the report's cutoff, not one taken again later, so a run that has become old since the report is
+/// not looked at, and the report's runs are removed.
+#[test]
+fn apply_uses_the_reported_cutoff_not_a_new_one() {
+    let p = Project::new("pinned");
+    let a = p.old_run(RunState::Passed, None);
+    let args = p.apply_args(&["--older-than", "1h"]);
+    let at = args.iter().position(|a| a == "--cutoff").unwrap() + 1;
+    let cutoff: i64 = args[at].parse().unwrap();
+    // A run that finished just after the cutoff: older than an hour by the time anyone applies a fresh scan later.
+    let s = p.store();
+    let late = s
+        .create_run(
+            &NewRun {
+                target: "svc".into(),
+                backend: "sim".into(),
+                seed: 1,
+                config_json: "{}".into(),
+            },
+            cutoff,
+        )
+        .unwrap();
+    s.finish_run(&late.id, RunState::Passed, 1, 1, None, cutoff + 1)
+        .unwrap();
+    drop(s);
+    let o = p.gc(&args);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
+    assert!(!p.run_exists(&a));
+    assert!(p.run_exists(&late.id), "not old at the report's cutoff");
 }
 
 #[test]
@@ -226,7 +332,7 @@ fn a_bad_age_is_an_error_and_a_missing_one_is_a_usage_error() {
     let o = p.gc(&["--older-than", "30"]);
     assert_eq!(o.status.code(), Some(2));
     assert!(text(&o).1.contains("not an age"), "{}", text(&o).1);
-    let o = p.gc(&[]);
+    let o = p.gc::<&str>(&[]);
     assert_eq!(o.status.code(), Some(2));
 }
 
@@ -278,17 +384,14 @@ fn apply_removes_exactly_what_the_report_showed() {
         &hairspring_store::sha256_hex(b"bundle f")[..8]
     ));
 
-    let o = p.gc(&[
-        "--older-than",
-        "1h",
-        "--apply",
-        "--expect-runs",
-        "2",
-        "--json",
-    ]);
+    let mut args = p.apply_args(&["--older-than", "1h"]);
+    args.push("--json".into());
+    let o = p.gc(&args);
     assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
     let v = json(&o);
     assert_eq!(v["dry_run"], false);
+    assert_eq!(v["would_remove"]["runs"], 2);
+    assert_eq!(v["kept_when_removing"], serde_json::json!({}));
     assert_eq!(v["removed"]["runs"], 2);
     assert_eq!(v["removed"]["bundle_files"], 1);
     assert_eq!(v["removed"]["bundle_blobs"], 1);
@@ -306,15 +409,7 @@ fn apply_removes_exactly_what_the_report_showed() {
     let s = p.store();
     assert!(s.list_failures(&passed).unwrap().is_empty());
 
-    let o = p.gc(&[
-        "--older-than",
-        "1h",
-        "--state",
-        "failed",
-        "--apply",
-        "--expect-runs",
-        "1",
-    ]);
+    let o = p.gc(&p.apply_args(&["--older-than", "1h", "--state", "failed"]));
     assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
     assert!(!p.run_exists(&failed) && !failed_file.exists());
     assert!(p.run_exists(&queued) && p.run_exists(&fresh) && unrelated.exists());
@@ -354,15 +449,9 @@ fn a_running_run_is_never_removed_whatever_states_are_asked_for() {
         Some(2),
         "running cannot be named as a state to remove"
     );
-    let o = p.gc(&[
-        "--older-than",
-        "1h",
-        "--state",
-        "failed",
-        "--apply",
-        "--expect-runs",
-        "0",
-    ]);
+    let args = p.apply_args(&["--older-than", "1h", "--state", "failed"]);
+    assert!(args.windows(2).any(|w| w == ["--expect-runs", "0"]));
+    let o = p.gc(&args);
     assert_eq!(o.status.code(), Some(0));
     assert!(p.run_exists(&run.id));
 }
@@ -381,7 +470,7 @@ fn a_symbolic_link_in_the_bundle_directory_is_left_alone() {
     std::fs::write(&target, "bundle l").unwrap();
     std::fs::remove_file(&real).unwrap();
     std::os::unix::fs::symlink(&target, &real).unwrap();
-    let o = p.gc(&["--older-than", "1h", "--apply", "--expect-runs", "1"]);
+    let o = p.gc(&p.apply_args(&["--older-than", "1h"]));
     assert_eq!(o.status.code(), Some(0), "{}", text(&o).1);
     assert!(target.exists(), "the link was not followed");
     assert!(
@@ -401,14 +490,9 @@ fn a_bundle_file_that_cannot_be_removed_is_reported_and_leaves_no_dangling_refer
         eprintln!("skipped: this user can write to a read-only directory");
         return;
     }
-    let o = p.gc(&[
-        "--older-than",
-        "1h",
-        "--apply",
-        "--expect-runs",
-        "1",
-        "--json",
-    ]);
+    let mut args = p.apply_args(&["--older-than", "1h"]);
+    args.push("--json".into());
+    let o = p.gc(&args);
     let (_, err) = text(&o);
     assert_eq!(o.status.code(), Some(2), "{err}");
     let v = json(&o);
@@ -434,7 +518,7 @@ fn a_bundle_file_that_cannot_be_removed_is_reported_and_leaves_no_dangling_refer
 fn a_removed_run_is_reported_as_not_stored_by_show() {
     let p = Project::new("show");
     let id = p.old_run(RunState::Passed, None);
-    let o = p.gc(&["--older-than", "1h", "--apply", "--expect-runs", "1"]);
+    let o = p.gc(&p.apply_args(&["--older-than", "1h"]));
     assert_eq!(o.status.code(), Some(0));
     let shown = Command::new(env!("CARGO_BIN_EXE_hairspring"))
         .arg("--db")

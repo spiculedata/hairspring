@@ -460,19 +460,29 @@ hairspring gc --older-than 30d
 
 The report lists the runs (by state), failures, stored check results, trials, events, jobs, trial trees, stored blobs
 with their size, and the bundle files in `.hairspring/bundles` that it would delete. It also says what it is leaving
-alone and why. Nothing has changed after this command.
+alone and why. Nothing has changed after this command. Its last line gives the arguments that remove exactly what it
+showed, for example:
 
-To remove exactly what the report showed, repeat it with `--apply` and the number of runs from the report:
-
-```bash
-hairspring gc --older-than 30d --apply --expect-runs 12
+```text
+nothing was removed. To remove exactly these 2 runs, run again with --apply --cutoff 1791256734719 --expect-runs 2 --expect-digest 5def881df86a09f0.
 ```
 
-If the number does not match, or `--expect-runs` is missing, nothing is removed and the exit status is 2. Other options:
+Repeat the command with those arguments:
+
+```bash
+hairspring gc --older-than 30d --apply --cutoff 1791256734719 --expect-runs 2 --expect-digest 5def881df86a09f0
+```
+
+`--cutoff` is the report's cutoff (milliseconds since 1970, UTC), so the same runs count as old; `--expect-runs` and
+`--expect-digest` are the number of runs and a digest of their ids. If any of the three is missing, or the runs found are
+not the runs the report showed, nothing is removed and the exit status is 2. If a run stops qualifying while it is
+being removed (a job was queued for it, say), it is kept, the output says why under "kept when removing", and the exit
+status is 2. Other options:
 
 | Option | Meaning |
 |---|---|
-| `--older-than 30d` | Required. A whole number and `h`, `d` or `w`. Measured from when the run finished (from its creation, if it never did) |
+| `--older-than 30d` | Required. A whole number and `h`, `d` or `w`. Measured from when the run finished (from its creation, if it never did), by this computer's clock |
+| `--cutoff T` | Use the cutoff a report printed instead of taking the time again. It may not be later than `--older-than` allows |
 | `--state passed,error,cancelled` | The states to remove. The default leaves failed runs alone, because they hold the evidence; add `failed` to include them |
 | `--bundle-dir DIR` | Where bundle files are looked for (default `.hairspring/bundles`, as for `hairspring test`) |
 | `--json` | One JSON document instead of text |
@@ -481,8 +491,10 @@ Queued and running runs, and runs with a queued or running job, are never remove
 whole. The command works the same on SQLite and PostgreSQL (`HAIRSPRING_DATABASE_URL`).
 
 What it does not do: the database file does not shrink (SQLite reuses the space; run `VACUUM` to give it back), files
-outside the bundle directory are never touched, and a symbolic link is never followed. Run it when no worker is
-finishing jobs. After a removal, the web UI and API answer 404 for that run, and the UI says "This run does not exist
+outside the bundle directory are never touched, and a symbolic link is never followed. Run `--apply` when no worker is
+running jobs: a failure found while `gc` runs, whose bundle text is identical to one being removed, can be left
+without its stored bundle. On SQLite even the report
+holds the database's write lock while it counts, so writes from a server or worker wait for it. After a removal, the web UI and API answer 404 for that run, and the UI says "This run does not exist
 here. It may have been removed."; it does not yet say that retention removed it. See
 [Retention](architecture.md#retention-hairspring-gc) for the rules and the failure cases.
 
