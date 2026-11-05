@@ -124,8 +124,9 @@
   gains `list_checks_of_failures`.
 - `GET /api/runs/{id}/events` reads only the run's own row, on connecting and at each poll, to check that the run
   exists and whether it is over, instead of building the full run detail. Events, their order, the end of the stream,
-  error answers, role checks and the per-caller cap are unchanged. On a generated run of 200000 trials the first byte
-  took 0.4 s on SQLite (0.26 s to 0.76 s on PostgreSQL) and now takes under 1 ms (about 57 ms on PostgreSQL, where the
+  role checks and the per-caller cap are unchanged, and so is the 404 for an unknown run. One case differs: when a
+  run's full detail cannot be built (for example a stored check that cannot be decoded), connecting used to answer 500 and a poll ended the stream early; it now answers 200 and follows the run. On a
+  generated run of 200000 trials the first byte took 0.4 s on SQLite (0.26 s to 0.76 s on PostgreSQL) and now takes under 1 ms (about 57 ms on PostgreSQL, where the
   first read of stored events is the rest), and eight simultaneous connects no longer take memory in proportion to the
   run's size.
 - Server hardening. The server now closes a connection that has not sent a complete request head within 10 seconds

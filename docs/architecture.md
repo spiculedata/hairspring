@@ -424,9 +424,11 @@ repeats the value, as `{"error": "`state` is not valid"}`):
 | `/api/failures` | `status` | `candidate`, `rerun_repeated`, `confirmed`, `verified`, `not_reproducible` or `control_failed`: where the stored checks leave the failure. |
 
 A failure's state is worked out from its stored checks, not kept on its row, so a `status` filter reads the checks of
-the failures it passes over. One request reads at most 1000 failures, in batches of at most 500: each batch is one read
-of the failures and one read of their checks (a single query with the ids as bound parameters), so a full scan is two
-batches of each, not 1000 separate reads of checks. The cost is the failure listing, which both stores pay once per
+the failures it passes over. One request reads at most 1000 failures. If that is not enough to fill a page, the page
+comes back short (it can even be empty) with a `next_cursor` to carry on from, so keep following `next_cursor` until it
+is absent. The failures are read in batches of at most 500: each batch is one read of the failures and one read of their
+checks (a single query with the ids as bound parameters), so a full scan is two batches of each, not 1000 separate reads
+of checks. The cost is the failure listing, which both stores pay once per
 batch, plus one indexed read of checks per batch. Measured on a generated store of 300000 failures and 60000 stored
 checks (a release build on one laptop, warm, median of 15 requests; your figures will differ):
 
@@ -439,10 +441,11 @@ checks (a release build on one laptop, warm, median of 15 requests; your figures
 | no `status` | 0.11 s | 0.11 s | 0.02 s | 0.02 s |
 
 A `property` filter is applied when the failures are listed, so it is paid once per batch as well. The answer, the order
-and every `next_cursor` are the same as before, byte for byte on this store. If a failure's stored checks cannot be
-read, the request fails only when the scan reaches that failure, as before. If that is not enough to fill a page, the page
-comes back short (it can even be empty) with a `next_cursor` to carry on from, so keep following `next_cursor` until it
-is absent. With a `status` filter each failure carries its `finding` (`status`, `checks`, `environment_pinned`); without
+and every `next_cursor` are the same as before, byte for byte on this store. A finding is still worked out only for
+the failures the scan reaches, so a failure past the end of a page whose checks decode but make no finding cannot fail
+the page. Because each batch's checks are read in one query, a check row the store cannot decode fails the page even if
+it belongs to a failure past its end (this can happen on SQLite if a row is damaged outside Hairspring; PostgreSQL's
+column types prevent it); before this change such a row failed the request only when the scan reached it. With a `status` filter each failure carries its `finding` (`status`, `checks`, `environment_pinned`); without
 one the list leaves `finding` out, as before.
 
 There is no `mine` filter: a run does not record who started it.

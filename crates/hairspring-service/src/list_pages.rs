@@ -242,8 +242,10 @@ impl Service {
             let wanted = (scan_cap - scanned).clamp(1, u64::from(STATUS_SCAN_BATCH)) as u32;
             let batch = self.store.list_failures_page(filter, position, wanted)?;
             let last_batch = batch.len() < wanted as usize;
-            // One read of the checks for the whole batch. Each failure's finding is still worked out only when the
-            // scan reaches it, so a failure past the end of the page cannot fail the request.
+            // One read of the checks for the whole batch, so a check row the store cannot decode fails the page even
+            // if it belongs to a failure past the end of it (SQLite can hold such a row; PostgreSQL's column types
+            // prevent it). Each failure's finding is still worked out only when the scan reaches it, so a failure
+            // past the end of the page whose checks decode but do not make a finding cannot fail the request.
             let ids: Vec<&str> = batch.iter().map(|f| f.id.as_str()).collect();
             let mut checks = self.store.list_checks_of_failures(&ids)?;
             for record in &batch {
