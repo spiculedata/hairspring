@@ -20,12 +20,12 @@ export function FailureConfirmation({ failureId }: { failureId: string }) {
     return checks.error === undefined ? (
       <Loading what="confirmation checks" />
     ) : (
-      <LoadFailed what="the confirmation checks" message={checks.error} retries={!checks.notFound} />
+      <LoadFailed what="the confirmation checks" message={checks.error} network={checks.networkError} retries={!checks.notFound} />
     );
   }
   return (
     <>
-      {checks.error !== undefined && <LoadFailed what="the confirmation checks" message={checks.error} retries={!checks.notFound} />}
+      {checks.error !== undefined && <LoadFailed what="the confirmation checks" message={checks.error} network={checks.networkError} retries={!checks.notFound} />}
       <ConfirmationLadder finding={data.finding} environmentPinned={data.environment_pinned} />
       {data.checks.length === 0 ? (
         <>

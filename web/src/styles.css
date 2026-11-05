@@ -51,7 +51,8 @@
 :root[data-theme="light"] { color-scheme: light; }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif; }
-main { max-width: 1000px; margin: 0 auto; padding: 1rem 16px 4rem; }
+/* A grid item with auto margins is sized to its content, not its column; width and min-width keep every page the width of the column. */
+main { width: 100%; min-width: 0; max-width: 1000px; margin: 0 auto; padding: 1rem 16px 4rem; }
 a { color: var(--accent); }
 .time-relative { display: block; font-size: .8rem; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -87,7 +88,7 @@ button.linklike { background: none; color: var(--fg); border: 0; padding: .15rem
 .badge-good::before { content: '✓' / ''; } .badge-bad::before { content: '✕' / ''; } .badge-busy::before { content: '●' / ''; } .badge-idle::before { content: '◌' / ''; } .badge-gap::before { content: '△' / ''; }
 .muted { color: var(--muted); } .error { color: var(--bad); }
 .facts { display: grid; grid-template-columns: max-content 1fr; gap: .25rem 1rem; } .facts dt { color: var(--muted); } .facts dd { margin: 0; }
-pre { overflow: auto; background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: .6rem; font-size: .8rem; }
+pre { max-width: 100%; overflow: auto; background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: .6rem; font-size: .8rem; }
 .log { max-height: 18rem; } .state { margin: .25rem 0 .5rem 1.5rem; white-space: pre-wrap; }
 .timeline { list-style: none; padding: 0; counter-reset: s; } .timeline li { border-left: 2px solid var(--line); padding: .15rem 0 .15rem .75rem; margin-left: .5rem; }
 .step-n { display: inline-block; min-width: 1.6rem; color: var(--muted); font-variant-numeric: tabular-nums; }

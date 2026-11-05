@@ -24,6 +24,11 @@ describe('ActivityLog', () => {
     expect(html).toContain('Raw event');
   });
 
+  it('lets a keyboard reader scroll each raw event, and names it', () => {
+    const html = renderToString(<ActivityLog lines={events} />);
+    expect(html.match(/<pre[^>]*tabindex="0"[^>]*aria-label="Raw event text"/g)).toHaveLength(3);
+  });
+
   it('says what an empty log means', () => {
     const html = renderToString(<ActivityLog lines={[]} />);
     expect(html).toContain('No activity yet');

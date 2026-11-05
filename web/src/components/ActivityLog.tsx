@@ -33,7 +33,7 @@ export function ActivityLog({ lines }: { lines: readonly SseEvent[] }) {
             ))}
             <details>
               <summary className="muted">Raw event</summary>
-              <pre className="log">
+              <pre className="log" tabIndex={0} aria-label="Raw event text">
                 <GuestText text={`${line.event} ${line.data}`} max={RAW_CHARS} expandable={false} />
               </pre>
             </details>

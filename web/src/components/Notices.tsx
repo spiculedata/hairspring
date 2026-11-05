@@ -1,5 +1,6 @@
 import { Link } from './Layout';
 import { GuestText } from './GuestText';
+import { useConnectionLoss } from './useConnectionLoss';
 
 const ERROR_CHARS = 300;
 
@@ -25,7 +26,12 @@ export function NotFound({ what }: { what: 'run' | 'trial' | 'failure' | 'page' 
  * A load that failed: what was being loaded, the reason, and what to do about it, all in one announced alert. A page
  * that polls tries again by itself, so it does not tell the reader to reload.
  */
-export function LoadFailed({ what, message, retries = true }: { what: string; message: string; retries?: boolean }) {
+export function LoadFailed({ what, message, network = false, retries = true }: { what: string; message: string; network?: boolean; retries?: boolean }) {
+  const loss = useConnectionLoss();
+  // While the connection banner is up the cause is known and announced there; the browser's own text ("Failed to fetch")
+  // would only repeat it in worse words, once per section. An error the server sent is its own answer and is kept: the
+  // connection is not what failed for that section, whatever another request is doing.
+  if (loss !== undefined && network) return <p className="muted">{`Could not load ${what} until the connection returns.`}</p>;
   return (
     <div className="error" role="alert">
       {`Could not load ${what}: `}

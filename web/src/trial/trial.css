@@ -22,6 +22,8 @@ pre.slices { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 14rem; 
 .trial-nav { margin: .75rem 0; }
 .trial-nav-list { display: flex; flex-wrap: wrap; gap: .25rem 1rem; list-style: none; padding: 0; margin: 0; }
 .trial-nav-select { display: none; max-width: 100%; }
+/* The section buttons are plain buttons (the address must not change), so they are drawn as links. */
+.trial-nav-list button.linklike { color: var(--accent); text-decoration: underline; text-underline-offset: .15em; }
 .note.caveat { font-weight: 600; }
 
 /* Taller lanes, each with the label of its own scale beneath it. */

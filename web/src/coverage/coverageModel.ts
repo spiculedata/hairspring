@@ -59,3 +59,9 @@ export function panelSummary(key: PanelKey, points: readonly CoveragePoint[]): s
   const lastRise = points.find((p) => p[key] === final);
   return `${formatCount(final)} by trial ${formatCount(points[points.length - 1]?.seq ?? 0)}, last rising at trial ${formatCount(lastRise?.seq ?? 0)}`;
 }
+
+/** True when every series stayed at zero to the end. Counts never fall, so the last point says it. */
+export function isAllZero(points: readonly CoveragePoint[]): boolean {
+  const last = points[points.length - 1];
+  return last !== undefined && PANEL_KEYS.every((key) => last[key] === 0);
+}

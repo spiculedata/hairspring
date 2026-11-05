@@ -63,6 +63,14 @@
   against the address's allowance. `/api/health` without a token is still never limited; with a valid token from such
   an address it still answers 200, without the organisation name.
 
+- Web UI wording and layout fixes. Pages no longer grow wider than the window when a table or a line of preformatted text
+  is wide: the targets and workers tables and the bundle text scroll inside their own box, and a box that scrolls can be
+  reached from the keyboard. While the connection banner is showing, a section whose request got no answer says
+  "Could not load X until the connection returns" instead of repeating the browser's text; an error the server sent (a
+  500, for example) is still shown as it came. The copy buttons on a page share one status message, and Copy bundle on
+  the failure page now says when the copy did not work. A run whose coverage counts all stayed at zero shows one
+  sentence ("Every count stayed at zero over N trials ... This records that none were counted, not that none exist")
+  instead of three flat charts.
 - The `not rated trials:` line in the text report of a search run or a sweep now says how many inconclusive trials
   showed a failure, counted once per trial. Those failures stay out of the hits and the rate. The count is stored
   with the run's property summary. A run with no stored property summary has an unknown count, and the line says

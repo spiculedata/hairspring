@@ -35,7 +35,7 @@ export function AttentionRuns({ runs }: { runs: readonly Run[] }) {
       <ul className="overview-list">
         {runs.map((r) => (
           <li key={r.id}>
-            <Link to={runPath(r.id)}>{r.id}</Link> <RunBadge run={r} /> <span className="muted">{r.target}</span>
+            <Link to={runPath(r.id)}>{r.id}</Link> <RunBadge run={r} /> <span className="muted">{r.target}</span>{' '}
             <TimeStamp ms={r.created_at} />
             {r.error !== null && r.error !== '' && (
               <div className="overview-detail">
@@ -59,7 +59,7 @@ export function AttentionFailures({ failures, limit }: { failures: readonly Fail
             const to = failurePath(f.id);
             return (
               <li key={f.id}>
-                {to === undefined ? f.id : <Link to={to}>{f.id}</Link>} <span className="muted">{f.target}</span>
+                {to === undefined ? f.id : <Link to={to}>{f.id}</Link>} <span className="muted">{f.target}</span>{' '}
                 <TimeStamp ms={f.created_at} />
                 <div className="overview-detail">
                   <GuestText text={f.message} max={MESSAGE_CHARS} expandable={false} />

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { Link } from '../components/Layout';
 import { failurePath, trialPath } from '../router';
-import { CopyButton } from '../share/CopyButton';
+import { CopyButtons } from '../share/CopyButton';
 import { trialSummary } from '../share/summary';
 import type { RunContext } from './TrialHeader';
 import type { TrialRow } from './types';
@@ -46,18 +46,21 @@ export function TrialActions({ runId, trial, context }: Props) {
   return (
     <div className="row trial-actions">
       {failureHref !== undefined && <Link to={failureHref}>{LINK_TEXT}</Link>}
-      <CopyButton label="Copy link" text={link} />
-      <CopyButton
-        label="Copy summary"
-        text={() =>
-          trialSummary({
-            runId,
-            trial,
-            link: link(),
-            completionLabel: context?.completionLabel,
-            stoppedAtFirstFailure: context?.stoppedAtFirstFailure === true,
-          })
-        }
+      <CopyButtons
+        items={[
+          { label: 'Copy link', text: link },
+          {
+            label: 'Copy summary',
+            text: () =>
+              trialSummary({
+                runId,
+                trial,
+                link: link(),
+                completionLabel: context?.completionLabel,
+                stoppedAtFirstFailure: context?.stoppedAtFirstFailure === true,
+              }),
+          },
+        ]}
       />
     </div>
   );
