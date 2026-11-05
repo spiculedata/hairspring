@@ -191,9 +191,11 @@ set `HAIRSPRING_ORGANISATION`. It is plain text of at most 80 characters (no log
 setting, shows nothing, and a name with a line break, another control character or an invisible formatting character
 is refused when the server starts. The browser reads it from `GET /api/health`, which adds an `organisation` field
 only for a caller with a valid token (or any caller when the server has no tokens), so a probe without a token still
-gets just `status` and `version`. A health request that carries a token counts against the same per-client rate
-limit as the other endpoints; once that limit is used up the `organisation` field is left out (the answer is still
-200), so health cannot be used to guess tokens. A request without a token is never limited.
+gets just `status` and `version`. A health request that carries a token is counted against the per-client rate limit
+as the other endpoints count it: with a valid token it counts against that token's own allowance, and with a wrong
+token against your address's allowance. The `organisation` field is left out (the answer is still 200) once the
+token's own allowance is used up, or while your address's allowance is, so health cannot be used to guess tokens. A
+request without a token is never limited.
 
 ## Who am I: `GET /api/me`
 

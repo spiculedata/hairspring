@@ -559,8 +559,8 @@ fn rate_limit_cannot_be_bypassed_with_garbage_tokens() {
     let good = client(srv.addr(), Some(READ));
     assert_eq!(
         good.get("/api/targets").status,
-        200,
-        "a valid token has its own bucket and is unaffected by the noise"
+        429,
+        "a valid token from an address that has used up its budget is refused too, or the limit would not slow guessing"
     );
 }
 

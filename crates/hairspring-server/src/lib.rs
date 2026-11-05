@@ -176,15 +176,29 @@ fn digest_prefix(s: &str) -> String {
         .collect()
 }
 
-/// Who a request counts against. A valid token gets its own bucket; everything else (no token, a wrong
-/// token, a made-up token) shares one bucket per client address, so guessing cannot dodge the limit.
-fn limit_key(state: &AppState, peer: SocketAddr, authorization: Option<&str>) -> String {
-    if !state.auth.is_open() {
-        if let Some((_, key)) = state.auth.identify(authorization) {
-            return key;
-        }
+/// Whether a limited request may go ahead. Anything without a valid token (no token, a wrong token, a made-up
+/// token) counts against one bucket per client address (the address for IPv4, the /64 for IPv6, taken from the
+/// connection and never from forwarding headers), so guessing cannot dodge the limit. A valid token counts
+/// against its own bucket, and is also refused, without spending either budget, while its client address's
+/// anonymous bucket is over the limit: otherwise the right guess would be told apart from the wrong ones by its
+/// 200, and the limit would not slow guessing at all. The windows are fixed and a refused request still counts
+/// against the anonymous bucket's window, so valid tokens from that address are refused for as long as such
+/// traffic keeps the bucket over the limit, and for up to one window (a minute) after it stops. That is the
+/// trade-off of limiting guessing per address; behind a shared address (NAT, a proxy, an IPv6 /64) it affects
+/// every caller there. Any other code that counts a request against `limiter` should call this rather than
+/// `check`, so a valid token never spends its address's anonymous budget and locks other tokens on that address
+/// out.
+fn admit(state: &AppState, peer: SocketAddr, authorization: Option<&str>) -> bool {
+    let anonymous = ratelimit::anonymous_key(peer.ip());
+    let token = if state.auth.is_open() {
+        None
+    } else {
+        state.auth.identify(authorization)
+    };
+    match token {
+        Some((_, key)) => !state.limiter.is_over(&anonymous) && state.limiter.check(&key),
+        None => state.limiter.check(&anonymous),
     }
-    ratelimit::anonymous_key(peer.ip())
 }
 
 async fn limit_requests(
@@ -200,7 +214,7 @@ async fn limit_requests(
             .headers()
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok());
-        if !s.limiter.check(&limit_key(&s, peer, authorization)) {
+        if !admit(&s, peer, authorization) {
             return (
                 StatusCode::TOO_MANY_REQUESTS,
                 [(header::RETRY_AFTER, "60")],
@@ -424,4 +438,64 @@ pub fn start(config: ServerConfig, svc: Service, engine: Engine) -> io::Result<R
         thread: Some(thread),
         workers,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hairspring_engine::config::Config;
+    use hairspring_engine::demos::default_registry;
+    use hairspring_store::{SqliteStore, Store};
+
+    const TOKEN: &str = "read-token-0123456789abcdef";
+    const LIMIT: u32 = 2;
+    const WINDOW: Duration = Duration::from_millis(600);
+
+    fn state_with_window(window: Duration) -> AppState {
+        let registry = Arc::new(default_registry());
+        let engine = Engine::new(registry.clone(), Config::from_registry(&registry));
+        let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let svc = Service::new(store);
+        AppState {
+            svc: svc.clone(),
+            engine: engine.clone(),
+            mcp: Arc::new(McpServer::new(svc, engine, false)),
+            auth: Arc::new(Auth::from_spec(&format!("{TOKEN}:read")).unwrap()),
+            stopping: Arc::new(AtomicBool::new(false)),
+            limiter: Arc::new(RateLimiter::with_window(LIMIT, window)),
+            register_limiter: Arc::new(RateLimiter::new(0)),
+            register_retry_after_secs: 1,
+            sse_slots: Arc::new(tokio::sync::Semaphore::new(1)),
+            organisation: None,
+        }
+    }
+
+    #[test]
+    fn a_valid_token_refused_because_of_its_address_keeps_its_own_allowance() {
+        // Arrange: the address's anonymous bucket goes over the limit, and the valid token is refused for it.
+        let state = state_with_window(WINDOW);
+        let peer: SocketAddr = "192.0.2.7:4000".parse().unwrap();
+        let bearer = format!("Bearer {TOKEN}");
+        for _ in 0..=LIMIT {
+            admit(&state, peer, Some("Bearer wrong-guess"));
+        }
+        // Refuse the token part-way through the address's window, so that if these requests did spend the
+        // token's own allowance, that window would still be open after the address's has ended.
+        std::thread::sleep(WINDOW / 2);
+        for _ in 0..LIMIT + 3 {
+            assert!(
+                !admit(&state, peer, Some(&bearer)),
+                "refused while the address is over the limit"
+            );
+        }
+
+        // Act: wait until only the address's window has ended, then use the token.
+        std::thread::sleep(WINDOW * 2 / 3);
+        let allowed = (0..LIMIT + 3)
+            .filter(|_| admit(&state, peer, Some(&bearer)))
+            .count();
+
+        // Assert: the refused requests did not spend the token's own allowance.
+        assert_eq!(allowed, LIMIT as usize);
+    }
 }

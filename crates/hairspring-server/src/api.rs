@@ -4,7 +4,6 @@
 use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::ndjson::list_response;
-use crate::ratelimit::anonymous_key;
 use crate::read_api::{limit, param, Params};
 use crate::AppState;
 use axum::extract::rejection::JsonRejection;
@@ -62,9 +61,12 @@ fn reject(rej: JsonRejection) -> ApiError {
 /// Liveness for probes, open to everyone. The organisation name, when one is configured, is added only for a caller
 /// the other endpoints would answer: a valid token (any role), or any caller when the server has no tokens.
 ///
-/// A request without an `Authorization` header is never limited, so probes keep working. One that carries a token
-/// is counted against the caller's anonymous limiter key, the bucket guesses at other endpoints use, and the name is
-/// left out once that bucket is used up. Health cannot be used to guess tokens faster than the limit allows.
+/// A request without an `Authorization` header is never limited, so probes keep working. One that carries the header
+/// goes through the same admission rule as the limited endpoints ([`crate::admit`]): a valid token counts against its
+/// own bucket, anything else against the client address's anonymous bucket, and a valid token is not admitted while
+/// that address bucket is over the limit. When the request is not admitted the name is left out and the answer is
+/// still 200. Health cannot be used to guess tokens faster than the limit allows, and one token polling it cannot
+/// spend the address's budget and lock other tokens on that address out.
 pub async fn health(
     State(s): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -90,10 +92,8 @@ fn may_see_organisation(
     let Some(authorization) = authorization else {
         return false;
     };
-    if !s.limiter.check(&anonymous_key(peer.ip())) {
-        return false;
-    }
-    s.auth.authenticate(authorization.to_str().ok()).is_some()
+    let authorization = authorization.to_str().ok();
+    crate::admit(s, peer, authorization) && s.auth.authenticate(authorization).is_some()
 }
 
 /// Who the caller is and what they may do, so a client can hide or explain actions instead of guessing from a 403.

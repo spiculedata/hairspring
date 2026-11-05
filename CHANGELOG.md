@@ -34,9 +34,11 @@
 - `hairspring serve --organisation NAME` (or `HAIRSPRING_ORGANISATION`) shows an organisation name in the web UI's top
   bar. It is plain text of at most 80 characters, with no logo. `GET /api/health` carries it as `organisation`, only for
   a caller with a valid token (or any caller when the server has no tokens), and leaves the field out when no name is
-  set. A health request that carries a token counts against the same per-client rate limit as other endpoints, and the
-  field is left out (the answer is still 200) once that limit is used up, so health cannot be used to guess tokens.
-  A request without a token is never limited.
+  set. A health request that carries a token is counted as other endpoints count it: a valid token's health requests
+  count against that token's own allowance, and a wrong token's against the client address's allowance. The field is
+  left out (the answer is still 200) once the token's own allowance is used up, or while the address's allowance is,
+  so health cannot be used to guess tokens, and one token polling health does not use up the address's allowance
+  for other tokens. A request without a token is never limited.
 
 - The web UI asks `GET /api/me` for the caller's role once per page load, and again after the token changes. When the
   role cannot start runs (`read`), the Runs page disables Start run and Start sweep and says so in one line, instead
@@ -44,6 +46,17 @@
   the server still decides.
 
 ### Changed
+
+- The per-client rate limit now also applies to valid tokens from an address that has used up its budget. Once
+  requests without a valid token (no token, or a wrong one) from a client address (an IPv4 address or an IPv6 /64)
+  go past `--rate-limit` in a minute, a request with a valid token from that address is answered `429` too. The
+  window is fixed and restarts on the next request, so valid tokens from that address are refused while such traffic
+  continues, and for up to a minute after it stops. This is the trade-off of limiting guessing per address, and it
+  applies to every caller behind a shared address, such as a proxy; operators who need otherwise should put a
+  limiter in front of the server. A valid
+  token from any other address works as before, and its requests, including its `/api/health` requests, do not count
+  against the address's allowance. `/api/health` without a token is still never limited; with a valid token from such
+  an address it still answers 200, without the organisation name.
 
 - The `not rated trials:` line in the text report of a search run or a sweep now says how many inconclusive trials
   showed a failure, counted once per trial. Those failures stay out of the hits and the rate. The count is stored
