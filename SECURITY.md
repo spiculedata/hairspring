@@ -68,7 +68,11 @@ agents.
   its `200`, and the limit would not slow guessing. The cost is that a legitimate caller sharing an address with
   someone guessing (behind the same NAT or proxy, or in the same /64) can be refused for up to a minute. A valid
   token from a quiet address is unaffected, and its requests never spend the address's anonymous budget. The address
-  is the connecting one; forwarding headers are ignored. Two limits remain: the anonymous window can be pushed out of
+  is the connecting one; forwarding headers are ignored. `/api/health` follows the same rule for a request that
+  carries an `Authorization` header: a valid token's health requests count against that token's own bucket, anything
+  else counts against the address's anonymous bucket, and the organisation name is left out (the answer is still
+  `200`) once the token's own bucket is used up or while the address's bucket is over the limit. Health without the
+  header is never counted. Two limits remain: the anonymous window can be pushed out of
   the bounded table by traffic from very many addresses (see above), which clears the refusal early, and the check
   covers one address only, so guessing spread over many addresses gets one allowance per address.
 - **Behind a reverse proxy, anonymous callers share one bucket.** Forwarding headers such as `X-Forwarded-For` are

@@ -122,8 +122,11 @@ request (no token, or a wrong one) counts against one allowance per client addre
 IPv6, taken from the connection and never from forwarding headers. While an address's anonymous allowance is used
 up, a valid token from that address is refused as well, without counting against either allowance, until the window
 ends; otherwise the right token would be told apart from wrong guesses by its `200`. A caller sharing an address with
-someone guessing can therefore be refused for up to a minute. The windows are kept in server memory in a bounded
-table (see SECURITY.md for how it is evicted).
+someone guessing can therefore be refused for up to a minute. `/api/health` is never refused, but a health request
+that carries an `Authorization` header is counted by the same rule, and the organisation name is added only when the
+request would have been let through and the token is valid; otherwise the answer is still `200` without the name.
+Health without the header is never counted. The windows are kept in server memory in a bounded table (see
+SECURITY.md for how it is evicted).
 
 Registration is limited per token. `hairspring serve --register-limit N` (default 100, `0` disables) makes `register`
 answer `429 Too Many Requests` with a `Retry-After` header once a token has made `N` registration attempts in a fixed
