@@ -119,7 +119,8 @@ Requests to `/api/` (except `/api/health`) and `/mcp` are limited per caller. `h
 (default 1200, `0` disables) allows `N` requests in a fixed one-minute window and answers `429 Too Many Requests` with
 `Retry-After: 60` past it. A request with a valid token counts against that token's own allowance. Every other
 request (no token, or a wrong one) counts against one allowance per client address: the IPv4 address, or the /64 for
-IPv6, taken from the connection and never from forwarding headers. While an address's anonymous allowance is used
+IPv6, taken from the connection, or from `X-Forwarded-For` only when the connection comes from a proxy named with
+`--trusted-proxy` (see "Client address behind a proxy" below). While an address's anonymous allowance is used
 up, a valid token from that address is refused as well, without counting against either allowance; otherwise the
 right token would be told apart from wrong guesses by its `200`. The window is fixed and restarts with the next
 request after it ends, so valid tokens from that address are refused while such traffic continues, and for up to a
@@ -693,8 +694,8 @@ returns a tool error with `structuredContent.code` set to `replay_busy`. A repla
 even if the client has gone away. Other handlers therefore always have blocking threads left.
 
 Event streams (`GET /api/runs/{id}/events`) are capped at 64 open in total and 16 per caller, where a caller is one
-token, or, when the server has no tokens, one client address (IPv4 address or IPv6 /64), as for the rate limit. Either
-cap answers `429` with a JSON error. A stream ends when its run ends, when the server stops, or after 10 minutes. For a
+token, or, when the server has no tokens, one client address (IPv4 address or IPv6 /64, found as for the rate
+limit). Either cap answers `429` with a JSON error. A stream ends when its run ends, when the server stops, or after 10 minutes. For a
 `read` caller the `worker` key is removed from event payloads (it is in the `started` event), as `GET /api/workers`
 leaves out worker ids for that role.
 
@@ -702,6 +703,30 @@ A query string that does not parse (for example `?after=abc` on the event stream
 `{"error": "invalid query string"}`, which does not repeat the caller's text. API and MCP responses carry
 `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` unless the response sets its own (program output
 downloads use `sandbox`); the web UI's policy also sets `base-uri 'none'` and `form-action 'self'`.
+
+### Client address behind a proxy
+
+By default the client address used by the rate limit (and, without tokens, by the per-caller event-stream cap) is
+the connection's peer address, and forwarding headers are ignored. Behind a reverse proxy that makes every caller
+share the proxy's address, so `hairspring serve --trusted-proxy ADDR[,ADDR...]` (or `HAIRSPRING_TRUSTED_PROXY`) names
+proxy addresses and networks whose `X-Forwarded-For` is believed. The rules, in
+`crates/hairspring-server/src/client_addr.rs`:
+
+- The header is read only when the peer address is in the list (an IPv4-mapped IPv6 peer counts as its IPv4
+  address).
+- All `X-Forwarded-For` headers are read as one comma-separated list, in order. Walking from the right, entries
+  that are themselves in the list are skipped; the first one that is not is the client address. The left-most entry
+  is never believed on its own account.
+- The peer address is used when the header is missing, more than 1024 bytes in total, more than 16 entries, has any
+  entry that is not a plain IP address, or has only trusted entries.
+- `Forwarded` and `X-Real-IP` are never read. The open-mode `Host` and `Origin` checks never look at forwarding
+  headers.
+- Entries are parsed strictly: an address or `address/prefix` with a decimal prefix and no bits set past it. Any
+  `/0`, the unspecified addresses, IPv4-mapped IPv6 entries, empty entries and anything else are refused at startup
+  with an error naming the setting. The server prints the trusted list when it starts.
+
+The proxy must overwrite a client-supplied `X-Forwarded-For`; SECURITY.md has nginx and Caddy examples and the
+remaining risks.
 
 ## Bundles
 

@@ -1,7 +1,7 @@
 use crate::ctx::{CmdResult, Ctx};
 use clap::Args;
 use hairspring_mcp::McpServer;
-use hairspring_server::{start, Auth, ServerConfig};
+use hairspring_server::{start, Auth, ServerConfig, TrustedProxies};
 use hairspring_service::Role;
 use std::io::Write;
 use std::net::SocketAddr;
@@ -36,9 +36,32 @@ pub struct ServeArgs {
     /// value shows none). Alternative to the HAIRSPRING_ORGANISATION environment variable.
     #[arg(long)]
     pub organisation: Option<String>,
+    /// Reverse proxies (addresses or networks, comma-separated, e.g. `10.0.0.5,2001:db8::/64`) whose
+    /// X-Forwarded-For header names the client a request is counted under for the rate limit. Only requests whose
+    /// connection comes from one of these use the header, and only its right-most address that is not itself a
+    /// listed proxy; the proxy must overwrite, not append to, any X-Forwarded-For the client sent. Off by default
+    /// (forwarding headers are ignored). `0.0.0.0/0`, `::/0` and unspecified addresses are refused. Alternative to
+    /// the HAIRSPRING_TRUSTED_PROXY environment variable.
+    #[arg(long, value_name = "ADDR[,ADDR...]")]
+    pub trusted_proxy: Option<String>,
 }
 
 const ORGANISATION_ENV: &str = "HAIRSPRING_ORGANISATION";
+const TRUSTED_PROXY_ENV: &str = "HAIRSPRING_TRUSTED_PROXY";
+
+/// The trusted proxies: the flag if given (an empty flag trusts none), else the environment variable. A list that is
+/// not valid is an error that names where it came from.
+pub(crate) fn trusted_proxies_from(
+    flag: Option<&str>,
+    env: Option<String>,
+) -> CmdResult<TrustedProxies> {
+    let (raw, source) = match (flag, env) {
+        (Some(flag), _) => (flag.to_owned(), "--trusted-proxy"),
+        (None, Some(env)) => (env, TRUSTED_PROXY_ENV),
+        (None, None) => return Ok(TrustedProxies::default()),
+    };
+    TrustedProxies::parse(&raw).map_err(|e| format!("{source}: {e}").into())
+}
 
 /// The organisation name to show: the flag if given (an empty flag switches the name off), else the environment
 /// variable. A name that is not valid is an error that names where it came from and does not repeat the value.
@@ -106,6 +129,11 @@ pub fn run(ctx: &Ctx, args: &ServeArgs, out: &mut dyn Write) -> CmdResult<i32> {
         args.organisation.as_deref(),
         std::env::var(ORGANISATION_ENV).ok(),
     )?;
+    config.trusted_proxies = trusted_proxies_from(
+        args.trusted_proxy.as_deref(),
+        std::env::var(TRUSTED_PROXY_ENV).ok(),
+    )?;
+    let trusted = config.trusted_proxies.to_string();
     config.handle_ctrl_c = true;
     let server = start(config, ctx.service()?, ctx.engine.clone())
         .map_err(|e| format!("cannot start the server: {e}"))?;
@@ -119,6 +147,12 @@ pub fn run(ctx: &Ctx, args: &ServeArgs, out: &mut dyn Write) -> CmdResult<i32> {
             ""
         }
     )?;
+    if !trusted.is_empty() {
+        writeln!(
+            out,
+            "hairspring: rate limit uses X-Forwarded-For from trusted proxies: {trusted}"
+        )?;
+    }
     out.flush()?;
     server.wait();
     Ok(crate::EXIT_OK)
@@ -135,7 +169,7 @@ pub fn run_mcp_stdio(ctx: &Ctx) -> CmdResult<i32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{loose_permissions_warning, organisation_from};
+    use super::{loose_permissions_warning, organisation_from, trusted_proxies_from};
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
@@ -169,6 +203,36 @@ mod tests {
             .to_string();
         assert!(env.contains("HAIRSPRING_ORGANISATION"), "{env}");
         assert!(!env.contains("xxxx"), "the value is not repeated: {env}");
+    }
+
+    #[test]
+    fn trusted_proxies_come_from_the_flag_else_the_environment() {
+        let list = |flag: Option<&str>, env: Option<&str>| {
+            trusted_proxies_from(flag, env.map(str::to_owned))
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(list(None, None), "");
+        assert_eq!(list(Some("10.0.0.5"), Some("10.0.0.6")), "10.0.0.5/32");
+        assert_eq!(list(None, Some("10.0.0.0/8")), "10.0.0.0/8");
+        assert_eq!(
+            list(Some(""), Some("10.0.0.6")),
+            "",
+            "an empty flag trusts none"
+        );
+    }
+
+    #[test]
+    fn a_trusted_proxy_list_that_covers_everyone_is_an_error_naming_the_setting() {
+        let flag = trusted_proxies_from(Some("0.0.0.0/0"), None)
+            .unwrap_err()
+            .to_string();
+        assert!(flag.starts_with("--trusted-proxy: "), "{flag}");
+        assert!(flag.contains("every address"), "{flag}");
+        let env = trusted_proxies_from(None, Some("::/0".to_owned()))
+            .unwrap_err()
+            .to_string();
+        assert!(env.starts_with("HAIRSPRING_TRUSTED_PROXY: "), "{env}");
     }
 
     #[test]

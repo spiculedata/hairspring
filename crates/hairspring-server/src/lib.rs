@@ -3,6 +3,7 @@ mod api;
 mod auth;
 #[cfg(test)]
 mod body_order_tests;
+mod client_addr;
 mod conn;
 mod error;
 mod limits;
@@ -15,6 +16,7 @@ mod ui;
 mod worker_api;
 
 pub use auth::Auth;
+pub use client_addr::TrustedProxies;
 pub use organisation::{parse_organisation, MAX_ORGANISATION_CHARS};
 
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Request, State};
@@ -30,7 +32,7 @@ use limits::CallerStreams;
 use ratelimit::RateLimiter;
 use sha2::{Digest, Sha256};
 use std::io;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -99,6 +101,10 @@ pub struct ServerConfig {
     /// [`MAX_ORGANISATION_CHARS`] characters; a blank name is none. `GET /api/health` serves it, and only to a caller
     /// the server would answer (a valid token, or any caller when there are no tokens).
     pub organisation: Option<String>,
+    /// Proxies whose `X-Forwarded-For` header names the client address that the rate limit, and without tokens the
+    /// per-caller event-stream cap, are keyed by. Empty by default: forwarding headers are then ignored and the
+    /// connection's peer address is used. Never consulted by the open-mode `Host` and `Origin` checks.
+    pub trusted_proxies: TrustedProxies,
 }
 
 impl ServerConfig {
@@ -118,6 +124,7 @@ impl ServerConfig {
             max_replays: DEFAULT_MAX_REPLAYS,
             handle_ctrl_c: false,
             organisation: None,
+            trusted_proxies: TrustedProxies::default(),
         }
     }
 
@@ -174,6 +181,17 @@ pub struct AppState {
     pub body_read_timeout: Duration,
     /// The checked organisation name, if one is configured.
     pub organisation: Option<Arc<str>>,
+    /// Proxies whose forwarded client address is believed; see [`ServerConfig::trusted_proxies`].
+    trusted_proxies: Arc<TrustedProxies>,
+}
+
+/// The address a request is counted under: the connection's peer, or the client a trusted proxy forwarded for.
+pub(crate) fn client_ip(
+    state: &AppState,
+    peer: SocketAddr,
+    headers: &axum::http::HeaderMap,
+) -> IpAddr {
+    state.trusted_proxies.client_ip(peer.ip(), headers)
 }
 
 /// Handle to a running server. Dropping it shuts the server down.
@@ -232,18 +250,18 @@ fn digest_prefix(s: &str) -> String {
 
 /// Whether a limited request may go ahead. Anything without a valid token (no token, a wrong token, a made-up
 /// token) counts against one bucket per client address (the address for IPv4, the /64 for IPv6, taken from the
-/// connection and never from forwarding headers), so guessing cannot dodge the limit. A valid token counts
-/// against its own bucket, and is also refused, without spending either budget, while its client address's
-/// anonymous bucket is over the limit: otherwise the right guess would be told apart from the wrong ones by its
-/// 200, and the limit would not slow guessing at all. The windows are fixed and a refused request still counts
+/// connection, or from `X-Forwarded-For` only when the connection comes from a trusted proxy; see [`client_ip`]), so
+/// guessing cannot dodge the limit. A valid token counts against its own bucket, and is also refused, without
+/// spending either budget, while its client address's anonymous bucket is over the limit: otherwise the right guess
+/// would be told apart from the wrong ones by its 200, and the limit would not slow guessing at all. The windows are fixed and a refused request still counts
 /// against the anonymous bucket's window, so valid tokens from that address are refused for as long as such
 /// traffic keeps the bucket over the limit, and for up to one window (a minute) after it stops. That is the
 /// trade-off of limiting guessing per address; behind a shared address (NAT, a proxy, an IPv6 /64) it affects
 /// every caller there. Any other code that counts a request against `limiter` should call this rather than
 /// `check`, so a valid token never spends its address's anonymous budget and locks other tokens on that address
 /// out.
-fn admit(state: &AppState, peer: SocketAddr, authorization: Option<&str>) -> bool {
-    let anonymous = ratelimit::anonymous_key(peer.ip());
+fn admit(state: &AppState, client: IpAddr, authorization: Option<&str>) -> bool {
+    let anonymous = ratelimit::anonymous_key(client);
     let token = if state.auth.is_open() {
         None
     } else {
@@ -268,7 +286,7 @@ async fn limit_requests(
             .headers()
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok());
-        if !admit(&s, peer, authorization) {
+        if !admit(&s, client_ip(&s, peer, req.headers()), authorization) {
             return (
                 StatusCode::TOO_MANY_REQUESTS,
                 [(header::RETRY_AFTER, "60")],
@@ -294,7 +312,8 @@ fn is_loopback_host(authority: &str) -> bool {
 }
 
 /// Without tokens the server trusts anything that can reach it, so it must not be drivable from a
-/// web page: reject unknown Host headers (DNS rebinding) and cross-site Origins (CSRF).
+/// web page: reject unknown Host headers (DNS rebinding) and cross-site Origins (CSRF). Forwarding headers
+/// (`X-Forwarded-Host`, `X-Forwarded-For`, `Forwarded`) are never consulted here, trusted proxy or not.
 async fn guard_open_mode(State(s): State<AppState>, req: Request, next: Next) -> Response {
     if s.auth.is_open() {
         let headers = req.headers();
@@ -468,6 +487,7 @@ pub fn start(config: ServerConfig, svc: Service, engine: Engine) -> io::Result<R
         replays,
         body_read_timeout: config.body_read_timeout,
         organisation: config.organisation_name()?,
+        trusted_proxies: Arc::new(config.trusted_proxies.clone()),
     };
     let limits = conn::ConnLimits {
         header_read_timeout: config.header_read_timeout,
@@ -546,6 +566,7 @@ mod tests {
             replays: ReplaySlots::new(1),
             body_read_timeout: Duration::from_secs(5),
             organisation: None,
+            trusted_proxies: Arc::new(TrustedProxies::default()),
         }
     }
 
@@ -553,7 +574,7 @@ mod tests {
     fn a_valid_token_refused_because_of_its_address_keeps_its_own_allowance() {
         // Arrange: the address's anonymous bucket goes over the limit, and the valid token is refused for it.
         let state = state_with_window(WINDOW);
-        let peer: SocketAddr = "192.0.2.7:4000".parse().unwrap();
+        let peer: IpAddr = "192.0.2.7".parse().unwrap();
         let bearer = format!("Bearer {TOKEN}");
         for _ in 0..=LIMIT {
             admit(&state, peer, Some("Bearer wrong-guess"));

@@ -90,7 +90,8 @@ pub async fn health(
 ) -> Json<Value> {
     let mut body = json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") });
     if let Some(name) = &s.organisation {
-        if may_see_organisation(&s, peer, headers.get(header::AUTHORIZATION)) {
+        let client = crate::client_ip(&s, peer, &headers);
+        if may_see_organisation(&s, client, headers.get(header::AUTHORIZATION)) {
             body["organisation"] = json!(name.as_ref());
         }
     }
@@ -99,7 +100,7 @@ pub async fn health(
 
 fn may_see_organisation(
     s: &AppState,
-    peer: SocketAddr,
+    client: std::net::IpAddr,
     authorization: Option<&header::HeaderValue>,
 ) -> bool {
     if s.auth.is_open() {
@@ -109,7 +110,7 @@ fn may_see_organisation(
         return false;
     };
     let authorization = authorization.to_str().ok();
-    crate::admit(s, peer, authorization) && s.auth.authenticate(authorization).is_some()
+    crate::admit(s, client, authorization) && s.auth.authenticate(authorization).is_some()
 }
 
 /// Who the caller is and what they may do, so a client can hide or explain actions instead of guessing from a 403.
