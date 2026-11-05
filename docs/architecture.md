@@ -424,7 +424,23 @@ repeats the value, as `{"error": "`state` is not valid"}`):
 | `/api/failures` | `status` | `candidate`, `rerun_repeated`, `confirmed`, `verified`, `not_reproducible` or `control_failed`: where the stored checks leave the failure. |
 
 A failure's state is worked out from its stored checks, not kept on its row, so a `status` filter reads the checks of
-the failures it passes over. One request reads at most 1000 failures. If that is not enough to fill a page, the page
+the failures it passes over. One request reads at most 1000 failures, in batches of at most 500: each batch is one read
+of the failures and one read of their checks (a single query with the ids as bound parameters), so a full scan is two
+batches of each, not 1000 separate reads of checks. The cost is the failure listing, which both stores pay once per
+batch, plus one indexed read of checks per batch. Measured on a generated store of 300000 failures and 60000 stored
+checks (a release build on one laptop, warm, median of 15 requests; your figures will differ):
+
+| Request | SQLite before | SQLite after | PostgreSQL before | PostgreSQL after |
+|---|---|---|---|---|
+| `status=confirmed` (about 5% of failures; reads 1000) | 1.75 s | 0.38 s | 0.39 s | 0.05 s to 0.07 s |
+| `status=verified` (none; reads 1000) | 1.75 s | 0.38 s | 0.39 s | 0.05 s |
+| `status=confirmed&property=db.p0` | 8.1 s | 1.7 s | 1.5 s | 0.48 s |
+| `status=candidate` (about 95%; stops at one page) | 0.16 s | 0.19 s | 0.03 s | 0.03 s |
+| no `status` | 0.11 s | 0.11 s | 0.02 s | 0.02 s |
+
+A `property` filter is applied when the failures are listed, so it is paid once per batch as well. The answer, the order
+and every `next_cursor` are the same as before, byte for byte on this store. If a failure's stored checks cannot be
+read, the request fails only when the scan reaches that failure, as before. If that is not enough to fill a page, the page
 comes back short (it can even be empty) with a `next_cursor` to carry on from, so keep following `next_cursor` until it
 is absent. With a `status` filter each failure carries its `finding` (`status`, `checks`, `environment_pinned`); without
 one the list leaves `finding` out, as before.
@@ -697,7 +713,13 @@ Event streams (`GET /api/runs/{id}/events`) are capped at 64 open in total and 1
 token, or, when the server has no tokens, one client address (IPv4 address or IPv6 /64, found as for the rate
 limit). Either cap answers `429` with a JSON error. A stream ends when its run ends, when the server stops, or after 10 minutes. For a
 `read` caller the `worker` key is removed from event payloads (it is in the `started` event), as `GET /api/workers`
-leaves out worker ids for that role.
+leaves out worker ids for that role. On connecting, and at every poll (every 400 ms), a stream reads only the run's own
+row to learn whether the run is over and whether it exists; it does not build the run's detail (failures, findings,
+properties), so the cost does not grow with the number of trials or failures a run holds. On a generated run of 200000
+trials the first byte took 0.4 s on SQLite and 0.26 s to 0.76 s on PostgreSQL before, and 0.3 ms and 57 ms after (the
+PostgreSQL time that remains is the first read of the run's stored events on that data; an ordinary run takes about
+1 ms); eight simultaneous connects to it took 3 s to 4 s on SQLite and 0.5 s to 0.8 s on PostgreSQL, and now take under
+5 ms and about 0.1 s.
 
 A query string that does not parse (for example `?after=abc` on the event stream) is a `400` with the JSON error
 `{"error": "invalid query string"}`, which does not repeat the caller's text. API and MCP responses carry

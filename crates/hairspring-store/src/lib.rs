@@ -192,6 +192,13 @@ pub trait Store: Send + Sync {
     fn add_confirmation(&self, new: &NewConfirmation, now: i64) -> Result<ConfirmationOutcome>;
     /// The checks held for a failure, oldest confirmation first and in each confirmation's order.
     fn list_failure_checks(&self, failure_id: &str) -> Result<Vec<CheckRecord>>;
+    /// The checks of every failure in `failure_ids` at once, one query per [`CHECK_READ_BATCH`] ids. Each distinct id
+    /// asked about has an entry (empty when it has no checks or is unknown), and an entry holds exactly the rows
+    /// [`Store::list_failure_checks`] gives for that id, in the same order.
+    fn list_checks_of_failures(
+        &self,
+        failure_ids: &[&str],
+    ) -> Result<BTreeMap<String, Vec<CheckRecord>>>;
 
     // job queue
     fn enqueue_job(&self, run_id: &str, kind: &str, payload_json: &str, now: i64) -> Result<Job>;

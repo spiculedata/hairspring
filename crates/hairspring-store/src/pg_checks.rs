@@ -4,6 +4,7 @@ use crate::checks::*;
 use crate::new_id;
 use crate::types::{Result, StoreError};
 use postgres::{Client, GenericClient, Row};
+use std::collections::BTreeMap;
 
 const COLUMNS: &str = "id, failure_id, confirmation_id, ordinal, kind, status, passed, failed, inconclusive, \
     command, detail_json, artefacts_json, environment_json, started_at, finished_at, runner, runner_trusted, created_at";
@@ -40,6 +41,37 @@ pub(crate) fn list(c: &mut Client, failure_id: &str) -> Result<Vec<CheckRecord>>
         &[&failure_id],
     )?;
     Ok(rows.iter().map(from_row).collect())
+}
+
+/// The checks of every failure in `failure_ids`, one query per [`CHECK_READ_BATCH`] ids. The rows come back in the
+/// order [`list`] uses, so each failure's rows keep that order when they are split by failure.
+pub(crate) fn list_many(
+    c: &mut Client,
+    failure_ids: &[&str],
+) -> Result<BTreeMap<String, Vec<CheckRecord>>> {
+    let mut found: BTreeMap<String, Vec<CheckRecord>> = failure_ids
+        .iter()
+        .map(|id| ((*id).to_owned(), Vec::new()))
+        .collect();
+    let distinct: Vec<String> = found.keys().cloned().collect();
+    for chunk in distinct.chunks(CHECK_READ_BATCH) {
+        let rows = c.query(
+            &format!(
+                "SELECT {COLUMNS} FROM failure_checks c WHERE failure_id = ANY($1) ORDER BY created_at, \
+                 (SELECT MIN(seq) FROM failure_checks m WHERE m.confirmation_id=c.confirmation_id), ordinal"
+            ),
+            &[&chunk],
+        )?;
+        let mut by_failure: BTreeMap<String, Vec<CheckRecord>> = BTreeMap::new();
+        for row in rows.iter().map(from_row) {
+            by_failure
+                .entry(row.failure_id.clone())
+                .or_default()
+                .push(row);
+        }
+        found.extend(by_failure);
+    }
+    Ok(found)
 }
 
 fn of_confirmation<C: GenericClient>(c: &mut C, id: &str) -> Result<Vec<CheckRecord>> {

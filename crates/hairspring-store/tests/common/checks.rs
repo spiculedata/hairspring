@@ -15,6 +15,8 @@ pub fn run_all_checks(make: &dyn Fn() -> Arc<dyn Store>) {
     later_confirmations_list_after_earlier_ones(&*make());
     hostile_text_is_stored_verbatim(&*make());
     concurrent_identical_confirmations_store_once(make());
+    a_batched_read_gives_what_the_per_failure_read_gives(&*make());
+    a_batched_read_of_nothing_is_empty(&*make());
 }
 
 fn failure(s: &dyn Store) -> FailureRecord {
@@ -352,4 +354,91 @@ pub fn a_full_failure_drops_untrusted_confirmations_before_trusted_ones(s: &dyn 
         rows.iter().all(|r| r.confirmation_id != "conf_u0"),
         "dropped"
     );
+}
+
+/// A small deterministic generator, so a failing case can be rerun.
+struct Lcg(u64);
+
+impl Lcg {
+    fn next(&mut self, bound: u64) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (self.0 >> 33) % bound
+    }
+}
+
+/// More failures than one batch holds, each with a random number of confirmations of random sizes, trust and times
+/// (many sharing a millisecond, so the order they were written decides), read in a shuffled order that repeats an id
+/// and names an unknown one: the batched read gives every failure exactly the rows the per-failure read gives.
+pub fn a_batched_read_gives_what_the_per_failure_read_gives(s: &dyn Store) {
+    const FAILURES: usize = 620;
+    let run = s
+        .create_run(
+            &NewRun {
+                target: "t".into(),
+                backend: "hermit".into(),
+                seed: 7,
+                config_json: "{}".into(),
+            },
+            1,
+        )
+        .unwrap();
+    let bundle = s.put_blob(b"bundle").unwrap();
+    let mut rng = Lcg(42);
+    let mut ids = Vec::new();
+    for i in 0..FAILURES {
+        let f = s
+            .add_failure(
+                &NewFailure {
+                    run_id: run.id.clone(),
+                    target: "t".into(),
+                    message: "m".into(),
+                    original_len: 1,
+                    shrunk_len: 1,
+                    bundle_hash: bundle.clone(),
+                    steps_json: "[]".into(),
+                },
+                2 + i as i64,
+            )
+            .unwrap();
+        for c in 0..rng.next(4) {
+            let kinds = ["same_seed_rerun", "bundle_replay", "control_run"];
+            let statuses = ["pass", "fail", "inconclusive"];
+            let checks: Vec<NewCheck> = (0..1 + rng.next(3))
+                .map(|_| check(kinds[rng.next(3) as usize], statuses[rng.next(3) as usize]))
+                .collect();
+            let mut conf = confirmation(&format!("conf_{i}_{c}"), &f.id, checks);
+            conf.runner_trusted = rng.next(2) == 0;
+            s.add_confirmation(&conf, 100 + rng.next(3) as i64).unwrap();
+        }
+        ids.push(f.id);
+    }
+    let mut asked: Vec<&str> = ids.iter().map(String::as_str).collect();
+    for i in (1..asked.len()).rev() {
+        asked.swap(i, rng.next(i as u64 + 1) as usize);
+    }
+    asked.push("fail_0000000000000000");
+    asked.push(asked[0]);
+
+    let batched = s.list_checks_of_failures(&asked).unwrap();
+
+    assert_eq!(
+        batched.len(),
+        FAILURES + 1,
+        "one entry per distinct id asked"
+    );
+    assert!(batched["fail_0000000000000000"].is_empty());
+    let mut with_checks = 0;
+    for id in &ids {
+        let single = s.list_failure_checks(id).unwrap();
+        with_checks += usize::from(!single.is_empty());
+        assert_eq!(batched[id], single, "{id}");
+    }
+    assert!(with_checks > FAILURES / 2, "the data should hold checks");
+}
+
+pub fn a_batched_read_of_nothing_is_empty(s: &dyn Store) {
+    assert!(s.list_checks_of_failures(&[]).unwrap().is_empty());
 }

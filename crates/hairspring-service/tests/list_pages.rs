@@ -339,6 +339,100 @@ fn a_status_filter_counts_only_failures_in_that_state_and_pages_over_them() {
     assert!(by("verified", 10, None).failures.is_empty());
 }
 
+/// Failures stored across more than two store batches, each left as a candidate, confirmed or not reproducible by a
+/// repeatable pattern, so every batch holds all three.
+fn many_failures(store: &dyn Store, run: &str, n: usize) -> Vec<String> {
+    let confirmed = vec![
+        check("same_seed_rerun", "pass"),
+        check("bundle_replay", "pass"),
+    ];
+    (0..n)
+        .map(|i| {
+            let id = failure_of(store, run, 100 + i as i64);
+            match (i * 7) % 5 {
+                0 | 1 => confirm(store, &id, confirmed.clone()),
+                2 => confirm(store, &id, vec![check("same_seed_rerun", "fail")]),
+                _ => {}
+            }
+            id
+        })
+        .collect()
+}
+
+#[test]
+fn a_status_scan_over_many_batches_agrees_with_each_failures_own_finding() {
+    // Arrange
+    let (svc, store, engine) = setup();
+    let run = start(&svc, &engine, RunMode::Search);
+    let ids = many_failures(&*store, &run, 260);
+    let own_finding = |id: &str| svc.failure_checks(id).unwrap().unwrap().finding;
+
+    for status in ["candidate", "confirmed", "not_reproducible", "verified"] {
+        // Act: the whole list, newest first, page by page.
+        let (mut walked, mut cursor) = (Vec::new(), None);
+        loop {
+            let page = svc
+                .failure_page(&fquery(|q| {
+                    q.status = Some(status.into());
+                    q.limit = Some(70);
+                    q.cursor = cursor.clone();
+                }))
+                .unwrap();
+            walked.extend(page.failures);
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+
+        // Assert
+        let expected: Vec<&String> = ids
+            .iter()
+            .rev()
+            .filter(|id| own_finding(id) == status)
+            .collect();
+        assert_eq!(
+            walked.iter().map(|f| &f.id).collect::<Vec<_>>(),
+            expected,
+            "{status}"
+        );
+        for f in &walked {
+            let finding = f.finding.as_ref().expect("the finding comes with it");
+            let own = svc.failure_checks(&f.id).unwrap().unwrap();
+            assert_eq!(finding.status, status);
+            assert_eq!(finding.checks as usize, own.checks.len(), "{}", f.id);
+        }
+    }
+}
+
+#[test]
+fn a_failure_the_page_never_reaches_cannot_make_it_fail() {
+    // Arrange: the oldest failure holds a check whose environment cannot be read. A page of one candidate stops at
+    // the second candidate, which is newer than that failure.
+    let (svc, store, engine) = setup();
+    let run = start(&svc, &engine, RunMode::Search);
+    let ids: Vec<String> = (0..3).map(|i| failure_of(&*store, &run, 100 + i)).collect();
+    let mut unreadable = check("same_seed_rerun", "pass");
+    unreadable.environment_json = "not json".into();
+    confirm(&*store, &ids[0], vec![unreadable]);
+
+    // Act
+    let page = svc
+        .failure_page(&fquery(|q| {
+            q.status = Some("candidate".into());
+            q.limit = Some(1);
+        }))
+        .unwrap();
+
+    // Assert
+    assert_eq!(failure_ids(&page), vec![ids[2].clone()]);
+    assert_eq!(page.next_cursor.as_deref(), Some("1"));
+    let all = svc.failure_page(&fquery(|q| {
+        q.status = Some("candidate".into());
+    }));
+    assert!(all.is_err(), "reaching the unreadable failure still fails");
+}
+
 #[test]
 fn failures_filter_by_run_and_refuse_what_is_not_valid() {
     let (svc, store, engine) = setup();

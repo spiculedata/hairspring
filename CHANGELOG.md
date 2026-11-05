@@ -115,6 +115,19 @@
 
 ### Changed
 
+- `GET /api/failures` with a `status` filter reads the stored checks of the failures it scans in batches (one query per
+  batch of up to 500 failures, with the ids as bound parameters) instead of one query per failure, and scans in
+  batches of up to 500 failures instead of 100. Results, ordering, cursors and the scan cap of 1000 failures per
+  request are unchanged. On a generated store of 300000 failures, `status=confirmed` took 1.75 s on SQLite and 0.39 s
+  on PostgreSQL, and now takes 0.38 s and about 0.06 s. A page that a common status fills from the first failures
+  reads more than before: `status=candidate` took about 30 ms more on SQLite. No schema change; the `Store` trait
+  gains `list_checks_of_failures`.
+- `GET /api/runs/{id}/events` reads only the run's own row, on connecting and at each poll, to check that the run
+  exists and whether it is over, instead of building the full run detail. Events, their order, the end of the stream,
+  error answers, role checks and the per-caller cap are unchanged. On a generated run of 200000 trials the first byte
+  took 0.4 s on SQLite (0.26 s to 0.76 s on PostgreSQL) and now takes under 1 ms (about 57 ms on PostgreSQL, where the
+  first read of stored events is the rest), and eight simultaneous connects no longer take memory in proportion to the
+  run's size.
 - Server hardening. The server now closes a connection that has not sent a complete request head within 10 seconds
   (this is also the idle time allowed between requests on a kept-alive connection), answers `408` and closes the
   connection when a request body has not arrived within 30 seconds, and allows at most 512 open connections
