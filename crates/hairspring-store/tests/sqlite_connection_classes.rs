@@ -34,6 +34,7 @@ const ON_THE_WRITER: &[&str] = &[
     "prune_workers",
     "put_blob",
     "put_run_identity",
+    "put_run_inputs",
     "record_branch_verify",
     "register_worker",
     "register_worker_with_secret",

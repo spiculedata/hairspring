@@ -4,7 +4,7 @@ use hairspring_store::*;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
-const CURRENT_VERSION: i64 = 7;
+const CURRENT_VERSION: i64 = 8;
 
 fn temp_db(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(

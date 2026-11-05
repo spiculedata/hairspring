@@ -78,7 +78,7 @@ Roles are checked in the handler, from the router in `crates/hairspring-server/s
 | `GET /api/workers` | `read` (worker ids from `run`) | [the workers and the queue](#get-apiworkers) |
 | `POST /api/workers/{id}/trust` | `admin` | [set whether a worker is trusted](#post-apiworkersidtrust) |
 | `POST /api/worker/register` | `run` | a remote worker registers; the reply holds its secret |
-| `POST /api/worker/lease`, `/api/worker/jobs/{job}/progress`, `/complete`, `/fail`, `/trials`, `/heartbeat` | `run`, plus the worker's secret | the worker protocol; used by `hairspring worker`, not by hand (see [architecture.md](architecture.md#job-lifecycle)) |
+| `POST /api/worker/lease`, `/api/worker/jobs/{job}/progress`, `/complete`, `/fail`, `/trials`, `/inputs`, `/heartbeat` | `run`, plus the worker's secret | the worker protocol; used by `hairspring worker`, not by hand (see [architecture.md](architecture.md#job-lifecycle)) |
 | `POST /mcp` | any valid token | one JSON-RPC message per request; each tool checks its own role (`start_run`, `replay_bundle` and `cancel_run` need `run`, the others `read`) |
 
 The role is checked inside each handler, after the body of a `POST` has been read. A caller whose role is too low that

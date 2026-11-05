@@ -396,6 +396,7 @@ fn router(state: AppState) -> Router {
         )
         .route("/api/worker/jobs/{job}/fail", post(worker_api::fail))
         .route("/api/worker/jobs/{job}/trials", post(worker_api::trials))
+        .route("/api/worker/jobs/{job}/inputs", post(worker_api::inputs))
         .route(
             "/api/worker/jobs/{job}/heartbeat",
             post(worker_api::heartbeat),

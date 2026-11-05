@@ -2,6 +2,7 @@
 //! (which may have backends the server lacks, such as Hermit on a Linux box) and
 //! reports progress and results back.
 mod completion;
+mod inputs;
 mod reregister;
 mod trials;
 
@@ -251,6 +252,7 @@ fn execute(
         budget: job.budget,
         mode: job.mode,
     };
+    inputs::report(api, engine, worker_id, secret, job);
     let interrupted = Cell::new(false);
     let done = AtomicBool::new(false);
     let result = std::thread::scope(|scope| {

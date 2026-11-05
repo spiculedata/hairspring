@@ -9,10 +9,11 @@ use crate::EngineError;
 use hairspring_core::bundle::Bundle;
 use hairspring_core::doctor::doctor;
 use hairspring_core::explore::{branching, Config as ExploreConfig, Failure};
+use hairspring_core::point::{CommonInputs, IdentityDraft, Recorded};
 use hairspring_core::replay::find_action;
 use hairspring_core::shrink::shrink;
 use hairspring_core::{ActionId, Sim};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 pub(crate) const ROUND_STEPS: u64 = 100_000;
@@ -90,9 +91,28 @@ pub(crate) fn failure_report(
     })
 }
 
+/// SHA-256 of the running executable, read once per process: the code under test is compiled into it, so this one
+/// digest covers the engine and the target. `None` when the executable cannot be read, which leaves the input missing.
+fn executable_sha() -> Option<String> {
+    static SHA: OnceLock<Option<String>> = OnceLock::new();
+    SHA.get_or_init(|| {
+        let path = std::env::current_exe().ok()?;
+        hairspring_core::environment::sha256_file(&path).ok()
+    })
+    .clone()
+}
+
 impl Backend for SimBackend {
     fn name(&self) -> &'static str {
         "sim"
+    }
+
+    fn run_inputs(&self, spec: &TargetSpec) -> Option<IdentityDraft> {
+        self.root(spec).ok()?;
+        Some(IdentityDraft::Sim(CommonInputs {
+            hairspring_sha: executable_sha().map_or(Recorded::Missing, Recorded::Value),
+            target: Recorded::Value(spec.name.clone()),
+        }))
     }
 
     fn supports(&self, kind: &TargetKind) -> bool {

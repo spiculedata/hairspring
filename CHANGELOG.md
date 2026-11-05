@@ -165,6 +165,20 @@
 
 ### Changed
 
+- Schema version 8 adds a table, `run_inputs`, and an index, `runs_target_created`, on both stores. The table keeps,
+  once per run, a SHA-256 digest of each input the run executed with (never the values, which can include the working
+  directory and environment), who reported them and whether that worker was trusted; nothing serves a digest, and a
+  run stored before this version has no row and reads as "not recorded". The process records the inputs of a run it
+  executes for a built-in simulated target, and a remote worker reports them to the new
+  `POST /api/worker/jobs/{job}/inputs` (with its secret, for the job it holds); a Hermit or WASM run records none yet.
+  No existing response changes, and nothing compares runs by these inputs yet. Opening a version 7 database creates
+  both in the transaction that sets the version; no row is rewritten. On PostgreSQL this blocks writes to `runs` while
+  the index builds and must be done by the role that owns the tables; a role that only reads and writes rows needs
+  `SELECT, INSERT` on `run_inputs` to record inputs. A table or index of either name built beforehand is kept only if
+  it has the same definition: otherwise the open is refused, everything is rolled back and the database stays at
+  version 7. An older release refuses a version 8 database. There is no offline downgrade from 8 to 7 (reset the stored
+  version by hand); the downgrade to version 2 drops the table and the index. `hairspring gc` deletes a run's inputs
+  with the run. See "Run inputs" in docs/architecture.md.
 - `hairspring --version` names the build: `hairspring 0.1.0 (f819c1a 2026-10-24)` is the crate version, the short
   commit and that commit's date, so two builds of the same crate version can be told apart (`v0.1-RC1` and later
   builds all printed `hairspring 0.1.0`). The commit comes from git at build time, or from `HAIRSPRING_BUILD_COMMIT`

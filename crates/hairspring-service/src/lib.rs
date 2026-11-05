@@ -23,6 +23,7 @@ mod property_query;
 mod query;
 mod result_cache;
 mod run_facts;
+mod run_inputs;
 pub mod sanitize;
 mod scan;
 mod search;
@@ -49,6 +50,7 @@ pub use query::{
     PropertyQuery, SeedQuery, StripQuery, TrialQuery, DEFAULT_PAGE, MAX_PAGE, MAX_PREFIX_BYTES,
     MAX_SEED_PAGE, MAX_STRIP_PAGE,
 };
+pub use run_inputs::{RunInputsReceipt, RunInputsSubmission, RunInputsView};
 pub use search::{
     PropertyGuest, PropertyHit, SearchResults, SearchScope, TargetHit, MAX_SEARCH_CHARS,
     SEARCH_PER_GROUP,

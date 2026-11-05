@@ -11,7 +11,7 @@ use axum::Json;
 use hairspring_engine::backend::Progress;
 use hairspring_engine::report::RunOutcome;
 use hairspring_engine::trial_log::TrialReport;
-use hairspring_service::{Role, ServiceError};
+use hairspring_service::{Role, RunInputsSubmission, ServiceError};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -201,6 +201,36 @@ pub async fn heartbeat(
     })
     .await?;
     Ok(Json(json!({ "ok": alive })))
+}
+
+#[derive(Deserialize)]
+pub struct InputsBody {
+    worker_id: String,
+    /// The secret issued at registration. Required: a worker id alone is not a credential.
+    worker_secret: Option<String>,
+    /// Read by hand below: the usual error for a body that does not fit its type repeats the offending text.
+    inputs: Value,
+}
+
+/// The hashes of the inputs of the job's run, once per job. The service checks them before anything is stored, and
+/// a refusal says why in fixed words.
+pub async fn inputs(
+    State(s): State<AppState>,
+    caller: Caller,
+    Path(job): Path<String>,
+    ApiJson(b): ApiJson<InputsBody>,
+) -> Result<Json<Value>, ApiError> {
+    caller.need(Role::Run)?;
+    check_job(&job)?;
+    check_worker(&b.worker_id)?;
+    let inputs: RunInputsSubmission = serde_json::from_value(b.inputs)
+        .map_err(|_| ApiError::bad_request("inputs are not in the expected form"))?;
+    let receipt = blocking(move || {
+        s.svc
+            .record_run_inputs_with_secret(&job, &b.worker_id, b.worker_secret.as_deref(), &inputs)
+    })
+    .await?;
+    Ok(Json(json!({ "ok": true, "outcome": receipt.outcome })))
 }
 
 #[derive(Deserialize)]

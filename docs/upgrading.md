@@ -64,10 +64,10 @@ error: storage error: database schema version 6 is not supported (expected 5)
 ```
 
 (exit status 2). That text was printed by the v0.1-RC1 binary for a copy of a database made by a build of `main` when `main`
-was at schema 6. `main` has since moved to schema 7, so the same binary on a database made by a current `main` build gives
+was at schema 6. `main` has since moved to schema 8, so the same binary on a database made by a current `main` build gives
 
 ```text
-error: storage error: database schema version 7 is not supported (expected 5)
+error: storage error: database schema version 8 is not supported (expected 5)
 ```
 
 (derived from the code, not run). The numbers change as schemas are added; the meaning does not. The number after

@@ -96,7 +96,8 @@ statistics of each run.
   findings, degraded trials, the first few trials and a sample, under a per-run allowance. A trial that did not fit
   is marked as dropped, never silently.
 
-A worker sends its trials to `POST /api/worker/jobs/{job}/trials` in batches of at most 256 records and about
+Before it runs, a worker may report the hashes of the inputs of its run to `POST /api/worker/jobs/{job}/inputs` (see
+"Run inputs (schema version 8)" below). A worker sends its trials to `POST /api/worker/jobs/{job}/trials` in batches of at most 256 records and about
 1.5 MiB. The server decodes every digest, checks each field against the protocol limits, applies the catalog
 changes, and stores the batch all or nothing. Sending a batch again changes nothing. The server then folds the
 digests itself when the job finishes and stores only its own figures; a worker's statistics are never read.
@@ -287,7 +288,7 @@ tree tables in the same transaction as the version bump.
 
 **Downgrade to version 2** (offline; back up first, nothing is downgraded automatically):
 `hairspring_store::downgrade_sqlite` and `downgrade_postgres` (also `cargo run -p hairspring-store --example
-store_downgrade`) drop the four tree tables (and the tables of versions 4 and 5 and the indexes of version 7, if
+store_downgrade`) drop the four tree tables (and the tables of versions 4 and 5 and the table of version 8 and the indexes of versions 7 and 8, if
 present) and set the version to 2.
 Branch runs, which exist only because of version 3,
 are listed first and kept by default as ordinary runs; `--drop-branch-runs` deletes them, with their trials, jobs,
@@ -376,7 +377,7 @@ Opening a version 4 database adds the table and its index in the same transactio
 database that lost one of its own tables or indexes is refused rather than repaired, on both backends, and a current
 database is only looked at (no DDL). An older release refuses a version 5 database. **Back up first; stop every older
 server and worker before upgrading.** The offline downgrade (`hairspring_store::downgrade_sqlite` and
-`downgrade_postgres`, also `cargo run -p hairspring-store --example store_downgrade`) now accepts versions 3 to 7
+`downgrade_postgres`, also `cargo run -p hairspring-store --example store_downgrade`) now accepts versions 3 to 8
 and drops the version 5 table first, so stored checks are lost by a downgrade.
 
 ## Stored run mode (schema version 6)
@@ -506,6 +507,69 @@ rebuilt. An older release refuses a version 7 database ("database schema version
   that step is setting the stored schema version back to 6 by hand (`PRAGMA user_version = 6` on SQLite,
   `UPDATE schema_version SET version = 6` on PostgreSQL); dropping the two indexes is optional, as a version 6 build
   ignores them. The offline downgrade to version 2 accepts version 7 and drops the two indexes.
+
+## Run inputs (schema version 8)
+
+Version 8 adds one table, `run_inputs`, and one index. It records, for a run, a SHA-256 digest of each input the run
+executed with, so that a later comparison of two runs can tell "same instrument" from "different instrument". Nothing
+reads it for a comparison yet: this version only records it and says whether a run has any. No existing response
+changes.
+
+- `run_inputs(run_id PRIMARY KEY REFERENCES runs(id), scheme, fields_json, missing_json, reporter_id,
+  reporter_trusted, created_at)`: one row per run, written once. `scheme` is `sim/1`, `wasm/1` or `hermit/1`, the scheme
+  of the point identity (see "Point addresses and hashes"), and must be the run's backend. `fields_json` is an object
+  from input name to the lower-case SHA-256 hex of that input's rendered value (the text after `key=` in the identity
+  text), keys sorted, at most 64 names and 16 KiB. `missing_json` lists the names of inputs the worker could not
+  record. `reporter_trusted` is the reporting worker's trust when it reported, as for trial rows.
+- **Digests, never values.** The identity text holds the working directory and the guest environment in plain text, so
+  it is not stored. A value is stored only if it is a digest: a plain value is refused. A digest of a short input can
+  be guessed by trying candidates, so no endpoint returns one; the service reports the names of the recorded and
+  missing inputs and who reported them (`hairspring_service::Service::run_inputs_view`).
+- `runs_target_created` on `runs(target, created_at)` on SQLite (every SQLite index also holds the `rowid`) and
+  `runs(target, created_at, seq)` on PostgreSQL: the runs of one target, newest first, read without sorting the whole
+  table. Nothing in this version reads it; the property history will.
+- **A run stored earlier has no row**, and reads as "not recorded". It is never given a guess, and the migration
+  writes no row.
+- **Who records.** The process itself records the inputs of a run it executes, for a built-in simulated target: the
+  digest of the running executable (the code under test is compiled into it, so one digest covers engine and target),
+  the target name and the backend. A remote worker reports the inputs its own engine can describe, once per job, to
+  `POST /api/worker/jobs/{job}/inputs` with its secret and the job's lease, as for trials (`run` role). The body is
+  `{"worker_id", "worker_secret", "inputs": {"scheme", "fields": {name: digest}, "missing": [name]}}`; the answer is
+  `{"ok": true, "outcome": "stored"}` or `"duplicate"`. The server checks that the scheme is the run's backend and
+  that every name is one the scheme has; the same inputs again are accepted and change nothing; different inputs for a
+  run that has some are refused (400, "this run already has different inputs recorded"). A refusal uses fixed words and
+  never repeats what was sent. Only the built-in simulated backend describes its inputs today: a Hermit or WASM run
+  records none yet, so it reads as "not recorded".
+- `hairspring gc` deletes a run's `run_inputs` row with the run.
+
+**Upgrading.** Opening a version 7 database creates the index and the table, with `IF NOT EXISTS`, in the transaction
+that sets the version to 8, on both backends; no row is rewritten. Back up first; stop every older server and worker
+before upgrading. An older release refuses a version 8 database ("database schema version 8 is not supported
+(expected 7)").
+
+- *How long, and locks.* Building the index reads the `runs` table once; creating the table is instant. SQLite holds its
+  write lock for the whole migration. On PostgreSQL `CREATE INDEX` (not `CONCURRENTLY`, which cannot run in a
+  transaction) takes a `SHARE` lock on `runs` until the migration commits: reads carry on, and every insert or update of
+  a run waits. Upgrade at a quiet time, or build the index beforehand with `CREATE INDEX CONCURRENTLY runs_target_created
+  ON runs(target, created_at, seq)`; the migration then finds it. A concurrent build that fails leaves an invalid index:
+  drop it first.
+- *Checked, not trusted.* `IF NOT EXISTS` goes by name, so after creating them the migration, and every later open,
+  checks that `run_inputs` has these columns (names, types, not-null), that `run_id` alone is its primary key and
+  references `runs`, and that the index is on `runs`, not unique, with these columns in this order and the default
+  collation and direction (on PostgreSQL also valid and ready). Otherwise the open is refused ("table run_inputs exists
+  but has a different definition: rename or drop it and open the database again", or the same for the index), the
+  whole migration is rolled back, and a version 7 database stays at 7. A current database missing either object is
+  refused, not repaired.
+- *Rights.* On PostgreSQL the migration must be run, once, by the role that owns the schema's tables (or a member of it,
+  or a superuser): creating the index needs ownership of `runs`. The table it creates belongs to that role, so a role
+  that only reads and writes rows needs `SELECT, INSERT` on `run_inputs` granted, as on the other tables, before it can
+  record inputs. Opening a current (version 8) schema issues no DDL. A role that is not the owner, opening a version 7
+  schema, is refused by the database ("must be owner of table runs") and the schema stays at 7.
+- *Downgrade.* There is no offline downgrade from 8 to 7. Version 8 has the tables and columns of version 7 plus the new
+  table, so that step is dropping `run_inputs` and `runs_target_created` (optional: a version 7 build ignores them,
+  but it refuses the database until the stored version is set back) and resetting the stored version to 7 by hand
+  (`PRAGMA user_version = 7` on SQLite, `UPDATE schema_version SET version = 7` on PostgreSQL). The offline downgrade
+  to version 2 accepts version 8 and drops the table and the index; the recorded inputs are lost.
 
 ## Paging and filters on the runs and failures lists
 

@@ -9,9 +9,11 @@ use crate::pg_checks as checks;
 use crate::pg_explorer as explorer;
 use crate::pg_lineage as lineage;
 use crate::pg_run_end as run_end;
+use crate::pg_run_inputs;
 use crate::pg_schema;
 use crate::pg_tree_query as query;
 use crate::pg_trials as trials;
+use crate::run_inputs::{NewRunInputs, RunInputsOutcome, RunInputsRecord};
 use crate::run_mode::mode_of_config;
 use crate::trials::*;
 use crate::types::*;
@@ -740,6 +742,14 @@ impl Store for PgStore {
             last_seen: now,
             trusted: false,
         })
+    }
+
+    fn put_run_inputs(&self, new: &NewRunInputs, now: i64) -> Result<RunInputsOutcome> {
+        pg_run_inputs::put(&mut *self.client()?, new, now)
+    }
+
+    fn get_run_inputs(&self, run_id: &str) -> Result<Option<RunInputsRecord>> {
+        pg_run_inputs::get(&mut *self.client()?, run_id)
     }
 
     fn put_run_identity(&self, identity: &RunIdentity) -> Result<IdentityOutcome> {

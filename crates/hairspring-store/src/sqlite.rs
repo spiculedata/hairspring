@@ -1,12 +1,14 @@
 use crate::checks::{CheckRecord, ConfirmationOutcome, NewConfirmation};
 use crate::digest_allowance::DigestUse;
 use crate::lineage::*;
+use crate::run_inputs::{NewRunInputs, RunInputsOutcome, RunInputsRecord};
 use crate::run_mode::mode_of_config;
 use crate::sqlite_checks as checks;
 use crate::sqlite_explorer as explorer;
 use crate::sqlite_lineage as lineage;
 use crate::sqlite_read_pool::ReadPool;
 use crate::sqlite_run_end as run_end;
+use crate::sqlite_run_inputs;
 use crate::sqlite_schema;
 use crate::sqlite_tree_query as query;
 use crate::sqlite_trials as trials;
@@ -649,6 +651,14 @@ impl Store for SqliteStore {
         failure_ids: &[&str],
     ) -> Result<BTreeMap<String, Vec<CheckRecord>>> {
         self.read(|c| checks::list_many(c, failure_ids))
+    }
+
+    fn put_run_inputs(&self, new: &NewRunInputs, now: i64) -> Result<RunInputsOutcome> {
+        sqlite_run_inputs::put(&mut self.conn(), new, now)
+    }
+
+    fn get_run_inputs(&self, run_id: &str) -> Result<Option<RunInputsRecord>> {
+        self.read(|c| sqlite_run_inputs::get(c, run_id))
     }
 
     fn put_run_identity(&self, identity: &RunIdentity) -> Result<IdentityOutcome> {

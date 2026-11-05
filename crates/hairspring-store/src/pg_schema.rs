@@ -1,12 +1,12 @@
 //! PostgreSQL schema versions and the migration between them. A schema is created at version 1 and then migrated like
 //! any older one, so a fresh schema and a migrated one cannot differ. The caller holds an advisory lock for the whole
 //! migration transaction.
-use crate::downgrade::V7_INDEXES;
+use crate::downgrade::{V7_INDEXES, V8_INDEXES, V8_TABLES_DROP_ORDER};
 use crate::run_mode::{mode_of_config, SEARCH_MODE, SWEEP_MODE};
 use crate::types::{Result, StoreError};
 use postgres::Transaction;
 
-pub(crate) const SCHEMA_VERSION: i32 = 7;
+pub(crate) const SCHEMA_VERSION: i32 = 8;
 
 /// The tables a version 3 schema must have.
 const V3_TABLES: [&str; 4] = ["run_identity", "trees", "trial_lineage", "tree_branches"];
@@ -152,6 +152,19 @@ CREATE INDEX IF NOT EXISTS failures_created ON failures(created_at, seq);
 CREATE INDEX IF NOT EXISTS run_properties_violation ON run_properties(run_id, idx) WHERE status = 'violation';
 ";
 
+/// Version 8: see the SQLite migration of the same name; the two stores keep the same columns and index. The index ends
+/// in `seq`, the column that orders runs created in the same millisecond here (as `runs_created` does). `CREATE INDEX`
+/// (not `CONCURRENTLY`, which cannot run in a transaction) blocks writes to `runs` while it builds; reads carry on.
+/// Creating the index needs ownership of `runs`, so this step must be run by the role that owns the schema's tables
+/// (that role owns the new table too: a role that only reads and writes rows needs `SELECT, INSERT` on `run_inputs`
+/// granted, as on the other tables, before it can record inputs).
+const MIGRATE_V7_TO_V8: &str = "
+CREATE INDEX IF NOT EXISTS runs_target_created ON runs(target, created_at, seq);
+CREATE TABLE IF NOT EXISTS run_inputs (
+  run_id TEXT PRIMARY KEY REFERENCES runs(id), scheme TEXT NOT NULL, fields_json TEXT NOT NULL,
+  missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted BOOLEAN NOT NULL, created_at BIGINT NOT NULL);
+";
+
 /// Brings the schema to [`SCHEMA_VERSION`] inside the caller's transaction. A schema from a newer release is refused.
 /// A current schema is only looked at: no DDL is issued, so opening it needs no rights beyond reading and writing rows.
 pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
@@ -179,6 +192,7 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             tx.batch_execute(MIGRATE_V4_TO_V5)?;
             backfill_run_modes(tx)?;
             migrate_v6_to_v7(tx)?;
+            migrate_v7_to_v8(tx)?;
             tx.execute(
                 "INSERT INTO schema_version(version) VALUES ($1)",
                 &[&SCHEMA_VERSION],
@@ -191,6 +205,7 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             tx.batch_execute(MIGRATE_V4_TO_V5)?;
             backfill_run_modes(tx)?;
             migrate_v6_to_v7(tx)?;
+            migrate_v7_to_v8(tx)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(2) => {
@@ -204,6 +219,7 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             tx.batch_execute(MIGRATE_V4_TO_V5)?;
             backfill_run_modes(tx)?;
             migrate_v6_to_v7(tx)?;
+            migrate_v7_to_v8(tx)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(3) => {
@@ -213,6 +229,7 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             tx.batch_execute(MIGRATE_V4_TO_V5)?;
             backfill_run_modes(tx)?;
             migrate_v6_to_v7(tx)?;
+            migrate_v7_to_v8(tx)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(4) => {
@@ -221,17 +238,25 @@ pub(crate) fn migrate(tx: &mut Transaction<'_>) -> Result<()> {
             tx.batch_execute(MIGRATE_V4_TO_V5)?;
             backfill_run_modes(tx)?;
             migrate_v6_to_v7(tx)?;
+            migrate_v7_to_v8(tx)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(5) => {
             verify_v5_schema(tx, 5)?;
             backfill_run_modes(tx)?;
             migrate_v6_to_v7(tx)?;
+            migrate_v7_to_v8(tx)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(6) => {
             verify_v5_schema(tx, 6)?;
             migrate_v6_to_v7(tx)?;
+            migrate_v7_to_v8(tx)?;
+            tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
+        }
+        Some(7) => {
+            verify_v7(tx, 7)?;
+            migrate_v7_to_v8(tx)?;
             tx.execute("UPDATE schema_version SET version=$1", &[&SCHEMA_VERSION])?;
         }
         Some(v) if v == SCHEMA_VERSION => verify_current(tx)?,
@@ -267,10 +292,106 @@ fn backfill_run_modes(tx: &mut Transaction<'_>) -> Result<()> {
 
 /// Reports a current schema that lost one of its tables or a version 3 index instead of repairing it.
 fn verify_current(tx: &mut Transaction<'_>) -> Result<()> {
-    verify_v5_schema(tx, SCHEMA_VERSION)?;
-    verify_objects(tx, SCHEMA_VERSION, &[], &V7_INDEXES)?;
+    verify_v7(tx, SCHEMA_VERSION)?;
+    verify_objects(tx, SCHEMA_VERSION, &V8_TABLES_DROP_ORDER, &V8_INDEXES)?;
+    verify_v8_definitions(tx)
+}
+
+/// A version 7 schema (and the version 7 part of a current one): the tables, and the version 7 indexes as the
+/// migration created them.
+fn verify_v7(tx: &mut Transaction<'_>, version: i32) -> Result<()> {
+    verify_v5_schema(tx, version)?;
+    verify_objects(tx, version, &[], &V7_INDEXES)?;
     verify_v7_definitions(tx)
 }
+
+/// Creates the version 8 table and index and checks what is there afterwards. `IF NOT EXISTS` goes by name, so a table
+/// or index of that name made beforehand would be kept: the check refuses one that is not what the migration creates.
+fn migrate_v7_to_v8(tx: &mut Transaction<'_>) -> Result<()> {
+    tx.batch_execute(MIGRATE_V7_TO_V8)?;
+    verify_v8_definitions(tx)
+}
+
+/// The columns of `run_inputs`: name, data type as `information_schema` names it, and whether it may be NULL.
+const RUN_INPUTS_COLUMNS: [(&str, &str, &str); 7] = [
+    ("run_id", "text", "NO"),
+    ("scheme", "text", "NO"),
+    ("fields_json", "text", "NO"),
+    ("missing_json", "text", "NO"),
+    ("reporter_id", "text", "NO"),
+    ("reporter_trusted", "boolean", "NO"),
+    ("created_at", "bigint", "NO"),
+];
+
+/// The table has these columns, `run_id` alone is its primary key, and `run_id` references `runs`; the index is valid
+/// and ready, on `runs`, not unique, on `(target, created_at, seq)`.
+fn verify_v8_definitions(tx: &mut Transaction<'_>) -> Result<()> {
+    let columns: Vec<(String, String, String)> = tx
+        .query(
+            "SELECT column_name::text, data_type::text, is_nullable::text FROM information_schema.columns \
+             WHERE table_schema = current_schema() AND table_name = 'run_inputs' ORDER BY ordinal_position",
+            &[],
+        )?
+        .iter()
+        .map(|r| (r.get(0), r.get(1), r.get(2)))
+        .collect();
+    let wanted: Vec<(String, String, String)> = RUN_INPUTS_COLUMNS
+        .iter()
+        .map(|(n, t, nullable)| (n.to_string(), t.to_string(), nullable.to_string()))
+        .collect();
+    let references_runs: i64 = tx
+        .query_one(
+            "SELECT count(*) FROM pg_constraint k JOIN pg_class t ON t.oid = k.conrelid \
+             JOIN pg_namespace n ON n.oid = t.relnamespace JOIN pg_class r ON r.oid = k.confrelid \
+             WHERE n.nspname = current_schema() AND t.relname = 'run_inputs' \
+               AND k.contype = 'f' AND r.relname = 'runs' AND k.conkey = ARRAY[1]::smallint[]",
+            &[],
+        )?
+        .get(0);
+    let primary: i64 = tx
+        .query_one(
+            "SELECT count(*) FROM pg_constraint k JOIN pg_class t ON t.oid = k.conrelid \
+             JOIN pg_namespace n ON n.oid = t.relnamespace \
+             WHERE n.nspname = current_schema() AND t.relname = 'run_inputs' \
+               AND k.contype = 'p' AND k.conkey = ARRAY[1]::smallint[]",
+            &[],
+        )?
+        .get(0);
+    if columns != wanted || references_runs != 1 || primary != 1 {
+        return Err(StoreError::Backend(
+            "table run_inputs exists but has a different definition: rename or drop it and open the database again"
+                .to_string(),
+        ));
+    }
+    for (index, table, ending) in V8_DEFINITIONS {
+        let row = tx.query_opt(
+            "SELECT i.indisvalid AND i.indisready, i.indisunique, t.relname::text, pg_get_indexdef(i.indexrelid) \
+             FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_class t ON t.oid = i.indrelid \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = current_schema() AND c.relname = $1",
+            &[&index],
+        )?;
+        let fits = row.is_some_and(|r| {
+            r.get::<_, bool>(0)
+                && !r.get::<_, bool>(1)
+                && r.get::<_, String>(2) == table
+                && r.get::<_, String>(3).ends_with(ending)
+        });
+        if !fits {
+            return Err(StoreError::Backend(format!(
+                "index {index} exists but is invalid or has a different definition: drop it and open the database again"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// What each version 8 index must be: its table, and how `pg_get_indexdef` ends for it.
+const V8_DEFINITIONS: [(&str, &str, &str); 1] = [(
+    "runs_target_created",
+    "runs",
+    " USING btree (target, created_at, seq)",
+)];
 
 /// Creates the version 7 indexes and checks what is there afterwards. `IF NOT EXISTS` goes by name, so an index an
 /// operator built beforehand (with `CREATE INDEX CONCURRENTLY`, say) is kept, and one with the same name but another
