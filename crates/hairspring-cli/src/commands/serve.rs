@@ -29,6 +29,12 @@ pub struct ServeArgs {
     /// refused with 429 and `Retry-After`, not queued.
     #[arg(long, default_value_t = hairspring_mcp::DEFAULT_MAX_REPLAYS)]
     pub max_replays: usize,
+    /// Confirmations a caller with the run role may start from the web UI or `POST /api/failures/{id}/confirm`, at once
+    /// (0 to 4). 0, the default, turns it off. A confirmation reruns and replays a failure's `process` target on this
+    /// server for up to two minutes, and its checks are trusted like the server's own workers'. A request beyond the
+    /// cap is refused with 429 and `Retry-After`, not queued; a failure has at most one at a time.
+    #[arg(long, default_value_t = 0)]
+    pub max_confirmations: usize,
     /// File with one `token:role` per line, optionally `token:role label` (alternative to the HAIRSPRING_TOKENS
     /// environment variable). A label is a readable name for log lines; it is set only here, not secret.
     #[arg(long)]
@@ -128,6 +134,7 @@ pub fn run(ctx: &Ctx, args: &ServeArgs, out: &mut dyn Write) -> CmdResult<i32> {
     config.register_limit = args.register_limit;
     config.max_connections = args.max_connections;
     config.max_replays = args.max_replays;
+    config.max_confirmations = args.max_confirmations;
     config.organisation = organisation_from(
         args.organisation.as_deref(),
         std::env::var(ORGANISATION_ENV).ok(),
@@ -150,6 +157,13 @@ pub fn run(ctx: &Ctx, args: &ServeArgs, out: &mut dyn Write) -> CmdResult<i32> {
             ""
         }
     )?;
+    if args.max_confirmations > 0 {
+        writeln!(
+            out,
+            "hairspring: confirmation from the browser is on (up to {} at once): any run token can start one, and its checks are trusted",
+            args.max_confirmations
+        )?;
+    }
     if !trusted.is_empty() {
         writeln!(
             out,

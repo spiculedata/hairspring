@@ -9,6 +9,7 @@ use crate::confirm_view::{failure_checks, summary, FailureChecks, FindingSummary
 use crate::{Result, Service, ServiceError, MAX_BUNDLE_BYTES, MAX_REPLAY_STEPS};
 use hairspring_core::bundle::Bundle;
 use hairspring_engine::backend::Progress;
+use hairspring_engine::config::TargetKind;
 use hairspring_engine::confirm::{CheckResult, ConfirmRequest};
 use hairspring_engine::engine::Engine;
 use hairspring_store::{
@@ -16,6 +17,10 @@ use hairspring_store::{
     MAX_CHECK_TAG_BYTES,
 };
 
+const NO_TARGET_REFUSAL: &str =
+    "this server has no configuration for the failure's target, so it cannot confirm it";
+const NOT_PROCESS_REFUSAL: &str =
+    "only a failure of a process target can be confirmed, and this one is not";
 const FAILURE_ID_PREFIX: &str = "fail_";
 const FAILURE_ID_HEX: usize = 16;
 
@@ -102,6 +107,32 @@ impl Service {
         self.record_confirmation(failure_id, &Service::local_worker_id(), true, &checks)?;
         self.failure_checks(failure_id)?
             .ok_or_else(|| ServiceError::NotFound(format!("failure {failure_id}")))
+    }
+
+    /// Whether a failure with this id is stored. A malformed id is a refusal, as everywhere else.
+    pub fn failure_exists(&self, failure_id: &str) -> Result<bool> {
+        checked_failure_id(failure_id)?;
+        Ok(self.store.get_failure(failure_id)?.is_some())
+    }
+
+    /// Whether this engine could confirm the stored failure `failure_id`: the id is well formed, the failure exists and
+    /// its target is a configured `process` target. Nothing runs. The refusals are fixed words that do not repeat the
+    /// target's name, so a caller can be answered with them as they are.
+    pub fn check_confirmable(&self, engine: &Engine, failure_id: &str) -> Result<()> {
+        checked_failure_id(failure_id)?;
+        let failure = self
+            .store
+            .get_failure(failure_id)?
+            .ok_or_else(|| ServiceError::NotFound(format!("failure {failure_id}")))?;
+        let Some(spec) = engine.config().targets.get(&failure.target) else {
+            return Err(ServiceError::InvalidRequest(NO_TARGET_REFUSAL.to_string()));
+        };
+        match spec.kind {
+            TargetKind::Process { .. } => Ok(()),
+            _ => Err(ServiceError::InvalidRequest(
+                NOT_PROCESS_REFUSAL.to_string(),
+            )),
+        }
     }
 
     /// Runs the pipeline on bundle text without storing anything: for a bundle that is not a stored failure.

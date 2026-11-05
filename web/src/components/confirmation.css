@@ -14,3 +14,8 @@
 .check-detail dd { margin: 0; overflow-wrap: anywhere; }
 .checks-scroll { overflow-x: auto; }
 .checks-scroll .checks { min-width: 48rem; }
+.confirm-run { margin: .75rem 0; display: grid; gap: .5rem; justify-items: start; }
+.confirm-step { border: 1px solid var(--confirm-line); background: var(--confirm-bg); border-radius: 6px; padding: .6rem .75rem; display: grid; gap: .5rem; max-width: 42rem; }
+.confirm-step p { margin: 0; }
+.confirm-step-title { font-weight: 600; }
+.confirm-step-actions { display: flex; flex-wrap: wrap; gap: .5rem; }

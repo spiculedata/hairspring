@@ -5,8 +5,17 @@ export interface Me {
   readonly role: RoleName;
   /** The server has no API tokens and accepts only same-origin local requests; every caller is then an admin. */
   readonly open_mode: boolean;
-  readonly can: { readonly read: boolean; readonly run: boolean; readonly admin: boolean };
+  /** `confirm` is absent from a server that predates confirming from the browser; that is the same as false. */
+  readonly can: { readonly read: boolean; readonly run: boolean; readonly admin: boolean; readonly confirm?: boolean };
   readonly roles: readonly string[];
+  /** What one confirmation costs, present only when `can.confirm` is true. */
+  readonly confirm?: ConfirmLimits;
+}
+
+/** The server's bounds on a confirmation it runs: its whole wall-clock budget, and how many may run at once. */
+export interface ConfirmLimits {
+  readonly wall_secs: number;
+  readonly max_running: number;
 }
 
 /** What the page knows about the caller. `unavailable` means the question could not be answered (an older server, an error). */
@@ -20,7 +29,25 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 export function isMe(v: unknown): v is Me {
   if (!isObject(v) || typeof v.role !== 'string' || !ROLE_NAMES.includes(v.role)) return false;
   if (typeof v.open_mode !== 'boolean' || !Array.isArray(v.roles) || !isObject(v.can)) return false;
-  return typeof v.can.read === 'boolean' && typeof v.can.run === 'boolean' && typeof v.can.admin === 'boolean';
+  if (typeof v.can.read !== 'boolean' || typeof v.can.run !== 'boolean' || typeof v.can.admin !== 'boolean') return false;
+  if (v.can.confirm === undefined) return true;
+  if (typeof v.can.confirm !== 'boolean') return false;
+  return !v.can.confirm || isConfirmLimits(v.confirm);
+}
+
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0;
+
+function isConfirmLimits(v: unknown): v is ConfirmLimits {
+  return isObject(v) && isCount(v.wall_secs) && isCount(v.max_running);
+}
+
+/**
+ * What a confirmation costs, when the server will let this caller start one; otherwise `undefined` and the page shows
+ * nothing new. While the role is loading, or when it cannot be fetched, nothing is assumed.
+ */
+export function confirmAccess(state: MeState): ConfirmLimits | undefined {
+  if (state.status !== 'ready' || state.me.can.confirm !== true) return undefined;
+  return state.me.confirm;
 }
 
 /** Whether an action is offered, and the one line that says why not. */

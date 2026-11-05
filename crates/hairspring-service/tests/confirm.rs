@@ -44,6 +44,10 @@ fn engine(host: &Path, guest: &str) -> Engine {
     let bin = scratch("bin").join("fake-hermit");
     std::fs::write(&bin, FAKE_HERMIT).unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    engine_with_bin(host, guest, bin)
+}
+
+fn engine_with_bin(host: &Path, guest: &str, bin: PathBuf) -> Engine {
     let spec = TargetSpec {
         name: "svc".into(),
         description: String::new(),
@@ -274,4 +278,111 @@ fn a_changed_loader_is_stored_as_inconclusive_and_the_finding_is_not_confirmed()
         assert!(check.guest.detail["inconclusive"].contains("environment differs"));
     }
     assert!(!out.environment_pinned);
+}
+
+#[test]
+fn a_stored_failure_of_a_process_target_may_be_confirmed_here() {
+    let (svc, engine, _, failure) = failed_run();
+
+    svc.check_confirmable(&engine, &failure)
+        .expect("a process target on this engine");
+}
+
+#[test]
+fn a_failure_whose_target_this_engine_does_not_have_is_refused_in_fixed_words() {
+    // Arrange: the failure was stored by a run of target `svc`; the engine now has no such target.
+    let (svc, _, _, failure) = failed_run();
+    let other = Engine::new(
+        Arc::new(Registry::new()),
+        Config {
+            targets: BTreeMap::new(),
+        },
+    );
+
+    // Act
+    let err = svc.check_confirmable(&other, &failure).unwrap_err();
+
+    // Assert
+    let ServiceError::InvalidRequest(text) = err else {
+        panic!("expected a refusal, got {err}");
+    };
+    assert_eq!(
+        text,
+        "this server has no configuration for the failure's target, so it cannot confirm it"
+    );
+    assert!(!text.contains("svc"), "the target name is not repeated");
+}
+
+#[test]
+fn a_failure_of_a_target_that_is_not_a_process_target_is_refused_in_fixed_words() {
+    // Arrange: the same target name, now configured as a simulation.
+    let (svc, _, _, failure) = failed_run();
+    let registry = Arc::new(hairspring_engine::demos::default_registry());
+    let mut config = Config::from_registry(&registry);
+    let template = config
+        .targets
+        .values()
+        .next()
+        .expect("a demo target")
+        .clone();
+    config.targets.insert(
+        "svc".to_string(),
+        TargetSpec {
+            name: "svc".into(),
+            ..template
+        },
+    );
+    let sim = Engine::new(registry, config);
+
+    // Act
+    let err = svc.check_confirmable(&sim, &failure).unwrap_err();
+
+    // Assert
+    let ServiceError::InvalidRequest(text) = err else {
+        panic!("expected a refusal, got {err}");
+    };
+    assert_eq!(
+        text,
+        "only a failure of a process target can be confirmed, and this one is not"
+    );
+}
+
+#[test]
+fn a_malformed_or_unknown_failure_id_is_not_confirmable() {
+    let (svc, engine, _, _) = failed_run();
+
+    assert!(matches!(
+        svc.check_confirmable(&engine, "nope"),
+        Err(ServiceError::InvalidRequest(_))
+    ));
+    assert!(matches!(
+        svc.check_confirmable(&engine, "fail_0000000000000000"),
+        Err(ServiceError::NotFound(_))
+    ));
+}
+
+#[test]
+fn a_missing_hermit_gives_an_answer_and_does_not_hang() {
+    // Arrange: the engine's Hermit is a path that does not exist.
+    let (svc, _, _, failure) = failed_run();
+    let host = scratch("host-missing");
+    put(&host, "etc/ld.so.cache", "cache-one");
+    let missing = engine_with_bin(&host, FAILING_GUEST, PathBuf::from("/nonexistent/hermit"));
+
+    // Act
+    let started = std::time::Instant::now();
+    let result = svc.confirm_failure(&missing, &failure, &ConfirmRequest::default(), &mut |_| {
+        true
+    });
+
+    // Assert: it answers at once, as `hairspring confirm` does: every check is stored as inconclusive, saying that
+    // Hermit could not be started, and the failure does not move off candidate.
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    let checks = result.expect("the checks are stored, not an error");
+    assert_eq!(checks.finding, "candidate");
+    assert!(!checks.checks.is_empty());
+    for check in &checks.checks {
+        assert_eq!(check.status, "inconclusive", "{check:?}");
+    }
+    assert!(checks.checks[0].guest.detail["inconclusive"].contains("Hermit could not be started"));
 }

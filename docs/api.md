@@ -73,6 +73,8 @@ Roles are checked in the handler, from the router in `crates/hairspring-server/s
 | `GET /api/failures` | `read` | failures, newest first, with [paging and filters](#paging-and-filters) |
 | `GET /api/failures/{id}` | `read` | one failure: its steps and bundle |
 | `GET /api/failures/{id}/checks` | `read` | the failure's stored confirmation checks and where they leave it |
+| `GET /api/failures/{id}/confirm` | `read` | whether a [confirmation started from the API](#post-apifailuresidconfirm) is running |
+| `POST /api/failures/{id}/confirm` | `run` | [confirm a failure on the server](#post-apifailuresidconfirm); off unless the server was started with `--max-confirmations` |
 | `GET /api/bundles/{hash}` | `read` | a stored bundle as text |
 | `POST /api/replay` | `run` | [replay a bundle](#post-apireplay) |
 | `GET /api/workers` | `read` (worker ids from `run`) | [the workers and the queue](#get-apiworkers) |
@@ -107,11 +109,16 @@ never refused. The rules are in [architecture.md](architecture.md#job-lifecycle)
 read endpoints, so a missing or wrong token gets the same 401. A real reply for a `run` token:
 
 ```json
-{"can":{"admin":false,"read":true,"run":true},"open_mode":false,"role":"run","roles":["read","run","admin"]}
+{"can":{"admin":false,"confirm":false,"read":true,"run":true},"open_mode":false,"role":"run","roles":["read","run","admin"]}
 ```
 
 - `role` is the caller's role: `read`, `run` or `admin`. `can` spells out what that role allows, and `roles` lists
   the role names in order.
+- `can.confirm` is `true` only when the server was started with `--max-confirmations` above 0 **and** the caller's
+  role is `run` or `admin`; otherwise it is `false`. A server that predates the setting has no `can.confirm` key,
+  which a client should read as `false`. When it is `true` the reply also has `confirm`, with `wall_secs` (the
+  budget of one confirmation, in seconds) and `max_running` (how many the server runs at once), for example
+  `"confirm":{"max_running":2,"wall_secs":120}`. A server with the setting off says nothing about limits.
 - `open_mode` is `true` when the server has no API tokens and only accepts same-origin local requests. Every caller is
   then treated as `admin`.
 - `label` is present only when the operator gave the caller's own token a label in the token configuration (see
@@ -120,7 +127,67 @@ read endpoints, so a missing or wrong token gets the same 401. A real reply for 
   key. In open mode there is none.
 - The reply never contains the token, a digest of it, or any other secret.
 
-The web UI asks this when it loads, to disable the Start run button for a `read` token.
+The web UI asks this when it loads, to disable the Start run button for a `read` token and to show the Run
+confirmation control only when `can.confirm` is `true`.
+
+## `POST /api/failures/{id}/confirm`
+
+Starts a [confirmation](determinism.md#confirming-a-failure) of a stored failure on the server and answers at once;
+the work goes on in the background. It reruns the failure's seed, replays its bundle and records every check through
+the same path as `hairspring confirm`, so the ladder, the claim gate and the trust label are the same. The caller
+sends no body and chooses nothing but the failure: the reruns and the wall-clock budget are the defaults of
+`hairspring confirm` (3 reruns, 120 seconds), and there is no control target and no environment override.
+
+- **Off by default.** The server must have been started with `hairspring serve --max-confirmations N`, N from 1 to 4
+  (see [deploy.md](deploy.md#reference-serve-options)). With the default of 0 the route answers `403` with
+  `confirmation from the browser is not enabled on this server` and `"code":"confirm_disabled"`, whatever the id.
+- **Role.** `run` or `admin`. A `read` token gets `403` (`this endpoint requires the run role`), checked first.
+- **It runs on the server's own engine, never on a remote worker.** The server needs the failure's target in its own
+  `hairspring.toml`, and only `process` targets can be confirmed, so on a server that cannot run them (no Hermit, a
+  host that is not Linux on x86-64) a confirmation is stored with every check `inconclusive` and says Hermit could not
+  be started, exactly as `hairspring confirm` does there; it does not hang and it does not move the finding.
+- **Its checks are trusted.** The server is the runner, as for its own workers, so what a confirmation stores can
+  move a failure's state, and a claim, in either direction. Any `run` token can start one while the setting is on.
+- **At most one at a time per failure, and at most N at once.** A second request for a failure that already has
+  one running is `409`; a request when all N are running is `429` with `Retry-After`. Nothing is queued. A
+  confirmation keeps its slot until it ends, even if the client goes away. Stopping the server ends a confirmation
+  between checks; what ran is stored and the rest is recorded as skipped.
+- The server logs one line when it starts and one when it ends, naming the failure id and the caller as
+  `label (t:<key>)` (or the key alone), never the token.
+
+A real reply, for an accepted request:
+
+```json
+{"accepted":true}
+```
+
+with status `202`. Read the result from `GET /api/failures/{id}/checks`.
+
+| Status | When | Message or note |
+|---|---|---|
+| 202 | accepted | `{"accepted":true}` |
+| 400 | the failure's target is not configured on this server, or is not a `process` target | `this server has no configuration for the failure's target, so it cannot confirm it`; `only a failure of a process target can be confirmed, and this one is not` (the target's name is not repeated) |
+| 401 | no token, or a wrong one | `a valid bearer token is required` |
+| 403 | role too low; or the setting is off | `this endpoint requires the run role`; `confirmation from the browser is not enabled on this server` with `"code":"confirm_disabled"` |
+| 404 | an id that is not a failure id, or a failure the server does not know | `not found` |
+| 409 | this failure already has a confirmation running | `a confirmation of this failure is already running` with `"code":"confirm_running"` |
+| 429 | N confirmations are already running | `too many confirmations are running; try again shortly`, `Retry-After: 30` |
+
+In open mode (no tokens) the usual `Host` and cross-site `Origin` checks apply to this route like any other.
+
+### `GET /api/failures/{id}/confirm`
+
+The `read` role is enough. It says whether a confirmation started from the API is running for the failure, as this
+server process knows it:
+
+```json
+{"enabled":true,"state":"running"}
+```
+
+`state` is `idle`, `running` or `failed`. `failed` means the last attempt ended in an error (the reason is in the
+server's log) and carries `reason`, a fixed sentence. The state is kept in memory, so a restart forgets it; the
+stored checks, which are what counts, come from `GET /api/failures/{id}/checks`. `enabled` is `false` when the server
+was started without `--max-confirmations`. An id that is not a failure id, or an unknown failure, is `404`.
 
 ## `GET /api/workers`
 
@@ -359,14 +426,16 @@ sent beyond a short, single-line, sanitised piece. A `429` and the `503` carry a
 |---|---|---|
 | 400 | a body, query string, id or parameter that is not valid | names the parameter, for example `` `state` is not valid ``; `invalid query string` |
 | 401 | no token, or a wrong one | `a valid bearer token is required`, with `WWW-Authenticate: Bearer` |
-| 403 | role too low; or open mode and the request is not same-origin and local | `this endpoint requires the run role` (or `admin`) |
+| 403 | role too low; or open mode and the request is not same-origin and local; or confirmation is off | `this endpoint requires the run role` (or `admin`); `"code":"confirm_disabled"` |
 | 404 | an id the server does not know, or text that is not an id; also a run removed by `hairspring gc` | `not found` |
 | 408 | the request body did not arrive within 30 seconds of its head | JSON error, connection closed |
 | 409 | a replay refused because the loader differs from the recording | `"code":"environment_mismatch"` |
+| 409 | a confirmation of the failure is already running | `"code":"confirm_running"` |
 | 413 | a body over 2 MiB | |
 | 415 | `/mcp` called without `Content-Type: application/json` | `Content-Type must be application/json` |
 | 429 | the per-client rate limit (default 1200 requests a minute) | `rate limit exceeded`, `Retry-After: 60` |
 | 429 | too many replays at once (default 2, `--max-replays`) | `too many replays are running; try again shortly`, `Retry-After: 5` |
+| 429 | too many confirmations at once (`--max-confirmations`) | `too many confirmations are running; try again shortly`, `Retry-After: 30` |
 | 429 | too many open event streams | `too many open event streams` or `too many open event streams for this caller` |
 | 429 | a token registered too many workers in an hour (default 100, `--register-limit`) | `worker registration limit reached for this token`, `Retry-After: 3600` |
 | 500 | an internal error | `internal error`; the detail is logged by the server, never returned |

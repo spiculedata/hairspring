@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isMe, startAccess, type Me, type MeState } from './me';
+import { confirmAccess, isMe, startAccess, type Me, type MeState } from './me';
 
 const me = (role: Me['role'], open = false): Me => ({
   role,
@@ -58,5 +58,37 @@ describe('startAccess', () => {
 
   it('leaves the action to the server when the role cannot be fetched, and does not guess a role', () => {
     expect(startAccess({ status: 'unavailable' })).toEqual({ canStart: true });
+  });
+});
+
+describe('confirming from the browser', () => {
+  const on = (role: Me['role']): Me => ({ ...me(role), can: { ...me(role).can, confirm: true }, confirm: { wall_secs: 120, max_running: 2 } });
+  const off = (role: Me['role']): Me => ({ ...me(role), can: { ...me(role).can, confirm: false } });
+
+  it('accepts an answer with can.confirm true or false, and one from a server that has no such key', () => {
+    for (const m of [on('run'), off('run'), off('read'), me('run')]) expect(isMe(m)).toBe(true);
+  });
+
+  it('rejects can.confirm that is not a boolean, and a true one without its limits', () => {
+    const bad: unknown[] = [
+      { ...me('run'), can: { ...me('run').can, confirm: 'yes' } },
+      { ...me('run'), can: { ...me('run').can, confirm: true } },
+      { ...on('run'), confirm: { wall_secs: 'long', max_running: 2 } },
+      { ...on('run'), confirm: { wall_secs: 0, max_running: 2 } },
+      { ...on('run'), confirm: null },
+    ];
+    for (const b of bad) expect(isMe(b)).toBe(false);
+  });
+
+  it('gives the limits only when the server says this caller may', () => {
+    expect(confirmAccess(ready(on('run')))).toEqual({ wall_secs: 120, max_running: 2 });
+    expect(confirmAccess(ready(off('run')))).toBeUndefined();
+    expect(confirmAccess(ready(me('run')))).toBeUndefined();
+    expect(confirmAccess({ status: 'loading' })).toBeUndefined();
+    expect(confirmAccess({ status: 'unavailable' })).toBeUndefined();
+  });
+
+  it('reads the permission from can.confirm, not from the role name', () => {
+    expect(confirmAccess(ready({ ...on('admin'), can: { ...on('admin').can, confirm: false } }))).toBeUndefined();
   });
 });

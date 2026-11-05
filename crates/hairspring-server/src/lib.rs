@@ -4,6 +4,7 @@ mod auth;
 #[cfg(test)]
 mod body_order_tests;
 mod client_addr;
+mod confirm_api;
 mod conn;
 mod error;
 mod limits;
@@ -18,6 +19,7 @@ mod worker_api;
 
 pub use auth::Auth;
 pub use client_addr::TrustedProxies;
+pub use confirm_api::MAX_MAX_CONFIRMATIONS;
 pub use organisation::{parse_organisation, MAX_ORGANISATION_CHARS};
 
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Request, State};
@@ -26,6 +28,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
+use confirm_api::Confirmations;
 use hairspring_engine::engine::Engine;
 use hairspring_mcp::{McpServer, ReplaySlots, DEFAULT_MAX_REPLAYS};
 use hairspring_service::Service;
@@ -96,6 +99,11 @@ pub struct ServerConfig {
     /// Replays (REST `/api/replay` and MCP `replay_bundle` together) allowed to run at once. A replay runs target
     /// code on the server, so one beyond this is refused with 429 and `Retry-After` rather than queued.
     pub max_replays: usize,
+    /// Confirmations a caller with the run role may have this server run at once, from `POST
+    /// /api/failures/{id}/confirm`; 0 (the default) turns the endpoint off, and at most [`MAX_MAX_CONFIRMATIONS`].
+    /// A confirmation runs target code on this server for up to two minutes, so one beyond the cap is refused with
+    /// 429 and `Retry-After` rather than queued, and a failure has at most one at a time.
+    pub max_confirmations: usize,
     /// Shut down on Ctrl-C (for the CLI).
     pub handle_ctrl_c: bool,
     /// The organisation's name, shown in the web UI's top bar when set. Plain text of at most
@@ -123,6 +131,7 @@ impl ServerConfig {
             body_read_timeout: DEFAULT_BODY_READ_TIMEOUT,
             max_connections: DEFAULT_MAX_CONNECTIONS,
             max_replays: DEFAULT_MAX_REPLAYS,
+            max_confirmations: 0,
             handle_ctrl_c: false,
             organisation: None,
             trusted_proxies: TrustedProxies::default(),
@@ -147,6 +156,11 @@ impl ServerConfig {
         }
         if !(1..=MAX_MAX_REPLAYS).contains(&self.max_replays) {
             return Err(invalid("the replay cap must be between 1 and 64"));
+        }
+        if self.max_confirmations > MAX_MAX_CONFIRMATIONS {
+            return Err(invalid(
+                "the confirmation cap must be between 0 (off) and 4",
+            ));
         }
         if self.header_read_timeout.is_zero() || self.body_read_timeout.is_zero() {
             return Err(invalid("read timeouts must be longer than zero"));
@@ -178,6 +192,8 @@ pub struct AppState {
     pub caller_streams: Arc<CallerStreams>,
     /// Replays running now; shared with the MCP endpoint.
     pub replays: ReplaySlots,
+    /// Confirmations started from the API: the cap, and which failures have one running.
+    pub confirms: Confirmations,
     /// Time allowed for reading a request body.
     pub body_read_timeout: Duration,
     /// The checked organisation name, if one is configured.
@@ -380,6 +396,10 @@ fn router(state: AppState) -> Router {
         .route("/api/failures", get(api::list_failures))
         .route("/api/failures/{id}", get(api::get_failure))
         .route("/api/failures/{id}/checks", get(read_api::failure_checks))
+        .route(
+            "/api/failures/{id}/confirm",
+            get(confirm_api::status).post(confirm_api::confirm),
+        )
         .route("/api/bundles/{hash}", get(api::get_bundle))
         .route("/api/replay", post(api::replay))
         .route("/api/workers", get(api::workers))
@@ -487,6 +507,7 @@ pub fn start(config: ServerConfig, svc: Service, engine: Engine) -> io::Result<R
         sse_slots: Arc::new(tokio::sync::Semaphore::new(config.max_sse_streams)),
         caller_streams: Arc::new(CallerStreams::new(config.max_sse_streams_per_caller)),
         replays,
+        confirms: Confirmations::new(config.max_confirmations),
         body_read_timeout: config.body_read_timeout,
         organisation: config.organisation_name()?,
         trusted_proxies: Arc::new(config.trusted_proxies.clone()),
@@ -566,6 +587,7 @@ mod tests {
             sse_slots: Arc::new(tokio::sync::Semaphore::new(1)),
             caller_streams: Arc::new(CallerStreams::new(1)),
             replays: ReplaySlots::new(1),
+            confirms: Confirmations::new(0),
             body_read_timeout: Duration::from_secs(5),
             organisation: None,
             trusted_proxies: Arc::new(TrustedProxies::default()),

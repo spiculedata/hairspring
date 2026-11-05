@@ -377,6 +377,18 @@ process group of the run in progress (a child that calls `setsid` escapes; see t
 above). The confirmation stored is the partial one: the check that was running and the ones after it are recorded as
 skipped, so it never changes an earlier finding. A remote worker does not run confirmations yet.
 
+A confirmation can also be started from the API: `POST /api/failures/{id}/confirm` (`run` role). It is off unless
+`hairspring serve --max-confirmations N` is above 0 (at most 4), and it runs the same pipeline on the server's own
+engine, never queued to a worker, with the CLI defaults (3 reruns, 120 seconds) and nothing chosen by the caller but
+the failure. The handler checks, in order, the role, whether the setting is on, the id, that the failure's target is
+a configured `process` target (`Service::check_confirmable`, fixed refusal text that does not repeat the target),
+then that this failure has no confirmation running (`409`) and that a slot is free (`429`, `Retry-After: 30`); it then
+answers `202` and the work goes on on the blocking pool, holding its slot until it ends. Slots are separate from the
+replay slots. Results go through `Service::confirm_failure`, the call the CLI makes, so they are recorded by this
+process as a trusted runner and read back by the same ladder and claim gate. The running flag is in memory
+(`GET /api/failures/{id}/confirm`); a restart loses it and nothing else. The server stopping ends a confirmation
+between checks through the progress callback, with the rest stored as skipped.
+
 Opening a version 4 database adds the table and its index in the same transaction as the version bump. A version 4
 database that lost one of its own tables or indexes is refused rather than repaired, on both backends, and a current
 database is only looked at (no DDL). An older release refuses a version 5 database. **Back up first; stop every older
@@ -1085,6 +1097,10 @@ Replays run target code synchronously on the server's blocking threads, so they 
 A replay over the cap is refused at once, never queued: REST answers `429` with `Retry-After: 5`, and the MCP tool
 returns a tool error with `structuredContent.code` set to `replay_busy`. A replay keeps its slot until it finishes,
 even if the client has gone away. Other handlers therefore always have blocking threads left.
+
+Confirmations started from the API (`--max-confirmations N`, default 0 = off, at most 4) have slots of their own, taken
+without waiting: a request over the cap is `429` with `Retry-After: 30`, and a failure with a confirmation already
+running gets `409`. Each holds a blocking thread for up to its wall budget (120 seconds), so the cap is small.
 
 Event streams (`GET /api/runs/{id}/events`) are capped at 64 open in total and 16 per caller, where a caller is one
 token, or, when the server has no tokens, one client address (IPv4 address or IPv6 /64, found as for the rate

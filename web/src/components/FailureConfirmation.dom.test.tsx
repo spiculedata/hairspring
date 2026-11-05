@@ -2,6 +2,7 @@
 import { cleanup, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CheckView, FailureChecks } from '../types';
+import { resetMeForTests } from '../meStore';
 import { FailureConfirmation } from './FailureConfirmation';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
@@ -15,7 +16,10 @@ const body = (over: Partial<FailureChecks> = {}): FailureChecks => ({
 });
 
 describe('FailureConfirmation', () => {
-  beforeEach(() => vi.stubGlobal('fetch', vi.fn()));
+  beforeEach(() => {
+    resetMeForTests();
+    vi.stubGlobal('fetch', vi.fn());
+  });
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
@@ -97,5 +101,37 @@ describe('FailureConfirmation', () => {
     const { container } = render(<FailureConfirmation failureId="fail_0123456789abcdef" />);
     await waitFor(() => expect(container.textContent).toContain('no wording for'));
     expect(container.querySelector('img')).toBeNull();
+  });
+
+  const me = (confirm: boolean) => ({
+    role: 'run',
+    open_mode: false,
+    can: { read: true, run: true, admin: false, confirm },
+    ...(confirm ? { confirm: { wall_secs: 120, max_running: 2 } } : {}),
+    roles: ['read', 'run', 'admin'],
+  });
+  const serve = (canConfirm: boolean) =>
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url === '/api/me') return json(me(canConfirm));
+        if (url.endsWith('/confirm')) return json({ enabled: canConfirm, state: 'idle' });
+        return json(body());
+      }),
+    );
+
+  it('adds the run control, and keeps the command to run, when the server says this caller may confirm', async () => {
+    serve(true);
+    const { container } = render(<FailureConfirmation failureId="fail_0123456789abcdef" />);
+    await waitFor(() => expect(container.textContent).toContain('Run confirmation'));
+    expect(container.textContent).toContain('hairspring confirm fail_0123456789abcdef');
+  });
+
+  it('shows nothing new when the server says this caller may not', async () => {
+    serve(false);
+    const { container } = render(<FailureConfirmation failureId="fail_0123456789abcdef" />);
+    await waitFor(() => expect(container.textContent).toContain('No checks recorded.'));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([u]) => u === '/api/me')).toBe(true));
+    expect(container.textContent).not.toContain('Run confirmation');
   });
 });

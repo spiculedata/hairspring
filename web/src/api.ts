@@ -1,7 +1,7 @@
 import { isMe, type Me } from './me';
 import { parseSse, type SseEvent } from './sse';
 import type { StartRunBody } from './startRun';
-import type { Coverage, FailureChecks, FailureDetail, FailureSummary, PropertyPage, PropertyQuery, ReplayResult, Run, RunDetail, Target, Worker, WorkersOverview } from './types';
+import type { ConfirmStatus, Coverage, FailureChecks, FailureDetail, FailureSummary, PropertyPage, PropertyQuery, ReplayResult, Run, RunDetail, Target, Worker, WorkersOverview } from './types';
 
 const TOKEN_KEY = 'hairspring.token';
 
@@ -143,8 +143,16 @@ export function failureChecksUrl(failureId: string): string {
   return `/api/failures/${encodeURIComponent(failureId)}/checks`;
 }
 
+export function failureConfirmUrl(failureId: string): string {
+  return `/api/failures/${encodeURIComponent(failureId)}/confirm`;
+}
+
 export const api = {
   failureChecks: (failureId: string) => request<FailureChecks>(failureChecksUrl(failureId)),
+  /** Whether a confirmation of the failure is running on the server. */
+  confirmStatus: (failureId: string) => request<ConfirmStatus>(failureConfirmUrl(failureId)),
+  /** Asks the server to run a confirmation of the failure on its own engine. Answers at once; the work goes on there. */
+  startConfirmation: (failureId: string) => request<{ accepted: boolean }>(failureConfirmUrl(failureId), { method: 'POST' }),
   properties: async (runId: string, query: PropertyQuery = {}, signal?: AbortSignal): Promise<PropertyPage> => {
     const body = await request<unknown>(propertiesUrl(runId, query), { signal });
     if (!isPropertyPage(body)) throw new ApiError(502, 'the server sent a properties response in an unexpected shape');

@@ -139,7 +139,10 @@ hairspring serve --addr 0.0.0.0:7878 --tokens-file /etc/hairspring/tokens --work
 - `--workers N` is the number of worker threads inside the server process (default 1). `--workers 0` means queued runs
   are executed only by remote workers. It does **not** stop the server running target code: a replay
   (`POST /api/replay`, or the MCP replay tool; `run` role, at most `--max-replays` at once) runs the target on the server,
-  using the server's `hairspring.toml`, whatever `--workers` says.
+  using the server's `hairspring.toml`, whatever `--workers` says. So does a confirmation, but only when you turn it on
+  with `--max-confirmations N` (default 0, off): then any `run` token can start up to N of them at once, each for up to
+  two minutes, and the checks it stores are trusted. Leave it off unless every `run` token holder is someone you would
+  let move a claim either way.
 - `--config` names the `hairspring.toml` that defines the targets (default `./hairspring.toml`; without one the
   built-in demo targets are offered). Callers of the API choose a target by name only; the commands behind a name
   come from this file, on whichever machine runs the job.
@@ -147,6 +150,7 @@ hairspring serve --addr 0.0.0.0:7878 --tokens-file /etc/hairspring/tokens --work
   from).
 - Not in v0.1-RC1: `--organisation NAME` (shown in the web UI's top bar), `--max-connections`, `--max-replays` and
   `--trusted-proxy`; see [`hairspring serve --help`](#reference-serve-options) and [the reverse proxy](#9-reverse-proxy-and-tls)
+  `--max-confirmations` (not in v0.1-RC1 or v0.1-RC2) is described below.
   below.
 
 At start the server prints where it is listening. Open the address in a browser for the web UI and sign in with a token.
@@ -389,8 +393,9 @@ The documentation says two things that do not fit together, and this page does n
   says "Run the server and workers as unprivileged users". The provided Docker image runs as an unprivileged user
   (uid 10001), and it contains no Hermit.
 
-The server runs target code in two ways: its own worker threads (`--workers`, default 1) and replays (`POST /api/replay`
-and the MCP replay tool, `run` role, at most `--max-replays` at once), which use the server's `hairspring.toml`. So the
+The server runs target code in three ways: its own worker threads (`--workers`, default 1), replays (`POST /api/replay`
+and the MCP replay tool, `run` role, at most `--max-replays` at once) and, only when `--max-confirmations` is above 0,
+confirmations (`POST /api/failures/{id}/confirm`, `run` role), which use the server's `hairspring.toml`. So the
 advice to run the server unprivileged applies in every case, including `--workers 0`.
 
 For a worker that runs `process` targets under Hermit, the unprivileged case has not been tested, and whether to run it
@@ -442,5 +447,6 @@ From `hairspring serve --help` on a build of `main`:
 | `--tokens-file FILE` | `token:role` or `token:role label` lines, an alternative to `HAIRSPRING_TOKENS` |
 | `--max-connections N` | Open connections at once, 1 to 1000000 (default 512). Not in v0.1-RC1 |
 | `--max-replays N` | Replays at once, 1 to 64 (default 2). Not in v0.1-RC1 |
+| `--max-confirmations N` | Confirmations a `run` token may start from the web UI or `POST /api/failures/{id}/confirm`, at once, 0 to 4 (default 0, which turns it off). Each runs a failure's `process` target on this server for up to two minutes, and its checks are trusted like the server's own workers'; see [SECURITY.md](../SECURITY.md#known-limitations-read-these). Not in v0.1-RC1 or v0.1-RC2 |
 | `--organisation NAME` | Name shown in the web UI's top bar (also `HAIRSPRING_ORGANISATION`). Not in v0.1-RC1 |
 | `--trusted-proxy ADDR[,ADDR...]` | Proxies whose `X-Forwarded-For` is read (also `HAIRSPRING_TRUSTED_PROXY`). Not in v0.1-RC1 |

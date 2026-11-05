@@ -77,3 +77,26 @@ export const noChecksCommand = (failureId: string): string => `hairspring confir
 export function countsText(c: { passed: number; failed: number; inconclusive: number }): string {
   return `${formatCount(c.passed)} passed, ${formatCount(c.failed)} failed, ${formatCount(c.inconclusive)} inconclusive`;
 }
+
+// ---- Running a confirmation from the page (only when the server says this caller may) ----
+
+export const RUN_CONFIRMATION = 'Run confirmation';
+export const CONFIRM_STEP_TITLE = 'Run a confirmation on the server?';
+export const START_CONFIRMATION = 'Start confirmation';
+export const NOT_NOW = 'Not now';
+export const STARTING_CONFIRMATION = 'Starting…';
+
+/** What a confirmation costs, in the server's own bound. The checks it stores are trusted and can move the finding either way. */
+export const confirmStepText = (wallSecs: number): string =>
+  `This runs on the server for up to ${formatCount(wallSecs)} seconds. It reruns the failing target and replays its bundle there, which uses the server's machine time. The checks it stores are recorded as from a trusted runner, and they can move where this failure stands in either direction.`;
+
+export const runningText = (wallSecs: number): string =>
+  `Running on the server, for up to ${formatCount(wallSecs)} seconds. This page checks every few seconds and shows the checks when they are stored.`;
+
+export const FINISHED_TEXT = 'The confirmation has finished. The ladder and the checks above are what the server stored.';
+
+/** Said when the server refused with 429: it is running as many as it allows, and when to try again. */
+export const busyText = (retryAfterMs: number | undefined): string =>
+  `The server is already running as many confirmations as it allows. ${
+    retryAfterMs === undefined ? 'Try again shortly.' : `Try again in about ${Math.max(1, Math.ceil(retryAfterMs / 1000))} seconds.`
+  }`;

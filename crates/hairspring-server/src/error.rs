@@ -36,6 +36,13 @@ impl ApiError {
             None => json!({ "error": self.message }),
         }
     }
+    /// An error with a stable `code` a client can branch on, besides its fixed text.
+    pub fn coded(status: StatusCode, message: impl Into<String>, code: &'static str) -> ApiError {
+        ApiError {
+            code: Some(code),
+            ..ApiError::new(status, message)
+        }
+    }
     pub fn bad_request(message: impl Into<String>) -> ApiError {
         ApiError::new(StatusCode::BAD_REQUEST, message)
     }
