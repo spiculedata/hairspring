@@ -9,8 +9,8 @@
 # workers on Linux x86-64 hosts with Hermit installed.
 #
 # Trust: remote workers start untrusted, so their results are labelled unverified until an admin
-# trusts each worker. See docs/quickstart.md, the sections "The Workers page" and "Workers and the
-# queue: GET /api/workers".
+# trusts each worker. See docs/quickstart.md, the section "The Workers page", and docs/api.md,
+# "GET /api/workers" and "POST /api/workers/{id}/trust".
 #
 # The server is published on localhost only. Put a TLS-terminating reverse proxy in front before
 # exposing it: bearer tokens and the database connection are plain TCP inside this compose network.
