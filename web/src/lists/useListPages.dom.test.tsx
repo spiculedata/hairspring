@@ -162,4 +162,42 @@ describe('useListPages', () => {
     await waitFor(() => expect(ids(result.current.rows)).toEqual(['r90', 'r89']));
     expect(result.current.hasMore).toBe(true);
   });
+
+  it('says the list cannot be read further, and shows no failure, when the server refuses the cursor as too deep', async () => {
+    const load = vi
+      .fn<Load>()
+      .mockResolvedValueOnce(page([2, 1], '100000'))
+      .mockRejectedValueOnce(new ApiError(400, '`cursor` is not valid'));
+    const { result } = setup(load, 60_000);
+    await waitFor(() => expect(result.current.hasMore).toBe(true));
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.endReached).toBe(true));
+    expect(result.current.hasMore).toBe(false);
+    expect(result.current.moreError).toBeUndefined();
+    expect(ids(result.current.rows)).toEqual(['r2', 'r1']);
+  });
+
+  it('keeps showing an ordinary 400 for a further page as a failure', async () => {
+    const load = vi.fn<Load>().mockResolvedValueOnce(page([2, 1], '2')).mockRejectedValueOnce(new ApiError(400, '`limit` is not valid'));
+    const { result } = setup(load, 60_000);
+    await waitFor(() => expect(result.current.hasMore).toBe(true));
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.moreError).toBe('`limit` is not valid'));
+    expect(result.current.endReached).toBe(false);
+  });
+
+  it('carries on from the cursor an empty further page gave, through a refresh of the first page', async () => {
+    const load = vi.fn<Load>(async (cursor) => {
+      if (cursor === undefined) return page([], '1000');
+      return cursor === '1000' ? page([], '2000') : page([5], undefined);
+    });
+    const { result } = setup(load);
+    await waitFor(() => expect(result.current.hasMore).toBe(true));
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.moreLoads).toBe(1));
+    await pause(SETTLE_MS);
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(load).toHaveBeenLastCalledWith('2000', expect.any(AbortSignal)));
+    await waitFor(() => expect(ids(result.current.rows)).toEqual(['r5']));
+  });
 });

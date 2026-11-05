@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FailureFilterBar, RunFilterBar } from './FilterBars';
-import { MAX_TARGET_CHARS } from './filters';
+import { MAX_TARGET_BYTES } from './filters';
 
 afterEach(cleanup);
 
@@ -101,7 +101,7 @@ describe('RunFilterBar', () => {
     expect(onChange).not.toHaveBeenCalled();
     expect(box.getAttribute('aria-invalid')).toBe('true');
     const alert = screen.getByRole('alert');
-    expect(alert.textContent).toContain(`${MAX_TARGET_CHARS} characters`);
+    expect(alert.textContent).toContain(`${MAX_TARGET_BYTES} bytes`);
     expect(box.getAttribute('aria-describedby')).toContain(alert.id);
     fireEvent.change(box, { target: { value: 'ok' } });
     fireEvent.blur(box);

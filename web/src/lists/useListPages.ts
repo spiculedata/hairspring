@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ApiError } from '../api';
 import { startPolling } from '../pollLoop';
 import { useTokenVersion } from '../useTokenVersion';
 import { applyHead, applyMore, rowsOf, type Held, type ListPage } from './listPaging';
@@ -10,6 +11,8 @@ export interface ListPagesOptions<T> {
   id: (row: T) => string;
   /** How often the first page is loaded again. */
   intervalMs: number;
+  /** Rows can leave the list between loads (a filter on a state that changes); see `HeadOptions` in listPaging.ts. */
+  rowsLeave?: boolean;
 }
 
 export interface ListPagesModel<T> {
@@ -21,6 +24,8 @@ export interface ListPagesModel<T> {
   loadingMore: boolean;
   /** Why the last attempt at an older page failed. The rows already held are kept; asking again tries again. */
   moreError: string | undefined;
+  /** The server said the list cannot be read any further back (the cursor is too deep). That is an end, not a failure. */
+  endReached: boolean;
   /** Pages added by asking for more so far; zero until the reader asks. */
   moreLoads: number;
   /** Why the last load of the first page failed. The rows already held are kept, and the page tries again by itself. */
@@ -30,6 +35,9 @@ export interface ListPagesModel<T> {
 }
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/** The server's refusal of a cursor beyond the deepest position it reads (a 400 that names `cursor`). */
+const isCursorTooDeep = (e: unknown): boolean => e instanceof ApiError && e.status === 400 && e.message.includes('`cursor`');
 
 /**
  * A list that is refreshed from its first page and extended by asking for older pages.
@@ -43,19 +51,26 @@ const messageOf = (e: unknown): string => (e instanceof Error ? e.message : Stri
  * - A change of filters is a new list: mount this hook again for it (give its component a new `key`).
  * The rules for keeping rows once and leaving none out are in listPaging.ts.
  */
-export function useListPages<T>({ loadPage, id, intervalMs }: ListPagesOptions<T>): ListPagesModel<T> {
+export function useListPages<T>({ loadPage, id, intervalMs, rowsLeave = false }: ListPagesOptions<T>): ListPagesModel<T> {
   const [held, setHeld] = useState<Held<T>>();
   const [error, setError] = useState<string>();
   const [updatedAt, setUpdatedAt] = useState<number>();
   const [loadingMore, setLoadingMore] = useState(false);
   const [moreError, setMoreError] = useState<string>();
   const [moreLoads, setMoreLoads] = useState(0);
+  /** The epoch in which the server said the list cannot be read further; a restart of the list clears it. */
+  const [endEpoch, setEndEpoch] = useState<number>();
+  const endReached = held !== undefined && endEpoch === held.epoch;
+  const endReachedRef = useRef(endReached);
+  endReachedRef.current = endReached;
   const heldRef = useRef(held);
   heldRef.current = held;
   const loadRef = useRef(loadPage);
   loadRef.current = loadPage;
   const idRef = useRef(id);
   idRef.current = id;
+  const rowsLeaveRef = useRef(rowsLeave);
+  rowsLeaveRef.current = rowsLeave;
   const request = useRef<AbortController>(undefined);
   const tokenVersion = useTokenVersion();
 
@@ -65,7 +80,7 @@ export function useListPages<T>({ loadPage, id, intervalMs }: ListPagesOptions<T
       load: () => loadRef.current(undefined, controller.signal),
       intervalMs,
       onData: (page) => {
-        setHeld((prev) => applyHead(prev, page, idRef.current));
+        setHeld((prev) => applyHead(prev, page, idRef.current, { rowsLeave: rowsLeaveRef.current }));
         setUpdatedAt(Date.now());
         setError(undefined);
       },
@@ -82,7 +97,7 @@ export function useListPages<T>({ loadPage, id, intervalMs }: ListPagesOptions<T
 
   const loadMore = useCallback(() => {
     const current = heldRef.current;
-    if (current === undefined || current.cursor === undefined || request.current !== undefined) return;
+    if (current === undefined || current.cursor === undefined || endReachedRef.current || request.current !== undefined) return;
     const controller = new AbortController();
     request.current = controller;
     setLoadingMore(true);
@@ -95,7 +110,9 @@ export function useListPages<T>({ loadPage, id, intervalMs }: ListPagesOptions<T
         setMoreLoads((n) => n + 1);
       })
       .catch((e: unknown) => {
-        if (!controller.signal.aborted) setMoreError(messageOf(e));
+        if (controller.signal.aborted) return;
+        if (isCursorTooDeep(e)) setEndEpoch(current.epoch);
+        else setMoreError(messageOf(e));
       })
       .finally(() => {
         if (request.current !== controller) return;
@@ -105,5 +122,6 @@ export function useListPages<T>({ loadPage, id, intervalMs }: ListPagesOptions<T
   }, []);
 
   const rows = useMemo(() => (held === undefined ? undefined : rowsOf(held, idRef.current)), [held]);
-  return { rows, hasMore: held?.cursor !== undefined, loadMore, loadingMore, moreError, moreLoads, error, updatedAt };
+  const hasMore = held?.cursor !== undefined && !endReached;
+  return { rows, hasMore, endReached, loadMore, loadingMore, moreError, moreLoads, error, updatedAt };
 }

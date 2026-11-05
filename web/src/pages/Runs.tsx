@@ -39,7 +39,7 @@ function RunsList({ filters }: { filters: RunFilters }) {
     (cursor: string | undefined, signal: AbortSignal) => runsPage({ ...filters, cursor, limit: PAGE_SIZE }, signal),
     [filters],
   );
-  const list = useListPages({ loadPage, id: runId, intervalMs: POLL_MS });
+  const list = useListPages({ loadPage, id: runId, intervalMs: POLL_MS, rowsLeave: filters.state !== undefined });
   const rows = list.rows;
   return (
     <>
@@ -54,6 +54,7 @@ function RunsList({ filters }: { filters: RunFilters }) {
           shown={rows.length}
           hasMore={list.hasMore}
           loading={list.loadingMore}
+          endReached={list.endReached}
           onLoadMore={list.loadMore}
           error={list.moreError}
           moreLoads={list.moreLoads}

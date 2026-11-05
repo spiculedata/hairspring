@@ -140,7 +140,7 @@ describe('Runs page', () => {
     const target = bar().getByLabelText('Target');
     fireEvent.change(target, { target: { value: 'x'.repeat(65) } });
     fireEvent.blur(target);
-    expect(screen.getByRole('alert').textContent).toContain('64 characters');
+    expect(screen.getByRole('alert').textContent).toContain('64 bytes');
     expect(runUrls(fetchMock)).toHaveLength(1);
   });
 

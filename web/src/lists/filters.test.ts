@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   MAX_PROPERTY_PREFIX_BYTES,
-  MAX_TARGET_CHARS,
+  MAX_TARGET_BYTES,
   checkPropertyPrefix,
   checkRunId,
   checkTarget,
@@ -22,14 +22,14 @@ describe('run filters in the address', () => {
   it('leave out anything the server would refuse, so a pasted link cannot cause a 400', () => {
     expect(runFiltersFromSearch('?state=done&mode=sweeps&target=')).toEqual({});
     expect(runFiltersFromSearch('?state=FAILED')).toEqual({});
-    expect(runFiltersFromSearch(`?target=${'x'.repeat(MAX_TARGET_CHARS + 1)}`)).toEqual({});
+    expect(runFiltersFromSearch(`?target=${'x'.repeat(MAX_TARGET_BYTES + 1)}`)).toEqual({});
     expect(runFiltersFromSearch('?target=a%00b')).toEqual({});
     expect(runFiltersFromSearch('?target=a%0Ab')).toEqual({});
     expect(runFiltersFromSearch('?cursor=5&limit=3&unknown=1')).toEqual({});
   });
 
   it('keep the longest allowed target and a name with spaces and symbols', () => {
-    const longest = 'x'.repeat(MAX_TARGET_CHARS);
+    const longest = 'x'.repeat(MAX_TARGET_BYTES);
     expect(runFiltersFromSearch(`?target=${longest}`)).toEqual({ target: longest });
     expect(runFiltersFromSearch(`?target=${encodeURIComponent('a b&c=d')}`)).toEqual({ target: 'a b&c=d' });
   });
@@ -96,14 +96,17 @@ describe('checking typed text', () => {
 
   it('names the problem for text that cannot be used', () => {
     expect(checkTarget('a\nb')).toEqual({ problem: 'target' });
-    expect(checkTarget('x'.repeat(MAX_TARGET_CHARS + 1))).toEqual({ problem: 'target' });
+    expect(checkTarget('x'.repeat(MAX_TARGET_BYTES + 1))).toEqual({ problem: 'target' });
     expect(checkRunId('run_12')).toEqual({ problem: 'run' });
     expect(checkRunId('run_0123456789abcdeg')).toEqual({ problem: 'run' });
     expect(checkPropertyPrefix('a\u0000')).toEqual({ problem: 'property' });
   });
 
-  it('counts a target in characters, not bytes', () => {
-    const wide = '研'.repeat(MAX_TARGET_CHARS);
-    expect(checkTarget(wide)).toEqual({ value: wide });
+  it('counts a target in bytes, as the server does', () => {
+    const fits = '研'.repeat(Math.floor(MAX_TARGET_BYTES / 3));
+    expect(checkTarget(fits)).toEqual({ value: fits });
+    const tooLong = '研'.repeat(Math.floor(MAX_TARGET_BYTES / 3) + 1);
+    expect(checkTarget(tooLong)).toEqual({ problem: 'target' });
+    expect(runFiltersFromSearch(`?target=${encodeURIComponent(tooLong)}`)).toEqual({});
   });
 });

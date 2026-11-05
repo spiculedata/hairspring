@@ -27,7 +27,7 @@ function FailuresList({ filters }: { filters: FailureFilters }) {
     (cursor: string | undefined, signal: AbortSignal) => failuresPage({ ...filters, cursor, limit: PAGE_SIZE }, signal),
     [filters],
   );
-  const list = useListPages({ loadPage, id: failureId, intervalMs: POLL_MS });
+  const list = useListPages({ loadPage, id: failureId, intervalMs: POLL_MS, rowsLeave: filters.status !== undefined });
   const rows = list.rows;
   const filtered = hasFailureFilters(filters);
   return (
@@ -45,6 +45,7 @@ function FailuresList({ filters }: { filters: FailureFilters }) {
           shown={rows.length}
           hasMore={list.hasMore}
           loading={list.loadingMore}
+          endReached={list.endReached}
           onLoadMore={list.loadMore}
           error={list.moreError}
           moreLoads={list.moreLoads}

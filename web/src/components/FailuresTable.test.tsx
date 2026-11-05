@@ -93,3 +93,11 @@ describe('FailuresTable', () => {
     expect(readSource('styles.css')).toMatch(/table\.failures[^{]*\{[^}]*overflow-wrap:\s*anywhere/);
   });
 });
+
+describe('FailuresTable on a narrow screen', () => {
+  it('sits in a labelled scroll region, so a wide table scrolls inside it and not the page', () => {
+    const html = renderToString(<FailuresTable failures={[failure({ finding: { status: 'not_reproducible', checks: 0, environment_pinned: false } })]} />);
+    expect(html).toMatch(/role="region"[^>]*aria-label="Failures"/);
+    expect(html).toContain('class="table-scroll"');
+  });
+});

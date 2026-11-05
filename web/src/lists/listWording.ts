@@ -7,7 +7,7 @@ import { FINISHED } from '../runOutcome';
 import { runStateEntry } from '../statusMap';
 import { SEARCH_LABEL, SWEEP_LABEL } from '../startRunWording';
 import { formatCount } from '../wording';
-import { MAX_PROPERTY_PREFIX_BYTES, MAX_TARGET_CHARS, type FilterProblem, type RunModeFilter } from './filters';
+import { MAX_PROPERTY_PREFIX_BYTES, MAX_TARGET_BYTES, type FilterProblem, type RunModeFilter } from './filters';
 import type { FindingStatus, RunState } from '../types';
 
 export const FILTER_ALL = 'All';
@@ -39,7 +39,7 @@ export const STATUS_FILTER_NOTE =
 export function problemText(problem: FilterProblem): string {
   switch (problem) {
     case 'target':
-      return `A target name has 1 to ${MAX_TARGET_CHARS} characters and no control characters.`;
+      return `A target name has 1 to ${MAX_TARGET_BYTES} bytes (a character outside ASCII takes more than one) and no control characters.`;
     case 'property':
       return `A property id prefix has at most ${MAX_PROPERTY_PREFIX_BYTES} bytes and no control characters.`;
     case 'run':
@@ -49,6 +49,9 @@ export function problemText(problem: FilterProblem): string {
 
 export const loadMoreRuns = (shown: number): string => `Load more runs (${formatCount(shown)} shown)`;
 export const loadMoreFailures = (shown: number): string => `Load more failures (${formatCount(shown)} shown)`;
+export const allShown = (shown: number, what: 'runs' | 'failures'): string => `All ${formatCount(shown)} ${what} are shown.`;
+/** The server reads a list down to a fixed depth; a filter reaches what lies beyond it. */
+export const LIST_DEPTH_REACHED = 'That is as far back as this list can be read. Narrow it with a filter to see older ones.';
 export const LOADING_MORE = 'Loading more…';
 export const shownAnnouncement = (shown: number, what: 'runs' | 'failures'): string => `${formatCount(shown)} ${what} shown.`;
 export const loadMoreFailed = (what: 'runs' | 'failures', message: string): string => `Could not load more ${what}: ${message}`;

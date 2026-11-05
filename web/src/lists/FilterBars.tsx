@@ -20,7 +20,7 @@ import {
 } from './listWording';
 import {
   MAX_PROPERTY_PREFIX_BYTES,
-  MAX_TARGET_CHARS,
+  MAX_TARGET_BYTES,
   RUN_MODE_FILTERS,
   RUN_STATE_FILTERS,
   checkPropertyPrefix,
@@ -146,7 +146,7 @@ export function RunFilterBar({ filters, onChange }: RunBarProps) {
         label={RUN_TARGET_LABEL}
         value={filters.target}
         check={checkTarget}
-        maxLength={MAX_TARGET_CHARS}
+        maxLength={MAX_TARGET_BYTES}
         onValue={(target) => onChange({ ...filters, target })}
       />
       <Actions show={hasRunFilters(filters)} onClear={() => onChange({})} />

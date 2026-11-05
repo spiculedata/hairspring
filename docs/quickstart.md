@@ -144,7 +144,8 @@ reached.
 The Runs page and the Failures page show the newest 50 rows and load the newest page again every few seconds (two for
 runs, five for failures), so a run's state stays current. When older rows exist, **Load more** adds the next page below;
 it makes one request at a time, and if it fails the rows already shown stay, with the reason, and pressing it again tries
-again. Both pages read `GET /api/runs` and `GET /api/failures`, which page with `cursor` (see "Paging and filters on
+again. When the last page arrives the button is replaced by a note saying all rows are shown, and a list can be read
+down to position 100000, after which the note says to narrow the list with a filter. Both pages read `GET /api/runs` and `GET /api/failures`, which page with `cursor` (see "Paging and filters on
 the runs and failures lists" in [architecture.md](architecture.md)).
 
 Each page has a filter bar. The state and run type (Runs) and the state (Failures) apply when you choose them; the
@@ -152,6 +153,10 @@ target, the run id and the property id prefix apply when you press Enter or leav
 refuse is explained next to the box and not sent. **Clear filters** appears while any filter is set. The filters are in
 the address (for example `/runs?state=failed&mode=sweep`), so a filtered list can be bookmarked or shared; anything in
 the address that is not a valid filter is ignored.
+
+A target name is at most 64 bytes, as the server counts them, so a name with characters outside ASCII may be shorter
+in characters. While a state is chosen, a row that stops matching (for example a run that finishes under the Running
+state) is dropped at the next refresh, and rows read with **Load more** are shown as they were when they were read.
 
 - **Runs**: state (a run the server stores as `passed` is listed as Finished, as in the table), run type (search or
   sweep, as stored) and an exact target name.

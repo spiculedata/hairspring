@@ -12,8 +12,8 @@ export const RUN_STATE_FILTERS: readonly RunState[] = ['queued', 'running', 'pas
 export const RUN_MODE_FILTERS = ['search', 'sweep'] as const;
 export type RunModeFilter = (typeof RUN_MODE_FILTERS)[number];
 
-/** Longest target name, in characters, and longest property id prefix, in bytes. */
-export const MAX_TARGET_CHARS = 64;
+/** Longest target name and longest property id prefix, both in bytes, as the server counts them. */
+export const MAX_TARGET_BYTES = 64;
 export const MAX_PROPERTY_PREFIX_BYTES = 128;
 
 const RUN_ID = /^run_[0-9a-fA-F]{16}$/;
@@ -41,7 +41,7 @@ const byteLength = (s: string): number => new TextEncoder().encode(s).length;
 /** The target name to filter by, or why it cannot be used. An empty text means no filter. */
 export function checkTarget(text: string): { value: string | undefined } | { problem: FilterProblem } {
   if (text === '') return { value: undefined };
-  return [...text].length <= MAX_TARGET_CHARS && !CONTROL.test(text) ? { value: text } : { problem: 'target' };
+  return byteLength(text) <= MAX_TARGET_BYTES && !CONTROL.test(text) ? { value: text } : { problem: 'target' };
 }
 
 /** The property id prefix to filter by, or why it cannot be used. An empty text means no filter. */

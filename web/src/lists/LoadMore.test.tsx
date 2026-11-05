@@ -14,6 +14,7 @@ const base = {
   onLoadMore: () => undefined,
   error: undefined,
   moreLoads: 0,
+  endReached: false,
 };
 
 describe('LoadMore', () => {
@@ -31,12 +32,52 @@ describe('LoadMore', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
 
-  it('disables the button and says it is loading while a request is out', () => {
-    render(<LoadMore {...base} loading />);
+  it('marks the button busy and says it is loading while a request is out, without taking it out of the tab order', () => {
+    const onLoadMore = vi.fn();
+    render(<LoadMore {...base} loading onLoadMore={onLoadMore} />);
     const button = screen.getByRole('button') as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute('aria-disabled')).toBe('true');
     expect(button.getAttribute('aria-busy')).toBe('true');
     expect(button.textContent).toBe('Loading more…');
+    fireEvent.click(button);
+    expect(onLoadMore).not.toHaveBeenCalled();
+  });
+
+  it('keeps keyboard focus on the button while a request is out', () => {
+    const { rerender } = render(<LoadMore {...base} />);
+    const button = screen.getByRole('button');
+    button.focus();
+    rerender(<LoadMore {...base} loading />);
+    expect(document.activeElement).toBe(screen.getByRole('button'));
+    rerender(<LoadMore {...base} moreLoads={1} />);
+    expect(document.activeElement).toBe(screen.getByRole('button'));
+  });
+
+  it('moves focus to the end-of-list note when the last page arrives and the button had focus', () => {
+    const { rerender } = render(<LoadMore {...base} />);
+    screen.getByRole('button').focus();
+    rerender(<LoadMore {...base} hasMore={false} moreLoads={1} shown={80} />);
+    expect(screen.queryByRole('button')).toBeNull();
+    const note = screen.getByText('All 80 runs are shown.');
+    expect(document.activeElement).toBe(note);
+  });
+
+  it('leaves focus alone when the last page arrives and the button did not have it', () => {
+    const { rerender } = render(<LoadMore {...base} />);
+    rerender(<LoadMore {...base} hasMore={false} moreLoads={1} shown={80} />);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('says the list cannot be read further, as a note and not as a failure, when the server stopped it', () => {
+    render(<LoadMore {...base} hasMore={false} endReached moreLoads={3} shown={500} />);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByText(/as far back as this list can be read/i)).toBeTruthy();
+  });
+
+  it('says nothing about the end before the reader has asked for more', () => {
+    render(<LoadMore {...base} hasMore={false} />);
+    expect(screen.queryByText(/are shown/)).toBeNull();
   });
 
   it('keeps the button and says what failed, as an alert, so asking again tries again', () => {

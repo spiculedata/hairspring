@@ -64,6 +64,41 @@ describe('applyHead', () => {
     expect(restarted.epoch).toBe(1);
   });
 
+  it('keeps the cursor an empty further page moved on to, when the first page is loaded again', () => {
+    // Under a state filter the first page can hold no match; reading further back finds none yet.
+    let held = applyHead(undefined, page([], '1000'), id);
+    held = applyMore(held, page([], '2000'), 0, id) as Held<Row>;
+    const refreshed = applyHead(held, page([], '1000'), id);
+    expect(refreshed.cursor).toBe('2000');
+    expect(refreshed.epoch).toBe(0);
+  });
+
+  it('keeps the cursor when a further page added only rows already held', () => {
+    let held = applyHead(undefined, page([9, 8, 7], '3'), id);
+    held = applyMore(held, page([7], '6'), 0, id) as Held<Row>;
+    expect(applyHead(held, page([9, 8, 7], '3'), id).cursor).toBe('6');
+  });
+
+  describe('when rows can leave the list (a state filter)', () => {
+    const leaving = { rowsLeave: true };
+
+    it('does not keep a row the first page no longer holds, since it may have left the list', () => {
+      let held = applyHead(undefined, { items: [row(3, 'running'), row(2, 'running')], nextCursor: '2' }, id, leaving);
+      held = applyMore(held, page([1]), 0, id) as Held<Row>;
+      // r2 finished and left the filter; r4 arrived.
+      const refreshed = applyHead(held, { items: [row(4, 'running'), row(3, 'running')], nextCursor: '2' }, id, leaving);
+      expect(ids(refreshed)).toEqual(['r4', 'r3', 'r1']);
+    });
+
+    it('still keeps the loaded pages and their cursor', () => {
+      let held = applyHead(undefined, page([9, 8, 7], '3'), id, leaving);
+      held = applyMore(held, page([6, 5], '5'), 0, id) as Held<Row>;
+      const refreshed = applyHead(held, page([10, 9, 8], '3'), id, leaving);
+      expect(refreshed.cursor).toBe('5');
+      expect(ids(refreshed)).toEqual(['r10', 'r9', 'r8', 'r6', 'r5']);
+    });
+  });
+
   it('does not change what it was given', () => {
     const held = applyHead(undefined, page([9, 8], '2'), id);
     const frozen = JSON.stringify(held);

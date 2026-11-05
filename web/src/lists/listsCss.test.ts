@@ -26,4 +26,13 @@ describe('lists.css', () => {
     expect(css).toMatch(/aria-invalid="true"\][^}]*box-shadow/);
     expect(css).toMatch(/:focus-visible \{ outline: 2px solid var\(--focus\)/);
   });
+
+  it('lets a badge in the Failures table wrap, so the State column cannot widen the page past a phone screen', () => {
+    expect(css).toMatch(/table\.failures \.badge \{[^}]*white-space: normal/);
+    expect(css).toMatch(/table\.failures \.badge \{[^}]*overflow-wrap: anywhere/);
+  });
+
+  it('shows a busy Load more button as unavailable by style, since it is aria-disabled and not disabled', () => {
+    expect(css).toMatch(/\.load-more button\[aria-disabled="true"\] \{[^}]*cursor: default/);
+  });
 });
