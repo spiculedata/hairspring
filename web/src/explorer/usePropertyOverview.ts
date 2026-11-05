@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
-import { isNotFound, retryDelay, STOP_ON_UNAUTHORIZED } from '../pollPolicy';
+import { startPolling } from '../pollLoop';
+import { isNotFound } from '../pollPolicy';
 import type { PropertyPage, PropertyQuery, PropertyRow } from '../types';
 import { useTokenVersion } from '../useTokenVersion';
 
@@ -32,8 +33,10 @@ const messageOf = (e: unknown): string => (e instanceof Error ? e.message : Stri
  *   run ends the table is reloaded from the start with the final figures.
  * - A response that belongs to an earlier filter, or that arrives after a refresh replaced the rows it would extend,
  *   is dropped, and a superseded request is aborted.
- * - A 429 delays the next refresh by Retry-After, a 401 stops refreshing (the token prompt has been raised once; entering
- *   a token loads the table again) and a 404 stops it for good (the run is gone); see pollPolicy.ts.
+ * - It polls through the shared loop (pollLoop.ts): no request is made while the tab is hidden, the table refreshes when
+ *   the tab is shown again, and failures are reported to the connection banner. A 429 delays the next refresh by
+ *   Retry-After, a 401 stops refreshing (the token prompt has been raised once; entering a token loads the table again)
+ *   and a 404 stops it for good (the run is gone); see pollPolicy.ts.
  */
 export function usePropertyOverview(runId: string, live: boolean): PropertyOverviewModel {
   const [query, setQuery] = useState<PropertyQuery>({});
@@ -58,36 +61,28 @@ export function usePropertyOverview(runId: string, live: boolean): PropertyOverv
 
   useEffect(() => {
     const ctl = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
     let first = true;
-    const load = async () => {
-      let delay = LIVE_REFRESH_MS;
-      if (first || moreCount.current === 0) {
-        try {
-          const next = await api.properties(runId, { ...query, limit: PAGE_SIZE }, ctl.signal);
-          if (ctl.signal.aborted) return;
-          epoch.current++;
-          moreCount.current = 0;
-          setPage(next);
-          setMore([]);
-          setCursor(next.next_cursor);
-          setError(undefined);
-        } catch (e) {
-          if (ctl.signal.aborted) return;
-          setError(isNotFound(e) ? 'this run does not exist' : messageOf(e));
-          const wait = retryDelay(e, LIVE_REFRESH_MS, STOP_ON_UNAUTHORIZED);
-          if (wait === undefined) return;
-          delay = wait;
-        }
-      }
-      first = false;
-      if (live && !ctl.signal.aborted) timer = setTimeout(load, delay);
-    };
-    void load();
+    const cancel = startPolling<PropertyPage | undefined>({
+      // Once the reader has loaded further pages a refresh would replace their rows, so the request is skipped.
+      load: async () => (first || moreCount.current === 0 ? api.properties(runId, { ...query, limit: PAGE_SIZE }, ctl.signal) : undefined),
+      intervalMs: LIVE_REFRESH_MS,
+      stop: () => !live,
+      onData: (next) => {
+        first = false;
+        if (!next) return;
+        epoch.current++;
+        moreCount.current = 0;
+        setPage(next);
+        setMore([]);
+        setCursor(next.next_cursor);
+        setError(undefined);
+      },
+      onError: (e) => setError(isNotFound(e) ? 'this run does not exist' : messageOf(e)),
+    });
     return () => {
+      cancel();
       ctl.abort();
       moreRequest.current?.abort();
-      if (timer) clearTimeout(timer);
     };
     // `queryKey` stands in for `query`, which is a new object on every change.
   }, [runId, queryKey, live, tokenVersion, reloads]);

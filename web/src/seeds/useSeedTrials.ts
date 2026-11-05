@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { isNotFound, retryDelay, STOP_ON_UNAUTHORIZED } from '../pollPolicy';
+import { startPolling } from '../pollLoop';
+import { isNotFound } from '../pollPolicy';
 import type { TrialRow } from '../trial/types';
 import { useTokenVersion } from '../useTokenVersion';
-import { seedsApi } from './api';
+import { seedsApi, type SeedTrialPage } from './api';
 import type { SeedFilters } from './filters';
 
 /** Rows asked for per request; the server caps this, and the table windows what is loaded. */
@@ -30,7 +31,9 @@ const messageOf = (e: unknown): string => (e instanceof Error ? e.message : Stri
  *   dropped silently).
  * - A response for an earlier filter, or one that arrives after a refresh replaced the rows it would extend, is dropped,
  *   and a superseded request is aborted.
- * - 404 stops refreshing for good, 401 stops it (the token prompt is up; entering a token loads again), 429 waits for Retry-After (pollPolicy.ts).
+ * - It polls through the shared loop (pollLoop.ts): no request while the tab is hidden, a refresh when it is shown again,
+ *   failures reported to the connection banner. 404 stops refreshing for good, 401 stops it (the token prompt is up;
+ *   entering a token loads again), 429 waits for Retry-After (pollPolicy.ts).
  */
 export function useSeedTrials(runId: string, filters: SeedFilters, live: boolean): SeedTrialsModel {
   const [first, setFirst] = useState<readonly TrialRow[]>([]);
@@ -56,38 +59,30 @@ export function useSeedTrials(runId: string, filters: SeedFilters, live: boolean
 
   useEffect(() => {
     const ctl = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
     let firstLoad = true;
     setLoaded(false);
-    const load = async () => {
-      let delay = TRIALS_LIVE_MS;
-      if (firstLoad || moreCount.current === 0) {
-        try {
-          const page = await seedsApi.trials(runId, filters, { limit: TRIALS_PAGE }, ctl.signal);
-          if (ctl.signal.aborted) return;
-          epoch.current++;
-          moreCount.current = 0;
-          setFirst(page.trials);
-          setMore([]);
-          setCursor(page.next_cursor);
-          setLoaded(true);
-          setError(undefined);
-        } catch (e) {
-          if (ctl.signal.aborted) return;
-          setError(isNotFound(e) ? 'this run does not exist' : messageOf(e));
-          const wait = retryDelay(e, TRIALS_LIVE_MS, STOP_ON_UNAUTHORIZED);
-          if (wait === undefined) return;
-          delay = wait;
-        }
-      }
-      firstLoad = false;
-      if (live && !ctl.signal.aborted) timer = setTimeout(load, delay);
-    };
-    void load();
+    const cancel = startPolling<SeedTrialPage | undefined>({
+      // Once the reader has loaded further pages a refresh would replace their rows, so the request is skipped.
+      load: async () => (firstLoad || moreCount.current === 0 ? seedsApi.trials(runId, filters, { limit: TRIALS_PAGE }, ctl.signal) : undefined),
+      intervalMs: TRIALS_LIVE_MS,
+      stop: () => !live,
+      onData: (page) => {
+        firstLoad = false;
+        if (!page) return;
+        epoch.current++;
+        moreCount.current = 0;
+        setFirst(page.trials);
+        setMore([]);
+        setCursor(page.next_cursor);
+        setLoaded(true);
+        setError(undefined);
+      },
+      onError: (e) => setError(isNotFound(e) ? 'this run does not exist' : messageOf(e)),
+    });
     return () => {
+      cancel();
       ctl.abort();
       moreRequest.current?.abort();
-      if (timer) clearTimeout(timer);
     };
     // `filterKey` stands in for `filters`, which is a new object on every change.
   }, [runId, filterKey, live, tokenVersion, reloads]);
