@@ -4,6 +4,13 @@
 
 ### Added
 
+- Token labels. An entry in `--tokens-file` or `HAIRSPRING_TOKENS` may carry a label after the role, separated by one
+  space (`token:run ci bot`). Entries without one are read as before. A label is 1 to 64 characters from ASCII
+  letters, digits, space, `.`, `_` and `-`, must differ from every other label (ignoring case), and must not contain a
+  configured token; otherwise the server does not start, and the error does not repeat the token. Only the operator
+  can set a label. `GET /api/me` returns `label` to the holder of that token and to no one else, and the server's log
+  lines for creating a run, starting a replay, registering a worker and changing a worker's trust now name the caller
+  as `label (t:<key>)` or, without a label, by the key alone. A label is not a secret and not proof of identity.
 - `hairspring serve --trusted-proxy ADDR[,ADDR...]` (or `HAIRSPRING_TRUSTED_PROXY`) names reverse proxies, by
   address or network, whose `X-Forwarded-For` header gives the client address for the rate limit, for the check that
   refuses a valid token while its address's anonymous budget is used up, and, without tokens, for the per-caller

@@ -444,6 +444,93 @@ fn serve_enforces_tokens_from_the_environment() {
     );
 }
 
+/// Collects the server's standard error lines on a thread, so a test can look for a log line.
+fn collect_stderr(g: &mut Guard) -> std::sync::mpsc::Receiver<String> {
+    let stderr = g.0.stderr.take().expect("stderr piped");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    rx
+}
+
+#[test]
+fn a_tokens_file_with_old_and_labelled_lines_serves_the_label_to_its_own_token_and_logs_no_token() {
+    let d = scratch("serve-labels");
+    let old = "old-token-0123456789abcdef";
+    let ci = "ci-token-0123456789abcdef";
+    let file = d.join("tokens");
+    std::fs::write(&file, format!("# comment\n{old}:read\n\n{ci}:run ci bot\n")).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let mut g = spawn(
+        &d,
+        &[
+            "serve",
+            "--addr",
+            "127.0.0.1:0",
+            "--tokens-file",
+            file.to_str().unwrap(),
+        ],
+        &[],
+    );
+    let stderr = collect_stderr(&mut g);
+    let base = url_of(&wait_for_line(&mut g, "listening on"));
+
+    let (status, body) = http("GET", &format!("{base}/api/me"), Some(old), None);
+    assert_eq!(status, 200);
+    assert!(!body.contains("label"), "{body}");
+    let (_, body) = http("GET", &format!("{base}/api/me"), Some(ci), None);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["label"],
+        "ci bot"
+    );
+
+    let (status, body) = http(
+        "POST",
+        &format!("{base}/api/runs"),
+        Some(ci),
+        Some("{\"target\":\"lock-lease\",\"seed\":7}"),
+    );
+    assert_eq!(status, 201, "{body}");
+    let mut seen = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let line = stderr.recv_timeout(left).expect("a created-by log line");
+        seen.push(line.clone());
+        if line.contains(" created by ci bot (t:") {
+            break;
+        }
+    }
+    assert!(
+        seen.iter().all(|l| !l.contains(ci) && !l.contains(old)),
+        "{seen:?}"
+    );
+}
+
+#[test]
+fn serve_refuses_a_label_that_holds_a_token_and_does_not_print_the_token() {
+    let d = scratch("serve-bad-label");
+    let tok = "env-token-0123456789abcdef";
+    let o = {
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_hairspring"));
+        cmd.args(["serve", "--addr", "127.0.0.1:0"])
+            .current_dir(&d)
+            .env("HAIRSPRING_TOKENS", format!("{tok}:admin {tok}"));
+        cmd.output().expect("run")
+    };
+    assert_eq!(o.status.code(), Some(2));
+    assert!(err(&o).contains("label"), "{}", err(&o));
+    assert!(!err(&o).contains(tok) && !out(&o).contains(tok));
+}
+
 #[test]
 fn token_command_prints_distinct_strong_tokens() {
     let d = scratch("token");

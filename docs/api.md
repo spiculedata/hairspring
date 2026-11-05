@@ -114,6 +114,10 @@ read endpoints, so a missing or wrong token gets the same 401. A real reply for 
   the role names in order.
 - `open_mode` is `true` when the server has no API tokens and only accepts same-origin local requests. Every caller is
   then treated as `admin`.
+- `label` is present only when the operator gave the caller's own token a label in the token configuration (see
+  [deploy.md](deploy.md#token-labels-optional)). It is the caller's own label and no one else's, it is not a secret and
+  not proof of identity, and a caller cannot set it. A token without a label gets the reply above, with no `label`
+  key. In open mode there is none.
 - The reply never contains the token, a digest of it, or any other secret.
 
 The web UI asks this when it loads, to disable the Start run button for a `read` token.

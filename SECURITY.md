@@ -43,6 +43,15 @@ agents.
 
 - **Plain HTTP/TCP.** There is no built-in TLS. Run behind a TLS-terminating proxy or on a private network.
   The same applies to the PostgreSQL connection (no TLS) and to the worker's token.
+- **Token labels are names, not authentication.** An operator may add a label to a token in the token configuration
+  (`token:role label`, see [docs/deploy.md](docs/deploy.md#token-labels-optional)). It is set only there and never
+  from a request. It is not a secret and does not prove who is calling: people who share a token share its label, and
+  whoever holds a token is shown that token's label by `GET /api/me`. It is shown to no other caller. It is written to
+  the server's log lines for creating a run, starting a replay, registering a worker and changing a worker's trust,
+  next to the token's key, never the token. Do not put a secret or personal data in a label. A label is restricted to
+  ASCII letters, digits, space, `.`, `_` and `-`, at most 64 characters, must differ from every other label, and is
+  refused if it contains a configured token. Those log lines cover REST calls; actions taken through MCP over HTTP
+  are not yet logged with the label.
 - **Run tokens are a trust domain.** A worker id is not bound to the token that registered it, and a malicious
   `run` token can lease jobs and report arbitrary (but bounded) results. Give `run` tokens only to workers you trust.
 - **Hermit is third-party code** (a small, fast-moving fork). It is unaudited by us and executes the program

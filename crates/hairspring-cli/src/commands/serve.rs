@@ -29,7 +29,8 @@ pub struct ServeArgs {
     /// refused with 429 and `Retry-After`, not queued.
     #[arg(long, default_value_t = hairspring_mcp::DEFAULT_MAX_REPLAYS)]
     pub max_replays: usize,
-    /// File with one `token:role` per line (alternative to the HAIRSPRING_TOKENS environment variable).
+    /// File with one `token:role` per line, optionally `token:role label` (alternative to the HAIRSPRING_TOKENS
+    /// environment variable). A label is a readable name for log lines; it is set only here, not secret.
     #[arg(long)]
     pub tokens_file: Option<PathBuf>,
     /// Name of your organisation, shown in the top bar of the web UI (plain text, at most 80 characters; an empty
