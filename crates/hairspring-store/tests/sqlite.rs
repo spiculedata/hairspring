@@ -7,6 +7,22 @@ fn sqlite_store_passes_the_conformance_suite() {
     common::run_all(&|| Arc::new(SqliteStore::open_in_memory().unwrap()) as Arc<dyn Store>);
 }
 
+/// The same suite on database files, so every read goes through the read-only connections: a method that writes
+/// through one fails, because those connections refuse writes.
+#[test]
+fn sqlite_store_on_a_file_with_read_connections_passes_the_conformance_suite() {
+    let dir = temp_db("conformance");
+    let dir = dir.parent().unwrap().to_path_buf();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    common::run_all(&|| {
+        let n = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let s = SqliteStore::open(&dir.join(format!("db{n}.sqlite"))).unwrap();
+        assert!(s.read_connections() > 0);
+        Arc::new(s) as Arc<dyn Store>
+    });
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn sqlite_store_persists_across_reopen_and_migrates_idempotently() {
     let dir = std::env::temp_dir().join(format!(

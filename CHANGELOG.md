@@ -129,6 +129,28 @@
   generated run of 200000 trials the first byte took 0.4 s on SQLite (0.26 s to 0.76 s on PostgreSQL) and now takes under 1 ms (about 57 ms on PostgreSQL, where the
   first read of stored events is the rest), and eight simultaneous connects no longer take memory in proportion to the
   run's size.
+- A SQLite store on a database file now reads through four read-only connections besides its one writer, so reads no
+  longer wait for one another or for a write. Each read call sees one committed snapshot that includes every write that
+  had returned before it began. A read of `/api/runs` while three clients looped the failures `status=confirmed` filter
+  took 0.6 to 0.7 ms at the median instead of 264 to 371 ms (two runs of each, on 100,000 runs and 300,000
+  failures; docs/architecture.md has the figures). In-memory stores keep a single connection; writes, retention and
+  the schema are unchanged. The `hairspring` binary also turns off SQLite's process-wide memory statistics at start-up,
+  whose mutex made heavy reads on several connections slower side by side than one after another (it prints one line
+  to stderr if that setting could not be made). PostgreSQL is unaffected.
+
+  Reads that overlap without a gap stop SQLite starting its WAL file again, so the store now limits it: when the WAL
+  reaches 16 MiB the writer pauses the read connections, waits up to 250 ms for the reads in progress to finish,
+  checkpoints with `TRUNCATE` (the file goes to zero bytes) and lends the connections again. A read that arrives
+  during a pause waits at most 250 ms plus the time the checkpoint takes to copy the backlog, which was up to a few
+  hundred milliseconds in the measurements (longest recorded pause 17.5 to 734 ms across runs, on a busy machine) and
+  grows with a larger backlog; writes from the same process can also wait for the `PASSIVE` pass that comes first.
+  If the reads in progress do not finish in time the checkpoint is skipped and tried again after 2 s. Any read still
+  running 250 ms into each attempt causes a skip, so clients looping the heavy status filter (about 1.7 s) can keep
+  the WAL growing, and each skip stalls reads and in-process writes for about 260 ms; during a long `gc --apply` the
+  limit does not act until the writer is released, and the checkpoint after it copies the whole backlog while reads
+  are paused. `journal_size_limit` is 4 MiB, and closing the store
+  checkpoints. With 8 readers looping and an unthrottled writer of 2 KB events for 15 s, the WAL reached 3280 MiB
+  without the limit and 16 MiB with it; the writer managed 8553 to 10292 writes/s instead of 10623.
 - Server hardening. The server now closes a connection that has not sent a complete request head within 10 seconds
   (this is also the idle time allowed between requests on a kept-alive connection), answers `408` and closes the
   connection when a request body has not arrived within 30 seconds, and allows at most 512 open connections

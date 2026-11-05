@@ -47,6 +47,8 @@ mod sqlite_explorer;
 mod sqlite_jobs;
 mod sqlite_lineage;
 mod sqlite_listing;
+mod sqlite_process;
+mod sqlite_read_pool;
 mod sqlite_retention;
 mod sqlite_run_end;
 mod sqlite_schema;
@@ -54,6 +56,7 @@ mod sqlite_search;
 mod sqlite_tree_query;
 mod sqlite_trials;
 mod sqlite_tx;
+mod sqlite_wal_limit;
 mod trials;
 
 pub use checks::*;
@@ -71,8 +74,13 @@ pub use search::{
     FailureHit, PropertyHit, RunHit, ScheduleHit, SearchHits, SearchQuery, SeedHit,
     SEARCH_PROPERTY_RUNS, SEARCH_RECENT_RUNS,
 };
-pub use sqlite::{SqliteStore, BUSY_TIMEOUT};
+pub use sqlite::{SqliteStore, BUSY_TIMEOUT, DEFAULT_READ_CONNECTIONS};
 pub use sqlite_downgrade::downgrade_sqlite;
+pub use sqlite_process::disable_sqlite_memory_statistics;
+pub use sqlite_wal_limit::{
+    WalCheckpoint, JOURNAL_SIZE_LIMIT, WAL_CHECKPOINT_RETRY, WAL_CHECKPOINT_THRESHOLD,
+    WAL_DRAIN_WAIT,
+};
 pub use trials::*;
 pub use types::*;
 

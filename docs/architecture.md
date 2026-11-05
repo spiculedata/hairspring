@@ -673,6 +673,125 @@ Gaps for a later slice: the UI cannot tell "removed by retention" from "never ex
 there is no audit entry for a removal; and `--older-than` is the only age rule (nothing keeps the most recent N runs per
 target, or exempts a run).
 
+## SQLite connections
+
+A SQLite store on a database file holds one writer connection and four read-only connections
+(`hairspring_store::DEFAULT_READ_CONNECTIONS`; `SqliteStore::open_with_read_connections` takes another number, and 0
+sends reads to the writer). There is no command-line setting. PostgreSQL is unchanged: it already has a pool.
+
+- **Which connection.** Every `Store` method that only reads runs on a read connection. Every method that writes, or
+  reads and writes in one transaction (leasing a job, finishing one, ingesting trials, adding a confirmation or a tree
+  node, retention), runs on the writer, behind its mutex, as before. The retention report (`gc` without `--apply`)
+  also stays on the writer, because it keeps its working lists in temporary tables, which a read-only connection
+  cannot create; it still takes no SQLite lock a writer waits for, but other writes from the same process wait for
+  the writer's mutex while it runs, as they did before. The retention lock file is unchanged. A test reads the
+  source and fails when a `Store` method uses the writer without being on its list of writer methods, so a new method
+  that only reads cannot end up behind the writer's mutex unnoticed.
+- **What a read sees.** A read call runs in one read transaction, so all of its statements see one committed
+  snapshot. The snapshot is taken by the call's first statement, so it includes every write that had returned before
+  the call began, whichever connection the call gets. A read that started before a write may return the state from
+  before it.
+- **Read only.** Each read connection has `PRAGMA query_only=ON`, so a write through one fails with `SQLITE_READONLY`
+  (the conformance suite runs on a database file to catch a write sent to a reader). Read connections also have the
+  writer's 5 second busy timeout and `foreign_keys=ON`.
+- **Waiting.** When all four are busy, a read waits in a queue and reads are served in the order they arrived; the
+  pool never opens more. A write never waits for the read connections. In WAL mode a read does not wait for a write;
+  the busy timeout covers the rare cases where SQLite makes it wait (for example, recovering the WAL index after a
+  crash).
+- **Panics.** The pool's lock is held only to hand a connection out or take it back. A connection comes back when its
+  holder drops, including when a read panics; its transaction is rolled back first, and a connection that cannot be
+  rolled back is closed and replaced when next needed.
+- **Open and close.** The writer opens first and runs the WAL check and the schema migration; the read connections
+  open after, against the current schema, and an error opening one fails the open. Dropping the store closes the read
+  connections, then runs a `TRUNCATE` checkpoint on the writer, then closes the writer. Whichever connection to the
+  file closes last removes the `-wal` and `-shm` files (the store's writer, unless another process still has the file
+  open; then the checkpoint still leaves the WAL file empty).
+- **In memory.** An in-memory database cannot be shared between connections, so an in-memory store (as most tests
+  use) reads and writes through its one connection, as before.
+- **Checkpoints and the WAL's size.** SQLite's automatic checkpoint (when the WAL passes 1000 pages) runs on the
+  writer as it commits. It cannot copy frames newer than the oldest snapshot still being read, and the WAL starts
+  again from the beginning only when no read is using it. Reads that overlap without a gap therefore stop it starting
+  again for as long as they last, however short each read is, and without a limit the file grew with every write (see
+  the table below). So the store limits it:
+  - After each use of the writer the store looks at the WAL file's size. At `WAL_CHECKPOINT_THRESHOLD` (16 MiB) the
+    writer runs a `PASSIVE` checkpoint while reads go on, then pauses the read connections (no new read starts),
+    waits for the reads in progress to finish, runs a `TRUNCATE` checkpoint, which copies the rest and sets the file
+    to zero bytes, and lends the connections again. `TRUNCATE` rather than `RESTART`: both start the WAL again once no
+    read is using it, but `RESTART` leaves the file at its largest size until a later commit cuts it.
+  - The wait is bounded: if the reads in progress have not finished within `WAL_DRAIN_WAIT` (250 ms), the writer
+    skips the checkpoint, reads resume, and it tries again no sooner than `WAL_CHECKPOINT_RETRY` (2 s) later. A read
+    that arrives during a pause therefore waits at most 250 ms plus the time the `TRUNCATE` checkpoint takes to copy
+    the backlog. The `PASSIVE` pass before the pause copies most of it, but whatever was written since still has to be
+    copied while reads are held, and a larger backlog takes longer. In the measurements below the longest recorded
+    pause was 417 ms, 734 ms and 17.5 ms in three runs with 8 readers and an unthrottled writer, and 217 ms and 26 ms
+    with 2 readers; the `TRUNCATE` checkpoint itself took up to about 480 ms. With a backlog forced to 300 MiB a
+    pause was 161 ms, and with 1000 MiB it was 506 ms. These were measured on a busy machine, so read them as a
+    range, not a guarantee.
+  - The `PASSIVE` pass runs under the writer's mutex and is not part of the recorded pause, so writes from the same
+    process can wait for it as well: in one run the recorded pause was 17.5 ms and the longest write 643 ms. Writes
+    from the same process also wait for the pause itself, since the writer holds its mutex.
+  - The `TRUNCATE` checkpoint runs with no busy handler, so a read held by another process makes it give up at once
+    (counted as a skip) instead of waiting 5 seconds; no caller sees `SQLITE_BUSY` from it. Retention holds the
+    writer while it runs and the size check happens when it gives the writer back, so the two cannot deadlock. But
+    during a long `gc --apply` the WAL can grow with the limit not acting at all, because the writer is held for the
+    whole pass; the `TRUNCATE` checkpoint after it then copies the whole backlog while reads are paused, so the pause
+    is as long as that copy (see the figures above for how the time grows with the backlog).
+  - The writer sets `PRAGMA journal_size_limit` to `JOURNAL_SIZE_LIMIT` (4 MiB), so whenever the WAL starts again
+    (by the automatic checkpoint or the limit), the next commit cuts a larger file back to 4 MiB.
+  - What does not hold: the limit only acts when the writer is used, so after a burst the file stays at its last
+    size (at most the threshold) until the next write or close; any read that is still running 250 ms into each
+    attempt (or a reader in another process) makes that attempt skip, and the WAL then grows as before until the
+    attempts stop meeting such a read. The heavy status filter (about 1.7 s), looped by clients, is exactly such a
+    read. With a held 1.7 s read and 600 writes/s the WAL reached 182.5 MiB in 15 s, with 7 skips and no completed
+    checkpoint. Each skip stalls every read and every in-process write for about 260 ms, once every 2 s.
+- **Memory statistics.** By default SQLite counts every allocation under one process-wide mutex. With several read
+  connections busy at once that mutex dominated: three heavy reads side by side took longer than the same three one
+  after another. The `hairspring` binary turns the statistics off as its first statement
+  (`hairspring_store::disable_sqlite_memory_statistics`, which must run before any thread uses SQLite); nothing reads
+  them. A program that embeds the store calls it itself, or keeps SQLite's default.
+
+Measured on a database of 100,000 runs and 300,000 failures (a release build, `hairspring serve --workers 0
+--rate-limit 0`, macOS on a 14-core Apple M3 Max), times in milliseconds. The four `/api/runs` lines are two runs of
+each build (a range where they differ); the heavy filter lines are one run. "Heavy filter" is
+`GET /api/failures?status=confirmed`, which reads a stored check result for each failure it scans. These figures were
+taken before that filter began reading checks in batches, and before the WAL limit.
+
+| Load | Before (one connection) p50 / p95 / max | After p50 / p95 / max |
+|---|---|---|
+| `GET /api/runs`, 1 client, 30 requests | 0.5 / 0.6 / 0.7–0.9 | 0.5 / 0.5–0.6 / 0.7 |
+| `GET /api/runs`, 8 clients × 20 | 1.3–1.4 / 1.6 / 2.2 | 1.1–1.2 / 1.6 / 2.0–2.4 |
+| `GET /api/runs`, 1 client × 15, while 3 clients loop the heavy filter | 264–371 / 553–685 / 560–902 | 0.6–0.7 / 0.7–0.8 / 1.0–1.1 |
+| `GET /api/runs`, 8 clients × 20, while 3 clients loop the heavy filter | 5.5–193 / 434–729 / 739–924 | 2.4–2.6 / 2.9 / 3.0 |
+| Heavy filter, 1 at a time (5 requests) | 1763–1819 | 1730–1792 |
+| Heavy filter, 2 / 3 / 4 at once (time until all finish) | 3614 / 5434 / 7278 | 2679 / 3955 / 6582 |
+
+With the read connections but without turning the statistics off, 2 / 3 / 4 heavy filters at once took 5046 / 8611 /
+12640 ms, slower than one connection; turning them off brought that to the figures above. Four at once gain less than
+two or three: the bundled build is compiled with `SQLITE_ENABLE_MEMORY_MANAGEMENT`, so the connections draw their page
+caches from one pool of page-cache memory and still contend on it. (This is not SQLite's shared-cache mode, which the
+store does not use.)
+
+WAL file size with a writer adding 2 KB events and readers looping `list_runs(50)` and `list_events(run, 0, 1000)`
+on the store directly (release build, same machine; one run each without the limit, two runs with it, as a range;
+"one connection" is the store opened with no read connections). Sizes in MiB, sampled every 5 ms; "after" is the size once the load stopped, before close.
+
+| Load | One connection: largest | Read connections, no limit: largest / after | With the limit: largest / after |
+|---|---|---|---|
+| 3 readers looping, 150 writes/s, 20 s | 3.9 | 14.2 / 14.2 | 15.1–16.0 / 0.1–4.0 |
+| 8 readers with 5 ms gaps, 600 writes/s, 20 s | 4.0 | 4.5 / 4.5 | 5.1–5.2 / 4.0 |
+| 8 readers looping, writer unthrottled, 15 s | 4.0 | 3280 / 3280 | 16.0 / 5.6–11.0 |
+| 2 readers looping, writer unthrottled, 15 s | 4.0 | 146.5 / 146.5 | 16.0 / 6.1–13.2 |
+
+With the limit, the unthrottled writer managed 8553–10292 writes/s with 8 readers and 10211–11851 with 2 (two runs),
+against 10623 and 14825 without it: each checkpoint copies the WAL into the database while the writer waits. Typical
+read times were about the same with and without the limit (8 readers unthrottled: p50 8.2–10.3 ms, p99 13.6–17.0 ms,
+against 8.3 / 12.8 ms), but the slowest reads were not: in two further runs the slowest fast read was 742 ms and
+984 ms with the limit against 174 ms and 67 ms without it, and the longest pauses are given above. The limit trades
+an occasional stall of a few hundred milliseconds for a bounded file. The single connection kept the WAL small only
+because every read waited for every write: with the writer unthrottled its reads took 167–183 ms at the median. With
+lighter reads (`list_events` of 100) the unthrottled cases without the limit reached 170 MiB and 43 MiB, and 16.0 MiB
+with it.
+
 ## Connection and request limits
 
 The server speaks HTTP/1.1 only and applies these limits before any token is checked:

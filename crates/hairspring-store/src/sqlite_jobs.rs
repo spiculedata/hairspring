@@ -32,10 +32,12 @@ impl SqliteStore {
     }
 
     pub(crate) fn jobs_get_job(&self, id: &str) -> Result<Option<Job>> {
-        Ok(self
-            .conn()
-            .query_row("SELECT * FROM jobs WHERE id=?", [id], job_from_row)
-            .optional()?)
+        self.read(|c| {
+            Ok(
+                c.query_row("SELECT * FROM jobs WHERE id=?", [id], job_from_row)
+                    .optional()?,
+            )
+        })
     }
 
     /// Leases the oldest runnable job, of `only_run` when that is given and of any run otherwise.
@@ -194,37 +196,42 @@ impl SqliteStore {
     }
 
     pub(crate) fn jobs_leased_jobs(&self, now: i64, limit: u32) -> Result<Vec<LiveLease>> {
-        let conn = self.conn();
-        let mut stmt = conn.prepare(
-            "SELECT run_id, kind, lease_owner, lease_until, attempts FROM jobs WHERE status='running' AND lease_owner IS NOT NULL AND lease_until >= ?1 ORDER BY created_at, rowid LIMIT ?2",
-        )?;
-        let rows = stmt
-            .query_map(params![now, i64::from(limit)], |r| {
-                Ok(LiveLease {
-                    run_id: r.get(0)?,
-                    kind: r.get(1)?,
-                    lease_owner: r.get(2)?,
-                    lease_until: r.get(3)?,
-                    attempts: r.get::<_, i64>(4)? as u32,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows)
+        self.read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT run_id, kind, lease_owner, lease_until, attempts FROM jobs WHERE status='running' AND lease_owner IS NOT NULL AND lease_until >= ?1 ORDER BY created_at, rowid LIMIT ?2",
+            )?;
+            let rows = stmt
+                .query_map(params![now, i64::from(limit)], |r| {
+                    Ok(LiveLease {
+                        run_id: r.get(0)?,
+                        kind: r.get(1)?,
+                        lease_owner: r.get(2)?,
+                        lease_until: r.get(3)?,
+                        attempts: r.get::<_, i64>(4)? as u32,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
     }
 
     pub(crate) fn jobs_leased_job_count(&self, now: i64) -> Result<u64> {
-        Ok(self.conn().query_row(
-            "SELECT COUNT(*) FROM jobs WHERE status='running' AND lease_owner IS NOT NULL AND lease_until >= ?1",
-            [now],
-            |r| r.get::<_, i64>(0),
-        )? as u64)
+        self.read(|c| {
+            Ok(c.query_row(
+                "SELECT COUNT(*) FROM jobs WHERE status='running' AND lease_owner IS NOT NULL AND lease_until >= ?1",
+                [now],
+                |r| r.get::<_, i64>(0),
+            )? as u64)
+        })
     }
 
     pub(crate) fn jobs_queued_job_count(&self) -> Result<u64> {
-        Ok(self
-            .conn()
-            .query_row("SELECT COUNT(*) FROM jobs WHERE status='queued'", [], |r| {
-                r.get::<_, i64>(0)
-            })? as u64)
+        self.read(|c| {
+            Ok(
+                c.query_row("SELECT COUNT(*) FROM jobs WHERE status='queued'", [], |r| {
+                    r.get::<_, i64>(0)
+                })? as u64,
+            )
+        })
     }
 }
