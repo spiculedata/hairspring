@@ -593,23 +593,3 @@ fn several_processes_opening_a_version_two_database_at_once_all_succeed() {
     );
     cleanup(&path);
 }
-
-#[test]
-#[ignore = "hairspring gc does not exist yet (RX D6); this is its specification"]
-fn gc_spec_a_tree_is_kept_while_any_of_its_runs_is_kept() {
-    let s = SqliteStore::open_in_memory().unwrap();
-    common::tree_gc_spec::a_tree_is_kept_while_any_of_its_runs_is_kept(
-        &s,
-        &common::tree_gc_spec::gc_is_not_built,
-    );
-}
-
-#[test]
-#[ignore = "hairspring gc does not exist yet (RX D6); this is its specification"]
-fn gc_spec_a_tree_is_deleted_in_one_unit_when_every_run_has_expired() {
-    let s = SqliteStore::open_in_memory().unwrap();
-    common::tree_gc_spec::a_tree_is_deleted_in_one_unit_when_every_run_has_expired(
-        &s,
-        &common::tree_gc_spec::gc_is_not_built,
-    );
-}

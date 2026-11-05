@@ -43,6 +43,8 @@ pub enum Command {
         #[command(subcommand)]
         command: BundleCommand,
     },
+    /// Remove old runs and what only they refer to. Reports first and removes nothing unless --apply is given.
+    Gc(GcArgs),
     /// Start the web server, REST API and MCP endpoint.
     Serve(crate::commands::serve::ServeArgs),
     /// Run a worker that pulls jobs from a server.
@@ -171,6 +173,52 @@ pub struct ShowArgs {
     /// Print NDJSON: the run, one line per property, then `{"_next":null}`.
     #[arg(long)]
     pub json: bool,
+}
+
+/// The states `gc --state` can name. Queued and running runs are never removed, so they cannot be named.
+#[derive(Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub enum GcState {
+    Passed,
+    Failed,
+    Error,
+    Cancelled,
+}
+
+impl GcState {
+    pub fn run_state(self) -> hairspring_store::RunState {
+        match self {
+            GcState::Passed => hairspring_store::RunState::Passed,
+            GcState::Failed => hairspring_store::RunState::Failed,
+            GcState::Error => hairspring_store::RunState::Error,
+            GcState::Cancelled => hairspring_store::RunState::Cancelled,
+        }
+    }
+}
+
+#[derive(Args)]
+#[command(
+    after_help = "Without --apply this only reports what it would remove, and changes nothing. To remove, run it again with --apply and --expect-runs N, where N is the number of runs the report shows: the removal goes ahead only if the count still matches.\n\nWhat goes: the selected runs with their failures, stored check results, trials, events, jobs and trial trees; the stored bundles and trial output that nothing else refers to; and bundle files in --bundle-dir that are copies of the bundles removed. Queued and running runs, and runs with a queued or running job, are never removed. A trial tree is removed whole or not at all. By default failed runs are kept (they hold the evidence): add --state failed to include them.\n\nRun it when no worker is finishing jobs. The database file does not shrink (SQLite reuses the space; run VACUUM to give it back).\n\nExit codes:\n  0 reported, or removed what was reported\n  2 error, a refused --apply (nothing removed), or a removal that stopped part-way or could not remove a bundle file; the output says what was removed"
+)]
+pub struct GcArgs {
+    /// Only runs that finished (or, if they never did, were created) longer ago than this: a whole number and h, d or
+    /// w, for example 30d.
+    #[arg(long)]
+    pub older_than: String,
+    /// The states to remove, comma separated or repeated (default: passed, error, cancelled).
+    #[arg(long = "state", value_enum, value_delimiter = ',')]
+    pub states: Vec<GcState>,
+    /// Remove what the report shows. Needs --expect-runs.
+    #[arg(long)]
+    pub apply: bool,
+    /// With --apply: the number of runs the report shows. Nothing is removed if the count is different.
+    #[arg(long, requires = "apply")]
+    pub expect_runs: Option<u64>,
+    /// Print one JSON document instead of text.
+    #[arg(long)]
+    pub json: bool,
+    /// Where `hairspring test` writes bundle files; the copies of removed bundles in here are removed too.
+    #[arg(long, default_value = ".hairspring/bundles")]
+    pub bundle_dir: PathBuf,
 }
 
 #[derive(Subcommand)]

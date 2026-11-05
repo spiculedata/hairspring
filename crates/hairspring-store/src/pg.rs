@@ -387,6 +387,19 @@ impl Store for PgStore {
         crate::pg_listing::list_failures(&mut *self.client()?, filter, offset, limit)
     }
 
+    fn retention_scan(&self, cutoff_ms: i64) -> Result<Vec<crate::RetentionCandidate>> {
+        crate::pg_retention::scan(&mut *self.client()?, cutoff_ms)
+    }
+
+    fn retention_delete(
+        &self,
+        run_ids: &[String],
+        cutoff_ms: i64,
+        dry_run: bool,
+    ) -> Result<crate::RetentionReport> {
+        crate::pg_retention::delete(&mut *self.client()?, run_ids, cutoff_ms, dry_run)
+    }
+
     fn put_blob(&self, data: &[u8]) -> Result<String> {
         let hash = sha256_hex(data);
         self.client()?.execute(

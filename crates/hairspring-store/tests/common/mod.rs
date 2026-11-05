@@ -10,6 +10,7 @@ pub mod listing;
 #[cfg(feature = "postgres")]
 pub mod pg_support;
 pub mod search;
+pub mod retention;
 pub mod terminal_events;
 pub mod tree;
 pub mod tree_attempts;
@@ -65,6 +66,7 @@ pub fn run_all(make: &dyn Fn() -> Arc<dyn Store>) {
     listing::run_all_listing(make);
     leases::run_all_leases(make);
     search::run_all_search(make);
+    retention::run_all_retention(make);
 }
 
 pub fn runs_lifecycle(s: &dyn Store) {

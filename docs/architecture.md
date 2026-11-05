@@ -497,6 +497,84 @@ program under test, so it is cut to one line of at most 500 characters (ending i
 under a `guest` object. An error names `q` and never repeats the text, including text that was not valid UTF-8 once
 unescaped.
 
+## Retention (`hairspring gc`)
+
+`hairspring gc` removes old runs and what only they refer to. It adds no table or column (the schema stays at
+version 6) and works the same on SQLite and PostgreSQL: both stores implement `Store::retention_scan` and
+`Store::retention_delete`, and one conformance suite runs against both.
+
+**Report first.** Without `--apply` the command changes nothing and prints what it would remove: runs (by state),
+failures, stored check results, trials, events, jobs, trial trees and nodes, stored blobs and their bytes (and which of
+those are failure bundles), and the bundle files it would delete from `--bundle-dir`. To remove, run it again with
+`--apply --expect-runs N`, where `N` is the number of runs the report shows. The report is printed first; if the count
+differs, or `--expect-runs` is missing, nothing is removed and the exit status is 2. `--json` prints the same report as
+one JSON document (`would_remove`, `removed`, `kept`, `refused`, `problems`, `not_deleted`).
+
+**What qualifies.** A run is removed only if all of these hold, and the store checks each one again inside the
+transaction that deletes the run:
+
+- it is `passed`, `failed`, `error` or `cancelled` (never `queued` or `running`), and is among the states chosen with
+  `--state` (default `passed`, `error` and `cancelled`: failed runs hold the evidence, so they are kept unless
+  `--state failed` is given);
+- it has no job that is queued or running (including a job whose lease has expired, which another worker may still
+  take);
+- it finished before the cutoff, `--older-than` ago (`30d`, `12h`, `2w`). A run that never finished is aged from its
+  creation. The age is required: there is no default.
+
+**Trial trees are one unit.** A tree is removed whole, and only if its root run and every branch run qualify and were
+selected; otherwise every run of the tree is kept (reported as `tree_kept`). A tree goes in one transaction in the
+order the foreign keys need: stored check results, nodes, branches, the tree, then each run's own rows (coverage,
+digest use, property rows, catalog, identity, trials, failures, jobs, events) and the run. A run outside any tree is its
+own unit. If one unit fails, its transaction is rolled back, the command stops, and the report says what had been
+committed before it (exit 2).
+
+**Blobs are shared, so they are removed last and only when nothing refers to them.** A bundle, trial output or detail,
+or tree edge is deleted only if no remaining trial row, failure or tree node refers to its hash, and no remaining stored
+check names the hash in its artefact list. A bundle that another failure also uses stays.
+
+**A dry run is exact.** It does the same deletes inside one transaction and rolls it back, so its counts are what an
+apply of the same runs removes at that moment. (It takes the write lock for that time; on PostgreSQL it needs the right
+to delete.) An apply removes exactly the runs the report listed, one unit per transaction; it never selects new runs.
+
+**Bundle files, and the order of removal.** The store commits first; then the command deletes bundle files. A bundle
+file is `<target>-<first 8 digits of the bundle hash>.hairspring` in `--bundle-dir` (default `.hairspring/bundles`).
+The command removes a file only if it is a direct child of that directory, is a regular file and not a symbolic link,
+is named like a bundle file for a bundle it just deleted, and its contents hash to that bundle's hash. A symbolic link
+is never followed or removed, and a bundle directory that is itself a symbolic link is not entered. Nothing outside the
+bundle directory and the database is touched. The failure cases:
+
+- A bundle file cannot be removed (for example, a read-only directory): the file stays, the output names it, and the
+  exit status is 2. The run, its failures and its stored bundle are already gone together, so nothing refers to the
+  file. A later `gc` cannot find it, because the stored bundle that identified it is gone: delete it by hand.
+- The process stops between the commit and the file removal: same result, with the same remedy.
+- The process stops before the commit: nothing changed for that unit. Run it again.
+
+**What is not deleted.** The database file does not shrink: SQLite reuses the freed pages (run `VACUUM` to return the
+space) and PostgreSQL reclaims it by vacuuming. Bundle files outside `--bundle-dir`, exported or copied bundles,
+workers, tokens, runs that were not selected, and runs that are not old enough are not touched. There is no stored
+record that a run was removed. Runs and failures that were exported (SARIF, JUnit, bundles in CI) still carry their
+ids.
+
+**Run it when no worker is finishing jobs.** A worker stores a bundle before the row that refers to it. If `gc` removes
+a bundle in that gap, and the new failure's bundle text is identical to one `gc` is deleting, the new failure would be
+left without its stored bundle. The window is small and needs identical bundle text, but the store cannot rule it out
+without a schema change.
+
+**How a removed run looks today.** The UI has no "expired" state yet. A removed run, failure, trial or bundle looks like
+one that never existed:
+
+- `GET /api/runs/{id}`, `GET /api/failures/{id}`, trial and bundle requests answer 404 with `{"error":"not found"}`.
+- The web UI run, failure and trial pages show "This run does not exist here. It may have been removed." (or
+  "failure", "trial") with a link to Runs; the page title is "No such page". Polling stops on the 404.
+- `hairspring show <run>` and `hairspring confirm <run>` print `no stored run`, and `hairspring replay <hash>` says the
+  input is not a readable bundle file or a stored bundle hash (exit 2).
+- Run and failure lists, counts and the Overview simply stop including the removed rows.
+
+Gaps for a later slice: the UI cannot tell "removed by retention" from "never existed", so a shared link says only
+"may have been removed"; there is no retention setting on the server or a scheduled run (the command is run by hand);
+there is no audit entry for a removal; and `--older-than` is the only age rule (nothing keeps the most recent N runs per
+target, or exempts a run).
+
 ## Bundles
 
 A bundle is a small text file: `seed`, `build`, `target`, `backend`, `param.*` and `path` (hex action ids or

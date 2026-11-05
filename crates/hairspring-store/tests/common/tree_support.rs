@@ -189,3 +189,10 @@ pub fn branch_for(tree: &str, run_id: &str, source_node: u64, hash: &str) -> New
         created_by: "key_ab12".into(),
     }
 }
+
+/// Closes every job of the run, as a worker does when it finishes: a run with a job that could still run is not old.
+pub fn close_jobs(s: &dyn Store, run_id: &str) {
+    while let Some(job) = s.lease_run_job(run_id, "closer", 1, i64::MAX / 2).unwrap() {
+        assert!(s.complete_job(&job.id, "closer").unwrap());
+    }
+}

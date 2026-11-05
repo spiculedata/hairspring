@@ -450,6 +450,42 @@ CPU flags, loader files, Hermit executable hash, the target program's hash). The
 
 See [Recorded environment](determinism.md#recorded-environment) for the fields and what they mean.
 
+## Remove old runs: `hairspring gc`
+
+Stored runs accumulate. `hairspring gc` reports what could be removed and removes nothing unless you ask:
+
+```bash
+hairspring gc --older-than 30d
+```
+
+The report lists the runs (by state), failures, stored check results, trials, events, jobs, trial trees, stored blobs
+with their size, and the bundle files in `.hairspring/bundles` that it would delete. It also says what it is leaving
+alone and why. Nothing has changed after this command.
+
+To remove exactly what the report showed, repeat it with `--apply` and the number of runs from the report:
+
+```bash
+hairspring gc --older-than 30d --apply --expect-runs 12
+```
+
+If the number does not match, or `--expect-runs` is missing, nothing is removed and the exit status is 2. Other options:
+
+| Option | Meaning |
+|---|---|
+| `--older-than 30d` | Required. A whole number and `h`, `d` or `w`. Measured from when the run finished (from its creation, if it never did) |
+| `--state passed,error,cancelled` | The states to remove. The default leaves failed runs alone, because they hold the evidence; add `failed` to include them |
+| `--bundle-dir DIR` | Where bundle files are looked for (default `.hairspring/bundles`, as for `hairspring test`) |
+| `--json` | One JSON document instead of text |
+
+Queued and running runs, and runs with a queued or running job, are never removed. A trial tree is removed whole or kept
+whole. The command works the same on SQLite and PostgreSQL (`HAIRSPRING_DATABASE_URL`).
+
+What it does not do: the database file does not shrink (SQLite reuses the space; run `VACUUM` to give it back), files
+outside the bundle directory are never touched, and a symbolic link is never followed. Run it when no worker is
+finishing jobs. After a removal, the web UI and API answer 404 for that run, and the UI says "This run does not exist
+here. It may have been removed."; it does not yet say that retention removed it. See
+[Retention](architecture.md#retention-hairspring-gc) for the rules and the failure cases.
+
 ## What is supported
 
 | Language | SDK | Fixture | Status under Hermit |
@@ -499,3 +535,4 @@ An SDK adds named properties (`always`, `sometimes`, `reachable`) that are track
 | `Hermit was not found` | `HAIRSPRING_HERMIT` is unset and `hermit` is not on `PATH`. Export the path the installer printed |
 | `Inherited descriptor cleanup failed ... close_range` | The environment (an emulated or restricted container) does not implement `close_range`. Run on a native Linux host |
 | `environment mismatch` on replay | The loader changed since the bundle was recorded. See determinism.md |
+| `no stored run` or a 404 for a run you had a link to | The run may have been removed by `hairspring gc`. The UI does not yet say so; check with whoever runs it |

@@ -9,6 +9,15 @@
   `queue` with the number of jobs waiting and the number held. The `read` role is enough; `id` is still left out for
   that role, and no secret, digest, job payload, error text or guest output is returned. Existing fields are unchanged.
   Both stores answer the same way (two new read-only queries on the job table; no schema change).
+- `hairspring gc --older-than 30d` reports what retention would remove and removes nothing by default: runs by state,
+  failures, stored check results, trials, events, jobs, trial trees, stored blobs and bytes, and bundle files in
+  `--bundle-dir`. `--apply --expect-runs N` removes exactly the runs the report showed, and only if `N` matches. Queued
+  and running runs and runs with a queued or running job are never removed; failed runs are kept unless `--state failed`
+  is given; a trial tree is removed whole or kept whole; blobs go only when nothing refers to them; a symbolic link is
+  never followed. `--json` prints one JSON document; exit 2 for an error, a refused `--apply`, or a removal that
+  stopped part-way. No schema change; SQLite and PostgreSQL behave the same. The database file does not shrink, and
+  the UI still shows a removed run as "may have been removed" (no "expired" state yet). See "Retention" in
+  `docs/architecture.md`.
 - `GET /api/me` returns the caller's role (`read`, `run` or `admin`), what that role may do, and whether the server is
   in open mode. It needs a valid token like the other read endpoints (401 otherwise) and never includes the token or a
   digest of it.

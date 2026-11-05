@@ -343,6 +343,19 @@ impl Store for SqliteStore {
         crate::sqlite_listing::list_failures(&self.conn(), filter, offset, limit)
     }
 
+    fn retention_scan(&self, cutoff_ms: i64) -> Result<Vec<crate::RetentionCandidate>> {
+        crate::sqlite_retention::scan(&self.conn(), cutoff_ms)
+    }
+
+    fn retention_delete(
+        &self,
+        run_ids: &[String],
+        cutoff_ms: i64,
+        dry_run: bool,
+    ) -> Result<crate::RetentionReport> {
+        crate::sqlite_retention::delete(&mut self.conn(), run_ids, cutoff_ms, dry_run)
+    }
+
     fn put_blob(&self, data: &[u8]) -> Result<String> {
         let hash = sha256_hex(data);
         self.conn().execute(

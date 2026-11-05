@@ -25,6 +25,8 @@ mod pg_lineage;
 #[cfg(feature = "postgres")]
 mod pg_listing;
 #[cfg(feature = "postgres")]
+mod pg_retention;
+#[cfg(feature = "postgres")]
 mod pg_run_end;
 #[cfg(feature = "postgres")]
 mod pg_schema;
@@ -35,6 +37,7 @@ mod pg_tree_query;
 #[cfg(feature = "postgres")]
 mod pg_trials;
 mod reporters;
+mod retention;
 mod run_mode;
 mod search;
 mod sqlite;
@@ -44,6 +47,7 @@ mod sqlite_explorer;
 mod sqlite_jobs;
 mod sqlite_lineage;
 mod sqlite_listing;
+mod sqlite_retention;
 mod sqlite_run_end;
 mod sqlite_schema;
 mod sqlite_search;
@@ -66,6 +70,7 @@ pub use search::{
     FailureHit, PropertyHit, RunHit, ScheduleHit, SearchHits, SearchQuery, SeedHit,
     SEARCH_PROPERTY_RUNS, SEARCH_RECENT_RUNS,
 };
+pub use retention::{KeptReason, RetentionCandidate, RetentionReport};
 pub use sqlite::{SqliteStore, BUSY_TIMEOUT};
 pub use sqlite_downgrade::downgrade_sqlite;
 pub use trials::*;
@@ -352,6 +357,24 @@ pub trait Store: Send + Sync {
     fn find_tree_branch(&self, tree_id: &str, command_hash: &str) -> Result<Option<BranchRecord>>;
     /// Counts one verification re-run of a branch, and whether it matched.
     fn record_branch_verify(&self, run_id: &str, matched: bool) -> Result<()>;
+
+    // retention
+    /// Every run whose age is before `cutoff_ms`, in any state, oldest first (the run's finish time, or its creation
+    /// time when it never finished). It only reads: the caller decides which of them to name to
+    /// [`Store::retention_delete`].
+    fn retention_scan(&self, cutoff_ms: i64) -> Result<Vec<RetentionCandidate>>;
+    /// Deletes the named runs and the rows and blobs only they refer to, or, with `dry_run`, works out the same report
+    /// and changes nothing. A run is deleted only if it is finished, has no queued or running job, and is older than
+    /// `cutoff_ms`; each of those is re-checked inside the transaction that deletes. A trial tree is deleted whole,
+    /// and only when all of its runs are named and pass; otherwise it is kept whole. A run is never deleted halfway:
+    /// each tree or run goes in one transaction. If one fails, the pass stops and the report holds `error` and what
+    /// had already been committed.
+    fn retention_delete(
+        &self,
+        run_ids: &[String],
+        cutoff_ms: i64,
+        dry_run: bool,
+    ) -> Result<RetentionReport>;
 
     // workers
     fn set_worker_trusted(&self, id: &str, trusted: bool) -> Result<()>;
