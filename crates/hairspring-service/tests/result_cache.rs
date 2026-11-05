@@ -14,7 +14,8 @@ use hairspring_props::trial::failure_basis;
 use hairspring_props::AssertKind;
 use hairspring_service::{PropertyQuery, SeedQuery, Service};
 use hairspring_store::{NewFailure, Store};
-use std::sync::{Arc, Barrier};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Barrier, Mutex};
 
 fn declared() -> Label {
     Label {
@@ -258,6 +259,83 @@ fn polls_of_an_open_run_with_no_new_trial_scan_nothing() {
         .unwrap();
     assert_eq!(svc.coverage(&job.run_id).unwrap().unwrap().trials, 2);
     assert_eq!(svc.coverage_scans(), 2);
+}
+
+#[test]
+fn a_scan_that_races_an_ingest_answers_what_it_saw_and_is_not_kept() {
+    let (svc, store, engine) = setup();
+    let job = lease_with_budget(&svc, &engine, &local(), 10);
+    let p = props("c.id", AssertKind::Always, 1, 0);
+    let rec = Arc::new(Mutex::new(Recorder::new()));
+    let first = rec.lock().unwrap().pass(1, &p);
+    svc.ingest_trials(&job.job_id, &local(), &[first]).unwrap();
+    let fired = Arc::new(AtomicBool::new(false));
+    {
+        let (svc2, job_id, rec, fired, p) = (
+            svc.clone(),
+            job.job_id.clone(),
+            rec.clone(),
+            fired.clone(),
+            p.clone(),
+        );
+        svc.set_coverage_count_hook(move || {
+            if !fired.swap(true, Ordering::SeqCst) {
+                let late = rec.lock().unwrap().pass(2, &p);
+                svc2.ingest_trials(&job_id, &local(), &[late]).unwrap();
+            }
+        });
+    }
+    // Counted one row; the scan saw two.
+    assert_eq!(svc.coverage(&job.run_id).unwrap().unwrap().trials, 2);
+    assert_eq!(svc.coverage_scans(), 1);
+    assert_current(&svc, &store, &job.run_id);
+    assert_eq!(svc.coverage_scans(), 2, "the raced scan was not kept");
+    assert_eq!(svc.coverage(&job.run_id).unwrap().unwrap().trials, 2);
+    assert_eq!(svc.coverage_scans(), 2, "the next one was");
+}
+
+#[test]
+fn a_scan_that_races_a_new_attempt_is_not_kept_under_the_old_count() {
+    let (svc, store, engine) = setup();
+    let job = lease_with_budget(&svc, &engine, &local(), 3);
+    let mut rec = Recorder::new();
+    let old: Vec<_> = (0..3)
+        .map(|i| rec.pass(i, &props("old.id", AssertKind::Always, 1, 0)))
+        .collect();
+    svc.ingest_trials(&job.job_id, &local(), &old).unwrap();
+    let new_job = Arc::new(Mutex::new(None));
+    let new_rec = Arc::new(Mutex::new(Recorder::new()));
+    let new_trial = {
+        let new_rec = new_rec.clone();
+        move |s: u64| {
+            let p = props("new.id", AssertKind::Sometimes, 0, 1);
+            new_rec.lock().unwrap().pass(s, &p)
+        }
+    };
+    {
+        let (svc2, job_id, new_job) = (svc.clone(), job.job_id.clone(), new_job.clone());
+        let new_trial = new_trial.clone();
+        svc.set_coverage_count_hook(move || {
+            let mut slot = new_job.lock().unwrap();
+            if slot.is_none() {
+                // Between the count (three rows of the first attempt) and the scan, a new attempt starts and reports
+                // one trial: the read is made under the new attempt with the old count, and scans one row.
+                svc2.fail(&job_id, &local(), "interrupted").unwrap();
+                let again = svc2.lease(&local()).unwrap().expect("requeued");
+                svc2.ingest_trials(&again.job_id, &local(), &[new_trial(3)])
+                    .unwrap();
+                *slot = Some(again);
+            }
+        });
+    }
+    assert_eq!(svc.coverage(&job.run_id).unwrap().unwrap().trials, 1);
+    let again = new_job.lock().unwrap().clone().expect("the hook ran");
+    // The new attempt reaches the count the raced read was made under; a series kept under it would be one row short.
+    svc.ingest_trials(&again.job_id, &local(), &[new_trial(6), new_trial(9)])
+        .unwrap();
+    assert_eq!(store.count_trials(&job.run_id).unwrap(), 3);
+    assert_eq!(svc.coverage(&job.run_id).unwrap().unwrap().trials, 3);
+    assert_current(&svc, &store, &job.run_id);
 }
 
 #[test]

@@ -5,10 +5,14 @@
 //! of runs finished before the store kept them, which are scanned on first read), under the run row they were read
 //! with. A run that is still open is cached under its attempt and its count of trial rows: within one attempt rows are
 //! only ever added, and a new attempt removes the old rows and raises the attempt, so an equal pair means equal rows.
-use crate::result_cache::{Bounds, ResultCache, Weigh};
+use crate::result_cache::{Bounds, Keep, ResultCache, Weigh};
 use crate::view::{Coverage, CoveragePoint};
 use hairspring_store::RunRecord;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+
+/// A test's hook, run by a coverage read of an open run just after it has counted the run's trial rows.
+pub(crate) type CountHook = Arc<dyn Fn() + Send + Sync>;
 
 /// Most series held at once. A series is at most [`crate::query::MAX_COVERAGE_POINTS`] small points (about 64 KB).
 pub(crate) const MAX_CACHED_SERIES: usize = 64;
@@ -38,6 +42,20 @@ pub(crate) fn held_still(before: OpenRows, after: OpenRows, scanned: u64) -> boo
     before.attempt.is_some() && before == after && scanned == before.trials
 }
 
+/// What may be done with a series scanned from an open run. Kept when the rows [`held_still`]. Otherwise, while the
+/// attempt is unchanged, the scan saw every row counted `before` it, plus rows added while it ran, all of which callers
+/// holding the same count were waiting through: they are given it, as the scanning caller is. A new attempt (or a run
+/// that went) may have changed the rows under the scan, so the waiting callers scan for themselves.
+pub(crate) fn open_scan_keep(before: OpenRows, after: OpenRows, scanned: u64) -> Keep {
+    if held_still(before, after, scanned) {
+        Keep::Yes
+    } else if before.attempt.is_some() && before.attempt == after.attempt {
+        Keep::Share
+    } else {
+        Keep::No
+    }
+}
+
 impl Weigh for Coverage {
     fn weight(&self) -> usize {
         std::mem::size_of::<Coverage>()
@@ -49,6 +67,7 @@ impl Weigh for Coverage {
 pub(crate) struct CoverageCache {
     pub(crate) series: ResultCache<CoverageToken, Coverage>,
     scans: AtomicU64,
+    count_hook: Mutex<Option<CountHook>>,
 }
 
 impl Default for CoverageCache {
@@ -59,11 +78,28 @@ impl Default for CoverageCache {
                 bytes: MAX_CACHED_SERIES_BYTES,
             }),
             scans: AtomicU64::new(0),
+            count_hook: Mutex::new(None),
         }
     }
 }
 
 impl CoverageCache {
+    pub(crate) fn set_count_hook(&self, hook: CountHook) {
+        *self.count_hook.lock().unwrap_or_else(|e| e.into_inner()) = Some(hook);
+    }
+
+    /// Runs the test's hook, if one is set; not while holding the lock, so the hook may read coverage itself.
+    pub(crate) fn after_count(&self) {
+        let hook = self
+            .count_hook
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(hook) = hook {
+            hook();
+        }
+    }
+
     /// Records that a series was worked out from the stored trials rather than served from memory.
     pub(crate) fn note_scan(&self) {
         self.scans.fetch_add(1, Ordering::Relaxed);
@@ -104,6 +140,19 @@ mod tests {
         };
         assert!(!held_still(rows(5, 1), gone, 5), "the run went");
         assert!(!held_still(gone, gone, 5), "no run to hold");
+    }
+
+    #[test]
+    fn an_unkept_scan_is_shared_only_while_the_attempt_is_unchanged() {
+        assert_eq!(open_scan_keep(rows(5, 1), rows(5, 1), 5), Keep::Yes);
+        assert_eq!(open_scan_keep(rows(5, 1), rows(7, 1), 7), Keep::Share);
+        assert_eq!(open_scan_keep(rows(5, 1), rows(2, 2), 2), Keep::No);
+        let gone = OpenRows {
+            trials: 0,
+            attempt: None,
+        };
+        assert_eq!(open_scan_keep(rows(5, 1), gone, 5), Keep::No);
+        assert_eq!(open_scan_keep(gone, gone, 0), Keep::No);
     }
 
     #[test]

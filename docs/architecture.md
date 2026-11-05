@@ -474,13 +474,21 @@ list records the trust each trial row was stored with, which is never rewritten.
 An open run's coverage series is kept under its attempt and its count of trial rows. Within one attempt rows are only
 added, and a new attempt removes the earlier rows and raises the attempt in one transaction, so an equal pair means
 the same rows. The count is read before the run row, and a series is kept only if the count and attempt read after the
-scan equal those read before it and the scan saw every counted row. Polls with no new trial scan nothing; a new trial
-or a new attempt is scanned again.
+scan equal those read before it and the scan saw every counted row. Once a scan has been kept, polls with no new trial
+scan nothing; a new trial or a new attempt is scanned again. While trials keep arriving, a scan may see rows that came
+in after the count and is then not kept, so the next poll scans again.
 
-**Bound.** At most 32 finished runs' figures and about 64 MiB of them by estimate (a run with the largest catalog,
-16384 ids, holds about 7 MB), and at most 64 coverage series and about 16 MiB of them. The least recently used entry
-goes first, and a value larger than the whole bound is not kept. Concurrent first requests for one run work its
-figures out once: the others wait for that result and share it.
+**Bound.** At most 32 finished runs' figures and about 64 MiB of them by estimate, and at most 64 coverage series and
+about 16 MiB of them. A run with the largest catalog, 16384 ids, holds about 7 MB with short ids and messages, and
+about 23 MB when every id, message and location is as long as allowed, so two such runs fit. The least recently used
+entry goes first, and a value larger than the whole bound is not kept.
+
+**Concurrent requests.** The first request for an entry works it out without holding a lock, and other requests for
+the same run with the same validity token wait for it and are handed its outcome, so concurrent first requests work a
+run's figures out once. If that work fails, every waiting request gets the same error; it is not repeated once per
+waiting request. An open run's series that could not be kept because trials arrived during the scan is still handed
+to the requests that waited for it, since each of them counted the same rows before the scan finished; if a new
+attempt started during the scan, each waiting request scans for itself, side by side rather than one after another.
 
 **Lifetime.** The cache belongs to one server process. Restarting the server clears it, and two servers on one
 database each keep their own; the validity rule is checked against the store, so neither can serve the other's stale

@@ -120,14 +120,21 @@
   while the run row read for the request is unchanged since the entry was worked out; trial rows cannot be added to a
   finished run, so they cannot change behind it, and a run removed by `hairspring gc` answers 404 as before. Checks of a
   run's failures, worker trust and the claim built from them are still read on every request. At most 32 runs (about
-  64 MiB by estimate) and 64 coverage series are kept, least recently used first; concurrent first requests for one run
-  work its figures out once; restarting the server clears the cache. The coverage series of a run that is still open is
-  scanned again only when the run holds a new trial row or a new attempt. Responses are unchanged byte for byte. On a
-  generated run of 200000 trials and 16384 property ids, after the first request, `GET /api/runs/{id}` took 137 ms on
-  SQLite and 79 ms on PostgreSQL and now takes under 3 ms; the property table took 233 ms and 126 ms and now takes under
-  7 ms for any page or filter; a property's seed list still scans trials and dropped from 224 ms to 100 ms on SQLite and
-  from 144 ms to 86 ms on PostgreSQL; repeated coverage polls of an open run of 50000 trials with no new trial took
-  276 ms and 236 ms and now take about 2 to 3 ms. The first request for a finished run works all of its figures out at once and costs about what it did (148 ms against 135 ms on SQLite for the run above). No schema change.
+  64 MiB by estimate; a run of 16384 property ids takes about 7 MB with short ids and messages and about 23 MB when
+  they are as long as allowed) and 64 coverage series are kept, least recently used first; restarting the server clears
+  the cache. Concurrent first requests for one run work its figures out once, and if that fails they all get the same
+  error rather than each trying again in turn. The coverage series of a run that is still open is kept once a scan saw
+  no trial arrive while it ran; after that, polls with no new trial scan nothing, and a new trial row or a new attempt
+  is scanned again. Responses are unchanged byte for byte. Measured after the first request on a generated run at the
+  service's limit of 10000 trials, with 16384 property ids: `GET /api/runs/{id}` took 55 ms on SQLite and 51 ms on
+  PostgreSQL and now takes under 3 ms; the property table took 54 to 59 ms and 40 to 45 ms and now takes under 6 ms for
+  any page or filter; a property's seed list still scans trials and dropped from 97 ms to 50 ms on SQLite and from
+  80 ms to 49 ms on PostgreSQL; repeated coverage polls of an open run of 10000 trials with no new trial took 55 ms and
+  53 ms and now take under 2 ms. On a generated store whose runs are larger than the service accepts (200000 trials)
+  the run detail, the property table and the coverage polls went from between 79 and 276 ms to under 7 ms; with runs
+  at the 10000-trial cap the gains are smaller, as above. The first request for a finished run works all of its
+  figures out at once and costs about what it did (59 ms against 58 ms on SQLite for the 10000-trial run). No schema
+  change.
 - `GET /api/failures` with a `status` filter reads the stored checks of the failures it scans in batches (one query per
   batch of up to 500 failures, with the ids as bound parameters) instead of one query per failure, and scans in
   batches of up to 500 failures instead of 100. Results, ordering, cursors and the scan cap of 1000 failures per

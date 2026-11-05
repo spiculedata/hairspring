@@ -1,5 +1,5 @@
 //! A run's trials: the list with its filters, one trial's detail and output, and the coverage series.
-use crate::coverage_cache::{held_still, CoverageToken, OpenRows};
+use crate::coverage_cache::{open_scan_keep, CoverageToken, OpenRows};
 use crate::coverage_series;
 use crate::digest_cap::is_capped_reason;
 use crate::output_view::{OutputMeta, STREAMS};
@@ -304,6 +304,7 @@ impl Service {
         // The count is read before the run row, so the attempt read after it is the one the counted rows belong to:
         // attempts only go up, and a new one removes the rows of the old one in the same transaction.
         let trials = self.store.count_trials(run_id)?;
+        self.coverage_cache.after_count();
         // A run that finished in between is still scanned correctly here; its next read takes the finished path.
         let Some(run) = self.stored_run(run_id)? else {
             return Ok(None);
@@ -325,7 +326,7 @@ impl Service {
                     trials: self.store.count_trials(run_id)?,
                     attempt: self.store.get_run(run_id)?.map(|r| r.ingest_attempt),
                 };
-                let keep = held_still(before, after, series.trials);
+                let keep = open_scan_keep(before, after, series.trials);
                 Ok(Computed {
                     value: series,
                     keep,
@@ -378,6 +379,14 @@ impl Service {
     #[doc(hidden)]
     pub fn coverage_scans(&self) -> u64 {
         self.coverage_cache.scans()
+    }
+
+    /// Runs `hook` in every coverage read of an open run, just after it has counted the run's trial rows and before
+    /// it reads the run row and scans. For tests that race a write against the read.
+    #[doc(hidden)]
+    pub fn set_coverage_count_hook(&self, hook: impl Fn() + Send + Sync + 'static) {
+        self.coverage_cache
+            .set_count_hook(std::sync::Arc::new(hook));
     }
 
     fn scan_coverage(&self, run_id: &str) -> Result<Coverage> {

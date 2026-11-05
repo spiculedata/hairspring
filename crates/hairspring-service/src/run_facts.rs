@@ -20,7 +20,8 @@ use std::sync::Arc;
 
 /// Most finished runs whose figures are held at once.
 pub(crate) const RUN_FACTS_MAX_ENTRIES: usize = 32;
-/// Most estimated bytes of figures held at once. A run with the largest catalog (16384 ids) holds about 7 MB.
+/// Most estimated bytes of figures held at once. A run with the largest catalog (16384 ids) holds about 7 MB with short
+/// ids and messages, and about 23 MB when every id, message and location is as long as allowed, so two such runs fit.
 pub(crate) const RUN_FACTS_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 /// A run's statistics paired with their catalog index, sorted by id.
@@ -247,6 +248,32 @@ mod tests {
     fn the_largest_catalog_fits_the_byte_bound_several_times() {
         let largest = facts(hairspring_props::limits::MAX_IDS_PER_RUN).weight();
         assert!(largest * 4 < RUN_FACTS_MAX_BYTES, "{largest} bytes");
+    }
+
+    #[test]
+    fn the_largest_catalog_with_the_longest_text_fits_the_byte_bound_twice() {
+        use hairspring_props::limits::{
+            MAX_IDS_PER_RUN, MAX_ID_BYTES, MAX_LOC_FILE_BYTES, MAX_LOC_FUNC_BYTES, MAX_MSG_BYTES,
+        };
+        let mut f = facts(0);
+        let longest = |i: usize| {
+            let mut s = stat(&format!("{i:0width$}", width = MAX_ID_BYTES));
+            s.msg = "m".repeat(MAX_MSG_BYTES);
+            s.loc = Some(Loc {
+                file: "f".repeat(MAX_LOC_FILE_BYTES),
+                line: 1,
+                func: Some("g".repeat(MAX_LOC_FUNC_BYTES)),
+            });
+            (i as u32, s)
+        };
+        f.stats = Arc::new((0..MAX_IDS_PER_RUN).map(longest).collect());
+        let w = f.weight();
+        // About 23 MB, against about 7 MB with short text.
+        assert!(w > 20_000_000 && w < 26_000_000, "{w} bytes");
+        assert!(
+            w * 2 < RUN_FACTS_MAX_BYTES && w * 3 > RUN_FACTS_MAX_BYTES,
+            "{w} bytes"
+        );
     }
 
     #[test]
