@@ -284,6 +284,23 @@ fn failures_page_newest_first_and_leave_the_finding_out_unless_a_status_is_asked
 }
 
 #[test]
+fn a_failure_page_that_ends_exactly_at_the_last_failure_has_no_cursor() {
+    let (svc, store, engine) = setup();
+    five_failures(&svc, &*store, &engine);
+    let all = svc.failure_page(&fquery(|q| q.limit = Some(5))).unwrap();
+    assert_eq!((all.failures.len(), all.next_cursor), (5, None));
+    let tail = svc
+        .failure_page(&fquery(|q| {
+            q.limit = Some(2);
+            q.cursor = Some("3".into());
+        }))
+        .unwrap();
+    assert_eq!((tail.failures.len(), tail.next_cursor), (2, None));
+    let short = svc.failure_page(&fquery(|q| q.limit = Some(4))).unwrap();
+    assert_eq!(short.next_cursor.as_deref(), Some("4"));
+}
+
+#[test]
 fn a_status_filter_counts_only_failures_in_that_state_and_pages_over_them() {
     let (svc, store, engine) = setup();
     let (_run, ids) = five_failures(&svc, &*store, &engine);

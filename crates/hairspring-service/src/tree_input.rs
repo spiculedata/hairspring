@@ -302,6 +302,19 @@ mod tests {
     }
 
     #[test]
+    fn a_command_of_exactly_the_longest_size_is_accepted() {
+        // `{"a":""}` is 8 bytes; pad the value so the whole text is exactly the limit.
+        let at_limit = format!(r#"{{"a":"{}"}}"#, "x".repeat(MAX_COMMAND_JSON_BYTES - 8));
+        assert_eq!(at_limit.len(), MAX_COMMAND_JSON_BYTES);
+        assert_eq!(check_command_json(&at_limit), Ok(()));
+        let over = format!(r#"{{"a":"{}"}}"#, "x".repeat(MAX_COMMAND_JSON_BYTES - 7));
+        assert_eq!(
+            check_command_json(&over),
+            Err(TreeFieldError::CommandTooLong)
+        );
+    }
+
+    #[test]
     fn a_field_error_becomes_an_invalid_request_naming_the_field() {
         let e: ServiceError = TreeFieldError::BadDigest("edge_ref").into();
         assert!(matches!(&e, ServiceError::InvalidRequest(m) if m.contains("edge_ref")));

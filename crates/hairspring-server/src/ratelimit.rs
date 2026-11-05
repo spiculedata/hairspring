@@ -258,6 +258,80 @@ mod tests {
         assert!(limiter.is_over(&anonymous_key(v6(9, 77))));
     }
 
+    /// Gives each caller a distinct start time, so "the oldest" is never a tie.
+    fn pause_between_callers() {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    fn anon(i: u32) -> String {
+        anonymous_key(IpAddr::V4(Ipv4Addr::from(0x0a00_0000 + i)))
+    }
+
+    #[test]
+    fn a_full_table_of_live_token_windows_refuses_a_new_caller_and_keeps_every_count() {
+        let limiter = RateLimiter::with_capacity(1, LONG, 3);
+        for key in ["t:a", "t:b", "t:c"] {
+            assert!(limiter.check(key));
+        }
+        // Nothing has expired and tokens are never evicted, so there is no room.
+        assert!(!limiter.check("t:new"));
+        assert_eq!(limiter.len(), 3);
+        // The live windows were kept: each token is still over its limit of one.
+        for key in ["t:a", "t:b", "t:c"] {
+            assert!(!limiter.check(key), "{key}");
+        }
+    }
+
+    #[test]
+    fn expired_windows_are_dropped_to_make_room_for_a_new_caller() {
+        let limiter = RateLimiter::with_capacity(1, Duration::from_millis(20), 3);
+        for key in ["t:a", "t:b", "t:c"] {
+            assert!(limiter.check(key));
+        }
+        std::thread::sleep(Duration::from_millis(40));
+        assert!(limiter.check("t:new"));
+        assert_eq!(limiter.len(), 1, "the three expired windows were dropped");
+    }
+
+    #[test]
+    fn a_caller_already_in_a_full_table_does_not_cost_another_caller_its_window() {
+        let limiter = RateLimiter::with_capacity(1, LONG, 10);
+        for i in 0..10 {
+            assert!(limiter.check(&anon(i)));
+            pause_between_callers();
+        }
+        // The oldest caller is already in the table: it is counted again, nobody is evicted, and it stays limited.
+        assert!(!limiter.check(&anon(0)));
+        assert_eq!(limiter.len(), 10);
+    }
+
+    #[test]
+    fn a_new_anonymous_caller_is_admitted_by_evicting_exactly_the_oldest_tenth() {
+        let limiter = RateLimiter::with_capacity(5, LONG, 100);
+        for i in 0..100 {
+            assert!(limiter.check(&anon(i)));
+            pause_between_callers();
+        }
+        assert_eq!(limiter.len(), 100);
+        assert!(limiter.check(&anon(1_000)));
+        assert_eq!(limiter.len(), 91, "ten evicted, one added");
+        // The oldest ten went; the eleventh oldest kept its one count, so four of its five calls remain.
+        for i in 0..4 {
+            assert!(limiter.check(&anon(10)), "call {i}");
+        }
+        assert!(!limiter.check(&anon(10)));
+    }
+
+    #[test]
+    fn the_smallest_table_still_evicts_one_anonymous_window_to_admit_a_new_one() {
+        let limiter = RateLimiter::with_capacity(1, LONG, 3);
+        for i in 0..3 {
+            assert!(limiter.check(&anon(i)));
+        }
+        assert!(limiter.check(&anon(9)));
+        assert_eq!(limiter.len(), 3);
+    }
+
     #[test]
     fn a_window_that_has_expired_starts_again() {
         let limiter = RateLimiter::with_capacity(1, Duration::from_millis(20), 100);
