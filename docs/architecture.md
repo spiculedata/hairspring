@@ -613,7 +613,7 @@ figures. There is no schema change.
 ## Search
 
 `GET /api/search?q=...` (any valid token, rate limited like every `/api/` route except health) answers "where is this
-id?" and nothing larger. The text, the groups and the answer are described in the quickstart; this section is about what
+id?" and nothing larger. The text, the groups and the answer are described in [api.md](api.md#get-apisearchq); this section is about what
 a request costs, because a search box sends a request for every pause in typing.
 
 The service checks the text (1 to 64 characters from ASCII letters, digits and `_ - . : /`) before any query runs, and
