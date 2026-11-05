@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetMeForTests } from '../meStore';
 import type { Run } from '../types';
 import { Runs } from './Runs';
 
@@ -25,7 +26,11 @@ const runUrls = (fetchMock: ReturnType<typeof vi.fn>): string[] =>
 
 /** Answers the runs list with `list`, and the targets the start form asks for with none. */
 const serve = (list: (url: string) => Response) =>
-  vi.fn(async (url: string) => (url.startsWith('/api/targets') ? json({ targets: [] }) : list(url)));
+  vi.fn(async (url: string) => {
+    if (url.startsWith('/api/targets')) return json({ targets: [] });
+    if (url === '/api/me') return json({ error: 'not found' }, 404);
+    return list(url);
+  });
 
 /** The filter bar, apart from the start form above it, which has a target of its own. */
 const bar = () => within(screen.getByRole('search', { name: 'Filter runs' }));
@@ -33,9 +38,13 @@ const bar = () => within(screen.getByRole('search', { name: 'Filter runs' }));
 const rows = (container: HTMLElement): number => container.querySelectorAll('table.runs tbody tr').length;
 
 describe('Runs page', () => {
-  beforeEach(() => window.history.replaceState({}, '', '/runs'));
+  beforeEach(() => {
+    resetMeForTests();
+    window.history.replaceState({}, '', '/runs');
+  });
   afterEach(() => {
     cleanup();
+    resetMeForTests();
     vi.unstubAllGlobals();
     window.history.replaceState({}, '', '/');
   });
@@ -157,5 +166,29 @@ describe('Runs page', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe.each([
+    ['with no state filter', '/runs', 4],
+    ['with a state filter', '/runs?state=running', 3],
+  ])('a run pushed off the newest page by a newer one, %s', (_name, address, expectedRows) => {
+    it('is kept only when no filter can have taken it out of the list', async () => {
+      window.history.replaceState({}, '', address);
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        let head: Run[] = [run(5), run(4)];
+        vi.stubGlobal('fetch', serve((url) => json(url.includes('cursor=') ? { runs: [run(1)] } : { runs: head, next_cursor: '2' })));
+        const { container } = render(<Runs />);
+        await waitFor(() => expect(rows(container)).toBe(2));
+        fireEvent.click(screen.getByRole('button', { name: /load more/i }));
+        await waitFor(() => expect(rows(container)).toBe(3));
+        head = [run(6), run(4)];
+        await vi.advanceTimersByTimeAsync(2100);
+        await waitFor(() => expect(container.querySelector('table.runs tbody')?.textContent).toContain('run_0000000000000006'));
+        expect(rows(container)).toBe(expectedRows);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

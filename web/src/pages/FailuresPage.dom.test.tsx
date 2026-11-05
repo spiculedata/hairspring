@@ -179,4 +179,31 @@ describe('FailuresPage', () => {
     const { container } = render(<FailuresPage />);
     await waitFor(() => expect(container.textContent).toContain('Could not load failures: `status` is not valid'));
   });
+
+  describe.each([
+    ['with no state filter', '/failures', 4],
+    ['with a state filter', '/failures?status=confirmed', 3],
+  ])('a failure pushed off the newest page by a newer one, %s', (_name, address, expectedRows) => {
+    it('is kept only when no filter can have taken it out of the list', async () => {
+      window.history.replaceState({}, '', address);
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        let head: FailureSummary[] = [row('f_5', 5), row('f_4', 4)];
+        vi.stubGlobal(
+          'fetch',
+          vi.fn(async (url: string) => json(url.includes('cursor=') ? { failures: [row('f_1', 1)] } : { failures: head, next_cursor: '2' })),
+        );
+        const { container } = render(<FailuresPage />);
+        await waitFor(() => expect(container.querySelectorAll('tbody tr')).toHaveLength(2));
+        fireEvent.click(screen.getByRole('button', { name: /load more/i }));
+        await waitFor(() => expect(container.querySelectorAll('tbody tr')).toHaveLength(3));
+        head = [row('f_6', 6), row('f_4', 4)];
+        await vi.advanceTimersByTimeAsync(5100);
+        await waitFor(() => expect(container.querySelector('tbody')?.textContent).toContain('f_6'));
+        expect(container.querySelectorAll('tbody tr')).toHaveLength(expectedRows);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });

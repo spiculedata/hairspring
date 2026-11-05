@@ -12,8 +12,9 @@
 .load-more button { min-height: 2.5rem; }
 .load-more button[aria-disabled="true"] { opacity: .5; cursor: default; }
 .load-more p[tabindex="-1"]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-/* The State column holds a badge that does not wrap by default; let it, so a phone screen does not scroll sideways. */
-table.failures .badge { white-space: normal; overflow-wrap: anywhere; }
+/* The State column holds a badge that does not wrap by default. Let it wrap between words only (a cell breaks anywhere
+   otherwise); the table region scrolls sideways on a narrow screen. */
+table.failures .badge { white-space: normal; overflow-wrap: normal; word-break: normal; }
 /* Phones: one control per line, each as wide as the screen allows, so nothing makes the page scroll sideways. */
 @media (max-width: 640px) {
   .list-filters { display: grid; grid-template-columns: minmax(0, 1fr); }

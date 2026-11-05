@@ -63,6 +63,11 @@ describe('LoadMore', () => {
     expect(document.activeElement).toBe(note);
   });
 
+  it('does not say "All 1 runs" for a single row', () => {
+    render(<LoadMore {...base} hasMore={false} moreLoads={1} shown={1} />);
+    expect(screen.getByText('The only run is shown.')).toBeTruthy();
+  });
+
   it('leaves focus alone when the last page arrives and the button did not have it', () => {
     const { rerender } = render(<LoadMore {...base} />);
     rerender(<LoadMore {...base} hasMore={false} moreLoads={1} shown={80} />);

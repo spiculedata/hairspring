@@ -49,7 +49,8 @@ export function problemText(problem: FilterProblem): string {
 
 export const loadMoreRuns = (shown: number): string => `Load more runs (${formatCount(shown)} shown)`;
 export const loadMoreFailures = (shown: number): string => `Load more failures (${formatCount(shown)} shown)`;
-export const allShown = (shown: number, what: 'runs' | 'failures'): string => `All ${formatCount(shown)} ${what} are shown.`;
+export const allShown = (shown: number, what: 'runs' | 'failures'): string =>
+  shown === 1 ? `The only ${what === 'runs' ? 'run' : 'failure'} is shown.` : `All ${formatCount(shown)} ${what} are shown.`;
 /** The server reads a list down to a fixed depth; a filter reaches what lies beyond it. */
 export const LIST_DEPTH_REACHED = 'That is as far back as this list can be read. Narrow it with a filter to see older ones.';
 export const LOADING_MORE = 'Loading more…';
