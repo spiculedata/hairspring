@@ -234,3 +234,30 @@ fn a_bundle_that_lists_only_known_fields_behaves_as_before() {
     let out = check(&bundle, &now(), false).unwrap();
     assert_eq!((out.differs, out.warnings), (false, vec![]));
 }
+
+#[test]
+fn a_concrete_change_is_reported_before_the_unknown_field_line() {
+    let listed = "env.base_env,env.guest.passed,hermit.future_flag,hermit.path.sha256,host.container,host.kernel_release,host.loader.ld_so_cache.sha256,target.command.sha256,target.cwd.sha256";
+    let current = identity_of(&with(&[("host.kernel_release", "6.9.1")]));
+    let out = check(&bundle_listing(listed), &current, false).unwrap();
+    assert_eq!(out.warnings.len(), 2, "{:?}", out.warnings);
+    assert!(
+        out.warnings[0].contains("host.kernel_release"),
+        "{:?}",
+        out.warnings
+    );
+    assert!(out.warnings[1].contains("does not know (hermit.future_flag)"));
+}
+
+#[test]
+fn the_no_list_case_also_says_may_have_been_written() {
+    let bundle = now()
+        .apply_to(Bundle::new(1, "b", vec![]))
+        .with_param("host.future_fact", "1");
+    let out = check(&bundle, &now(), false).unwrap();
+    assert!(out.differs);
+    assert!(out
+        .warnings
+        .iter()
+        .any(|w| w.contains("may have been written by a newer build")));
+}

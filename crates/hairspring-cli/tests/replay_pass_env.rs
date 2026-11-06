@@ -77,7 +77,8 @@ impl Recorded {
     fn old(&self) -> String {
         self.bundle
             .lines()
-            .filter(|l| !l.starts_with(PASSED_LINE))
+            // An engine from before the field also predates the list of recorded fields.
+            .filter(|l| !l.starts_with(PASSED_LINE) && !l.starts_with("param.env.fields="))
             .map(|l| format!("{l}\n"))
             .collect()
     }

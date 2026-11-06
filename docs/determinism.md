@@ -249,14 +249,22 @@ does not know, either in that list or as a param in a namespace it owns (`host.`
 says so and treats it as a change:
 
 - `warning: environment differs: this bundle records environment fields this build does not know (<names>); it was
-  written by a newer build, so upgrade Hairspring to compare them`. The replay still runs. If it reproduces the
+  may have been written by a newer build, so upgrade Hairspring to compare them`. The replay still runs. If it reproduces the
   failure, that stands (exit `1`). If it does not, the miss is a changed environment (exit `3`), never `NOT
   reproduced`. Up to eight names are listed and the rest counted.
 - An unknown field is `must-match` unless the bundle's own list marks it `~` (informational), because a build cannot
   judge a field it cannot read. An unknown informational field is ignored.
-- A list that cannot be read (an empty entry, an unsafe or over-long name, more than 4096 characters) is reported as a
-  malformed field and counts as changed. A param name that cannot be shown safely is reported as `(unreadable field
-  name)`, not echoed.
+- A build ignores `~` on a field it does know: it applies its own rule for that field, so a `~` in a bundle never
+  makes a known field informational.
+- An unknown field is never a reason to refuse the replay, including an unknown `host.loader.` field: only a changed
+  hash of a loader field this build knows is refused. An unknown field only turns a miss into exit `3`.
+- A list that cannot be read is reported as a malformed field and counts as changed. That covers an empty entry, an
+  unsafe or over-long name (over 64 characters), a list of more than 4096 characters, a name listed twice (with or
+  without `~`, in either order), and a known field that the list names but the bundle does not record (shown as
+  `<name> (listed, not recorded)`). A param name that cannot be shown safely is reported as `(unreadable field name)`,
+  not echoed.
+- When a replay or confirmation also finds a concrete change, that line comes first and the unknown-field line after it;
+  a confirmation's summary joins both.
 - Known fields are compared exactly as before, so a bundle with the list and nothing unknown replays with no new
   warning.
 

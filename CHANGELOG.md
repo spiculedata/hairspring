@@ -27,10 +27,11 @@
 
 - Replaying a bundle that records an environment field this build does not know no longer ends in `NOT reproduced`.
   Bundles now carry `param.env.fields`, the list of the environment fields they recorded; a build that finds a name it
-  does not know (in that list, or as a `host.`, `hermit.`, `env.` or `target.` param) warns that the bundle was written
-  by a newer build and counts it as a changed environment, so a replay that does not reproduce exits `3`, and one that
+  does not know (in that list, or as a `host.`, `hermit.`, `env.` or `target.` param) warns that the bundle may have been
+  written by a newer build and counts it as a changed environment, so a replay that does not reproduce exits `3`, and one that
   reproduces still exits `1`. An unknown field is treated as one that must match unless the bundle marks it
-  informational. Builds from before this change do not read the list and cannot give this protection. The environment
+  informational. A list that names a field twice, or names a known field the bundle does not record, counts as changed.
+  Builds from before this change do not read the list and cannot give this protection. The environment
   fields are now declared in a registry, one table per owner, with a comparison rule each; all existing fields keep
   their names, value forms and results.
 - A worker's failure report is now refused when the bundle it carries names a different target from the failure's, and

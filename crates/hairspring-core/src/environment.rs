@@ -24,6 +24,7 @@ pub const MAX_LISTED_CHANGES: usize = 8;
 const SHORT_HASH_CHARS: usize = 12;
 const HASH_FIELD_SUFFIX: &str = ".sha256";
 /// Shown in place of a field name that cannot be shown safely.
+const LISTED_NOT_RECORDED: &str = "listed, not recorded";
 const UNREADABLE_NAME: &str = "(unreadable field name)";
 
 pub fn is_known_field(name: &str) -> bool {
@@ -96,7 +97,7 @@ fn validate(registry: &Registry, name: &str, value: &str) -> Result<(), EnvError
 pub struct ParsedEnvironment {
     pub identity: Option<EnvironmentIdentity>,
     pub malformed: Vec<String>,
-    /// Fields the bundle records (or lists) that no owner in the registry declares: written by a newer build. They are
+    /// Fields the bundle records (or lists) that no owner in the registry declares: possibly written by a newer build. They are
     /// never compared, since this build cannot read them; see [`ParsedEnvironment::unknown_must_match`].
     pub unknown: Vec<Listed>,
 }
@@ -136,7 +137,7 @@ impl ParsedEnvironment {
             list.push(format!("and {} more", names.len() - MAX_LISTED_CHANGES));
         }
         Some(format!(
-            "environment differs: this bundle records environment fields this build does not know ({}); it was written by a newer build, so upgrade Hairspring to compare them",
+            "environment differs: this bundle records environment fields this build does not know ({}); it may have been written by a newer build, so upgrade Hairspring to compare them",
             list.join(", ")
         ))
     }
@@ -245,8 +246,12 @@ fn unknown_fields(
     if let Some(value) = bundle.params.get(FIELD_LIST_PARAM) {
         match fieldset::parse(value) {
             Some(listed) => {
-                for entry in listed.into_iter().filter(|e| !registry.is_known(&e.name)) {
-                    found.insert(entry.name, entry.rule);
+                for entry in listed {
+                    if !registry.is_known(&entry.name) {
+                        found.insert(entry.name, entry.rule);
+                    } else if !bundle.params.contains_key(&entry.name) {
+                        malformed.push(format!("{} ({LISTED_NOT_RECORDED})", entry.name));
+                    }
                 }
             }
             None => malformed.push(FIELD_LIST_PARAM.to_string()),

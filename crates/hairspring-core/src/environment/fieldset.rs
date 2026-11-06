@@ -44,12 +44,13 @@ pub fn render<'a>(fields: impl Iterator<Item = (&'a str, Rule)>) -> String {
 }
 
 /// The names in a list, or `None` when it is not a well-formed list (too long, an empty entry, a name that cannot be
-/// carried). A list that cannot be read is not guessed at.
+/// carried, a name listed twice). A list that cannot be read is not guessed at; in particular a name listed both with
+/// and without the informational mark has no single reading, so the order of the entries never decides it.
 pub fn parse(value: &str) -> Option<Vec<Listed>> {
     if value.len() > MAX_MARKER_CHARS {
         return None;
     }
-    value
+    let listed: Vec<Listed> = value
         .split(SEPARATOR)
         .map(|entry| {
             let (name, rule) = match entry.strip_prefix(INFORMATIONAL_PREFIX) {
@@ -61,5 +62,10 @@ pub fn parse(value: &str) -> Option<Vec<Listed>> {
                 rule,
             })
         })
-        .collect()
+        .collect::<Option<_>>()?;
+    let mut seen = std::collections::BTreeSet::new();
+    listed
+        .iter()
+        .all(|l| seen.insert(l.name.as_str()))
+        .then_some(listed)
 }

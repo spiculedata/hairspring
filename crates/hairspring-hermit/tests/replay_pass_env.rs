@@ -97,7 +97,8 @@ fn without_the_field(bundle: Bundle) -> Bundle {
         params: bundle
             .params
             .iter()
-            .filter(|(k, _)| k.as_str() != PASSED)
+            // A bundle from before the field also predates the list of recorded fields.
+            .filter(|(k, _)| k.as_str() != PASSED && k.as_str() != "env.fields")
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
         ..bundle

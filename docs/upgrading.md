@@ -135,6 +135,16 @@ results you want to keep, and restore a backup instead.
 If you only want to try a newer build without touching your results, run it with a different database (`--db`) in a
 different directory.
 
+### Bundles from a newer build
+
+A bundle written by a newer build can record environment fields an older build does not know. A build with this check
+says so when you replay it: `warning: environment differs: this bundle records environment fields this build does not
+know (...); it may have been written by a newer build, so upgrade Hairspring to compare them`. If the replay still
+reproduces the failure, that stands. If it does not, the result is exit `3` (inconclusive), not `NOT reproduced`:
+upgrade and replay again. Builds from before this check do not give the warning and can print `NOT reproduced` for such
+a bundle, so replay bundles that came from a newer build with a current build. See
+[determinism.md](determinism.md#bundles-written-by-a-newer-build).
+
 ## Uninstall
 
 What Hairspring writes outside a project directory, from `scripts/install.sh` and `scripts/install-hermit.sh`:

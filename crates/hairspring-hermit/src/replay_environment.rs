@@ -104,7 +104,6 @@ pub fn check(
     let parsed = EnvironmentIdentity::from_bundle(bundle);
     let comparison = compare(parsed.identity.as_ref(), current);
     let mut warnings: Vec<String> = parsed.warning().into_iter().collect();
-    warnings.extend(parsed.unknown_warning());
     // A field that could not be read cannot be checked, so it counts as a change: it must not let a miss pass as a fix.
     // The same goes for a field this build does not know: it was written by a newer build and cannot be compared.
     let tampered = parsed.is_partly_unreadable();
@@ -129,6 +128,7 @@ pub fn check(
         warnings.extend(target_not_recorded(recorded));
     }
     warnings.extend(comparison.warning());
+    warnings.extend(parsed.unknown_warning());
     warnings.extend(guest_passed_note(&comparison));
     let target_changed = changed_target_fields(&comparison);
     if !target_changed.is_empty() {
