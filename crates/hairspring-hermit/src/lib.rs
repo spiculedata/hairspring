@@ -28,6 +28,8 @@ mod pass_env_warning;
 mod program;
 mod property_verdict;
 mod replay_environment;
+#[cfg(test)]
+mod replay_environment_table_tests;
 mod safe_open;
 mod schedule_set;
 #[cfg(test)]
