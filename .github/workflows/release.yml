@@ -52,6 +52,12 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+    # In a container job GitHub runs `run:` steps with `sh -e` (dash here), not bash, so `${VAR:0:7}` and the like fail
+    # with "Bad substitution". Select bash explicitly, with the same flags the macOS job gets by default.
+    # scripts/check-workflow-shells.sh fails CI if a container job loses this.
+    defaults:
+      run:
+        shell: bash -e {0}
     steps:
       - name: Install build tools
         run: |

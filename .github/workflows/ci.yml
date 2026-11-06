@@ -433,6 +433,11 @@ jobs:
         run: shellcheck -S warning scripts/*.sh
       - name: Script tests
         run: bash scripts/test-scripts.sh
+      # A container job runs `run:` steps with sh (dash), not bash; every such job must select bash.
+      - name: Workflow shell check
+        run: |
+          bash scripts/check-workflow-shells.sh --self-test
+          bash scripts/check-workflow-shells.sh
       - name: Embedded-UI check script tests
         run: bash scripts/test-check-embedded-ui.sh
       # Offline: builds a fixture repository in a temporary directory and checks the report's parsing against it.
