@@ -68,7 +68,6 @@ pub use workers_view::{
 
 use hairspring_core::bundle::Bundle;
 pub use hairspring_engine::backend::ReplayOptions;
-use hairspring_engine::config::TargetKind;
 use hairspring_engine::engine::Engine;
 use hairspring_engine::mode::RunMode;
 use hairspring_engine::report::{FailureReport, ReplayOutcome, RunOutcome, RunStatus, Step};
@@ -145,14 +144,6 @@ fn new_secret() -> Result<String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-fn backend_name(kind: &TargetKind) -> &'static str {
-    match kind {
-        TargetKind::Sim { .. } => "sim",
-        TargetKind::Process { .. } => "hermit",
-        TargetKind::Wasm { .. } => "wasm",
-    }
-}
-
 fn summary(f: &FailureRecord) -> FailureSummary {
     FailureSummary {
         id: f.id.clone(),
@@ -204,6 +195,8 @@ impl Service {
                 kind: t.kind.name().to_string(),
                 description: t.description.clone(),
                 budget: t.budget,
+                backend: t.kind.backend_id().to_string(),
+                capabilities: engine.backend_info(t).map(|info| info.capabilities),
             })
             .collect()
     }
@@ -247,7 +240,7 @@ impl Service {
         let run = self.store.create_run(
             &NewRun {
                 target: req.target.clone(),
-                backend: backend_name(&spec.kind).to_string(),
+                backend: spec.kind.backend_id().to_string(),
                 seed: payload.seed,
                 config_json: json.clone(),
             },

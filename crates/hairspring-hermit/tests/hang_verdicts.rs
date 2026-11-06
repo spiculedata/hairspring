@@ -67,6 +67,7 @@ fn engine_with_wall(
             hang_is_violation,
             parallelism: 1,
             pass_env: true,
+            backend: None,
         },
         budget: Budget {
             max_steps: 1,

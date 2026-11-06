@@ -26,6 +26,7 @@ fn process(name: &str) -> TargetSpec {
             hang_is_violation: false,
             parallelism: 1,
             pass_env: true,
+            backend: None,
         },
         budget: Budget::default(),
     }
@@ -43,7 +44,7 @@ struct Fake {
 }
 
 impl Backend for Fake {
-    fn name(&self) -> &'static str {
+    fn id(&self) -> &'static str {
         "hermit"
     }
     fn supports(&self, kind: &TargetKind) -> bool {

@@ -7,6 +7,23 @@ fn addr(text: &str) -> Result<PointAddress, AddressError> {
 }
 
 #[test]
+fn backend_names_and_schemes_come_from_one_list() {
+    assert_eq!(
+        BackendKind::ALL.map(BackendKind::as_str),
+        ["sim", "wasm", "hermit"]
+    );
+    for kind in BackendKind::ALL {
+        assert_eq!(BackendKind::from_id(kind.as_str()), Some(kind));
+        assert_eq!(kind.scheme(), format!("{}/1", kind.as_str()));
+        assert_eq!(BackendKind::from_scheme(kind.scheme()), Some(kind));
+    }
+    assert_eq!(BackendKind::from_id("qemu"), None);
+    assert_eq!(BackendKind::from_id("Hermit"), None);
+    assert_eq!(BackendKind::from_scheme("hermit/2"), None);
+    assert_eq!(BackendKind::from_scheme("hermit"), None);
+}
+
+#[test]
 fn parses_each_cut_kind() {
     let end = addr("p1~run_0123456789abcdef~7~end").unwrap();
     assert_eq!((end.run_id(), end.seq(), end.cut()), (RUN, 7, Cut::End));

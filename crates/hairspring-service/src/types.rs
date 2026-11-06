@@ -30,6 +30,11 @@ pub struct TargetInfo {
     pub kind: String,
     pub description: String,
     pub budget: Budget,
+    /// The id of the backend that runs the target.
+    pub backend: String,
+    /// What that backend can do, or `None` when this server's engine has no usable backend for the target (a worker
+    /// that has one may still run it).
+    pub capabilities: Option<hairspring_engine::backend_info::Capabilities>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

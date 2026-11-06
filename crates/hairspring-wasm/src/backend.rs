@@ -1,6 +1,8 @@
 use crate::vm::{CompiledModule, RunResult, VmConfig, WasmVm};
 use hairspring_core::bundle::Bundle;
+use hairspring_core::point::BackendKind;
 use hairspring_engine::backend::{Backend, Progress, RunRequest};
+use hairspring_engine::backend_info::{BackendVersion, Capabilities};
 use hairspring_engine::config::{Budget, TargetKind, TargetSpec};
 use hairspring_engine::report::{
     DoctorDivergence, DoctorReport, FailureReport, ReplayOutcome, RunOutcome, Step,
@@ -273,13 +275,13 @@ impl WasmBackend {
         let steps = steps_for(&final_vm, &final_result, fuel);
         let bundle = Bundle::new(seed, BUILD, minimal.clone())
             .with_target(loaded.req.target.clone())
-            .with_backend("wasm")
+            .with_backend(BackendKind::Wasm.as_str())
             .with_param("module_hash", loaded.hash.clone())
             .with_param("fuel", fuel.to_string())
             .with_param("failure_key", key.clone());
         FailureReport {
             target: loaded.spec.name.clone(),
-            backend: "wasm".to_string(),
+            backend: BackendKind::Wasm.as_str().to_string(),
             message: format!(
                 "{}; shrunk from {} to {} choices",
                 describe(&final_result, fuel),
@@ -295,8 +297,24 @@ impl WasmBackend {
 }
 
 impl Backend for WasmBackend {
-    fn name(&self) -> &'static str {
-        "wasm"
+    fn id(&self) -> &'static str {
+        BackendKind::Wasm.as_str()
+    }
+
+    fn display_name(&self) -> &'static str {
+        "WebAssembly"
+    }
+
+    fn version(&self) -> BackendVersion {
+        BackendVersion::new(env!("CARGO_PKG_VERSION"))
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            replay: true,
+            shrink: true,
+            ..Capabilities::default()
+        }
     }
 
     fn supports(&self, kind: &TargetKind) -> bool {

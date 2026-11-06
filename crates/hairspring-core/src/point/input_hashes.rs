@@ -6,6 +6,7 @@
 //! `key=` in the identity text). The values themselves never leave the draft.
 //!
 //! A digest of a short value can be guessed by trying candidates, so a store that keeps these must not serve them.
+use super::address::BackendKind;
 use super::encoding::sha256_hex;
 use super::identity::IdentityDraft;
 use super::identity_text::render_fields;
@@ -55,11 +56,10 @@ const HERMIT_FIELDS: [&str; 24] = [
 
 /// The field names a scheme records (not `scheme` itself), or `None` for a scheme this build does not know.
 pub fn known_fields(scheme: &str) -> Option<&'static [&'static str]> {
-    match scheme {
-        "sim/1" => Some(&SIM_FIELDS),
-        "wasm/1" => Some(&WASM_FIELDS),
-        "hermit/1" => Some(&HERMIT_FIELDS),
-        _ => None,
+    match BackendKind::from_scheme(scheme)? {
+        BackendKind::Sim => Some(&SIM_FIELDS),
+        BackendKind::Wasm => Some(&WASM_FIELDS),
+        BackendKind::Hermit => Some(&HERMIT_FIELDS),
     }
 }
 
@@ -81,7 +81,7 @@ impl IdentityDraft {
         missing.sort();
         missing.dedup();
         InputHashes {
-            scheme: format!("{}/1", self.backend().as_str()),
+            scheme: self.backend().scheme().to_string(),
             fields: pairs
                 .into_iter()
                 .map(|(key, value)| (key, sha256_hex(value.as_bytes())))

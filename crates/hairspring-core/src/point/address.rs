@@ -27,13 +27,36 @@ pub enum BackendKind {
 }
 
 impl BackendKind {
+    /// Every backend this build knows an identity for, in a fixed order. The one list that the service, the store and
+    /// the engine take backend names and identity schemes from.
+    pub const ALL: [BackendKind; 3] = [BackendKind::Sim, BackendKind::Wasm, BackendKind::Hermit];
+
     /// The backend name used in identity text and bundles.
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             BackendKind::Sim => "sim",
             BackendKind::Wasm => "wasm",
             BackendKind::Hermit => "hermit",
         }
+    }
+
+    /// The backend with this exact name, or `None`.
+    pub fn from_id(id: &str) -> Option<BackendKind> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == id)
+    }
+
+    /// The identity scheme this backend records (`<name>/1`).
+    pub fn scheme(self) -> &'static str {
+        match self {
+            BackendKind::Sim => "sim/1",
+            BackendKind::Wasm => "wasm/1",
+            BackendKind::Hermit => "hermit/1",
+        }
+    }
+
+    /// The backend that records this identity scheme, or `None` for a scheme this build does not know.
+    pub fn from_scheme(scheme: &str) -> Option<BackendKind> {
+        Self::ALL.into_iter().find(|kind| kind.scheme() == scheme)
     }
 }
 

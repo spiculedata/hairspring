@@ -40,7 +40,10 @@ string_enum!(NodeOrigin { Server => "server", Exploration => "exploration", Poin
 string_enum!(Verified { No => "no", ReplayOk => "replay_ok", ReplayMismatch => "replay_mismatch" });
 string_enum!(SeedSource { ServerRandom => "server_random", Caller => "caller" });
 
-pub(crate) const IDENTITY_SCHEMES: [&str; 3] = ["sim/1", "wasm/1", "hermit/1"];
+/// Whether `scheme` is the identity scheme of a backend this build knows.
+pub(crate) fn is_identity_scheme(scheme: &str) -> bool {
+    hairspring_core::point::BackendKind::from_scheme(scheme).is_some()
+}
 
 /// Why the store refused a tree, node, branch or identity. Nothing was written.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -342,7 +345,7 @@ fn text_ok(s: &str, max: usize) -> bool {
 }
 
 pub(crate) fn check_identity(id: &RunIdentity) -> std::result::Result<(), TreeRejection> {
-    if !IDENTITY_SCHEMES.contains(&id.scheme.as_str()) {
+    if !is_identity_scheme(&id.scheme) {
         return Err(TreeRejection::Invalid("unknown identity scheme"));
     }
     if !text_ok(&id.identity_text, MAX_IDENTITY_TEXT_BYTES) {

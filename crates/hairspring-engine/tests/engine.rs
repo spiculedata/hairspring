@@ -222,7 +222,7 @@ fn engine_rejects_unknown_targets_and_missing_backends() {
     let e2 = Engine::new(registry, cfg);
     assert!(matches!(
         e2.run(&RunRequest::new("p", 1), &mut |_| true),
-        Err(EngineError::BackendUnavailable(_))
+        Err(EngineError::BackendChoice(_))
     ));
 }
 
@@ -336,7 +336,7 @@ fn doctor_rejects_unknown_targets_and_unsupported_backends() {
     let cfg = Config::parse("[target.p]\nkind=\"process\"\ncommand=[\"/bin/true\"]\n").unwrap();
     assert!(matches!(
         Engine::new(registry, cfg).doctor("p", 1, 1),
-        Err(EngineError::BackendUnavailable(_))
+        Err(EngineError::BackendChoice(_))
     ));
 }
 

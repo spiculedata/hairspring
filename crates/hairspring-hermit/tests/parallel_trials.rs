@@ -57,6 +57,7 @@ fn engine(dir: &Path, script: &str, trials: u64, parallelism: u32, timeout: Opti
             hang_is_violation: false,
             parallelism,
             pass_env: true,
+            backend: None,
         },
         budget: Budget {
             max_steps: 1,

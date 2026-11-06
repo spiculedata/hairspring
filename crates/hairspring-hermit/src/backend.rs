@@ -10,8 +10,10 @@ use crate::trace::{behaviour_hash, classify, steps, Verdict, HASH_SCHEME};
 use crate::HermitSettings;
 use hairspring_core::bundle::Bundle;
 use hairspring_core::environment::EnvironmentIdentity;
+use hairspring_core::point::BackendKind;
 use hairspring_engine::backend::{Backend, Progress, ReplayOptions, RunRequest};
-use hairspring_engine::config::{Budget, TargetKind, TargetSpec};
+use hairspring_engine::backend_info::{BackendLimits, BackendVersion, Capabilities};
+use hairspring_engine::config::{Budget, TargetKind, TargetSpec, MAX_PARALLELISM};
 use hairspring_engine::confirm::{CheckResult, ConfirmRequest};
 use hairspring_engine::report::{
     DoctorDivergence, DoctorReport, FailureReport, ReplayOutcome, RunOutcome,
@@ -208,6 +210,7 @@ impl HermitBackend {
                 hang_is_violation,
                 parallelism,
                 pass_env,
+                backend: _,
             } => Ok(ProcessSpec {
                 target: &spec.name,
                 command,
@@ -378,7 +381,7 @@ impl HermitBackend {
         }
         let mut bundle = Bundle::new(seed, BUILD, vec![])
             .with_target(req.target.clone())
-            .with_backend("hermit")
+            .with_backend(BackendKind::Hermit.as_str())
             .with_param("sched_seed", seed.to_string())
             .with_param("epoch", self.settings.epoch.clone())
             .with_param("heuristic", p.scheduler.effective_heuristic().name())
@@ -410,7 +413,7 @@ impl HermitBackend {
         );
         FailureReport {
             target: spec.name.clone(),
-            backend: "hermit".to_string(),
+            backend: BackendKind::Hermit.as_str().to_string(),
             message,
             original_len: steps.len(),
             shrunk_len: steps.len(),
@@ -638,8 +641,34 @@ fn infra(msg: impl Into<String>) -> RunOutcome {
 }
 
 impl Backend for HermitBackend {
-    fn name(&self) -> &'static str {
-        "hermit"
+    fn id(&self) -> &'static str {
+        BackendKind::Hermit.as_str()
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Hermit"
+    }
+
+    fn version(&self) -> BackendVersion {
+        // The Hermit program's own version and hash are not listed: reading them would start it.
+        BackendVersion::new(env!("CARGO_PKG_VERSION"))
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            replay: true,
+            confirm: true,
+            strict_verify: true,
+            multi_process: true,
+            ..Capabilities::default()
+        }
+    }
+
+    fn limits(&self) -> BackendLimits {
+        BackendLimits {
+            max_parallelism: Some(MAX_PARALLELISM),
+            max_trial_seconds: None,
+        }
     }
 
     fn supports(&self, kind: &TargetKind) -> bool {

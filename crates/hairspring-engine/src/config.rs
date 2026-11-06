@@ -2,6 +2,7 @@
 use crate::erased::Registry;
 use crate::hermit_args::{is_passable_name, pass_through_active, ENGINE_OWNED_VARS};
 use crate::scheduler::{check_hermit_args, Heuristic, SchedulerSpec};
+use hairspring_core::point::BackendKind;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -11,7 +12,8 @@ const MAX_STEPS_CAP: u64 = 50_000_000;
 pub const MAX_TRIALS_CAP: u64 = 10_000;
 const MAX_WALL_SECS_CAP: u64 = 600;
 const MAX_NAME_LEN: usize = 64;
-const MAX_PARALLELISM: u32 = 64;
+/// Most trials a process target may run at the same time.
+pub const MAX_PARALLELISM: u32 = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -65,13 +67,34 @@ pub enum TargetKind {
         /// Under `--base-env=minimal` or `empty`, name the variables Hairspring sets (and the target's `env`) with
         /// `--env=NAME` so Hermit passes them to the guest. `false` is the behaviour before that existed.
         pass_env: bool,
+        /// The backend that runs the target, by id. `None` means the default for process targets, Hermit, so every
+        /// config written before the key existed means what it always did.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        backend: Option<String>,
     },
     Wasm {
         module: String,
     },
 }
 
+/// The backends that can run a `process` target. A config may name one of these as `backend`.
+pub const PROCESS_BACKENDS: [BackendKind; 1] = [BackendKind::Hermit];
+
+/// The backend a process target uses when its config names none.
+pub const DEFAULT_PROCESS_BACKEND: BackendKind = BackendKind::Hermit;
+
 impl TargetKind {
+    /// The id of the backend that runs this kind of target: the one the config names, or the kind's default.
+    pub fn backend_id(&self) -> &str {
+        match self {
+            TargetKind::Sim { .. } => BackendKind::Sim.as_str(),
+            TargetKind::Wasm { .. } => BackendKind::Wasm.as_str(),
+            TargetKind::Process { backend, .. } => backend
+                .as_deref()
+                .unwrap_or(DEFAULT_PROCESS_BACKEND.as_str()),
+        }
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             TargetKind::Sim { .. } => "sim",
@@ -142,6 +165,7 @@ struct RawTarget {
     hang_is_violation: Option<bool>,
     parallelism: Option<u32>,
     pass_env: Option<bool>,
+    backend: Option<String>,
     module: Option<String>,
     #[serde(default)]
     budget: Budget,
@@ -197,6 +221,22 @@ fn check_env(
     Ok(())
 }
 
+/// The `backend` key of a process target. Only an id that can run process targets is accepted, and the message never
+/// repeats the value, which is text from a file.
+fn process_backend(target: &str, backend: Option<String>) -> Result<Option<String>, ConfigError> {
+    let Some(id) = backend else {
+        return Ok(None);
+    };
+    if PROCESS_BACKENDS.iter().any(|known| known.as_str() == id) {
+        return Ok(Some(id));
+    }
+    let known: Vec<&str> = PROCESS_BACKENDS.iter().map(|b| b.as_str()).collect();
+    Err(ConfigError::Invalid(format!(
+        "target `{target}`: unknown `backend` for a process target; known: {}",
+        known.join(", ")
+    )))
+}
+
 fn convert(name: String, raw: RawTarget) -> Result<TargetSpec, ConfigError> {
     if !valid_name(&name) {
         return Err(ConfigError::Invalid(format!(
@@ -215,6 +255,11 @@ fn convert(name: String, raw: RawTarget) -> Result<TargetSpec, ConfigError> {
             "target `{name}`: scheduler options (heuristic, chaos, ...), hang_is_violation, parallelism and pass_env are only valid for kind = \"process\""
         )));
     }
+    if !matches!(raw.kind, RawKind::Process) && raw.backend.is_some() {
+        return Err(ConfigError::Invalid(format!(
+            "target `{name}`: `backend` is only valid for kind = \"process\""
+        )));
+    }
     let kind = match raw.kind {
         RawKind::Sim => TargetKind::Sim {
             sim: raw
@@ -231,6 +276,7 @@ fn convert(name: String, raw: RawTarget) -> Result<TargetSpec, ConfigError> {
                 .validate()
                 .and_then(|()| check_hermit_args(&raw.hermit_args))
                 .map_err(|m| ConfigError::Invalid(format!("target `{name}`: {m}")))?;
+            let backend = process_backend(&name, raw.backend)?;
             let pass_env = raw.pass_env.unwrap_or(true);
             check_env(&name, &raw.env, &raw.hermit_args, pass_env)?;
             let parallelism = raw.parallelism.unwrap_or(1);
@@ -249,6 +295,7 @@ fn convert(name: String, raw: RawTarget) -> Result<TargetSpec, ConfigError> {
                 hang_is_violation: raw.hang_is_violation.unwrap_or(false),
                 parallelism,
                 pass_env,
+                backend,
             }
         }
         RawKind::Wasm => TargetKind::Wasm {

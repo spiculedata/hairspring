@@ -1,3 +1,4 @@
+use crate::backend_info::{BackendInfo, BackendLimits, BackendVersion, Capabilities};
 use crate::config::{Budget, TargetKind, TargetSpec};
 use crate::confirm::{CheckResult, ConfirmRequest};
 use crate::mode::RunMode;
@@ -55,7 +56,35 @@ pub struct ReplayOptions {
 ///
 /// A backend: knows how to run and replay one or more target kinds.
 pub trait Backend: Send + Sync {
-    fn name(&self) -> &'static str;
+    /// The id the config, the engine's routing, bundles and stored runs name this backend by. Fixed for the life of
+    /// the backend, and unique among the backends one engine holds.
+    fn id(&self) -> &'static str;
+    /// A short name for people. The id when the backend does not say more.
+    fn display_name(&self) -> &'static str {
+        self.id()
+    }
+    /// Which build this is. The default is the engine crate's own version; a backend in its own crate says its own.
+    fn version(&self) -> BackendVersion {
+        BackendVersion::new(env!("CARGO_PKG_VERSION"))
+    }
+    /// What this backend can do. The default claims nothing.
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
+    /// The bounds this backend states. The default states none.
+    fn limits(&self) -> BackendLimits {
+        BackendLimits::default()
+    }
+    /// Everything above in one value, for listings.
+    fn info(&self) -> BackendInfo {
+        BackendInfo {
+            id: self.id().to_string(),
+            display_name: self.display_name().to_string(),
+            version: self.version(),
+            capabilities: self.capabilities(),
+            limits: self.limits(),
+        }
+    }
     fn supports(&self, kind: &TargetKind) -> bool;
     fn run(
         &self,
@@ -88,7 +117,7 @@ pub trait Backend: Send + Sync {
     ) -> Result<Vec<CheckResult>, EngineError> {
         Err(EngineError::BackendUnavailable(format!(
             "`confirm` is not supported by the {} backend",
-            self.name()
+            self.id()
         )))
     }
     /// What this backend knows about the inputs a run of `spec` executes with, before it starts, as a draft whose
@@ -106,7 +135,7 @@ pub trait Backend: Send + Sync {
     ) -> Result<DoctorReport, EngineError> {
         Err(EngineError::BackendUnavailable(format!(
             "`doctor` is not supported by the {} backend",
-            self.name()
+            self.id()
         )))
     }
 }

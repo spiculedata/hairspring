@@ -101,6 +101,7 @@ impl Setup {
                 hang_is_violation: false,
                 parallelism: 1,
                 pass_env: self.pass_env,
+                backend: None,
             },
             budget: Budget {
                 max_steps: 1,

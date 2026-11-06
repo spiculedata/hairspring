@@ -888,6 +888,7 @@ dependencies = [
 name = "hairspring-store"
 version = "0.1.0"
 dependencies = [
+ "hairspring-core",
  "postgres",
  "r2d2",
  "r2d2_postgres",

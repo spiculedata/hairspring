@@ -61,6 +61,7 @@ fn engine_with_bin(host: &Path, guest: &str, bin: PathBuf) -> Engine {
             hang_is_violation: false,
             parallelism: 1,
             pass_env: false,
+            backend: None,
         },
         budget: Budget {
             max_steps: 1,
@@ -90,6 +91,7 @@ fn engine_with_bin(host: &Path, guest: &str, bin: PathBuf) -> Engine {
                 scheduler: scheduler.clone(),
                 hang_is_violation: false,
                 pass_env: false,
+                backend: None,
                 parallelism: 1,
             },
             _ => unreachable!("the target above is a process target"),

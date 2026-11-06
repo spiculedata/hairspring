@@ -124,6 +124,7 @@ fn process_target() -> TargetSpec {
             scheduler: SchedulerSpec::default(),
             hang_is_violation: false,
             pass_env: false,
+            backend: None,
             parallelism: 1,
         },
         budget: Budget {

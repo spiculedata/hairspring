@@ -14,7 +14,8 @@ const HEADER_V1: &str = "hairspring-bundle v1";
 // Bundles written under the project's former name (Anthill) still decode.
 const LEGACY_HEADER_V2: &str = "anthill-bundle v2";
 const LEGACY_HEADER_V1: &str = "anthill-bundle v1";
-const DEFAULT_BACKEND: &str = "sim";
+/// The backend a bundle names when it names none (bundles written before the field existed): `sim`.
+const DEFAULT_BACKEND: &str = crate::point::BackendKind::Sim.as_str();
 const PARAM_PREFIX: &str = "param.";
 
 #[derive(Clone, Debug, PartialEq, Eq)]

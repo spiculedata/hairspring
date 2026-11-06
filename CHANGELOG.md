@@ -4,6 +4,16 @@
 
 ### Added
 
+- Backends are now chosen by id. A `process` target may carry an optional `backend` key; without it the target runs
+  under Hermit, as before, and every existing config means what it did. `"hermit"` is the only value accepted today; any
+  other value is refused when the config is read, and the message does not repeat it. A target is never moved to
+  another backend when the one it names is missing: the run stops with `backend choice refused: ...`. Two backends
+  registered under one id, or a backend that cannot run the target's kind, are refused the same way.
+- Each backend now states its identity (id, display name, version), its capabilities (`replay`, `confirm`, `shrink`,
+  `strict_verify`, `snapshot_branch`, `fault_injection`, `multi_process`, all `false` unless the backend has the
+  feature) and its limits. `GET /api/targets` and the MCP `list_targets` tool add `backend` and `capabilities` to each
+  target; `capabilities` is `null` when the server's engine has no usable backend for the target. The existing
+  fields are unchanged.
 - Confirming a failure from the web UI or the API, off by default. `hairspring serve --max-confirmations N` (0 to 4,
   default 0) turns on `POST /api/failures/{id}/confirm` for the `run` role. It runs the confirmation pipeline on the
   server's own engine with the defaults of `hairspring confirm` (3 reruns, 120 seconds) and stores the checks the same
@@ -34,6 +44,9 @@
   Builds from before this change do not read the list and cannot give this protection. The environment
   fields are now declared in a registry, one table per owner, with a comparison rule each; all existing fields keep
   their names, value forms and results.
+- The error for a target whose backend is not available in the build now reads `backend choice refused: backend
+  `hermit` is not available in this build`; it used to read `no backend available for target kind `process``. The
+  same words are used when a hand-built target names a backend this build does not know, without repeating the name.
 - A worker's failure report is now refused when the bundle it carries names a different target from the failure's, and
   every way of confirming a stored failure (the API, `hairspring confirm` by failure id or run id, `hairspring test
   --confirm`) refuses a stored failure whose bundle is for another target, before anything runs. `hairspring confirm

@@ -32,8 +32,8 @@ fn failure(seed: u64) -> FailureReport {
 struct Overreaching;
 
 impl Backend for Overreaching {
-    fn name(&self) -> &'static str {
-        "fake"
+    fn id(&self) -> &'static str {
+        "hermit"
     }
     fn supports(&self, kind: &TargetKind) -> bool {
         matches!(kind, TargetKind::Process { .. })
@@ -66,6 +66,7 @@ fn engine() -> Engine {
             hang_is_violation: false,
             parallelism: 1,
             pass_env: true,
+            backend: None,
         },
         budget: Budget {
             max_steps: 1,

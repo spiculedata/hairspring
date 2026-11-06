@@ -56,7 +56,7 @@ Roles are checked in the handler, from the router in `crates/hairspring-server/s
 |---|---|---|
 | `GET /api/health` | none | `{"status":"ok","version":"0.1.0"}`; adds `organisation` for a caller with a valid token (see below) |
 | `GET /api/me` | any valid token | who the server takes you to be, and what you may do |
-| `GET /api/targets` | `read` | the targets the server can run (its configuration and the built-in ones), with their budgets |
+| `GET /api/targets` | `read` | the targets the server can run (its configuration and the built-in ones), with their budgets, the backend that runs each one and what it can do |
 | `GET /api/runs` | `read` | runs, newest first, with [paging and filters](#paging-and-filters) |
 | `POST /api/runs` | `run` | start a search or a sweep |
 | `GET /api/runs/{id}` | `read` | one run, with its failures |
@@ -102,6 +102,26 @@ for a caller with a valid token, and for anyone when the server has no tokens. A
 counted against the rate limit like other requests; a request without an `Authorization` header is never limited and
 never refused. The rules are in [architecture.md](architecture.md#job-lifecycle) ("Requests to `/api/`") and
 [SECURITY.md](../SECURITY.md).
+
+## `GET /api/targets`
+
+Role `read`. The targets this server's configuration and built-in registry define, in name order:
+
+```json
+{"targets":[{"backend":"hermit","budget":{"max_steps":200000,"max_trials":200,"wall_secs":60},"capabilities":{"confirm":true,"fault_injection":false,"multi_process":true,"replay":true,"shrink":false,"snapshot_branch":false,"strict_verify":true},"description":"","kind":"process","name":"checkout"},{"backend":"sim","budget":{"max_steps":200000,"max_trials":200,"wall_secs":60},"capabilities":{"confirm":false,"fault_injection":false,"multi_process":false,"replay":true,"shrink":true,"snapshot_branch":false,"strict_verify":false},"description":"Lease-based lock service; a paused client writes after its lease expired (split brain)","kind":"sim","name":"lock-lease"}]}
+```
+
+(Two of the targets, from a scratch server whose config defined only `checkout`.) `name`, `kind`, `description` and
+`budget` are as they always were. `backend` and `capabilities` were added later and are additive:
+
+- `backend` is the id of the backend that runs the target: `sim`, `wasm`, or for a `process` target the `backend` key
+  of its config, `hermit` when it names none.
+- `capabilities` says what that backend can do: `replay`, `confirm`, `shrink`, `strict_verify`, `snapshot_branch`,
+  `fault_injection`, `multi_process`, each `true` or `false`. A flag is `true` only if the backend has the feature.
+  It describes the backend, not the machine the server runs on. The value is `null` when this server's engine has no
+  usable backend for the target (a worker that has one can still run it), so `null` means "not known here", not "no".
+
+The MCP `list_targets` tool returns the same fields.
 
 ## `GET /api/me`
 
