@@ -73,11 +73,18 @@ fn a_gap_is_not_a_prefix() {
 fn an_unknown_append_followed_by_later_appends_is_never_a_violation() {
     // A timed-out append may never land, or may land late, so any recovered log could be explained.
     let h = appends(&[(1, "info"), (2, "ok")]);
-    for recovered in [&[2][..], &[2, 1], &[1, 2], &[], &[1]] {
+    for recovered in [&[2][..], &[2, 1], &[1, 2]] {
         let v = run(&h, recovered);
         assert!(
             matches!(v, Verdict::Unknown(UnknownReason::UnsupportedShape { .. })),
             "{recovered:?} gave {v:?}"
+        );
+    }
+    // Whatever the unknown append does, the acknowledged 2 must be there.
+    for recovered in [&[][..], &[1]] {
+        assert_eq!(
+            run(&h, recovered).violation().unwrap().kind,
+            ViolationKind::LostAcknowledgedWrite { value: 2 }
         );
     }
     let h = appends(&[(1, "ok"), (2, "info"), (3, "ok")]);
@@ -184,6 +191,83 @@ fn append_after_an_unknown_append_by_the_same_client_is_unknown() {
         run(&b.build(), &[1, 2]),
         Verdict::Unknown(UnknownReason::UnsupportedShape { .. })
     ));
+}
+
+#[test]
+fn acknowledged_appends_out_of_order_are_a_violation_even_after_an_unknown_append() {
+    let h = appends(&[(1, "ok"), (2, "info"), (3, "ok")]);
+    for recovered in [&[3, 1][..], &[3, 2, 1]] {
+        let v = run(&h, recovered);
+        assert!(
+            matches!(
+                v.violation().map(|v| &v.kind),
+                Some(ViolationKind::AcknowledgedOutOfOrder { .. })
+            ),
+            "{recovered:?} gave {v:?}"
+        );
+        // The witness is the predecessor in acknowledgement order and the append that cannot follow it.
+        let violation = v.violation().unwrap();
+        assert_eq!(
+            violation.kind,
+            ViolationKind::AcknowledgedOutOfOrder { value: 3 }
+        );
+        let ids: Vec<u64> = violation.witness.iter().map(|o| o.id).collect();
+        assert_eq!(ids, vec![0, 2], "{recovered:?}");
+        let args: Vec<Option<i64>> = violation.witness.iter().map(|o| o.arg).collect();
+        assert_eq!(args, vec![Some(1), Some(3)]);
+    }
+    // Orders the model allows stay undecided, not passed; so does [2, 1, 3], which the model rejects (the unknown
+    // append began after 1 finished) but the checker does not detect.
+    for recovered in [&[1, 2, 3][..], &[1, 3], &[1, 3, 2], &[2, 1, 3]] {
+        assert!(matches!(
+            run(&h, recovered),
+            Verdict::Unknown(UnknownReason::UnsupportedShape { .. })
+        ));
+    }
+}
+
+#[test]
+fn a_repeated_acknowledged_value_must_be_matched_once_per_acknowledgement() {
+    // After an unknown append: x, x, y acknowledged (ids 1, 2, 3). In [x, y, x] the second x is found only after y,
+    // so y cannot follow it; matching one recovered x to both acknowledgements would hide that.
+    let h = appends(&[(9, "info"), (5, "ok"), (5, "ok"), (6, "ok")]);
+    let v = run(&h, &[5, 6, 5]);
+    let v = v.violation().expect("violation");
+    assert_eq!(v.kind, ViolationKind::AcknowledgedOutOfOrder { value: 6 });
+    let ids: Vec<u64> = v.witness.iter().map(|o| o.id).collect();
+    assert_eq!(ids, vec![2, 3]);
+    // Both xs present in order, then y: undecided, not a violation.
+    assert!(matches!(
+        run(&h, &[5, 5, 6]),
+        Verdict::Unknown(UnknownReason::UnsupportedShape { .. })
+    ));
+}
+
+#[test]
+fn a_restarted_writer_must_use_a_new_client_name() {
+    // The writer was killed mid-append, so its append has no completion record. A restarted writer that reuses the
+    // name is a second open operation for one client.
+    let mut b = Hb::new();
+    b.seq_ok("w", 1, "append", "log", Some(1), None);
+    b.invoke("w", 2, "append", "log", Some(2));
+    b.seq_ok("w", 3, "append", "log", Some(3), None);
+    assert_eq!(
+        History::from_records(b.records(), Completeness::Complete),
+        Err(HistoryError::ClientOverlap {
+            client: "w".into(),
+            id: 3
+        })
+    );
+
+    // Under a new name the history is valid, and the checker decides what it can.
+    let mut b = Hb::new();
+    b.seq_ok("w", 1, "append", "log", Some(1), None);
+    b.invoke("w", 2, "append", "log", Some(2));
+    b.seq_ok("w.restart1", 1, "append", "log", Some(3), None);
+    assert_eq!(
+        run(&b.build(), &[3]).violation().unwrap().kind,
+        ViolationKind::LostAcknowledgedWrite { value: 1 }
+    );
 }
 
 #[test]

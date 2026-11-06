@@ -42,6 +42,9 @@ pub enum ViolationKind {
     Phantom { value: i64 },
     /// A value was delivered or recorded more often than non-failed operations could have produced it.
     Duplicate { value: i64, seen: u64, at_most: u64 },
+    /// Acknowledged appends cannot be found in the recovered log in the order they were acknowledged; `value` is the
+    /// first one that has nothing left to match after its predecessor.
+    AcknowledgedOutOfOrder { value: i64 },
     /// The recovered log is not a prefix of the attempted appends: `index` is the first differing position.
     NotPrefix { index: usize },
     /// The recovered log is shorter than the acknowledged appends require.

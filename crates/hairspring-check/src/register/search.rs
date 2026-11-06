@@ -85,6 +85,9 @@ struct Search<'a> {
     required_left: usize,
     memo: HashSet<(Vec<u64>, Option<i64>)>,
     stack: Vec<Frame>,
+    /// Steps spent on candidates tried, and on placed operations skipped (their sum is what `steps_left` loses).
+    tried: u64,
+    skipped: u64,
 }
 
 impl<'a> Search<'a> {
@@ -99,6 +102,8 @@ impl<'a> Search<'a> {
             register: initial,
             memo: HashSet::new(),
             stack: Vec::new(),
+            tried: 0,
+            skipped: 0,
         }
     }
 
@@ -137,6 +142,7 @@ impl<'a> Search<'a> {
                 self.stack[depth].cursor = i + 1;
                 return Ok(Some(i));
             }
+            self.skipped += 1;
             spend(steps_left)?;
             i += 1;
         }
@@ -192,6 +198,7 @@ impl<'a> Search<'a> {
                 }
                 continue;
             };
+            self.tried += 1;
             spend(steps_left)?;
             let Some(next) = apply(self.ops[i].kind, self.register) else {
                 continue;
@@ -230,4 +237,44 @@ pub(crate) fn linearizable(
     max_memo_entries: usize,
 ) -> Result<bool, Exhausted> {
     Search::new(ops, initial).run(steps_left, max_memo_entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Four overlapping required writes, then reads of 1 and 2 in sequence: not linearizable. Once the search
+    /// backtracks into a later write, the earlier ones are already placed and are skipped over while looking for the
+    /// next candidate.
+    fn overlapping_writes_then_contradiction() -> Vec<RegOp> {
+        let op = |source, invoke, complete, kind| RegOp {
+            source,
+            invoke,
+            complete,
+            required: true,
+            kind,
+        };
+        let mut ops: Vec<RegOp> = (0..4u64)
+            .map(|i| op(i as usize, i, 4 + i, Kind::Write(i as i64)))
+            .collect();
+        ops.push(op(4, 10, 11, Kind::Read(Some(1))));
+        ops.push(op(5, 12, 13, Kind::Read(Some(2))));
+        ops
+    }
+
+    #[test]
+    fn cursor_skips_count_as_steps() {
+        let ops = overlapping_writes_then_contradiction();
+        let mut search = Search::new(&ops, None);
+        let mut left = 1_000_000;
+        assert_eq!(search.run(&mut left, usize::MAX), Ok(false));
+        let used = 1_000_000 - left;
+        // Skips happen, and every one of them was charged on top of the candidates tried.
+        assert!(search.skipped > 0);
+        assert_eq!(used, search.tried + search.skipped);
+        assert!(used > search.tried);
+        // Golden value, kept so that a change to the search order or pruning is noticed and reviewed: for this
+        // history it is 57 candidates tried plus 37 skips.
+        assert_eq!((search.tried, search.skipped), (57, 37));
+    }
 }
