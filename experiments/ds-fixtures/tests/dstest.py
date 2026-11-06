@@ -6,10 +6,12 @@ import json
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 
 import oracle
@@ -45,12 +47,64 @@ def check(cond, message):
         raise AssertionError(message)
 
 
+# Every process a test starts runs in its own new session, and the session ids are remembered. Leftover checks and
+# cleanup look only at those sessions, never at process names across the machine, so another run (or another user of
+# the same machine) is never seen and never signalled.
+SESSIONS = []
+
+
+def popen(args, **kw):
+    """subprocess.Popen in a new session of its own, remembered for the leftover check."""
+    p = subprocess.Popen(args, start_new_session=True, **kw)
+    SESSIONS.append(p.pid)
+    return p
+
+
+def session_pids(sid, name=None):
+    """The pids in session sid, optionally only those whose executable name is exactly `name`.
+
+    Portable (pgrep has no session option on macOS): list every pid, then ask the kernel for each one's session with
+    os.getsid. Pids and executable names only; never an argument list or an environment."""
+    listing = subprocess.run(["ps", "-A", "-o", "pid="], capture_output=True, text=True).stdout.split()
+    found = []
+    for raw in listing:
+        pid = int(raw)
+        try:
+            if os.getsid(pid) != sid:
+                continue
+        except OSError:
+            continue
+        if name is not None:
+            comm = subprocess.run(["ps", "-o", "comm=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+            if os.path.basename(comm) != name:
+                continue
+        found.append(pid)
+    return found
+
+
+def kill_session(sid):
+    """SIGKILL what is left in one of this test's own sessions, by pid."""
+    for pid in session_pids(sid):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    time.sleep(0.2)
+
+
 def run(args, env=None, timeout=120):
     merged = dict(os.environ)
     merged.pop("HAIRSPRING_PROC_PID", None)
     if env:
         merged.update(env)
-    return subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=merged)
+    p = popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=merged)
+    try:
+        out, err = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        kill_session(p.pid)
+        p.communicate()
+        raise
+    return subprocess.CompletedProcess(args, p.returncode, out, err)
 
 
 class Trial:
@@ -73,14 +127,16 @@ def port_is_free(port):
         s.close()
 
 
-def process_running(name):
-    """True if a process with exactly this name exists. Only the exit status is used: nothing is printed."""
-    return subprocess.run(["pgrep", "-x", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-
-
 def check_no_leftovers(ports):
-    for name in PROGRAM_NAMES:
-        check(not process_running(name), "a %s process is still running" % name)
+    """No process is left in any session this test run started, and nothing listens on the given ports."""
+    mine = set(SESSIONS)
+    left = 0
+    for raw in subprocess.run(["ps", "-A", "-o", "pid="], capture_output=True, text=True).stdout.split():
+        try:
+            left += os.getsid(int(raw)) in mine
+        except OSError:
+            pass
+    check(left == 0, "%d process(es) are left in sessions this run started" % left)
     for p in ports:
         check(port_is_free(p), "port %d is still accepting connections" % p)
 

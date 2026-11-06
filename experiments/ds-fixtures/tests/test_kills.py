@@ -16,7 +16,7 @@ import threading
 import time
 
 import oracle
-from dstest import CRASH_PORT, GO_KILLS, KILLS, Trial, check, check_no_leftovers, exe, read_bytes, run_tests
+from dstest import CRASH_PORT, GO_KILLS, KILLS, Trial, check, check_no_leftovers, exe, popen, read_bytes, run_tests
 
 STORM_BYTES = b"".join(b"PUT k%d %d\n" % (i % 8, 1000 + i % 900) for i in range(20000))
 
@@ -34,7 +34,7 @@ def _kill_once(program, rng, port):
     with Trial() as tmp:
         for d in ("ds-data", "hairspring-region"):
             os.mkdir(os.path.join(tmp, d))
-        node = subprocess.Popen(
+        node = popen(
             [exe(program), "--node=n1", "--port=%d" % port, "--tmp=" + tmp],
             stdout=subprocess.DEVNULL,
             env=dict(os.environ, HAIRSPRING_PROC="n1.i0"),

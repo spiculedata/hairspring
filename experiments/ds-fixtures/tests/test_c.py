@@ -5,6 +5,7 @@ dsnode against a scripted peer, the dscli history file against a scripted server
 every N0 topology and every C0 topology RUNS times, the launcher's early-exit and straggler handling, and (Linux with
 strace) the syscall adjacency the kill supervisor promises.
 """
+import json
 import os
 import re
 import shutil
@@ -35,7 +36,9 @@ from dstest import (
     check_no_leftovers,
     exe,
     kv,
-    process_running,
+    kill_session,
+    popen,
+    session_pids,
     read_bytes,
     run,
     run_c0,
@@ -109,7 +112,7 @@ def _read_lines(conn, count):
 def test_dskv_protocol_against_a_scripted_peer():
     port, peer_port = PORT_BASE + 20, PORT_BASE + 21
     peer = _listener(peer_port)
-    server = subprocess.Popen(
+    server = popen(
         [exe("dskv"), "--mode=epoll", "--node=n1", "--port=%d" % port, "--peer-port=%d" % peer_port],
         stdout=subprocess.PIPE,
         text=True,
@@ -140,7 +143,7 @@ def test_dskv_protocol_against_a_scripted_peer():
 
 def test_dskv_retries_a_connect_made_before_the_peer_listens():
     port, peer_port = PORT_BASE + 22, PORT_BASE + 23
-    server = subprocess.Popen(
+    server = popen(
         [exe("dskv"), "--mode=epoll", "--node=n1", "--port=%d" % port, "--peer-port=%d" % peer_port],
         stdout=subprocess.PIPE,
         text=True,
@@ -163,7 +166,7 @@ def test_dskv_retries_a_connect_made_before_the_peer_listens():
 
 def test_dskv_block_mode_serves_one_connection_at_a_time():
     port = PORT_BASE + 24
-    server = subprocess.Popen([exe("dskv"), "--mode=block", "--node=n1", "--port=%d" % port], stdout=subprocess.PIPE, text=True)
+    server = popen([exe("dskv"), "--mode=block", "--node=n1", "--port=%d" % port], stdout=subprocess.PIPE, text=True)
     try:
         for attempt in range(100):
             try:
@@ -247,7 +250,7 @@ def test_dscli_retries_connect_before_listen():
         os.mkdir(os.path.join(tmp, "ds-hist"))
         with open(os.path.join(tmp, "ds-seq"), "wb") as f:
             f.write(b"\0" * 4096)
-        cli = subprocess.Popen([exe("dscli"), "--node=c2", "--servers=%d" % port, "--tmp=" + tmp], stdout=subprocess.PIPE, text=True)
+        cli = popen([exe("dscli"), "--node=c2", "--servers=%d" % port, "--tmp=" + tmp], stdout=subprocess.PIPE, text=True)
         time.sleep(0.3)
         ready, stop = threading.Event(), threading.Event()
         t = threading.Thread(target=_fake_kv_server, args=(port, ready, stop))
@@ -299,7 +302,7 @@ def test_dsnode_serves_and_leaves_an_intact_region():
     with Trial() as tmp:
         for d in ("ds-data", "hairspring-region"):
             os.mkdir(os.path.join(tmp, d))
-        node = subprocess.Popen(
+        node = popen(
             [exe("dsnode"), "--node=n1", "--port=%d" % port, "--tmp=" + tmp],
             stdout=subprocess.PIPE,
             text=True,
@@ -406,7 +409,7 @@ def test_crash_process_group_kill_removes_the_helper():
     with Trial() as tmp:
         r = run_c0(620001, 1, kind="pgid", flags=["--helper"], tmp=tmp)
         check_c0_trial(r, tmp, 620001, 1, group=True)
-    check(not process_running("dsnode"), "a dsnode is left")
+    check_no_leftovers([CRASH_PORT])
 
 
 def test_crash_write_then_kill_diagnostic_trial():
@@ -500,27 +503,22 @@ def test_pure_helpers_and_the_output_and_path_guards():
             check(r.returncode == 2 and r.stdout == "" and "too long" in r.stderr, "a %s-character path must be refused" % n)
 
 
-def _stop_leftover_nodes():
-    """Test cleanup: end any dsnode left by a stub trial, by pid, never by command line."""
-    out = subprocess.run(["pgrep", "-x", "dsnode"], capture_output=True, text=True).stdout.split()
-    for pid in out:
-        try:
-            os.kill(int(pid), signal.SIGKILL)
-        except OSError:
-            pass
-    time.sleep(0.2)
-
-
 def _trial_to_file(args, tmp):
-    """Run a launcher with stdout to a file (a stub trial can leave a node that holds a pipe open)."""
+    """Run a launcher in its own session with stdout to a file (a stub trial can leave a node that holds a pipe open).
+    Returns (rc, stdout text, session id)."""
     out = os.path.join(tmp, "stdout.txt")
     with open(out, "w") as f:
-        rc = subprocess.run(args, stdout=f, stderr=subprocess.PIPE, text=True, timeout=120).returncode
-    return rc, open(out).read()
+        p = popen(args, stdout=f, stderr=subprocess.PIPE, text=True)
+        try:
+            p.communicate(timeout=120)
+        except subprocess.TimeoutExpired:
+            kill_session(p.pid)
+            raise
+    return p.returncode, open(out).read(), p.pid
 
 
-def _crash_args(dsl, trial, bin_dir=None, seed=620001, kills=1, flags=None):
-    return [dsl, "--crash=pid,%d" % kills, "--bin-dir=" + (bin_dir or BIN), "--port=%d" % CRASH_PORT, "--seed=%d" % seed, "--pace-ms=10", "--tmp=" + trial] + (flags or [])
+def _crash_args(dsl, trial, bin_dir=None, seed=620001, kills=1, flags=None, kind="pid"):
+    return [dsl, "--crash=%s,%d" % (kind, kills), "--bin-dir=" + (bin_dir or BIN), "--port=%d" % CRASH_PORT, "--seed=%d" % seed, "--pace-ms=10", "--tmp=" + trial] + (flags or [])
 
 
 def _split(stdout):
@@ -537,7 +535,7 @@ def _split(stdout):
 
 def test_a_victim_that_died_before_the_kill_is_not_reported_as_killed():
     with Trial() as tmp:
-        p = subprocess.Popen(_crash_args(exe("dsl"), os.path.join(tmp, "t")), stdout=subprocess.PIPE, text=True)
+        p = popen(_crash_args(exe("dsl"), os.path.join(tmp, "t")), stdout=subprocess.PIPE, text=True)
         try:
             for _ in range(400):  # end the first incarnation early with QUIT, well before the 168 ms kill point
                 try:
@@ -563,7 +561,7 @@ def test_a_victim_that_died_before_the_kill_is_not_reported_as_killed():
 
 def test_an_unexpected_death_of_the_final_incarnation_is_counted():
     with Trial() as tmp:
-        p = subprocess.Popen(_crash_args(exe("dsl"), os.path.join(tmp, "t")), stdout=subprocess.PIPE, text=True)
+        p = popen(_crash_args(exe("dsl"), os.path.join(tmp, "t")), stdout=subprocess.PIPE, text=True)
         head = []
         try:
             for line in p.stdout:
@@ -572,9 +570,9 @@ def test_an_unexpected_death_of_the_final_incarnation_is_counted():
                     break
             pid = None
             for _ in range(600):
-                found = subprocess.run(["pgrep", "-x", "dsnode"], capture_output=True, text=True).stdout.split()
+                found = session_pids(p.pid, "dsnode")  # only a descendant of this launcher
                 if found:
-                    pid = int(found[0])
+                    pid = found[0]
                     break
                 time.sleep(0.005)
             check(pid is not None, "the second incarnation never appeared")
@@ -589,7 +587,7 @@ def test_an_unexpected_death_of_the_final_incarnation_is_counted():
     final = [e for e in exited if e["target"] == "n1.i1"]
     check(len(final) == 1 and final[0]["cause"] == "signal" and final[0]["status"] == 9, "final incarnation: %r" % final)
     check(p.returncode == 3 and launch["ok"] == "0" and int(launch["unexpected"]) >= 1, "bad launcher line %r rc %d" % (launch, p.returncode))
-    _stop_leftover_nodes()
+    kill_session(p.pid)
     check_no_leftovers([CRASH_PORT])
 
 
@@ -629,10 +627,10 @@ def test_the_write_then_kill_trial_fails_when_the_node_never_started():
     check_no_leftovers([CRASH_PORT])
 
 
-def _stub_trial(mode, tmp):
+def _stub_trial(mode, tmp, kind="pid", flags=None):
     dsl = _build_c(tmp, os.path.join(ROOT, "c", "dsl.c"), ["-DDS_STUB_WAITPID=%d" % mode], "dsl-stub%d" % mode)
-    rc, out = _trial_to_file(_crash_args(dsl, os.path.join(tmp, "t")), tmp)
-    _stop_leftover_nodes()
+    rc, out, sid = _trial_to_file(_crash_args(dsl, os.path.join(tmp, "t"), kind=kind, flags=flags), tmp)
+    kill_session(sid)  # only this trial's own session: a stub trial can leave its node running
     return rc, out
 
 
@@ -797,7 +795,7 @@ def test_a_child_left_alive_makes_live_after_one():
 def test_dskv_drains_what_is_already_delivered_before_it_quits():
     port, peer_port = PORT_BASE + 28, PORT_BASE + 29
     peer = _listener(peer_port)
-    server = subprocess.Popen(
+    server = popen(
         [exe("dskv"), "--mode=epoll", "--node=n1", "--port=%d" % port, "--peer-port=%d" % peer_port],
         stdout=subprocess.PIPE,
         text=True,
@@ -857,12 +855,68 @@ def test_a_group_kill_that_only_killed_the_pid_is_caught():
     with Trial() as tmp:
         mutant = _build_c(tmp, os.path.join(ROOT, "c", "dsl.c"), ["-DDS_MUTANT_PID_KILL"], "dsl-mutant")
         args = [mutant, "--crash=pgid,1", "--helper", "--bin-dir=" + BIN, "--port=%d" % CRASH_PORT, "--seed=620001", "--pace-ms=10", "--tmp=" + os.path.join(tmp, "t")]
-        rc, out = _trial_to_file(args, tmp)
+        rc, out, sid = _trial_to_file(args, tmp)
+        kill_session(sid)
     lines, killed, exited, sups, launch = _split(out)
     check(sups[0]["grp_gone"] == "0", "the helper survived a pid-only kill, so grp_gone must be 0: %r" % sups)
     helper = [e for e in exited if e["target"] == "n1.i0.h"]
     check(len(helper) == 1 and helper[0]["cause"] == "stop_kill", "the surviving helper must be stopped by the launcher: %r" % helper)
     check(rc == 3 and launch["ok"] == "0" and int(launch["unexpected"]) >= 1, "the launcher must report ok=0: rc %d %r" % (rc, launch))
+    check_no_leftovers([CRASH_PORT])
+
+
+def test_the_parent_places_the_helper_in_the_group_before_the_kill():
+    """With the helper's own setpgid delayed (a compile-time stub), only the launcher's call can put it in the node's
+    group in time: without the parent-side call the group kill misses the helper."""
+    with Trial() as tmp:
+        slow = _build_c(tmp, os.path.join(ROOT, "c", "dsl.c"), ["-DDS_STUB_HELPER_SLOW"], "dsl-slow")
+        args = _crash_args(slow, os.path.join(tmp, "t"), kind="pgid", flags=["--helper"])
+        rc, out, sid = _trial_to_file(args, tmp)
+        kill_session(sid)
+    lines, killed, exited, sups, launch = _split(out)
+    helper = [e for e in exited if e["target"] == "n1.i0.h"]
+    check(sups[0]["grp_gone"] == "1", "the helper was missed by the group kill: %r" % sups)
+    check(len(helper) == 1 and helper[0]["cause"] == "planned_kill" and helper[0]["status"] == 9, "helper exited line %r" % helper)
+    check(rc == 0 and launch["ok"] == "1" and launch["unexpected"] == "0", "bad launcher line %r rc %d" % (launch, rc))
+    check_no_leftovers([CRASH_PORT])
+
+
+def test_a_running_helper_is_stopped_right_after_the_sup_line_when_the_node_was_already_dead():
+    with Trial() as tmp:
+        args = _crash_args(exe("dsl"), os.path.join(tmp, "t"), kind="pgid", flags=["--helper"])
+        p = popen(args, stdout=subprocess.PIPE, text=True)
+        try:
+            for _ in range(400):
+                try:
+                    c = socket.create_connection(("127.0.0.1", CRASH_PORT), timeout=2)
+                    c.sendall(b"QUIT\n")
+                    c.close()
+                    break
+                except OSError:
+                    time.sleep(0.005)
+            out, _ = p.communicate(timeout=60)
+        finally:
+            if p.poll() is None:
+                kill_session(p.pid)
+    lines = out.splitlines()
+    at = [i for i, l in enumerate(lines) if " role=sup kill=" in l]
+    check(len(at) == 1 and kv(lines[at[0]])["pre_dead"] == "1", "expected one pre-dead sup line: %r" % lines)
+    nxt = json.loads(lines[at[0] + 1].split(" ", 1)[1])
+    check(nxt["target"] == "n1.i0.h" and nxt["cause"] == "stop_kill", "the helper must be stopped right after the sup line: %r" % lines[at[0] + 1])
+    check(not any(" recovered=" in l and "n1.i1" in l for l in lines[: at[0] + 2]), "the helper was stopped only after the restart")
+    check(p.returncode == 3, "rc %d" % p.returncode)
+    check_no_leftovers([CRASH_PORT])
+
+
+def test_a_helper_kill_counts_as_expected_only_when_the_nodes_kill_was_confirmed():
+    with Trial() as tmp:
+        rc, out = _stub_trial(2, tmp, kind="pgid", flags=["--helper", "--pause"])
+    lines, killed, exited, sups, launch = _split(out)
+    helper = [e for e in exited if e["target"] == "n1.i0.h"]
+    node = [e for e in exited if e["target"] == "n1.i0"]
+    check(killed == [] and len(helper) == 1 and helper[0]["status"] == 9 and helper[0]["cause"] == "planned_kill", "helper %r killed %r" % (helper, killed))
+    check(len(node) == 1 and node[0]["cause"] == "unreaped", "node %r" % node)
+    check(launch["unexpected"] == "2", "the helper's line is unexpected when the node's kill is not confirmed: %r" % launch)
     check_no_leftovers([CRASH_PORT])
 
 
@@ -901,6 +955,9 @@ TESTS = [
     test_the_write_then_kill_trial_fails_when_the_node_never_started,
     test_an_alive_check_error_is_not_alive_and_never_signals_the_pid,
     test_an_unreaped_victim_gets_no_killed_line_and_stops_the_plan,
+    test_the_parent_places_the_helper_in_the_group_before_the_kill,
+    test_a_running_helper_is_stopped_right_after_the_sup_line_when_the_node_was_already_dead,
+    test_a_helper_kill_counts_as_expected_only_when_the_nodes_kill_was_confirmed,
     test_a_server_that_ignores_quit_is_killed_and_counted,
     _crash_test("k1", 1),
     _crash_test("kp", 1, kind="pgid", flags=["--helper"]),

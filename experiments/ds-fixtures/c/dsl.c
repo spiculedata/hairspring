@@ -52,6 +52,7 @@ typedef struct {
     char tag[24];          /* the name in an "exited" line */
     int reported;          /* its "exited" line has been written */
     int planned_sent;      /* the launcher sent a planned kill to it after finding it alive */
+    int confirmed;         /* that planned kill was confirmed (for the helper: the node's kill was) */
     int stop_killed;       /* the launcher SIGKILLed it by pid at teardown */
     int expect_clean_exit; /* a normal exit with status 0 is the expected end (client, final incarnation) */
     int stub;              /* test stubs only (DS_STUB_WAITPID) */
@@ -417,10 +418,14 @@ static void spawn_helper(proc_t *h, pid_t node_pid) {
     pid_t pid = fork();
     if (pid < 0) ds_die("fork failed");
     if (pid == 0) {
+#ifdef DS_STUB_HELPER_SLOW
+        ds_sleep_ms(300); /* test stub: the helper runs late, so only the parent's setpgid can place it in time */
+#endif
         if (setpgid(0, node_pid) != 0) _exit(2);
         for (int i = 0; i < HELPER_LOOPS; i++) ds_sleep_ms(5);
         _exit(0);
     }
+    setpgid(pid, node_pid); /* race-free: parent and child both place the helper; EACCES/ESRCH here means the child did */
     memset(h, 0, sizeof *h);
     h->pid = pid;
     h->alive = 1;
@@ -445,7 +450,7 @@ static void report_exited(proc_t *p) {
         else if (p->planned_sent && WIFSIGNALED(status) && WTERMSIG(status) == 9) cause = "planned_kill";
         else cause = WIFEXITED(status) ? "exit" : "signal";
     }
-    int expected = (strcmp(cause, "planned_kill") == 0 && status == 9) ||
+    int expected = (strcmp(cause, "planned_kill") == 0 && status == 9 && p->confirmed) ||
                    (strcmp(cause, "exit") == 0 && status == 0 && p->expect_clean_exit);
     if (!expected) g_unexpected++;
     ds_emit("HAIRSPRING_EVENT {\"v\":1,\"kind\":\"exited\",\"proc\":\"_launcher\",\"target\":\"%s\",\"status\":%d,"
@@ -527,6 +532,8 @@ static kill_result_t do_kill(proc_t *victim, proc_t *helper, const crash_cfg_t *
     int termsig = wifsig ? WTERMSIG(victim->status) : 0;
     res.confirmed = res.sent && wifsig && termsig == 9;
     res.unreaped = res.sent && !victim->exited;
+    victim->confirmed = res.confirmed;
+    if (helper != NULL) helper->confirmed = res.confirmed; /* the helper's kill counts only if the node's was confirmed */
 
     if (res.confirmed) {
         ds_emit("HAIRSPRING_EVENT {\"v\":1,\"kind\":\"killed\",\"proc\":\"_launcher\",\"target\":\"n1.i%d\",\"signal\":9,"
@@ -541,7 +548,7 @@ static kill_result_t do_kill(proc_t *victim, proc_t *helper, const crash_cfg_t *
     ds_emit("DSC0 v1 role=sup kill=%d victim=n1.i%d pre_dead=%d wifsig=%d termsig=%d reap_polls=%u grp_gone=%s "
             "region_seen=%s planned_ms=%u\n",
             j, incarnation, res.pre_dead, wifsig, termsig, polls, grp, seen, planned_ms);
-    if (helper != NULL && res.sent && !helper->exited) {
+    if (helper != NULL && helper->alive) { /* right after the sup line, also when the node was already dead */
         stop_kill(helper);
         report_exited(helper);
     }

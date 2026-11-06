@@ -135,7 +135,7 @@ the native tests:
   invariant (`done <= records written <= started`, `started - done <= 1`, `acked <= done`, `done - acked <= 1`) and that
   the log has no torn entry.
 
-Every test that starts processes checks afterwards that none of them, and no listener on its ports, is left. Set
+Every test starts its processes in a session of its own and checks afterwards that none is left in those sessions and that nothing listens on its ports; cleanup and checks never match processes by name across the machine. Set
 `DS_REQUIRE_STRACE=1` to make a missing `strace` a failure instead of a skip.
 
 Not run here: anything under Hermit, anything needing Linux x86-64 and Hermit.
@@ -150,10 +150,10 @@ Not run here: anything under Hermit, anything needing Linux x86-64 and Hermit.
 - The history of a client that did not get a valid reply records `FAIL` as the result, and the client exits 3. The
   launcher then prints `ok=0` (ring trials: a non-zero exit status; crash trials: an unexpected `exited` line).
 - The test hooks `--test-exit-early`, `--test-ignore-quit` (`dskv`), `--test-skip-seq` (`dscli`) and `--test-leak-child`
-  (`dsl`), passed with `--server-arg=<node>:<arg>`, exist only so that the native tests can show a check failing. Two
+  (`dsl`), passed with `--server-arg=<node>:<arg>`, exist only so that the native tests can show a check failing. Three
   compile-time options exist for the same reason and are defined only by the tests: `DS_MUTANT_PID_KILL` (a group-kill
-  trial that kills the pid alone) and `DS_STUB_WAITPID=1|2` (the first node's alive check errors, or the node is never
-  reaped). The built programs never define them.
+  trial that kills the pid alone), `DS_STUB_WAITPID=1|2` (the first node's alive check errors, or the node is never
+  reaped) and `DS_STUB_HELPER_SLOW` (the helper places itself in the group late). The built programs never define them.
 - A name that reaches a path (`--node`, `HAIRSPRING_PROC`) must be letters and digits (the tag exactly `<node>.i<digits>`),
   and a path or argument too long for the launcher's buffers is refused with status 2 rather than shortened.
 - In a process-group trial the helper is a child of the launcher (not of the node), starts only with the first
