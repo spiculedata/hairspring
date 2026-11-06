@@ -89,7 +89,7 @@ fn table_exists(conn: &Connection, name: &str) -> bool {
 
 const NEW_TABLES: [&str; 4] = ["run_identity", "trees", "trial_lineage", "tree_branches"];
 /// The schema version this build creates and migrates to (versions 4 and 5 only add tables to version 3).
-const CURRENT_VERSION: i64 = 7;
+const CURRENT_VERSION: i64 = 8;
 
 #[test]
 fn a_fresh_database_is_current_and_has_the_tree_tables() {
@@ -134,9 +134,11 @@ fn a_version_two_database_migrates_to_three_in_place_and_leaves_trials_and_runs_
     for (t, was) in kept.iter().zip(dumps) {
         assert_eq!(table_dump(&after, t), was, "{t} is untouched");
     }
+    // Version 8 adds one index on `runs`; the tables themselves keep every column.
     let runs_ddl_after = schema_dump(&after)
         .into_iter()
         .filter(|l| l.contains("|runs|") || l.contains("|trials|"))
+        .filter(|l| !l.contains("|runs_target_created|"))
         .collect::<Vec<_>>();
     assert_eq!(
         runs_ddl_after, runs_ddl,

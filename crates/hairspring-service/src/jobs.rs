@@ -491,6 +491,7 @@ impl Service {
         let Some(job) = leased else {
             return Ok(false);
         };
+        self.record_engine_inputs(engine, &job.job_id, worker_id, &job.run_id, &job.target);
         let req = RunRequest {
             target: job.target.clone(),
             seed: job.seed,

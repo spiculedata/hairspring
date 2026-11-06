@@ -52,6 +52,20 @@ You need Rust and a C compiler and linker for that (see [quickstart.md](quicksta
 binary is checked against the release's `SHA256SUMS` before it is installed, which catches a damaged download but does
 not prove who built it; to pin a hash you got another way, pass `--sha256` to the installer.
 
+## Upgrading to schema 8 on PostgreSQL
+
+Schema 8 adds a table, `run_inputs`, and an index on `runs`. The first open of a version 7 schema must be made by the role
+that owns the schema's tables (creating the index needs ownership of `runs`), at a quiet time: the index build blocks
+writes to `runs` until it finishes. Before any other role opens the schema, the owner must grant it the new table:
+
+```sql
+GRANT SELECT, INSERT, DELETE ON <schema>.run_inputs TO <role>;
+```
+
+A role without those rights is refused at open with that statement in the message, before anything is changed. On SQLite
+nothing needs granting; every write to the database waits during the upgrade (up to the busy timeout, then fails). The
+details are in [architecture.md](architecture.md#run-inputs-schema-version-8).
+
 ## The schema-version error
 
 Hairspring stores results in a database (SQLite by default, `.hairspring/hairspring.db`, or PostgreSQL). The database
@@ -64,10 +78,10 @@ error: storage error: database schema version 6 is not supported (expected 5)
 ```
 
 (exit status 2). That text was printed by the v0.1-RC1 binary for a copy of a database made by a build of `main` when `main`
-was at schema 6. `main` has since moved to schema 7, so the same binary on a database made by a current `main` build gives
+was at schema 6. `main` has since moved to schema 8, so the same binary on a database made by a current `main` build gives
 
 ```text
-error: storage error: database schema version 7 is not supported (expected 5)
+error: storage error: database schema version 8 is not supported (expected 5)
 ```
 
 (derived from the code, not run). The numbers change as schemas are added; the meaning does not. The number after

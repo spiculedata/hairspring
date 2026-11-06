@@ -29,6 +29,8 @@ mod pg_retention;
 #[cfg(feature = "postgres")]
 mod pg_run_end;
 #[cfg(feature = "postgres")]
+mod pg_run_inputs;
+#[cfg(feature = "postgres")]
 mod pg_schema;
 #[cfg(feature = "postgres")]
 mod pg_search;
@@ -38,6 +40,7 @@ mod pg_tree_query;
 mod pg_trials;
 mod reporters;
 mod retention;
+mod run_inputs;
 mod run_mode;
 mod search;
 mod sqlite;
@@ -52,6 +55,7 @@ mod sqlite_process;
 mod sqlite_read_pool;
 mod sqlite_retention;
 mod sqlite_run_end;
+mod sqlite_run_inputs;
 mod sqlite_schema;
 mod sqlite_search;
 mod sqlite_tree_query;
@@ -71,6 +75,10 @@ pub use pg::PgStore;
 #[cfg(feature = "postgres")]
 pub use pg_downgrade::downgrade_postgres;
 pub use retention::{KeptReason, RetentionCandidate, RetentionLock, RetentionReport};
+pub use run_inputs::{
+    NewRunInputs, RunInputsOutcome, RunInputsRecord, RunInputsRejection, MAX_RUN_INPUTS_JSON_BYTES,
+    MAX_RUN_INPUT_FIELDS, MAX_RUN_INPUT_NAME_BYTES,
+};
 pub use search::{
     FailureHit, PropertyHit, RunHit, ScheduleHit, SearchHits, SearchQuery, SeedHit,
     SEARCH_PROPERTY_RUNS, SEARCH_RECENT_RUNS,
@@ -373,6 +381,15 @@ pub trait Store: Send + Sync {
     fn find_tree_branch(&self, tree_id: &str, command_hash: &str) -> Result<Option<BranchRecord>>;
     /// Counts one verification re-run of a branch, and whether it matched.
     fn record_branch_verify(&self, run_id: &str, matched: bool) -> Result<()>;
+
+    // run inputs (schema version 8)
+    /// Records the hashes of the inputs a run executed with, once. The same record again is a `Duplicate` and changes
+    /// nothing (the first reporter, trust flag and time stay); a different one for a run that has some is refused, and
+    /// so is an unknown run or a record that breaks the limits (values must be SHA-256 digests, never plain text).
+    fn put_run_inputs(&self, new: &NewRunInputs, now: i64) -> Result<RunInputsOutcome>;
+    /// The inputs recorded for a run, or `None` (a run stored before schema version 8, or one whose worker recorded
+    /// none).
+    fn get_run_inputs(&self, run_id: &str) -> Result<Option<RunInputsRecord>>;
 
     // retention
     /// Every run whose age is before `cutoff_ms`, in any state, oldest first (the run's finish time, or its creation

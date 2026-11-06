@@ -4,3 +4,8 @@ members = ["experiments", "crates/hairspring-core", "crates/hairspring-pubsub", 
 
 [profile.release]
 opt-level = 3
+
+# A run records the SHA-256 of the executable it runs in, and a debug build is hundreds of megabytes. Keep that one
+# dependency optimised in debug and test builds so hashing it does not dominate the time of a run.
+[profile.dev.package.sha2]
+opt-level = 3

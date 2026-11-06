@@ -8,7 +8,7 @@ use common::v7_lists::{every_list, fill};
 use hairspring_store::*;
 use postgres::Client;
 
-const CURRENT_VERSION: i32 = 7;
+const CURRENT_VERSION: i32 = 8;
 const V7_INDEXES: [&str; 2] = ["failures_created", "run_properties_violation"];
 
 fn recorded_version(c: &mut Client, schema: &str) -> i32 {

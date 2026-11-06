@@ -3,13 +3,13 @@
 //! A database is created at version 1 and then migrated like any older one, so a fresh database and a migrated one
 //! cannot differ. Migration runs inside one `BEGIN IMMEDIATE` transaction that re-reads the version, so several
 //! processes opening the same old file at once migrate it exactly once and none of them sees a half-migrated file.
-use crate::downgrade::V7_INDEXES;
+use crate::downgrade::{V7_INDEXES, V8_INDEXES, V8_TABLES_DROP_ORDER};
 use crate::run_mode::{mode_of_config, SEARCH_MODE, SWEEP_MODE};
 use crate::sqlite_index_check::sqlite_index_fits;
 use crate::types::{Result, StoreError};
 use rusqlite::Connection;
 
-pub(crate) const SCHEMA_VERSION: i64 = 7;
+pub(crate) const SCHEMA_VERSION: i64 = 8;
 
 const SCHEMA_V1: &str = "
 CREATE TABLE runs (
@@ -176,6 +176,19 @@ CREATE INDEX IF NOT EXISTS failures_created ON failures(created_at);
 CREATE INDEX IF NOT EXISTS run_properties_violation ON run_properties(run_id, idx) WHERE status = 'violation';
 ";
 
+/// Version 8 adds the hashes of the inputs a run executed with, and an index for "the runs of one target, newest first".
+/// Purely additive: `runs` is not altered, so no existing row is rewritten, and a run stored earlier has no `run_inputs`
+/// row (it reads as "not recorded", never as a guess). `runs_target_created` ends in the row id, which every SQLite
+/// index holds, so it serves the order of `runs_created` (time, then creation order) within one target. Building it
+/// takes the write lock for as long as the build lasts; readers carry on.
+const MIGRATE_V7_TO_V8: &str = "
+CREATE INDEX IF NOT EXISTS runs_target_created ON runs(target, created_at);
+CREATE TABLE IF NOT EXISTS run_inputs (
+  run_id TEXT PRIMARY KEY REFERENCES runs(id), scheme TEXT NOT NULL, fields_json TEXT NOT NULL,
+  missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, attempt INTEGER NOT NULL,
+  created_at INTEGER NOT NULL);
+";
+
 /// The tables a version 3 database must have.
 const V3_TABLES: [&str; 4] = ["run_identity", "trees", "trial_lineage", "tree_branches"];
 /// The tables version 4 added.
@@ -219,9 +232,94 @@ fn ensure_secret_column(conn: &Connection) -> Result<()> {
 /// write rows; a database that lost a table or an index is reported, not repaired (the children query names its
 /// index, so a missing one would otherwise fail later, at the first read).
 fn verify_current(conn: &Connection) -> Result<()> {
-    verify_v5_objects(conn, SCHEMA_VERSION)?;
-    verify_objects(conn, SCHEMA_VERSION, &[], &V7_INDEXES)?;
+    verify_v7(conn, SCHEMA_VERSION)?;
+    verify_objects(conn, SCHEMA_VERSION, &V8_TABLES_DROP_ORDER, &V8_INDEXES)?;
+    verify_v8_definitions(conn)
+}
+
+/// A version 7 database (and the version 7 part of a current one): the tables, and the version 7 indexes as the
+/// migration created them.
+fn verify_v7(conn: &Connection, version: i64) -> Result<()> {
+    verify_v5_objects(conn, version)?;
+    verify_objects(conn, version, &[], &V7_INDEXES)?;
     verify_v7_definitions(conn)
+}
+
+/// The columns of `run_inputs` as `PRAGMA table_info` reports them: name, declared type, NOT NULL, primary key.
+const RUN_INPUTS_COLUMNS: [(&str, &str, i64, i64); 8] = [
+    ("run_id", "TEXT", 0, 1),
+    ("scheme", "TEXT", 1, 0),
+    ("fields_json", "TEXT", 1, 0),
+    ("missing_json", "TEXT", 1, 0),
+    ("reporter_id", "TEXT", 1, 0),
+    ("reporter_trusted", "INTEGER", 1, 0),
+    ("attempt", "INTEGER", 1, 0),
+    ("created_at", "INTEGER", 1, 0),
+];
+
+/// `IF NOT EXISTS` goes by name, so a table or index of that name built beforehand is kept. They must be what the
+/// migration would create: the table with these columns and the reference to `runs`, the index on `runs(target,
+/// created_at)`.
+fn verify_v8_definitions(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT name, upper(type), \"notnull\", pk FROM pragma_table_info('run_inputs') ORDER BY cid",
+    )?;
+    let columns = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let wanted: Vec<(String, String, i64, i64)> = RUN_INPUTS_COLUMNS
+        .iter()
+        .map(|(n, t, nn, pk)| (n.to_string(), t.to_string(), *nn, *pk))
+        .collect();
+    // Exactly one reference, to runs(id), with the default actions (no ON DELETE CASCADE and the like).
+    let references_runs: i64 = conn.query_row(
+        "SELECT (SELECT COUNT(*) FROM pragma_foreign_key_list('run_inputs')) \
+              + (SELECT COUNT(*) FROM pragma_foreign_key_list('run_inputs') \
+                  WHERE \"table\"='runs' AND \"from\"='run_id' AND \"to\"='id' \
+                    AND on_update='NO ACTION' AND on_delete='NO ACTION' AND \"match\"='NONE')",
+        [],
+        |r| r.get(0),
+    )?;
+    // The primary key's own index and nothing else: no UNIQUE constraint, no index added by hand. No CHECK either.
+    // (A WITHOUT ROWID or STRICT table is caught by the column check above: SQLite then reports the primary key column
+    // as NOT NULL, which the migration's table does not have.)
+    let extra_indexes: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_index_list('run_inputs') WHERE origin <> 'pk'",
+        [],
+        |r| r.get(0),
+    )?;
+    let sql: String = conn.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='run_inputs'",
+        [],
+        |r| r.get(0),
+    )?;
+    let has_check = sql.to_ascii_uppercase().contains("CHECK");
+    if columns != wanted || references_runs != 2 || extra_indexes != 0 || has_check {
+        return Err(StoreError::Backend(
+            "table run_inputs exists but has a different definition: rename or drop it and open the database again"
+                .to_string(),
+        ));
+    }
+    if !sqlite_index_fits(
+        conn,
+        "runs_target_created",
+        "runs",
+        &["target", "created_at"],
+        None,
+    )? {
+        return Err(StoreError::Backend(
+            "index runs_target_created exists but is invalid or has a different definition: drop it and open the database again"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// What each version 7 index must be: its table, its columns, and the predicate of a partial index (lower case, with
@@ -312,6 +410,7 @@ fn upgrade(conn: &Connection, from: i64) -> Result<()> {
         3 => verify_v3(conn)?,
         4 => verify_v4(conn)?,
         5 | 6 => verify_v5_objects(conn, from)?,
+        7 => verify_v7(conn, from)?,
         _ => conn.execute_batch(MIGRATE_V2_TO_V3)?,
     }
     if from <= 3 {
@@ -323,8 +422,12 @@ fn upgrade(conn: &Connection, from: i64) -> Result<()> {
     if from <= 5 {
         backfill_run_modes(conn)?;
     }
-    conn.execute_batch(MIGRATE_V6_TO_V7)?;
-    verify_v7_definitions(conn)?;
+    if from <= 6 {
+        conn.execute_batch(MIGRATE_V6_TO_V7)?;
+        verify_v7_definitions(conn)?;
+    }
+    conn.execute_batch(MIGRATE_V7_TO_V8)?;
+    verify_v8_definitions(conn)?;
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }

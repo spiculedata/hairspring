@@ -16,6 +16,7 @@ pub mod encoding;
 pub mod hash;
 pub mod identity;
 mod identity_text;
+pub mod input_hashes;
 
 pub use address::{AddressError, BackendKind, Cut, PointAddress};
 pub use command::{command_hash, CommandError, CommandValue};
@@ -25,3 +26,4 @@ pub use identity::{
     CommonInputs, HermitInputs, Identity, IdentityDraft, IdentityError, SimInputs, TmpPolicy,
     WasmInputs,
 };
+pub use input_hashes::{known_fields, InputHashes};

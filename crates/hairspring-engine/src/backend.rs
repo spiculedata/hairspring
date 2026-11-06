@@ -4,6 +4,7 @@ use crate::mode::RunMode;
 use crate::report::{DoctorReport, ReplayOutcome, RunOutcome};
 use crate::EngineError;
 use hairspring_core::bundle::Bundle;
+use hairspring_core::point::IdentityDraft;
 
 #[derive(Debug, Clone)]
 pub struct Progress {
@@ -89,6 +90,12 @@ pub trait Backend: Send + Sync {
             "`confirm` is not supported by the {} backend",
             self.name()
         )))
+    }
+    /// What this backend knows about the inputs a run of `spec` executes with, before it starts, as a draft whose
+    /// missing inputs stay missing. `None` when the backend records nothing for the target (the default): a run then
+    /// has no recorded inputs, which is different from inputs that were recorded and differ.
+    fn run_inputs(&self, _spec: &TargetSpec) -> Option<IdentityDraft> {
+        None
     }
     /// Determinism self-check. Backends that cannot do this in-process say so.
     fn doctor(

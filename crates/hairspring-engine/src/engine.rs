@@ -66,6 +66,13 @@ impl Engine {
         backend.run(spec, req, budget, progress)
     }
 
+    /// What the backend of `target` records about the inputs of a run of it (see [`Backend::run_inputs`]), or `None`
+    /// for an unknown target or a backend that records none.
+    pub fn run_inputs(&self, target: &str) -> Option<hairspring_core::point::IdentityDraft> {
+        let spec = self.config.targets.get(target)?;
+        self.backend_for(&spec.kind).ok()?.run_inputs(spec)
+    }
+
     pub fn replay(&self, bundle: &Bundle) -> Result<ReplayOutcome, EngineError> {
         self.replay_with(bundle, ReplayOptions::default())
     }

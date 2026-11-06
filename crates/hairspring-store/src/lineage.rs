@@ -40,7 +40,7 @@ string_enum!(NodeOrigin { Server => "server", Exploration => "exploration", Poin
 string_enum!(Verified { No => "no", ReplayOk => "replay_ok", ReplayMismatch => "replay_mismatch" });
 string_enum!(SeedSource { ServerRandom => "server_random", Caller => "caller" });
 
-const IDENTITY_SCHEMES: [&str; 3] = ["sim/1", "wasm/1", "hermit/1"];
+pub(crate) const IDENTITY_SCHEMES: [&str; 3] = ["sim/1", "wasm/1", "hermit/1"];
 
 /// Why the store refused a tree, node, branch or identity. Nothing was written.
 #[derive(Debug, Clone, PartialEq, Eq)]

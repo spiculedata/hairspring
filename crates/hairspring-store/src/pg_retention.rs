@@ -312,6 +312,7 @@ impl RetentionOps for Ops<'_, '_> {
                 "run_properties",
                 "run_catalog",
                 "run_identity",
+                "run_inputs",
             ] {
                 self.remove(table, "run_id=$1", run)?;
             }

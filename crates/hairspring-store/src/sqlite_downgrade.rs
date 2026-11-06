@@ -1,4 +1,4 @@
-//! Offline downgrade of a SQLite database from schema version 3, 4, 5, 6 or 7 to version 2. See [`crate::downgrade`].
+//! Offline downgrade of a SQLite database from schema version 3, 4, 5, 6, 7 or 8 to version 2. See [`crate::downgrade`].
 use crate::downgrade::*;
 use crate::types::{Result, StoreError};
 use rusqlite::{Connection, OpenFlags};
@@ -70,6 +70,14 @@ fn apply(
     if opts.drop_branch_runs {
         for run in branch_runs {
             candidates.extend(blobs_of_run(conn, run)?);
+        }
+    }
+    if version >= FIRST_VERSION_WITH_V8_OBJECTS {
+        for index in V8_INDEXES {
+            conn.execute_batch(&format!("DROP INDEX {index}"))?;
+        }
+        for table in V8_TABLES_DROP_ORDER {
+            conn.execute_batch(&format!("DROP TABLE {table}"))?;
         }
     }
     if version >= FIRST_VERSION_WITH_V7_INDEXES {

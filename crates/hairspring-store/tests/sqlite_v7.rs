@@ -7,7 +7,7 @@ use hairspring_store::*;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
-const CURRENT_VERSION: i64 = 7;
+const CURRENT_VERSION: i64 = 8;
 const V7_INDEXES: [&str; 2] = ["failures_created", "run_properties_violation"];
 
 fn temp_db(name: &str) -> PathBuf {

@@ -7,7 +7,7 @@ use common::pg_support::*;
 use hairspring_store::*;
 use postgres::Client;
 
-const CURRENT_VERSION: i32 = 7;
+const CURRENT_VERSION: i32 = 8;
 
 fn recorded_version(c: &mut Client, schema: &str) -> i32 {
     c.query_one(

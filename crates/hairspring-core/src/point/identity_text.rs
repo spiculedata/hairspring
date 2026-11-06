@@ -12,8 +12,12 @@ use std::fmt::Display;
 #[derive(Default)]
 struct Lines {
     text: String,
+    /// Each line again as `(key, value)`, for the per-field hashes.
+    pairs: Vec<(String, String)>,
     missing: Vec<&'static str>,
     invalid: Option<(&'static str, &'static str)>,
+    /// Every input that was rejected, not only the first.
+    rejected: Vec<&'static str>,
 }
 
 impl Lines {
@@ -22,6 +26,7 @@ impl Lines {
         self.text.push('=');
         self.text.push_str(value);
         self.text.push('\n');
+        self.pairs.push((key.to_string(), value.to_string()));
     }
 
     fn miss(&mut self, key: &'static str) {
@@ -29,6 +34,7 @@ impl Lines {
     }
 
     fn reject(&mut self, key: &'static str, reason: &'static str) {
+        self.rejected.push(key);
         self.invalid.get_or_insert((key, reason));
     }
 
@@ -114,6 +120,24 @@ impl Lines {
 }
 
 pub(super) fn render(draft: &IdentityDraft) -> Result<String, IdentityError> {
+    fill(draft).finish()
+}
+
+/// The lines of every input that is recorded and valid, as `(key, rendered value)` in identity order, and the names
+/// of the inputs that are not: missing, or rejected as invalid. The `scheme` line is left out (it has its own place).
+pub(super) fn render_fields(draft: &IdentityDraft) -> (Vec<(String, String)>, Vec<&'static str>) {
+    let lines = fill(draft);
+    let pairs = lines
+        .pairs
+        .into_iter()
+        .filter(|(key, _)| key != "scheme" && !lines.rejected.contains(&key.as_str()))
+        .collect();
+    let mut absent = lines.missing;
+    absent.extend(lines.rejected);
+    (pairs, absent)
+}
+
+fn fill(draft: &IdentityDraft) -> Lines {
     let mut lines = Lines::default();
     let backend = draft.backend().as_str();
     match draft {
@@ -127,7 +151,7 @@ pub(super) fn render(draft: &IdentityDraft) -> Result<String, IdentityError> {
             hermit_lines(&mut lines, hermit);
         }
     }
-    lines.finish()
+    lines
 }
 
 const EPOCH_REASON: &str = "epoch must be `YYYY-MM-DDTHH:MM:SSZ` (RFC 3339, UTC, no fraction)";

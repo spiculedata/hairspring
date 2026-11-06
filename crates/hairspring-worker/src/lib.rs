@@ -2,6 +2,7 @@
 //! (which may have backends the server lacks, such as Hermit on a Linux box) and
 //! reports progress and results back.
 mod completion;
+mod inputs;
 mod reregister;
 mod trials;
 
@@ -24,6 +25,8 @@ const MAX_BACKOFF: Duration = Duration::from_secs(10);
 const RESULT_RETRY_WINDOW: Duration = Duration::from_secs(120);
 const TICK: Duration = Duration::from_millis(25);
 const STATUS_TOO_MANY_REQUESTS: u16 = 429;
+/// How long a worker leaves run inputs alone after a server said it has no endpoint for them.
+const INPUTS_REPROBE: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Clone, Debug)]
 pub struct WorkerConfig {
@@ -106,6 +109,11 @@ struct Api {
     agent: ureq::Agent,
     base: String,
     token: Option<String>,
+    /// When the server last answered that it has no endpoint for run inputs (an older release, or a proxy that does not
+    /// pass the path): the worker then stops sending them for `inputs_reprobe`, so the log says it once and the
+    /// server is not asked for every job, and then asks again, so a server that was upgraded is noticed.
+    inputs_paused_at: std::sync::Mutex<Option<Instant>>,
+    inputs_reprobe: Duration,
 }
 
 impl Api {
@@ -131,7 +139,25 @@ impl Api {
             agent,
             base: cfg.server.trim_end_matches('/').to_string(),
             token,
+            inputs_paused_at: std::sync::Mutex::new(None),
+            inputs_reprobe: INPUTS_REPROBE,
         })
+    }
+
+    /// Whether run inputs are left alone for now (the server said it has no endpoint, and the pause is not over).
+    fn inputs_paused(&self) -> bool {
+        let paused_at = self
+            .inputs_paused_at
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        paused_at.is_some_and(|at| at.elapsed() < self.inputs_reprobe)
+    }
+
+    fn pause_inputs(&self) {
+        *self
+            .inputs_paused_at
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
     }
 
     fn post(&self, path: &str, body: &Value) -> Result<(u16, String), CallError> {
@@ -251,6 +277,7 @@ fn execute(
         budget: job.budget,
         mode: job.mode,
     };
+    inputs::report(api, engine, worker_id, secret, job);
     let interrupted = Cell::new(false);
     let done = AtomicBool::new(false);
     let result = std::thread::scope(|scope| {

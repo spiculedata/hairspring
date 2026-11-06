@@ -67,7 +67,7 @@ fn make_v3_database(path: &Path) -> String {
 }
 
 /// The version this build creates: version 5 only adds a table to version 4.
-const CURRENT_VERSION: i64 = 7;
+const CURRENT_VERSION: i64 = 8;
 
 /// A genuine version 4 database: nothing of version 5.
 fn make_v4_database(path: &Path) {
