@@ -69,15 +69,25 @@ describe('confirming from the browser', () => {
     for (const m of [on('run'), off('run'), off('read'), me('run')]) expect(isMe(m)).toBe(true);
   });
 
-  it('rejects can.confirm that is not a boolean, and a true one without its limits', () => {
-    const bad: unknown[] = [
+  it('keeps the role when the confirm part is malformed, and offers no confirming', () => {
+    const odd: unknown[] = [
       { ...me('run'), can: { ...me('run').can, confirm: 'yes' } },
       { ...me('run'), can: { ...me('run').can, confirm: true } },
       { ...on('run'), confirm: { wall_secs: 'long', max_running: 2 } },
       { ...on('run'), confirm: { wall_secs: 0, max_running: 2 } },
       { ...on('run'), confirm: null },
     ];
-    for (const b of bad) expect(isMe(b)).toBe(false);
+    for (const body of odd) {
+      expect(isMe(body)).toBe(true);
+      const state = ready(body as Me);
+      expect(confirmAccess(state)).toBeUndefined();
+      expect(startAccess(state)).toEqual({ canStart: true });
+    }
+  });
+
+  it('still rejects a reply whose role or can.read, run or admin is wrong', () => {
+    expect(isMe({ ...on('run'), role: 'root' })).toBe(false);
+    expect(isMe({ ...on('run'), can: { read: true, run: 'yes', admin: false, confirm: true } })).toBe(false);
   });
 
   it('gives the limits only when the server says this caller may', () => {

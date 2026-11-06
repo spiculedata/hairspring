@@ -255,7 +255,7 @@ repeat it) and **Verified** (confirmed, and Hermit's strict verify agrees). No s
 ladder, not rungs: "Control failed" (the reruns repeat the failure, but the fixed build still fails at this seed) and
 "Not reproducible" (a rerun or the replay did not repeat it on the environment it was recorded in). By default the page cannot start a confirmation: run `hairspring confirm <failure id>` for that. (A server started with
 `--max-confirmations N` adds a Run confirmation control for callers with the `run` role; it runs on the server, for up to
-120 seconds, and its checks are trusted. See [api.md](api.md#post-apifailuresidconfirm) and [SECURITY.md](../SECURITY.md#known-limitations-read-these).)
+120 seconds, and its checks are trusted; a confirmation whose every check is inconclusive still counts as finished and can move a confirmed failure back to candidate. See [api.md](api.md#post-apifailuresidconfirm) and [SECURITY.md](../SECURITY.md#known-limitations-read-these).)
 A confirmation needs the `process` backend with Hermit, which runs on Linux x86-64, so a simulation failure stays a
 candidate and the page shows the command it would need. The checks table, which lists each recorded check, appears once a failure has checks. It was
 not captured here because that needs Hermit.

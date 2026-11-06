@@ -520,32 +520,49 @@ pub fn start(config: ServerConfig, svc: Service, engine: Engine) -> io::Result<R
     let workers = spawn_workers(config.embedded_workers, &svc, &engine, &stopping);
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
     let ctrl_c = config.handle_ctrl_c;
-    let thread = std::thread::Builder::new().name("hairspring-server".to_string()).spawn(move || {
-        let rt = match tokio::runtime::Builder::new_multi_thread().worker_threads(4).max_blocking_threads(MAX_BLOCKING_THREADS).enable_all().build() {
-            Ok(rt) => rt,
-            Err(e) => {
-                eprintln!("hairspring-server: cannot start the async runtime: {e}");
-                return;
-            }
-        };
-        rt.block_on(async move {
-            let listener = match tokio::net::TcpListener::from_std(listener) {
-                Ok(l) => l,
+    let stopping_on_ctrl_c = stopping.clone();
+    let thread = std::thread::Builder::new()
+        .name("hairspring-server".to_string())
+        .spawn(move || {
+            let rt = match tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .max_blocking_threads(MAX_BLOCKING_THREADS)
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
                 Err(e) => {
-                    eprintln!("hairspring-server: cannot use the listener: {e}");
+                    eprintln!("hairspring-server: cannot start the async runtime: {e}");
                     return;
                 }
             };
-            let app = router(state);
-            let shutdown = async move {
-                tokio::select! {
-                    _ = rx => {}
-                    _ = async { if ctrl_c { let _ = tokio::signal::ctrl_c().await; } else { std::future::pending::<()>().await } } => {}
-                }
-            };
-            conn::serve(listener, app, limits, shutdown).await;
-        });
-    })?;
+            rt.block_on(async move {
+                let listener = match tokio::net::TcpListener::from_std(listener) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        eprintln!("hairspring-server: cannot use the listener: {e}");
+                        return;
+                    }
+                };
+                let app = router(state);
+                let shutdown = async move {
+                    tokio::select! {
+                        _ = rx => {}
+                        _ = async {
+                            if ctrl_c {
+                                let _ = tokio::signal::ctrl_c().await;
+                                // Before anything waits for the work in progress: the runtime waits for a confirmation
+                                // running on the blocking pool, and it ends between checks once this is set.
+                                stopping_on_ctrl_c.store(true, Ordering::SeqCst);
+                            } else {
+                                std::future::pending::<()>().await
+                            }
+                        } => {}
+                    }
+                };
+                conn::serve(listener, app, limits, shutdown).await;
+            });
+        })?;
     Ok(RunningServer {
         addr,
         shutdown: Some(tx),

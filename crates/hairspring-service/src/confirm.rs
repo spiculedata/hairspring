@@ -21,6 +21,10 @@ const NO_TARGET_REFUSAL: &str =
     "this server has no configuration for the failure's target, so it cannot confirm it";
 const NOT_PROCESS_REFUSAL: &str =
     "only a failure of a process target can be confirmed, and this one is not";
+const BUNDLE_TARGET_REFUSAL: &str =
+    "the failure's bundle is for a different target, so it cannot be confirmed";
+const BUNDLE_UNREADABLE_REFUSAL: &str =
+    "the failure's bundle cannot be read, so it cannot be confirmed";
 const FAILURE_ID_PREFIX: &str = "fail_";
 const FAILURE_ID_HEX: usize = 16;
 
@@ -127,12 +131,25 @@ impl Service {
         let Some(spec) = engine.config().targets.get(&failure.target) else {
             return Err(ServiceError::InvalidRequest(NO_TARGET_REFUSAL.to_string()));
         };
-        match spec.kind {
-            TargetKind::Process { .. } => Ok(()),
-            _ => Err(ServiceError::InvalidRequest(
+        if !matches!(spec.kind, TargetKind::Process { .. }) {
+            return Err(ServiceError::InvalidRequest(
                 NOT_PROCESS_REFUSAL.to_string(),
-            )),
+            ));
         }
+        // `confirm_failure` reruns the bundle's own target, not the failure's, so the two must be the same one: a
+        // failure stored under a passing target with another target's bundle would have its checks recorded against
+        // a target they never ran. The bundle text is stored data, so it is read, not trusted.
+        let text = self
+            .get_bundle(&failure.bundle_hash)?
+            .ok_or_else(|| ServiceError::InvalidRequest(BUNDLE_UNREADABLE_REFUSAL.to_string()))?;
+        let bundle = Bundle::decode(&text)
+            .map_err(|_| ServiceError::InvalidRequest(BUNDLE_UNREADABLE_REFUSAL.to_string()))?;
+        if bundle.target != failure.target {
+            return Err(ServiceError::InvalidRequest(
+                BUNDLE_TARGET_REFUSAL.to_string(),
+            ));
+        }
+        Ok(())
     }
 
     /// Runs the pipeline on bundle text without storing anything: for a bundle that is not a stored failure.

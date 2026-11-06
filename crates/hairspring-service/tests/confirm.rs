@@ -386,3 +386,114 @@ fn a_missing_hermit_gives_an_answer_and_does_not_hang() {
     }
     assert!(checks.checks[0].guest.detail["inconclusive"].contains("Hermit could not be started"));
 }
+
+#[test]
+fn a_later_confirmation_whose_every_check_is_inconclusive_moves_a_confirmed_failure_back_to_candidate(
+) {
+    // This pins what the ladder does today, so that changing it is a decision and not an accident: the finding is read
+    // from the newest confirmation that finished, and a confirmation whose checks are all inconclusive (here, Hermit
+    // cannot be started) finished, so it replaces an earlier decisive one. The earlier checks stay stored and listed.
+    let (svc, engine, _, failure) = failed_run();
+    assert_eq!(confirm(&svc, &engine, &failure).finding, "confirmed");
+    let host = scratch("host-no-hermit");
+    put(&host, "etc/ld.so.cache", "cache-one");
+    let no_hermit = engine_with_bin(&host, FAILING_GUEST, PathBuf::from("/nonexistent/hermit"));
+
+    let after = svc
+        .confirm_failure(
+            &no_hermit,
+            &failure,
+            &ConfirmRequest::default(),
+            &mut |_| true,
+        )
+        .unwrap();
+
+    assert_eq!(after.finding, "candidate");
+    assert!(
+        after.checks.iter().any(|c| c.status == "pass"),
+        "the earlier checks are still stored"
+    );
+    assert!(after.checks.iter().any(|c| c.status == "inconclusive"));
+    assert_eq!(
+        svc.failure_checks(&failure).unwrap().unwrap().finding,
+        "candidate"
+    );
+}
+
+/// A stored failure of target `svc` whose bundle text is `bundle`, on a service whose engine has process target `svc`.
+fn failure_with_bundle(bundle: &str) -> (Service, Engine, String) {
+    let (svc, store, _) = setup();
+    let host = scratch("host-bundle");
+    put(&host, "etc/ld.so.cache", "cache-one");
+    let engine = engine(&host, FAILING_GUEST);
+    let run = store
+        .create_run(
+            &hairspring_store::NewRun {
+                target: "svc".into(),
+                backend: "hermit".into(),
+                seed: 1,
+                config_json: "{}".into(),
+            },
+            1,
+        )
+        .unwrap();
+    let hash = store.put_blob(bundle.as_bytes()).unwrap();
+    let failure = store
+        .add_failure(
+            &hairspring_store::NewFailure {
+                run_id: run.id,
+                target: "svc".into(),
+                message: "m".into(),
+                original_len: 1,
+                shrunk_len: 1,
+                bundle_hash: hash,
+                steps_json: "[]".into(),
+            },
+            2,
+        )
+        .unwrap();
+    (svc, engine, failure.id)
+}
+
+#[test]
+fn a_stored_bundle_that_names_another_target_is_not_confirmable_and_the_target_is_not_repeated() {
+    // Arrange: the failure is stored under `svc`, but its bundle belongs to another target (a worker's doing).
+    let hostile = "<script>alert(1)</script>";
+    for other in ["good", "", hostile] {
+        let bundle = hairspring_core::bundle::Bundle::new(1, "t", vec![])
+            .with_target(other)
+            .encode();
+        let (svc, engine, failure) = failure_with_bundle(&bundle);
+
+        // Act
+        let err = svc.check_confirmable(&engine, &failure).unwrap_err();
+
+        // Assert
+        let ServiceError::InvalidRequest(text) = err else {
+            panic!("expected a refusal, got {err}");
+        };
+        assert_eq!(
+            text,
+            "the failure's bundle is for a different target, so it cannot be confirmed"
+        );
+        assert!(svc
+            .failure_checks(&failure)
+            .unwrap()
+            .unwrap()
+            .checks
+            .is_empty());
+    }
+}
+
+#[test]
+fn a_stored_bundle_that_does_not_decode_is_not_confirmable() {
+    let (svc, engine, failure) = failure_with_bundle("not a bundle");
+
+    let err = svc.check_confirmable(&engine, &failure).unwrap_err();
+
+    assert!(
+        matches!(&err, ServiceError::InvalidRequest(t)
+            if t == "the failure's bundle cannot be read, so it cannot be confirmed"),
+        "{err}"
+    );
+}

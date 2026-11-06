@@ -219,18 +219,97 @@ fn it_is_off_unless_the_flag_is_given() {
 #[test]
 fn a_cap_above_four_is_refused_at_start_up() {
     let dir = scratch("cap");
-    let o = Command::new(env!("CARGO_BIN_EXE_hairspring"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_hairspring"))
         .args(["serve", "--addr", "127.0.0.1:0", "--max-confirmations", "5"])
         .current_dir(&dir)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .expect("binary runs");
 
-    assert_ne!(o.status.code(), Some(0));
-    assert!(
-        String::from_utf8_lossy(&o.stderr).contains("confirmation cap"),
-        "{}",
-        String::from_utf8_lossy(&o.stderr)
+    // A server that did start would listen for ever, so wait a bounded time for it to refuse and fail if it does not.
+    let status = wait_for_exit(&mut child, Duration::from_secs(20)).unwrap_or_else(|| {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("the server did not refuse a cap above four");
+    });
+    let mut stderr = String::new();
+    std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut stderr).unwrap();
+    assert_ne!(status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("confirmation cap"), "{stderr}");
+}
+
+/// The exit status once `child` has exited, or `None` if it is still running after `limit`.
+fn wait_for_exit(child: &mut Child, limit: Duration) -> Option<std::process::ExitStatus> {
+    let deadline = Instant::now() + limit;
+    loop {
+        if let Some(status) = child.try_wait().expect("can wait") {
+            return Some(status);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// A Hermit that takes two seconds to start while a file named `sleep` sits beside it, and leaves a file named
+/// `started` when it does.
+const SLOW_HERMIT: &str = "#!/bin/sh\n[ \"$1\" = \"--version\" ] && { echo 'fake-hermit 0.0'; exit 0; }\n[ -f \"$(dirname \"$0\")/sleep\" ] && { touch \"$(dirname \"$0\")/started\"; sleep 2; }\nshift\nseed=0\nwhile [ \"$1\" != \"--\" ]; do case \"$1\" in --sched-seed=*) seed=${1#--sched-seed=};; esac; shift; done\nshift\nFAKE_SCHED_SEED=$seed exec \"$@\"\n";
+
+#[test]
+fn ctrl_c_stops_a_running_confirmation_promptly_and_stores_the_rest_as_skipped() {
+    // Arrange: a stored failure, then a Hermit that takes two seconds per start, so a whole confirmation (three
+    // reruns and a replay) would take about eight.
+    let (dir, hermit) = project("sigint");
+    std::fs::write(&hermit, SLOW_HERMIT).unwrap();
+    let (mut server, base, _errors) =
+        serve(&dir, &hermit, &["--max-confirmations", "1"], &tokens());
+    let failure = the_failure(&base);
+    std::fs::write(dir.join("sleep"), "").unwrap();
+    let (status, body) = http(
+        "POST",
+        &format!("{base}/api/failures/{failure}/confirm"),
+        RUN,
     );
+    assert_eq!(status, 202, "{body}");
+    let started = dir.join("started");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !started.exists() {
+        assert!(Instant::now() < deadline, "the confirmation never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // Act: Ctrl-C, as a terminal sends it.
+    let asked = Instant::now();
+    let sent = Command::new("kill")
+        .args(["-INT", &server.0.id().to_string()])
+        .status()
+        .expect("kill runs");
+    assert!(sent.success());
+    let exit = wait_for_exit(&mut server.0, Duration::from_secs(30));
+
+    // Assert: it ended well before the confirmation could have, and what ran is stored with the rest skipped.
+    assert!(exit.is_some(), "the server did not exit");
+    assert!(
+        asked.elapsed() < Duration::from_secs(6),
+        "took {:?}; a whole confirmation takes about eight seconds",
+        asked.elapsed()
+    );
+    std::fs::remove_file(dir.join("sleep")).unwrap();
+    let (_server2, base2, _) = serve(&dir, &hermit, &["--max-confirmations", "1"], &tokens());
+    let (_, checks) = http(
+        "GET",
+        &format!("{base2}/api/failures/{failure}/checks"),
+        READ,
+    );
+    let checks = json(&checks);
+    let all = checks["checks"].as_array().unwrap();
+    assert!(
+        !all.is_empty(),
+        "a partial confirmation is stored: {checks}"
+    );
+    assert!(all.iter().any(|c| c["status"] == "skipped"), "{checks}");
 }
 
 #[test]

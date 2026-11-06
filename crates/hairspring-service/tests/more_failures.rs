@@ -155,6 +155,39 @@ fn a_further_failure_for_another_target_is_refused() {
 }
 
 #[test]
+fn a_failure_whose_bundle_names_another_target_is_refused_naming_the_field_and_not_the_target() {
+    // A worker reports a failure for the run's target whose bundle belongs to a different target; `confirm` would
+    // rerun the bundle's target and store the result against this one.
+    let hostile = "<script>alert(1)</script>";
+    for bundle_target in ["elsewhere", "", hostile] {
+        let mismatched = FailureReport {
+            bundle: Bundle::new(5, "t", vec![])
+                .with_target(bundle_target)
+                .with_param("sched_seed", "5")
+                .encode(),
+            ..report_at(5)
+        };
+        // As the first failure, and as a further one; a refused result ends the run, so each gets its own.
+        for outcome in [
+            RunOutcome::failed(TRIALS, TRIALS, 5, mismatched.clone()),
+            outcome(vec![mismatched]),
+        ] {
+            let rig = rig();
+            let err = complete(&rig, &outcome).unwrap_err();
+            let ServiceError::InvalidRequest(text) = err else {
+                panic!("expected a refusal, got {err:?}");
+            };
+            assert_eq!(
+                text,
+                "failure bundle's target does not match the failure's target"
+            );
+            assert!(!text.contains("script"), "{text}");
+            assert!(failure_ids(&rig).is_empty(), "nothing was stored");
+        }
+    }
+}
+
+#[test]
 fn more_failures_than_a_sweep_may_store_are_refused_and_one_fewer_is_not() {
     let rising =
         |n: usize| -> Vec<FailureReport> { (0..n as u64).map(|i| report_at(5 + i)).collect() };

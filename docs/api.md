@@ -142,16 +142,20 @@ sends no body and chooses nothing but the failure: the reruns and the wall-clock
   (see [deploy.md](deploy.md#reference-serve-options)). With the default of 0 the route answers `403` with
   `confirmation from the browser is not enabled on this server` and `"code":"confirm_disabled"`, whatever the id.
 - **Role.** `run` or `admin`. A `read` token gets `403` (`this endpoint requires the run role`), checked first.
+- **The failure's bundle must be for the failure's target.** A confirmation reruns the bundle's own target. The server
+  refuses a failure whose stored bundle names a different target (`400`), and refuses to store such a failure when a
+  worker reports one, so a confirmation cannot record checks against a target they did not run.
 - **It runs on the server's own engine, never on a remote worker.** The server needs the failure's target in its own
   `hairspring.toml`, and only `process` targets can be confirmed, so on a server that cannot run them (no Hermit, a
   host that is not Linux on x86-64) a confirmation is stored with every check `inconclusive` and says Hermit could not
-  be started, exactly as `hairspring confirm` does there; it does not hang and it does not move the finding.
+  be started, exactly as `hairspring confirm` does there; it does not hang. A confirmation whose every check is inconclusive (for example because Hermit could not be started) still counts as finished. A failure's finding is read from the newest finished confirmation, so such a confirmation replaces the finding from the one before it and can move a confirmed failure back to candidate. The earlier checks stay stored and listed.
 - **Its checks are trusted.** The server is the runner, as for its own workers, so what a confirmation stores can
   move a failure's state, and a claim, in either direction. Any `run` token can start one while the setting is on.
 - **At most one at a time per failure, and at most N at once.** A second request for a failure that already has
   one running is `409`; a request when all N are running is `429` with `Retry-After`. Nothing is queued. A
-  confirmation keeps its slot until it ends, even if the client goes away. Stopping the server ends a confirmation
-  between checks; what ran is stored and the rest is recorded as skipped.
+  confirmation keeps its slot until it ends, even if the client goes away. Stopping the server, with Ctrl-C or by
+  `shutdown`, ends a confirmation between checks (the check in progress finishes first); what ran is stored and the
+  rest is recorded as skipped.
 - The server logs one line when it starts and one when it ends, naming the failure id and the caller as
   `label (t:<key>)` (or the key alone), never the token.
 
@@ -166,7 +170,7 @@ with status `202`. Read the result from `GET /api/failures/{id}/checks`.
 | Status | When | Message or note |
 |---|---|---|
 | 202 | accepted | `{"accepted":true}` |
-| 400 | the failure's target is not configured on this server, or is not a `process` target | `this server has no configuration for the failure's target, so it cannot confirm it`; `only a failure of a process target can be confirmed, and this one is not` (the target's name is not repeated) |
+| 400 | the failure's target is not configured on this server, or is not a `process` target, or its stored bundle is for another target or cannot be read | `this server has no configuration for the failure's target, so it cannot confirm it`; `only a failure of a process target can be confirmed, and this one is not`; `the failure's bundle is for a different target, so it cannot be confirmed`; `the failure's bundle cannot be read, so it cannot be confirmed` (no target name is repeated) |
 | 401 | no token, or a wrong one | `a valid bearer token is required` |
 | 403 | role too low; or the setting is off | `this endpoint requires the run role`; `confirmation from the browser is not enabled on this server` with `"code":"confirm_disabled"` |
 | 404 | an id that is not a failure id, or a failure the server does not know | `not found` |

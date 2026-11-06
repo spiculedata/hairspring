@@ -280,14 +280,25 @@ fn it_is_off_by_default_and_says_so_in_fixed_words_without_running_anything() {
 }
 
 #[test]
-fn a_disabled_server_answers_the_same_for_an_id_that_does_not_exist() {
+fn a_disabled_server_answers_the_same_for_every_id_real_unknown_or_malformed() {
     // The switch is checked before the id, so a disabled server does not tell callers which failures exist.
     let rig = boot(0);
+    let real = rig.failures[0].clone();
 
-    let r = post(rig.addr(), Some(RUN), ABSENT);
+    for id in [
+        real.as_str(),
+        ABSENT,
+        "nope",
+        "fail_xyz",
+        "..%2f..",
+        "fail_0123456789abcdef0",
+    ] {
+        let r = post(rig.addr(), Some(RUN), id);
 
-    assert_eq!(r.status, 403);
-    assert_eq!(r.json()["error"], DISABLED_TEXT);
+        assert_eq!(r.status, 403, "{id}: {}", r.body);
+        assert_eq!(r.json()["error"], DISABLED_TEXT, "{id}");
+        assert_eq!(r.json()["code"], "confirm_disabled", "{id}");
+    }
 }
 
 #[test]
@@ -348,6 +359,11 @@ fn a_malformed_or_unknown_failure_id_is_a_404_and_nothing_runs() {
 
 /// A server whose store holds one failure of `target`, a name its engine does not have.
 fn failure_of_target(target: &str) -> (Rig, String) {
+    failure_with_bundle(target, b"bundle")
+}
+
+/// A server whose store holds one failure of `target` with the given bundle text.
+fn failure_with_bundle(target: &str, bundle: &[u8]) -> (Rig, String) {
     let store: Arc<dyn Store> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let run = store
         .create_run(
@@ -360,7 +376,7 @@ fn failure_of_target(target: &str) -> (Rig, String) {
             1,
         )
         .unwrap();
-    let bundle = store.put_blob(b"bundle").unwrap();
+    let bundle = store.put_blob(bundle).unwrap();
     let failure = store
         .add_failure(
             &NewFailure {
@@ -405,6 +421,41 @@ fn a_failure_of_a_target_this_server_does_not_have_is_refused_without_echoing_th
         "idle",
         "no slot is held for a refusal"
     );
+}
+
+#[test]
+fn a_failure_whose_bundle_is_for_another_target_is_refused_and_nothing_is_stored_against_it() {
+    // A worker can report a failure under a passing target with the bundle of a failing one. Confirming it would
+    // rerun the bundle's target and record trusted checks against the other.
+    let hostile = "<script>alert(1)</script>";
+    for (stored_under, bundle_target) in [("good", "svc"), ("svc", hostile), (hostile, "svc")] {
+        let bundle = hairspring_core::bundle::Bundle::new(1, "t", vec![])
+            .with_target(bundle_target)
+            .encode();
+        let (rig, id) = failure_with_bundle(stored_under, bundle.as_bytes());
+        let r = post(rig.addr(), Some(RUN), &id);
+        assert_eq!(r.status, 400, "{}", r.body);
+        assert!(!r.body.contains("script"), "{}", r.body);
+        assert!(rig.checks(&id)["checks"].as_array().unwrap().is_empty());
+        assert_eq!(rig.wait_idle(&id)["state"], "idle");
+    }
+}
+
+#[test]
+fn a_failure_whose_bundle_is_for_another_target_says_so_in_fixed_words() {
+    let bundle = hairspring_core::bundle::Bundle::new(1, "t", vec![])
+        .with_target("good")
+        .encode();
+    let (rig, id) = failure_with_bundle("svc", bundle.as_bytes());
+
+    let r = post(rig.addr(), Some(RUN), &id);
+
+    assert_eq!(r.status, 400, "{}", r.body);
+    assert_eq!(
+        r.json()["error"],
+        "the failure's bundle is for a different target, so it cannot be confirmed"
+    );
+    assert!(rig.checks(&id)["checks"].as_array().unwrap().is_empty());
 }
 
 #[test]

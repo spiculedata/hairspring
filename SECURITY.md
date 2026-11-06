@@ -88,9 +88,11 @@ agents.
   other way round, on any failure the server's configuration can run. The caller chooses no command, budget or
   option: the input is a failure id. At most N confirmations run at once (N from 1 to 4), a failure has one at a
   time, and a request beyond either is refused (`429` with `Retry-After`, or `409`) and never queued, but a `run`
-  token can keep all N slots busy for about two minutes at a time, repeatedly, until per-token quotas exist (see the
-  first item above). Enable it only on a deployment where every `run` token holder is trusted with that, and size
-  N for the machine: each running confirmation holds a blocking thread and a Hermit process group. It does not run on
+  token can keep all N slots busy for about two minutes at a time, repeatedly, until per-token quotas exist (listed under
+  "Not yet implemented" above). Enable it only on a deployment where every `run` token holder is trusted with that, and size
+  N for the machine: each running confirmation holds a blocking thread and a Hermit process group. A confirmation whose every check is inconclusive (for example
+  Hermit is missing on the server) still counts as finished and replaces the finding from the newest finished
+  confirmation, so it can move a confirmed failure back to candidate. It does not run on
   remote workers, and the server logs who started each one as `label (t:<key>)`, never the token. Leave it at 0 on a
   server that anyone you do not trust can reach with a `run` token.
 - The rate limiter is in-memory and per process; with several server replicas each enforces its own limit.

@@ -387,7 +387,11 @@ answers `202` and the work goes on on the blocking pool, holding its slot until 
 replay slots. Results go through `Service::confirm_failure`, the call the CLI makes, so they are recorded by this
 process as a trusted runner and read back by the same ladder and claim gate. The running flag is in memory
 (`GET /api/failures/{id}/confirm`); a restart loses it and nothing else. The server stopping ends a confirmation
-between checks through the progress callback, with the rest stored as skipped.
+between checks through the progress callback, with the rest stored as skipped; Ctrl-C on `hairspring serve` sets that
+flag first, before the server waits for the work in progress. `Service::check_confirmable` also decodes the stored bundle
+and refuses a failure whose bundle names a different target than the failure, because the engine reruns the bundle's
+target; `clean_failure` refuses to store such a failure from a worker. An all-inconclusive confirmation is a finished
+one and replaces the finding from the earlier one (a confirmed failure can return to candidate); a test pins this.
 
 Opening a version 4 database adds the table and its index in the same transaction as the version bump. A version 4
 database that lost one of its own tables or indexes is refused rather than repaired, on both backends, and a current

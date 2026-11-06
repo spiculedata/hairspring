@@ -30,9 +30,9 @@ export function isMe(v: unknown): v is Me {
   if (!isObject(v) || typeof v.role !== 'string' || !ROLE_NAMES.includes(v.role)) return false;
   if (typeof v.open_mode !== 'boolean' || !Array.isArray(v.roles) || !isObject(v.can)) return false;
   if (typeof v.can.read !== 'boolean' || typeof v.can.run !== 'boolean' || typeof v.can.admin !== 'boolean') return false;
-  if (v.can.confirm === undefined) return true;
-  if (typeof v.can.confirm !== 'boolean') return false;
-  return !v.can.confirm || isConfirmLimits(v.confirm);
+  // The confirm part is an extra: when it is malformed the role still stands and confirming is simply not offered
+  // (`confirmAccess` checks it again), so a bad value there cannot lock the page out of its role.
+  return true;
 }
 
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0;
@@ -47,7 +47,7 @@ function isConfirmLimits(v: unknown): v is ConfirmLimits {
  */
 export function confirmAccess(state: MeState): ConfirmLimits | undefined {
   if (state.status !== 'ready' || state.me.can.confirm !== true) return undefined;
-  return state.me.confirm;
+  return isConfirmLimits(state.me.confirm) ? state.me.confirm : undefined;
 }
 
 /** Whether an action is offered, and the one line that says why not. */
