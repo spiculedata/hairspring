@@ -34,7 +34,7 @@ flowchart LR
 | Crate | Responsibility | Depends on |
 |---|---|---|
 | `hairspring-core` | `Sim`, explorer, shrinker, bundle format, point addresses and hashes, doctor. Std and `sha2` only | nothing |
-| `hairspring-engine` | Type-erased registry, `hairspring.toml`, `Backend` trait, sim backend, JUnit/SARIF/text | core |
+| `hairspring-engine` | Type-erased registry, `hairspring.toml`, `Backend` trait, sim backend, the verdict ladder, JUnit/SARIF/text | core |
 | `hairspring-store` | `Store` trait, SQLite, PostgreSQL, shared conformance suite | nothing |
 | `hairspring-service` | The only place that mutates run/job state; validates and sanitises worker results | engine, store |
 | `hairspring-hermit`, `hairspring-wasm` | Additional backends | engine |
@@ -42,6 +42,18 @@ flowchart LR
 | `hairspring-dapr` | Simulated Dapr sidecar (a standalone supervisor binary) | core |
 
 Dependencies point one way: front ends depend on the service, the service on the engine and store.
+
+### Where a trial's verdict is decided
+
+The verdict ladder and the scan for the guest's `HAIRSPRING_VIOLATION` marker live in the engine
+(`hairspring-engine`, module `verdict`), not in a backend. A backend that runs a program declares the facts it knows
+about one finished trial: how the guest ended (exit status or signal), whether it timed out, any failure of its own
+tooling, a fault collecting the guest's events, the failing properties the guest reported, the first marker line,
+a deadlock it positively detected, and whether the evidence is too damaged for a pass. The engine weighs those facts in
+one fixed order and returns the verdict. Two rules hold for every backend: a timeout is never a pass, and a trial the
+ladder cannot classify is never a pass. What a backend's own words mean (for the Hermit backend, its internal-failure,
+usage, skid-overshoot and deadlock lines) stays in that backend's crate; the order they are weighed in does not.
+[guest-protocol.md](guest-protocol.md#how-the-hermit-backend-judges-a-trial) lists the order.
 
 ## Job lifecycle
 

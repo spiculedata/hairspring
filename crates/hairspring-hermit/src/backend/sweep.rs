@@ -187,10 +187,12 @@ impl HermitBackend {
         progress: &mut dyn FnMut(Progress) -> bool,
     ) -> Option<String> {
         let cut_by_budget = j.trial.timed_out && j.clipped;
-        let verdict = match self.verdict(j.p, j.trial, j.timeout) {
-            // Out of budget, not out of patience: inconclusive, never a finding.
-            Verdict::Hang(r) | Verdict::Violation(r) if cut_by_budget => Verdict::Hang(r),
-            other => other,
+        // Out of budget, not out of patience: inconclusive, never a finding.
+        let verdict = self.verdict(j.p, j.trial, j.timeout);
+        let verdict = if cut_by_budget {
+            verdict.cut_by_budget()
+        } else {
+            verdict
         };
         tally.on_trial(j.index, j.seed, j.trial, &verdict);
         found.infra_run = match verdict {

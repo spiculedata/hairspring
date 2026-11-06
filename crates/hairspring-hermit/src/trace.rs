@@ -1,30 +1,13 @@
-//! Verdicts and the readable trace for a trial.
-use crate::events::EventsFault;
+//! The readable trace for a trial, its behaviour hash, and Hermit's side of its verdict.
 use crate::exec::Trial;
-use crate::property_verdict;
+use crate::verdict_facts::{facts_of, is_skid_overshoot};
 use hairspring_engine::report::Step;
+use hairspring_engine::verdict::judge;
 
-use crate::line_scan::{Findings, LEGACY_VIOLATION_MARKER, VIOLATION_MARKER};
+pub use hairspring_engine::verdict::Verdict;
 
 const MAX_EXCERPT_LINES: usize = 40;
 const MAX_LINE_CHARS: usize = 300;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Verdict {
-    Pass,
-    Violation(String),
-    /// The trial hit its time limit: possibly a hang or deadlock, possibly just slow. Not a finding by itself.
-    Hang(String),
-    /// Hermit reported that every guest thread was blocked with no timer to wake one, and the guest exited non-zero.
-    /// Unlike a timeout this is positively detected, so it is a finding without waiting for a wall-clock limit; it
-    /// is never a data-property violation and is reported as a deadlock. The text carries Hermit's own line.
-    Deadlock(String),
-    /// Hermit itself failed, or the run is misconfigured: not a finding about the target, and the run cannot go on.
-    Infra(String),
-    /// This trial cannot be judged (the host failed to collect its events, or the guest's events are unusable) but
-    /// the run can go on. Counted apart from passes and never a finding by itself.
-    Inconclusive(String),
-}
 
 /// Names how `behaviour_hash` treats a stream over the capture cap (head, tail and a hash of the omitted middle).
 /// Bundles record it; one without it was hashed from the first 1 MiB alone, and cannot be compared on cut output.
@@ -56,101 +39,15 @@ pub fn behaviour_hash(t: &Trial) -> String {
     format!("{h:016x}")
 }
 
-fn is_skid_overshoot(stderr: &Findings) -> bool {
-    stderr.skid_overshoot || (stderr.panicked && stderr.overshoot)
-}
-
 /// Whether Hermit panicked on a PMU skid overshoot in this trial. Such a trial is `Infra`, and the one failure of
 /// Hermit's own that a confirmation retries.
 pub(crate) fn skid_overshoot(t: &Trial) -> bool {
     is_skid_overshoot(&t.stderr_findings())
 }
 
-/// Failures of Hermit itself that are not about the guest: a command-line usage error, or the PMU skid overshoot
-/// panic. Either would otherwise look like the guest exiting non-zero and be reported as a finding.
-fn hermit_own_failure(stderr: &Findings) -> Option<String> {
-    if stderr.usage {
-        let detail = stderr
-            .lower_error_line
-            .clone()
-            .unwrap_or_else(|| "bad command line".to_string());
-        return Some(format!(
-            "hermit rejected its command line (usage error): {detail}"
-        ));
-    }
-    if is_skid_overshoot(stderr) {
-        return Some(
-            "hermit panicked on a PMU skid overshoot: the preemption landed late, so this schedule is not reproducible; raise `skid_margin`"
-                .to_string(),
-        );
-    }
-    None
-}
-
-/// Judges a trial. Order: Hermit's own failures and misconfiguration (the run cannot go on), then a timeout, then host
-/// faults collecting events (both inconclusive, never a pass), then property failures (a false that was read counts
-/// even when the rest of the report is damaged), then the legacy violation line, then Hermit's deadlock report (with a
-/// non-zero exit), then the exit status. A trial that
-/// exits cleanly but whose events are unusable is inconclusive, not a pass.
+/// Judges a trial: Hermit declares the facts, the engine's ladder decides.
 pub fn classify(t: &Trial, timeout_secs: u64) -> Verdict {
-    // Read from the lines as they arrived, not from the kept text: a long stream keeps only its two ends.
-    let (out, err) = (t.stdout_findings(), t.stderr_findings());
-    if err.internal_failure {
-        let detail = err
-            .error_line
-            .clone()
-            .unwrap_or_else(|| "hermit reported an internal failure".to_string());
-        return Verdict::Infra(format!("hermit failed to run the program: {detail}"));
-    }
-    if let Some(reason) = hermit_own_failure(&err) {
-        return Verdict::Infra(reason);
-    }
-    if let Some(EventsFault::Config(problem)) = &t.events_error {
-        return Verdict::Infra(problem.clone());
-    }
-    if t.timed_out {
-        return Verdict::Hang(format!(
-            "timed out after {timeout_secs}s (possible hang or deadlock)"
-        ));
-    }
-    if let Some(EventsFault::Infra(problem)) = &t.events_error {
-        return Verdict::Inconclusive(format!(
-            "the guest's events could not be collected: {problem}"
-        ));
-    }
-    let failed = property_verdict::failures(t);
-    if !failed.is_empty() {
-        return Verdict::Violation(property_verdict::describe(&failed));
-    }
-    if let Some(line) = out.violation_line.or(err.violation_line) {
-        let reason = line
-            .trim_start()
-            .trim_start_matches(VIOLATION_MARKER)
-            .trim_start_matches(LEGACY_VIOLATION_MARKER)
-            .trim_start_matches(':')
-            .trim();
-        return Verdict::Violation(if reason.is_empty() {
-            "property violated".to_string()
-        } else {
-            reason.to_string()
-        });
-    }
-    if let (Some(line), Some(code)) = (&err.deadlock_line, t.exit_code) {
-        if code != 0 {
-            return Verdict::Deadlock(format!(
-                "deadlock: hermit reported `{line}` (exit code {code})"
-            ));
-        }
-    }
-    match (t.exit_code, t.signal) {
-        (Some(0), _) => match property_verdict::unusable_events(t) {
-            Some(why) => Verdict::Inconclusive(why),
-            None => Verdict::Pass,
-        },
-        (Some(code), _) => Verdict::Violation(format!("exit code {code}")),
-        (None, Some(sig)) => Verdict::Violation(format!("terminated by signal {sig}")),
-        (None, None) => Verdict::Violation("terminated abnormally".to_string()),
-    }
+    judge(&facts_of(t, timeout_secs))
 }
 
 fn clip(s: &str, max: usize) -> String {

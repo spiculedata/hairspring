@@ -237,10 +237,7 @@ impl HermitBackend {
         if let Some(line) = crate::program::hermit_refused_program(p, t) {
             return Verdict::Infra(crate::program::refused_program_message(p, &line));
         }
-        match classify(t, timeout.as_secs()) {
-            Verdict::Hang(reason) if p.hang_is_violation => Verdict::Violation(reason),
-            other => other,
-        }
+        classify(t, timeout.as_secs()).with_hang_policy(p.hang_is_violation)
     }
 
     /// Runs one trial of a process target at `seed` and returns everything captured, without judging it. This is what
@@ -290,11 +287,13 @@ impl HermitBackend {
     /// Decides what one finished trial means. Returns the run's outcome when the run should end here.
     fn judge(&self, j: &Judged, tally: &mut Tally) -> Option<RunOutcome> {
         let cut_by_budget = j.trial.timed_out && j.clipped;
-        let verdict = match self.verdict(j.p, j.trial, j.timeout) {
-            // Out of budget, not out of patience: inconclusive, never a finding. The rest of the batch is still
-            // judged first, because a violation among trials that already ran must not be thrown away.
-            Verdict::Hang(r) | Verdict::Violation(r) if cut_by_budget => Verdict::Hang(r),
-            other => other,
+        // Out of budget, not out of patience: inconclusive, never a finding. The rest of the batch is still judged
+        // first, because a violation among trials that already ran must not be thrown away.
+        let verdict = self.verdict(j.p, j.trial, j.timeout);
+        let verdict = if cut_by_budget {
+            verdict.cut_by_budget()
+        } else {
+            verdict
         };
         tally.on_trial(j.index, j.seed, j.trial, &verdict);
         match verdict {
