@@ -525,7 +525,9 @@ changes.
 - **Attempts.** A job that is leased again (its worker was lost, or the server restarted mid-run) is a new attempt, and
   its trials replace the earlier attempt's. Its inputs do too: a record from a later attempt replaces the row whole
   (fields, missing names, reporter and trust), the same attempt again is a repeat (the first reporter, trust and time
-  stay) or, if different, a conflict, and a record from an earlier attempt is refused as stale. When the new attempt's
+  stay) or, if different, a conflict, and a record from an earlier attempt is refused as stale. A record is also stale when its attempt is older than the attempt the run's stored trials
+  belong to, even with no row to compare to (the check and the write are one transaction, and the run row is locked, so
+  recorders for one run, and a trial batch starting an attempt, queue one after the other). When the new attempt's
   trials start, any inputs left by an earlier attempt are removed with the other rows of that attempt, so a worker
   that records nothing (one from an older release) never inherits the first attempt's.
 - **Digests, never values.** The identity text holds the working directory and the guest environment in plain text, so
@@ -552,8 +554,8 @@ changes.
   digests are those of this run's own target and backend (a report for another run is refused). The same inputs again
   are accepted and change nothing; different inputs from the same attempt are refused (400, "this run already has
   different inputs recorded"). A refusal uses fixed words and never repeats what was sent. A worker that is told the
-  server has no such endpoint (404 or 405, an older server) stops sending inputs for the rest of its life, so the log
-  says it once. Only the built-in simulated backend describes its inputs today: a Hermit or WASM run
+  server has no such endpoint (404 or 405: an older server, or a proxy that does not pass the path) stops sending inputs
+  for 10 minutes, so the log says it once, and then asks again, so a server that was upgraded is noticed. Only the built-in simulated backend describes its inputs today: a Hermit or WASM run
   records none yet, so it reads as "not recorded".
 - `hairspring gc` deletes a run's `run_inputs` row with the run.
 
@@ -563,11 +565,13 @@ before upgrading. An older release refuses a version 8 database ("database schem
 (expected 7)").
 
 - *How long, and locks.* Building the index reads the `runs` table once; creating the table is instant. SQLite holds its
-  write lock for the whole migration, so every write to the database waits until it is done. On PostgreSQL `CREATE INDEX` (not `CONCURRENTLY`, which cannot run in a
+  write lock for the whole migration, so every write to the database waits (up to the busy timeout, then the write
+  fails) until it is done. On PostgreSQL `CREATE INDEX` (not `CONCURRENTLY`, which cannot run in a
   transaction) takes a `SHARE` lock on `runs` until the migration commits: reads carry on, and every insert or update of
   a run waits. Upgrade at a quiet time, or build the index beforehand with `CREATE INDEX CONCURRENTLY runs_target_created
-  ON runs(target, created_at, seq)`; the migration then finds it. A concurrent build that fails leaves an invalid index:
-  drop it first.
+  ON runs(target, created_at, seq)`; the migration then finds it. That avoids the long wait, not all of it: the `REFERENCES runs` in
+  `CREATE TABLE run_inputs` still takes a brief lock on `runs`. A concurrent build that fails leaves an invalid index:
+  drop it first. (The SQLite index is `runs(target, created_at)`; the statement above is PostgreSQL's.)
 - *Checked, not trusted.* `IF NOT EXISTS` goes by name, so after creating them the migration, and every later open,
   checks that `run_inputs` has these columns (names, types, not-null), that `run_id` alone is its primary key, that
   its one reference is to `runs(id)` (in the same schema, on PostgreSQL) with the default actions, and that it has no
@@ -575,14 +579,16 @@ before upgrading. An older release refuses a version 8 database ("database schem
   collation and direction (on PostgreSQL also valid and ready). Otherwise the open is refused ("table run_inputs exists
   but has a different definition: rename or drop it and open the database again", or the same for the index), the
   whole migration is rolled back, and a version 7 database stays at 7. A current database missing either object is
-  refused, not repaired. On PostgreSQL the checks read the system catalogs, not `information_schema`, so a role that
-  has no privilege on `run_inputs` still sees the table and opens the database: only recording (and reading) it fails,
-  with the database's own "permission denied".
+  refused, not repaired. On PostgreSQL the checks read the system catalogs, not `information_schema`, so a role with
+  no privilege on `run_inputs` is not told the table is missing or different; it is refused for its rights (below).
 - *Rights.* On PostgreSQL the migration must be run, once, by the role that owns the schema's tables (or a member of it,
   or a superuser): creating the index needs ownership of `runs`. The table it creates belongs to that role, so a role
-  that only reads and writes rows needs `SELECT, INSERT, DELETE` on `run_inputs` granted (as on the other tables)
-  before it can record inputs: replacing an earlier attempt's inputs, removing them when a new attempt's trials start,
-  and `hairspring gc` all delete, and nothing here updates a row. Opening a current (version 8) schema issues no DDL. A role that is not the owner, opening a version 7
+  that only reads and writes rows needs `SELECT, INSERT, DELETE` on `run_inputs`, granted by the owner, before it can
+  open a version 8 database: the first batch of trials of an attempt deletes the inputs an earlier attempt left, so a
+  role without the rights could open the database and then fail to ingest trials for any run. Such a role is refused at
+  open, before anything is changed, with the statement to run (`GRANT SELECT, INSERT, DELETE ON <schema>.run_inputs TO
+  <role>`); the owner and a superuser always pass. Nothing updates a row (replacing is a delete and an insert), so
+  `UPDATE` is not needed. Opening a current (version 8) schema issues no DDL. A role that is not the owner, opening a version 7
   schema, is refused by the database ("must be owner of table runs") and the schema stays at 7.
 - *Downgrade.* There is no offline downgrade from 8 to 7. Version 8 has the tables and columns of version 7 plus the new
   table, so that step is dropping `run_inputs` and `runs_target_created` (optional: a version 7 build ignores them,

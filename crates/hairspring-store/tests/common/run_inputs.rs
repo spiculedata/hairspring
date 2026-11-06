@@ -1,5 +1,6 @@
 //! Run inputs (schema version 8): the hashes of what a run executed with, recorded once per run. Every `Store` must
 //! accept, refuse, repeat and read them the same way, and `hairspring gc` must delete them with their run.
+use super::tree_support::{batch, passes};
 use hairspring_store::*;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -15,6 +16,84 @@ pub fn run_all_run_inputs(make: &dyn Fn() -> Arc<dyn Store>) {
     inputs_go_with_their_run_when_it_is_deleted(&*make());
     hostile_text_is_never_spliced(&*make());
     a_newer_attempt_replaces_the_inputs_and_an_older_one_is_stale(&*make());
+    inputs_older_than_the_runs_trials_are_stale_even_with_no_row(&*make());
+    concurrent_recorders_never_error_and_the_newest_attempt_wins(make);
+}
+
+/// A report from attempt 1 that arrives after attempt 2's trials started (the lease check and the write are separate
+/// steps) must not be stored: the run's trials are already from a later attempt. This holds with no row to compare to.
+fn inputs_older_than_the_runs_trials_are_stale_even_with_no_row(s: &dyn Store) {
+    let run = new_run(s, 10);
+    s.enqueue_job(&run.id, "run", "{}", 2).unwrap();
+    let first = s.lease_job("w", 600, 10).unwrap().unwrap();
+    assert_eq!(first.attempts, 1);
+    s.ingest_trials(&first.id, "w", true, &batch(&passes(1), 0), 11)
+        .unwrap();
+    assert!(s.fail_job(&first.id, "w", "lost", 12).unwrap());
+    let second = s.lease_job("w2", 600, 13).unwrap().unwrap();
+    assert_eq!(second.attempts, 2);
+    s.ingest_trials(&second.id, "w2", true, &batch(&passes(1), 0), 14)
+        .unwrap();
+    assert_eq!(s.get_run_inputs(&run.id).unwrap(), None);
+    let late = NewRunInputs {
+        attempt: 1,
+        ..inputs(&run.id)
+    };
+    assert_eq!(
+        rejected(s.put_run_inputs(&late, 15).unwrap()),
+        RunInputsRejection::Stale
+    );
+    assert_eq!(s.get_run_inputs(&run.id).unwrap(), None, "nothing written");
+    let current = NewRunInputs {
+        attempt: 2,
+        ..inputs(&run.id)
+    };
+    assert_eq!(
+        s.put_run_inputs(&current, 16).unwrap(),
+        RunInputsOutcome::Stored
+    );
+}
+
+/// Several recorders for one run at once: every call answers (no error from a lost race), and what is kept is the
+/// newest attempt's. Run with five writers of five attempts, and with three writers of one.
+fn concurrent_recorders_never_error_and_the_newest_attempt_wins(make: &dyn Fn() -> Arc<dyn Store>) {
+    for (writers, same_attempt) in [(5u32, false), (3, true), (5, false), (3, true)] {
+        let s = make();
+        let run = new_run(&*s, 10);
+        let handles: Vec<_> = (1..=writers)
+            .map(|n| {
+                let s = s.clone();
+                let run_id = run.id.clone();
+                std::thread::spawn(move || {
+                    let mut new = inputs(&run_id);
+                    new.attempt = if same_attempt { 1 } else { n };
+                    new.reporter_id = format!("wrk_{n:016x}");
+                    if !same_attempt {
+                        new.fields
+                            .insert("hermit_sha".into(), digest((b'a' + n as u8) as char));
+                    }
+                    s.put_run_inputs(&new, i64::from(n))
+                })
+            })
+            .collect();
+        let outcomes: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        for outcome in &outcomes {
+            assert!(outcome.is_ok(), "a recorder failed: {outcome:?}");
+        }
+        let kept = s.get_run_inputs(&run.id).unwrap().unwrap();
+        if same_attempt {
+            // All the same content: one stored, the rest repeats.
+            let stored = outcomes
+                .iter()
+                .filter(|o| matches!(o, Ok(RunInputsOutcome::Stored)))
+                .count();
+            assert_eq!(stored, 1, "{outcomes:?}");
+            assert_eq!(kept.attempt, 1);
+        } else {
+            assert_eq!(kept.attempt, writers, "{outcomes:?}");
+            assert_eq!(kept.reporter_id, format!("wrk_{writers:016x}"));
+        }
+    }
 }
 
 /// A job leased again is a new attempt, and its trials replace the earlier attempt's. Its inputs do too: the newer

@@ -5,13 +5,12 @@ use crate::{Api, CallError};
 use hairspring_engine::engine::Engine;
 use hairspring_service::{LeasedJob, RunInputsSubmission};
 use serde_json::json;
-use std::sync::atomic::Ordering;
 
 /// What an older server answers to a path it does not have.
 const NOT_THERE: [u16; 2] = [404, 405];
 
 pub(crate) fn report(api: &Api, engine: &Engine, worker_id: &str, secret: &str, job: &LeasedJob) {
-    if api.inputs_unsupported.load(Ordering::Relaxed) {
+    if api.inputs_paused() {
         return;
     }
     let Some(draft) = engine.run_inputs(&job.target) else {
@@ -24,9 +23,10 @@ pub(crate) fn report(api: &Api, engine: &Engine, worker_id: &str, secret: &str, 
     match api.post(&path, &body) {
         Ok(_) => {}
         Err(CallError::Status(code, _)) if NOT_THERE.contains(&code) => {
-            api.inputs_unsupported.store(true, Ordering::Relaxed);
+            api.pause_inputs();
             eprintln!(
-                "hairspring-worker: this server does not record run inputs (it answered {code}); runs of this worker have none recorded"
+                "hairspring-worker: the server answered {code} to run inputs (an older server, or a proxy without the path); asking again in {} minutes",
+                api.inputs_reprobe.as_secs() / 60
             );
         }
         Err(CallError::Status(code, _)) => eprintln!(
@@ -48,7 +48,7 @@ mod tests {
     use hairspring_engine::mode::RunMode;
     use std::io::{Read, Write};
     use std::net::TcpListener;
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
     /// A server that answers every request with `status` and counts them; it reads each request to its end.
@@ -164,7 +164,23 @@ mod tests {
             1,
             "remembered after the first 404"
         );
-        assert!(api.inputs_unsupported.load(Ordering::SeqCst));
+        assert!(api.inputs_paused());
+    }
+
+    #[test]
+    fn a_worker_asks_again_after_the_pause_so_an_upgraded_server_is_noticed() {
+        let (url, hits) = stub("404 Not Found");
+        let engine = engine();
+        let target = engine.target_names().into_iter().next().unwrap();
+        let mut api = api(&url);
+        api.inputs_reprobe = std::time::Duration::from_millis(150);
+        report(&api, &engine, "wrk_0000000000000001", "s", &job(1, &target));
+        report(&api, &engine, "wrk_0000000000000001", "s", &job(2, &target));
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "paused");
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        assert!(!api.inputs_paused(), "the pause is over");
+        report(&api, &engine, "wrk_0000000000000001", "s", &job(3, &target));
+        assert_eq!(hits.load(Ordering::SeqCst), 2, "asked again");
     }
 
     #[test]
@@ -177,6 +193,6 @@ mod tests {
             report(&api, &engine, "wrk_0000000000000001", "s", &job(n, &target));
         }
         assert_eq!(hits.load(Ordering::SeqCst), 3);
-        assert!(!api.inputs_unsupported.load(Ordering::SeqCst));
+        assert!(!api.inputs_paused());
     }
 }

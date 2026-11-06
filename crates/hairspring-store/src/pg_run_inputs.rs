@@ -64,11 +64,20 @@ pub(crate) fn put(
     };
     let attempt = new.attempt as i32;
     let mut tx = c.transaction()?;
-    let run_exists = tx
-        .query_opt("SELECT 1 FROM runs WHERE id=$1", &[&new.run_id])?
-        .is_some();
-    if !run_exists {
+    // The run row is locked until this transaction ends, as a trial batch locks it before it starts an attempt, so the
+    // two are decided one after the other, and recorders for one run queue here instead of racing on the row below.
+    let ingest_attempt: Option<i64> = tx
+        .query_opt(
+            "SELECT ingest_attempt FROM runs WHERE id=$1 FOR UPDATE",
+            &[&new.run_id],
+        )?
+        .map(|r| r.get(0));
+    let Some(ingest_attempt) = ingest_attempt else {
         return Ok(RunInputsOutcome::Rejected(RunInputsRejection::RunNotFound));
+    };
+    // The run's trials are already from a later attempt: these inputs describe trials that are gone.
+    if i64::from(new.attempt) < ingest_attempt {
+        return Ok(RunInputsOutcome::Rejected(RunInputsRejection::Stale));
     }
     // Replacing is a delete and an insert, as on SQLite, so recording needs `SELECT`, `INSERT` and `DELETE` and no
     // `UPDATE`, and no row lock (which would need `UPDATE` too). Two writers can both see the same row: `ON CONFLICT DO

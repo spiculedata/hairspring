@@ -175,11 +175,13 @@
 
 - Schema version 8 upgrade (it adds the `run_inputs` table and the `runs_target_created` index, on both stores).
   Opening a version 7 database creates both in the transaction that sets the version; no row is rewritten. On SQLite
-  every write to the database waits during the upgrade. On PostgreSQL `CREATE INDEX` takes a `SHARE` lock on `runs`
-  until the migration commits, so every insert or update of a run waits (build the index beforehand with
-  `CREATE INDEX CONCURRENTLY` under the same name to avoid it), and the migration must be run by the role that owns
-  the tables. A role that only reads and writes rows needs `SELECT, INSERT, DELETE` on `run_inputs` (`DELETE` for
-  `hairspring gc`) to record inputs; without a grant it still opens the database. A table or index of either name built
+  every write to the database waits during the upgrade, up to the busy timeout, and then fails. On PostgreSQL
+  `CREATE INDEX` takes a `SHARE` lock on `runs` until the migration commits, so every insert or update of a run waits
+  (building the index beforehand with `CREATE INDEX CONCURRENTLY runs_target_created ON runs(target, created_at, seq)`
+  avoids the long wait, but the `REFERENCES runs` in `CREATE TABLE run_inputs` still takes a brief lock on `runs`), and
+  the migration must be run by the role that owns the tables. A role that only reads and writes rows needs
+  `SELECT, INSERT, DELETE` on `run_inputs`, granted by the owner, before it can open a schema 8 database; without
+  them the open is refused, before anything is changed, with the `GRANT` to run. A table or index of either name built
   beforehand is kept only if it has the same definition: otherwise the open is refused, everything is rolled back and the
   database stays at version 7. An older release refuses a version 8 database. There is no offline downgrade from 8 to
   7 (reset the stored version by hand); the downgrade to version 2 drops the table and the index. See "Run inputs" in

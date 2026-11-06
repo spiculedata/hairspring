@@ -64,12 +64,20 @@ pub(crate) fn put(conn: &mut Connection, new: &NewRunInputs, now: i64) -> Result
         Err(why) => return Ok(RunInputsOutcome::Rejected(RunInputsRejection::Invalid(why))),
     };
     let tx = write_tx(conn)?;
-    let run_exists = tx
-        .query_row("SELECT 1 FROM runs WHERE id=?", [&new.run_id], |_| Ok(()))
-        .optional()?
-        .is_some();
-    if !run_exists {
+    // `BEGIN IMMEDIATE` holds the write lock, so no trial batch starts a newer attempt between this read and the write.
+    let ingest_attempt: Option<i64> = tx
+        .query_row(
+            "SELECT ingest_attempt FROM runs WHERE id=?",
+            [&new.run_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(ingest_attempt) = ingest_attempt else {
         return Ok(RunInputsOutcome::Rejected(RunInputsRejection::RunNotFound));
+    };
+    // The run's trials are already from a later attempt: these inputs describe trials that are gone.
+    if i64::from(new.attempt) < ingest_attempt {
+        return Ok(RunInputsOutcome::Rejected(RunInputsRejection::Stale));
     }
     let stored = stored_row(&tx, &new.run_id)?;
     let view = stored

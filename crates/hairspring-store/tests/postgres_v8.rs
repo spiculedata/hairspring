@@ -381,7 +381,7 @@ fn only_the_owner_can_migrate_a_version_seven_schema_and_any_role_then_records_i
     drop(PgStore::connect_in_schema(&url, &schema, 1).unwrap());
     // The tables the owner created are the owner's: the role is granted what it needs, as for the other tables.
     a.batch_execute(&format!(
-        "GRANT SELECT, INSERT ON \"{schema}\".run_inputs TO \"{role}\""
+        "GRANT SELECT, INSERT, DELETE ON \"{schema}\".run_inputs TO \"{role}\""
     ))
     .unwrap();
     let recorded = PgStore::connect_in_schema(&as_role, &schema, 1)
@@ -466,19 +466,14 @@ fn downgrading_a_version_seven_schema_still_works() {
     assert_eq!((report.from_version, report.to_version), (7, 2));
 }
 
-/// A role that may read and write every table but `run_inputs` (a schema upgraded by the owner, with the grants of the
-/// earlier tables only) can still open a current schema: the table is there, it just may not be touched. The refusal
-/// to open, with advice to rename or drop the table, is for a table that is really different. Recording then fails with
-/// the database's own error, and nothing else is affected.
-#[test]
-fn a_role_without_rights_on_run_inputs_opens_the_schema_and_only_recording_fails() {
-    let Some(url) = url() else { return };
-    let schema = new_schema("v8g");
-    let role = format!("hs_v8g_{}", &new_id("u").replace('-', "_")[..12]);
-    let s = PgStore::connect_in_schema(&url, &schema, 1).unwrap();
-    let run = new_run(&s, "t", 1);
-    drop(s);
-    let mut a = admin(&url);
+/// Opens `schema` as `role` and says what happened: the error text, or the store.
+fn open_as(url: &str, schema: &str, role: &str) -> std::result::Result<PgStore, String> {
+    PgStore::connect_in_schema(&url_as(url, role), schema, 1).map_err(|e| e.to_string())
+}
+
+/// A role that may read and write every table, with the grants to `run_inputs` given by `on_run_inputs` (`None` for
+/// no grant at all).
+fn make_role(a: &mut Client, schema: &str, role: &str, on_run_inputs: Option<&str>) {
     a.batch_execute(&format!(
         "CREATE ROLE \"{role}\" LOGIN;
          GRANT USAGE ON SCHEMA \"{schema}\" TO \"{role}\";
@@ -487,28 +482,62 @@ fn a_role_without_rights_on_run_inputs_opens_the_schema_and_only_recording_fails
          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA \"{schema}\" TO \"{role}\";"
     ))
     .unwrap();
-    let as_role = url_as(&url, &role);
-    let opened = PgStore::connect_in_schema(&as_role, &schema, 1).map_err(|e| e.to_string());
-    let recorded = opened.as_ref().ok().map(|s| {
-        (
-            s.get_run(&run.id).map(|r| r.is_some()),
-            s.put_run_inputs(&inputs(&run.id), 5),
-        )
-    });
-    a.batch_execute(&format!("DROP OWNED BY \"{role}\"; DROP ROLE \"{role}\""))
+    if let Some(grant) = on_run_inputs {
+        a.batch_execute(&format!(
+            "GRANT {grant} ON \"{schema}\".run_inputs TO \"{role}\""
+        ))
         .unwrap();
-    let (reads, put) =
-        recorded.unwrap_or_else(|| panic!("the open was refused: {:?}", opened.as_ref().err()));
-    assert!(reads.unwrap(), "the other tables work");
-    let why = put.expect_err("recording needs a grant").to_string();
-    assert!(why.contains("permission denied"), "{why}");
-    assert!(!why.contains("rename or drop"), "{why}");
+    }
 }
 
-/// Recording, replacing by a later attempt, and removing an earlier attempt's inputs when its trials restart need
-/// `SELECT`, `INSERT` and `DELETE` on `run_inputs` and nothing more (no `UPDATE`).
+fn drop_role(a: &mut Client, role: &str) {
+    a.batch_execute(&format!("DROP OWNED BY \"{role}\"; DROP ROLE \"{role}\""))
+        .unwrap();
+}
+
+/// Every first batch of trials of an attempt removes the inputs an earlier attempt left, so a role that cannot touch
+/// `run_inputs` could open the database and then fail to ingest trials for any run. It is refused at open instead,
+/// before anything is written, with the statement that fixes it. Nothing about the table is "different": the advice to
+/// rename or drop it must never appear.
 #[test]
-fn select_insert_and_delete_on_run_inputs_are_enough_to_record_and_replace() {
+fn a_role_without_the_grants_on_run_inputs_is_refused_at_open_with_the_grant_to_run() {
+    let Some(url) = url() else { return };
+    for (label, grant) in [
+        ("no grant", None),
+        ("select only", Some("SELECT")),
+        ("select and insert", Some("SELECT, INSERT")),
+        ("insert and delete", Some("INSERT, DELETE")),
+        ("select and delete", Some("SELECT, DELETE")),
+    ] {
+        let schema = new_schema("v8g");
+        let role = format!("hs_v8g_{}", &new_id("u").replace('-', "_")[..12]);
+        drop(PgStore::connect_in_schema(&url, &schema, 1).unwrap());
+        let mut a = admin(&url);
+        make_role(&mut a, &schema, &role, grant);
+        let refused = open_as(&url, &schema, &role).err();
+        let version_after = recorded_version(&mut a, &schema);
+        drop_role(&mut a, &role);
+        let why = refused.unwrap_or_else(|| panic!("{label}: the open must be refused"));
+        assert!(
+            why.contains(&format!(
+                "GRANT SELECT, INSERT, DELETE ON {schema}.run_inputs TO {role}"
+            )),
+            "{label}: {why}"
+        );
+        assert!(!why.contains("rename or drop"), "{label}: {why}");
+        assert!(!why.contains("different definition"), "{label}: {why}");
+        assert_eq!(
+            version_after, CURRENT_VERSION,
+            "{label}: nothing was changed"
+        );
+    }
+}
+
+/// With `SELECT, INSERT, DELETE` on `run_inputs` and the usual rights on the other tables (no `UPDATE` on `run_inputs`),
+/// a role opens the schema, ingests trials, records inputs, replaces them for a later attempt, and a later attempt's
+/// first trials remove an earlier attempt's inputs.
+#[test]
+fn select_insert_and_delete_on_run_inputs_are_enough_to_open_ingest_record_and_replace() {
     let Some(url) = url() else { return };
     let schema = new_schema("v8h");
     let role = format!("hs_v8h_{}", &new_id("u").replace('-', "_")[..12]);
@@ -516,38 +545,99 @@ fn select_insert_and_delete_on_run_inputs_are_enough_to_record_and_replace() {
     let run = new_run(&s, "t", 1);
     drop(s);
     let mut a = admin(&url);
-    a.batch_execute(&format!(
-        "CREATE ROLE \"{role}\" LOGIN;
-         GRANT USAGE ON SCHEMA \"{schema}\" TO \"{role}\";
-         GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA \"{schema}\" TO \"{role}\";
-         REVOKE ALL ON \"{schema}\".run_inputs FROM \"{role}\";
-         GRANT SELECT, INSERT, DELETE ON \"{schema}\".run_inputs TO \"{role}\";
-         GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA \"{schema}\" TO \"{role}\";"
-    ))
-    .unwrap();
-    let as_role = url_as(&url, &role);
-    let outcome = PgStore::connect_in_schema(&as_role, &schema, 1)
-        .map_err(|e| e.to_string())
-        .and_then(|s| {
-            let first = s
-                .put_run_inputs(&inputs(&run.id), 5)
-                .map_err(|e| e.to_string())?;
-            let later = NewRunInputs {
-                attempt: 2,
-                ..inputs(&run.id)
-            };
-            let second = s.put_run_inputs(&later, 6).map_err(|e| e.to_string())?;
-            let kept = s.get_run_inputs(&run.id).map_err(|e| e.to_string())?;
-            Ok((first, second, kept.map(|k| k.attempt)))
-        });
-    a.batch_execute(&format!("DROP OWNED BY \"{role}\"; DROP ROLE \"{role}\""))
-        .unwrap();
+    make_role(&mut a, &schema, &role, Some("SELECT, INSERT, DELETE"));
+    let outcome = open_as(&url, &schema, &role).and_then(|s| -> std::result::Result<_, String> {
+        let err = |e: StoreError| e.to_string();
+        let job = common::tree_support::ingest_batch(
+            &s,
+            &run.id,
+            &common::tree_support::batch(&common::tree_support::passes(1), 0),
+        );
+        let first = s.put_run_inputs(&inputs(&run.id), 5).map_err(err)?;
+        s.fail_job(&job.id, "w", "lost", 20).map_err(err)?;
+        let again = s
+            .lease_job("w", 600, 30)
+            .map_err(err)?
+            .expect("leased again");
+        let later = NewRunInputs {
+            attempt: again.attempts,
+            ..inputs(&run.id)
+        };
+        let second = s.put_run_inputs(&later, 31).map_err(err)?;
+        let applied = s
+            .ingest_trials(
+                &again.id,
+                "w",
+                true,
+                &common::tree_support::batch(&common::tree_support::passes(1), 0),
+                32,
+            )
+            .map_err(err)?;
+        let kept = s.get_run_inputs(&run.id).map_err(err)?.map(|k| k.attempt);
+        // A third attempt that records nothing: its first trials remove the second attempt's inputs (a delete).
+        s.fail_job(&again.id, "w", "lost", 40).map_err(err)?;
+        let third = s
+            .lease_job("w", 600, 50)
+            .map_err(err)?
+            .expect("leased a third time");
+        s.ingest_trials(
+            &third.id,
+            "w",
+            true,
+            &common::tree_support::batch(&common::tree_support::passes(1), 0),
+            51,
+        )
+        .map_err(err)?;
+        let after_third = s.get_run_inputs(&run.id).map_err(err)?.is_none();
+        Ok((
+            first,
+            second,
+            matches!(applied, IngestOutcome::Applied { .. }),
+            kept,
+            after_third,
+        ))
+    });
+    drop_role(&mut a, &role);
     assert_eq!(
         outcome,
         Ok((
             RunInputsOutcome::Stored,
             RunInputsOutcome::Replaced,
-            Some(2)
+            true,
+            Some(2),
+            true
         ))
     );
+}
+
+/// The only defect is an extra index on the table (unique or not): the table is still refused.
+#[test]
+fn a_table_with_an_extra_index_and_nothing_else_wrong_is_refused() {
+    let Some(url) = url() else { return };
+    for extra in [
+        "CREATE INDEX ON run_inputs(fields_json)",
+        "CREATE UNIQUE INDEX ON run_inputs(scheme, attempt)",
+    ] {
+        let schema = new_schema("v8x");
+        drop(PgStore::connect_in_schema(&url, &schema, 1).unwrap());
+        make_v7(&url, &schema);
+        let mut c = admin(&url);
+        c.batch_execute(&format!(
+            "SET search_path = \"{schema}\";
+             CREATE TABLE run_inputs (run_id TEXT PRIMARY KEY REFERENCES runs(id), scheme TEXT NOT NULL,
+               fields_json TEXT NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL,
+               reporter_trusted BOOLEAN NOT NULL, attempt INTEGER NOT NULL, created_at BIGINT NOT NULL);
+             {extra}"
+        ))
+        .unwrap();
+        let err = PgStore::connect_in_schema(&url, &schema, 1)
+            .err()
+            .unwrap_or_else(|| panic!("{extra}: must refuse"));
+        assert!(
+            err.to_string()
+                .contains("table run_inputs exists but has a different definition"),
+            "{extra}: {err}"
+        );
+        assert_eq!(recorded_version(&mut c, &schema), 7, "{extra}");
+    }
 }

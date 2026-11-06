@@ -288,6 +288,8 @@ fn verify_v8_definitions(conn: &Connection) -> Result<()> {
         |r| r.get(0),
     )?;
     // The primary key's own index and nothing else: no UNIQUE constraint, no index added by hand. No CHECK either.
+    // (A WITHOUT ROWID or STRICT table is caught by the column check above: SQLite then reports the primary key column
+    // as NOT NULL, which the migration's table does not have.)
     let extra_indexes: i64 = conn.query_row(
         "SELECT COUNT(*) FROM pragma_index_list('run_inputs') WHERE origin <> 'pk'",
         [],
@@ -299,17 +301,7 @@ fn verify_v8_definitions(conn: &Connection) -> Result<()> {
         |r| r.get(0),
     )?;
     let has_check = sql.to_ascii_uppercase().contains("CHECK");
-    let without_rowid: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM pragma_table_list('run_inputs') WHERE wr = 1 OR strict = 1",
-        [],
-        |r| r.get(0),
-    )?;
-    if columns != wanted
-        || references_runs != 2
-        || extra_indexes != 0
-        || has_check
-        || without_rowid != 0
-    {
+    if columns != wanted || references_runs != 2 || extra_indexes != 0 || has_check {
         return Err(StoreError::Backend(
             "table run_inputs exists but has a different definition: rename or drop it and open the database again"
                 .to_string(),

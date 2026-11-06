@@ -156,7 +156,7 @@ CREATE INDEX IF NOT EXISTS run_properties_violation ON run_properties(run_id, id
 /// in `seq`, the column that orders runs created in the same millisecond here (as `runs_created` does). `CREATE INDEX`
 /// (not `CONCURRENTLY`, which cannot run in a transaction) blocks writes to `runs` while it builds; reads carry on.
 /// Creating the index needs ownership of `runs`, so this step must be run by the role that owns the schema's tables
-/// (that role owns the new table too: a role that only reads and writes rows needs `SELECT, INSERT` on `run_inputs`
+/// (that role owns the new table too: a role that only reads and writes rows needs `SELECT, INSERT, DELETE` on `run_inputs`
 /// granted, as on the other tables, before it can record inputs).
 const MIGRATE_V7_TO_V8: &str = "
 CREATE INDEX IF NOT EXISTS runs_target_created ON runs(target, created_at, seq);
@@ -375,6 +375,7 @@ fn verify_v8_definitions(tx: &mut Transaction<'_>) -> Result<()> {
                 .to_string(),
         ));
     }
+    verify_run_inputs_rights(tx)?;
     for (index, table, ending) in V8_DEFINITIONS {
         let row = tx.query_opt(
             "SELECT i.indisvalid AND i.indisready, i.indisunique, t.relname::text, pg_get_indexdef(i.indexrelid) \
@@ -396,6 +397,31 @@ fn verify_v8_definitions(tx: &mut Transaction<'_>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The role must be able to read, write and delete `run_inputs`. Every first batch of trials of an attempt deletes the
+/// inputs an earlier attempt left, so a role without the rights could open the database and then fail to ingest trials
+/// for any run: it is refused here instead, before anything is written, with the statement that fixes it. The owner and
+/// a superuser always pass. (`has_table_privilege` reads the catalogs, so this does not depend on seeing the table.)
+fn verify_run_inputs_rights(tx: &mut Transaction<'_>) -> Result<()> {
+    let row = tx.query_one(
+        "SELECT has_table_privilege(current_user, c.oid, 'SELECT') \
+            AND has_table_privilege(current_user, c.oid, 'INSERT') \
+            AND has_table_privilege(current_user, c.oid, 'DELETE'), \
+                quote_ident(current_user), quote_ident(current_schema()) \
+         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+         WHERE n.nspname = current_schema() AND c.relname = 'run_inputs' AND c.relkind = 'r'",
+        &[],
+    )?;
+    if row.get::<_, bool>(0) {
+        return Ok(());
+    }
+    let (role, schema): (String, String) = (row.get(1), row.get(2));
+    Err(StoreError::Backend(format!(
+        "role {role} cannot use table run_inputs: ask the role that owns the schema's tables to run \
+         GRANT SELECT, INSERT, DELETE ON {schema}.run_inputs TO {role} \
+         and open the database again (nothing was changed)"
+    )))
 }
 
 /// What each version 8 index must be: its table, and how `pg_get_indexdef` ends for it.
