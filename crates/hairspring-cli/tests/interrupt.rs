@@ -74,13 +74,29 @@ fn wait_for(file: &Path) -> String {
     panic!("{} never appeared", file.display());
 }
 
+/// Whether `pid` is still running. A zombie (killed or exited, but not yet waited for) is not: a killed guest whose
+/// parent is gone is handed to pid 1, and where pid 1 does not reap (a container whose first process is `tail`, as a
+/// GitHub Actions job container's is) it stays a zombie for good, yet `kill -0` still succeeds on it.
 fn alive(pid: &str) -> bool {
-    Command::new("kill")
-        .args(["-0", pid])
+    match process_state(pid) {
+        Some(state) => !matches!(state, 'Z' | 'X'),
+        None => false,
+    }
+}
+
+/// The one-letter process state, or `None` when there is no such process. On Linux it is read from `/proc`, which
+/// needs no `ps` (a bare container image has none); elsewhere `ps` prints it.
+fn process_state(pid: &str) -> Option<char> {
+    if cfg!(target_os = "linux") {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        // The command name in brackets may hold spaces or brackets; the state is the first field after the last `)`.
+        return stat.rsplit_once(')')?.1.trim_start().chars().next();
+    }
+    let out = Command::new("ps")
+        .args(["-o", "stat=", "-p", pid])
         .output()
-        .unwrap()
-        .status
-        .success()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().chars().next()
 }
 
 fn gone(pid: &str) -> bool {
@@ -119,6 +135,16 @@ fn latest_run_state(dir: &Path) -> String {
         .nth(1)
         .expect("a state")
         .to_string()
+}
+
+#[test]
+fn a_process_that_has_exited_but_was_not_reaped_counts_as_gone() {
+    // A child that exits stays a zombie until its parent waits for it, and this test does not wait until the end.
+    let mut child = Command::new("true").spawn().unwrap();
+    let pid = child.id().to_string();
+    assert!(gone(&pid), "a zombie is not running");
+    child.wait().unwrap();
+    assert!(!alive(&pid), "a reaped process is not running");
 }
 
 #[test]
