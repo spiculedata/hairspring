@@ -64,3 +64,46 @@ pub(crate) fn shrink(ops: &[RegOp], initial: Option<i64>, limits: &Limits) -> Sh
         minimal,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::search::Kind;
+    use super::*;
+
+    /// Six overlapping writes, then reads of 1 and 2 in sequence: not linearizable, and the search needs several
+    /// remembered states to see it.
+    fn hard_ops() -> Vec<RegOp> {
+        let op = |source, invoke, complete, kind| RegOp {
+            source,
+            invoke,
+            complete,
+            required: true,
+            kind,
+        };
+        let mut ops: Vec<RegOp> = (0..6u64)
+            .map(|i| op(i as usize, i, 6 + i, Kind::Write(i as i64)))
+            .collect();
+        ops.push(op(6, 12, 13, Kind::Read(Some(1))));
+        ops.push(op(7, 14, 15, Kind::Read(Some(2))));
+        ops
+    }
+
+    #[test]
+    fn memo_budget_hit_inside_the_shrink_means_not_minimal() {
+        let limits = Limits {
+            max_memo_entries: 1,
+            max_witness_steps: 1_000_000,
+            ..Limits::default()
+        };
+        let shrunk = shrink(&hard_ops(), None, &limits);
+        assert!(!shrunk.minimal);
+        assert!(!shrunk.ops.is_empty());
+    }
+
+    #[test]
+    fn with_enough_budget_the_shrink_is_minimal() {
+        let shrunk = shrink(&hard_ops(), None, &Limits::default());
+        assert!(shrunk.minimal);
+        assert!(shrunk.ops.len() <= 4);
+    }
+}

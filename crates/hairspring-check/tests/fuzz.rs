@@ -57,10 +57,33 @@ fn random_valid_history(rng: &mut Rng, ops: usize) -> History {
     let mut recs = Vec::new();
     let mut seq = 0u64;
     let mut pending: Vec<(String, u64, String, String)> = Vec::new();
+    let complete = |rng: &mut Rng,
+                    recs: &mut Vec<OpRecord>,
+                    seq: &mut u64,
+                    at: usize,
+                    pending: &mut Vec<(String, u64, String, String)>| {
+        let (client, id, f, key) = pending.remove(at);
+        *seq += 1;
+        let kind = [OpType::Ok, OpType::Fail, OpType::Info][rng.below(3)];
+        recs.push(OpRecord {
+            client,
+            id,
+            kind,
+            f,
+            key,
+            value: VALUES[rng.below(VALUES.len())],
+            expect: None,
+            seq: *seq,
+        });
+    };
     for id in 0..ops as u64 {
         let f = FUNCTIONS[rng.below(7)];
         let key = KEYS[rng.below(2)];
         let client = format!("c{}", rng.below(4));
+        // One operation at a time per client: finish its open one first.
+        if let Some(at) = pending.iter().position(|p| p.0 == client) {
+            complete(rng, &mut recs, &mut seq, at, &mut pending);
+        }
         let id = id + 1000 * rng.below(3) as u64;
         seq += 1;
         recs.push(OpRecord {
@@ -75,19 +98,8 @@ fn random_valid_history(rng: &mut Rng, ops: usize) -> History {
         });
         pending.push((client, id, f.to_string(), key.to_string()));
         while !pending.is_empty() && rng.chance(60) {
-            let (client, id, f, key) = pending.remove(rng.below(pending.len()));
-            seq += 1;
-            let kind = [OpType::Ok, OpType::Fail, OpType::Info][rng.below(3)];
-            recs.push(OpRecord {
-                client,
-                id,
-                kind,
-                f,
-                key,
-                value: VALUES[rng.below(VALUES.len())],
-                expect: None,
-                seq,
-            });
+            let at = rng.below(pending.len());
+            complete(rng, &mut recs, &mut seq, at, &mut pending);
         }
     }
     match History::from_records(&recs, Completeness::Complete) {

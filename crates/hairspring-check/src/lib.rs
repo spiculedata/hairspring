@@ -13,7 +13,7 @@
 //! with a memo of failed states, a step budget and a memo budget; a violation is shrunk to a 1-minimal witness under a
 //! separate budget. Everything is deterministic: the same history and limits give the same verdict and witness.
 //!
-//! The history type ([`History`]) is built from [`OpRecord`]s, one per `op` line; the wire parser is not part of this
+//! The history type ([`History`]) is built from [`OpRecord`]s, one per recorded operation event; the wire parser is not part of this
 //! crate. Internal building block: nothing here is a public claim about distributed testing.
 
 mod common;
@@ -28,7 +28,7 @@ mod wal;
 pub use history::{Completeness, History, HistoryError, OpRecord, OpType, Operation, Outcome};
 pub use limits::Limits;
 pub use queue::check_queue;
-pub use register::{check_register_key, check_register_linearizable};
+pub use register::{check_register_key, check_register_linearizable, RegisterInitials};
 pub use set::check_set;
 pub use verdict::{CheckerId, UnknownReason, Verdict, Violation, ViolationKind, CHECKER_VERSION};
 pub use wal::check_wal_prefix;

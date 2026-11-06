@@ -122,7 +122,7 @@ fn completion_before_its_invoke_in_sequence_order_is_rejected() {
     recs[1].seq = a;
     assert!(matches!(
         History::from_records(&recs, Completeness::Complete),
-        Err(HistoryError::CompletionWithoutInvoke { .. })
+        Err(HistoryError::CompletionBeforeInvoke { .. })
     ));
 }
 

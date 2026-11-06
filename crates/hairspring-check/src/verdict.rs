@@ -6,7 +6,7 @@ use crate::history::Operation;
 /// run identity next to [`CheckerId::as_str`]).
 pub const CHECKER_VERSION: u32 = 1;
 
-/// Which checker produced a verdict. The names match the topology file's `checker` setting.
+/// Which checker produced a verdict. The names are the configuration names of the checkers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CheckerId {
     /// No acknowledged add is missing from the final set, and nothing appears that was not added.

@@ -6,7 +6,8 @@
 //! the history is linearizable. Failed states are remembered, so each is expanded once.
 //!
 //! The search is an explicit-stack depth-first search (no recursion), tries candidates in invoke order (deterministic),
-//! and counts each candidate tried as one step.
+//! and counts one step for every candidate tried and for every already-placed operation skipped while looking for the
+//! next candidate.
 
 use std::collections::HashSet;
 
@@ -66,112 +67,167 @@ fn apply(kind: Kind, register: Option<i64>) -> Option<Option<i64>> {
     }
 }
 
-fn new_frame(
-    parent: (usize, usize),
-    bits: &[u64],
-    ops: &[RegOp],
-    by_completion: &[usize],
-) -> Frame {
-    let mut first = parent.0;
-    while first < ops.len() && is_set(bits, first) {
-        first += 1;
+fn spend(steps_left: &mut u64) -> Result<(), Exhausted> {
+    if *steps_left == 0 {
+        return Err(Exhausted::Steps);
     }
-    let mut first_c = parent.1;
-    while first_c < by_completion.len() && is_set(bits, by_completion[first_c]) {
-        first_c += 1;
+    *steps_left -= 1;
+    Ok(())
+}
+
+struct Search<'a> {
+    ops: &'a [RegOp],
+    /// Required operations by completion time.
+    by_completion: Vec<usize>,
+    /// Placed operations, as a bit set over `ops`.
+    bits: Vec<u64>,
+    register: Option<i64>,
+    required_left: usize,
+    memo: HashSet<(Vec<u64>, Option<i64>)>,
+    stack: Vec<Frame>,
+}
+
+impl<'a> Search<'a> {
+    fn new(ops: &'a [RegOp], initial: Option<i64>) -> Self {
+        let mut by_completion: Vec<usize> = (0..ops.len()).filter(|&i| ops[i].required).collect();
+        by_completion.sort_by_key(|&i| (ops[i].complete, i));
+        Search {
+            ops,
+            required_left: by_completion.len(),
+            by_completion,
+            bits: vec![0u64; ops.len().div_ceil(64)],
+            register: initial,
+            memo: HashSet::new(),
+            stack: Vec::new(),
+        }
     }
-    // Callers only build a frame while a required operation is unplaced, so `first_c` is in range.
-    let horizon = by_completion
-        .get(first_c)
-        .map_or(u64::MAX, |&i| ops[i].complete);
-    Frame {
-        cursor: first,
-        horizon,
-        first_unplaced: first,
-        first_unplaced_by_completion: first_c,
-        placed: None,
+
+    /// A node for the current state; `parent` holds the parent's first-unplaced positions (a valid starting point,
+    /// since a child has placed everything its parent had).
+    fn frame(&self, parent: (usize, usize)) -> Frame {
+        let mut first = parent.0;
+        while first < self.ops.len() && is_set(&self.bits, first) {
+            first += 1;
+        }
+        let mut first_c = parent.1;
+        while first_c < self.by_completion.len() && is_set(&self.bits, self.by_completion[first_c])
+        {
+            first_c += 1;
+        }
+        let horizon = self
+            .by_completion
+            .get(first_c)
+            .map_or(u64::MAX, |&i| self.ops[i].complete);
+        Frame {
+            cursor: first,
+            horizon,
+            first_unplaced: first,
+            first_unplaced_by_completion: first_c,
+            placed: None,
+        }
+    }
+
+    /// The next unplaced operation that may be placed from the top node, skipping placed ones (each skip is a step).
+    fn next_candidate(&mut self, steps_left: &mut u64) -> Result<Option<usize>, Exhausted> {
+        let depth = self.stack.len() - 1;
+        let horizon = self.stack[depth].horizon;
+        let mut i = self.stack[depth].cursor;
+        while i < self.ops.len() && self.ops[i].invoke < horizon {
+            if !is_set(&self.bits, i) {
+                self.stack[depth].cursor = i + 1;
+                return Ok(Some(i));
+            }
+            spend(steps_left)?;
+            i += 1;
+        }
+        self.stack[depth].cursor = i;
+        Ok(None)
+    }
+
+    fn place(&mut self, i: usize, next_register: Option<i64>) {
+        toggle(&mut self.bits, i);
+        self.register = next_register;
+        if self.ops[i].required {
+            self.required_left -= 1;
+        }
+    }
+
+    fn unplace(&mut self, i: usize, before: Option<i64>) {
+        toggle(&mut self.bits, i);
+        self.register = before;
+        if self.ops[i].required {
+            self.required_left += 1;
+        }
+    }
+
+    /// The top node has no candidates left: remember its state and undo the placement that led to it. `Ok(false)`
+    /// means that was the root, so nothing is left to try.
+    fn backtrack(&mut self, max_memo_entries: usize) -> Result<bool, Exhausted> {
+        if self.memo.len() >= max_memo_entries {
+            return Err(Exhausted::Memo);
+        }
+        self.memo.insert((self.bits.clone(), self.register));
+        self.stack.pop();
+        let Some(parent) = self.stack.last_mut() else {
+            return Ok(false);
+        };
+        let (placed, before) = parent
+            .placed
+            .take()
+            .expect("a parent frame has placed an operation");
+        self.unplace(placed, before);
+        Ok(true)
+    }
+
+    fn run(&mut self, steps_left: &mut u64, max_memo_entries: usize) -> Result<bool, Exhausted> {
+        if self.required_left == 0 {
+            return Ok(true);
+        }
+        let root = self.frame((0, 0));
+        self.stack.push(root);
+        loop {
+            let Some(i) = self.next_candidate(steps_left)? else {
+                if !self.backtrack(max_memo_entries)? {
+                    return Ok(false);
+                }
+                continue;
+            };
+            spend(steps_left)?;
+            let Some(next) = apply(self.ops[i].kind, self.register) else {
+                continue;
+            };
+            let before = self.register;
+            self.place(i, next);
+            if self.required_left == 0 {
+                return Ok(true);
+            }
+            if self.memo.contains(&(self.bits.clone(), self.register)) {
+                self.unplace(i, before);
+                continue;
+            }
+            let depth = self.stack.len() - 1;
+            self.stack[depth].placed = Some((i, before));
+            let parent = (
+                self.stack[depth].first_unplaced,
+                self.stack[depth].first_unplaced_by_completion,
+            );
+            let child = self.frame(parent);
+            self.stack.push(child);
+        }
     }
 }
 
 /// Is there an order of `ops` that respects real time and the register's behaviour? `steps_left` is decremented for
-/// every candidate tried and is shared across calls; `Err` means the answer is not known.
+/// every candidate tried or skipped and is shared across calls; `Err` means the answer is not known.
+///
+/// Cost: each remembered failed state holds a copy of the placed-set (`ops.len() / 8` bytes) plus the register, so
+/// memory is about `max_memo_entries * (ops.len() / 8 + 40)` bytes, and each step may clone that set once to probe the
+/// memo.
 pub(crate) fn linearizable(
     ops: &[RegOp],
     initial: Option<i64>,
     steps_left: &mut u64,
     max_memo_entries: usize,
 ) -> Result<bool, Exhausted> {
-    let mut required_left = ops.iter().filter(|o| o.required).count();
-    if required_left == 0 {
-        return Ok(true);
-    }
-    let mut by_completion: Vec<usize> = (0..ops.len()).filter(|&i| ops[i].required).collect();
-    by_completion.sort_by_key(|&i| (ops[i].complete, i));
-
-    let mut bits = vec![0u64; ops.len().div_ceil(64)];
-    let mut register = initial;
-    let mut memo: HashSet<(Vec<u64>, Option<i64>)> = HashSet::new();
-    let mut stack = vec![new_frame((0, 0), &bits, ops, &by_completion)];
-
-    loop {
-        let depth = stack.len() - 1;
-        let (mut i, horizon) = (stack[depth].cursor, stack[depth].horizon);
-        while i < ops.len() && ops[i].invoke < horizon && is_set(&bits, i) {
-            i += 1;
-        }
-        if i >= ops.len() || ops[i].invoke >= horizon {
-            // Dead end: remember the state, then undo the placement that led here.
-            if memo.len() >= max_memo_entries {
-                return Err(Exhausted::Memo);
-            }
-            memo.insert((bits.clone(), register));
-            stack.pop();
-            let Some(parent) = stack.last_mut() else {
-                return Ok(false);
-            };
-            let (placed, before) = parent
-                .placed
-                .take()
-                .expect("a parent frame has placed an operation");
-            toggle(&mut bits, placed);
-            register = before;
-            if ops[placed].required {
-                required_left += 1;
-            }
-            continue;
-        }
-
-        stack[depth].cursor = i + 1;
-        if *steps_left == 0 {
-            return Err(Exhausted::Steps);
-        }
-        *steps_left -= 1;
-        let Some(next) = apply(ops[i].kind, register) else {
-            continue;
-        };
-
-        let before = register;
-        toggle(&mut bits, i);
-        register = next;
-        if ops[i].required {
-            required_left -= 1;
-            if required_left == 0 {
-                return Ok(true);
-            }
-        }
-        if memo.contains(&(bits.clone(), register)) {
-            toggle(&mut bits, i);
-            register = before;
-            if ops[i].required {
-                required_left += 1;
-            }
-            continue;
-        }
-        stack[depth].placed = Some((i, before));
-        let parent = (
-            stack[depth].first_unplaced,
-            stack[depth].first_unplaced_by_completion,
-        );
-        stack.push(new_frame(parent, &bits, ops, &by_completion));
-    }
+    Search::new(ops, initial).run(steps_left, max_memo_entries)
 }

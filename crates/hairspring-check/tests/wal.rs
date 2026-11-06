@@ -47,10 +47,9 @@ fn recovery_missing_an_acknowledged_tail_is_a_violation() {
 
 #[test]
 fn recovery_may_drop_unacknowledged_tail() {
-    let h = appends(&[(1, "ok"), (2, "info"), (3, "info")]);
+    let h = appends(&[(1, "ok"), (2, "info")]);
     assert_eq!(run(&h, &[1]), Verdict::Ok);
     assert_eq!(run(&h, &[1, 2]), Verdict::Ok);
-    assert_eq!(run(&h, &[1, 2, 3]), Verdict::Ok);
 }
 
 #[test]
@@ -71,13 +70,58 @@ fn a_gap_is_not_a_prefix() {
 }
 
 #[test]
-fn skipping_an_unknown_append_in_the_middle_is_not_a_prefix() {
+fn an_unknown_append_followed_by_later_appends_is_never_a_violation() {
+    // A timed-out append may never land, or may land late, so any recovered log could be explained.
+    let h = appends(&[(1, "info"), (2, "ok")]);
+    for recovered in [&[2][..], &[2, 1], &[1, 2], &[], &[1]] {
+        let v = run(&h, recovered);
+        assert!(
+            matches!(v, Verdict::Unknown(UnknownReason::UnsupportedShape { .. })),
+            "{recovered:?} gave {v:?}"
+        );
+    }
     let h = appends(&[(1, "ok"), (2, "info"), (3, "ok")]);
-    assert_eq!(run(&h, &[1, 2, 3]), Verdict::Ok);
-    assert_eq!(
-        run(&h, &[1, 3]).violation().unwrap().kind,
-        ViolationKind::NotPrefix { index: 1 }
-    );
+    assert!(matches!(
+        run(&h, &[1, 3]),
+        Verdict::Unknown(UnknownReason::UnsupportedShape { .. })
+    ));
+}
+
+#[test]
+fn a_pending_append_by_one_client_followed_by_another_clients_ack_is_unknown() {
+    let mut b = Hb::new();
+    b.invoke("a", 1, "append", "log", Some(1));
+    b.seq_ok("b", 1, "append", "log", Some(2), None);
+    for recovered in [&[2][..], &[1, 2], &[2, 1]] {
+        assert!(
+            matches!(
+                run(&b.build(), recovered),
+                Verdict::Unknown(UnknownReason::UnsupportedShape { .. })
+            ),
+            "{recovered:?}"
+        );
+    }
+}
+
+#[test]
+fn an_unknown_append_followed_only_by_a_failed_append_is_still_decided() {
+    let h = appends(&[(1, "ok"), (2, "info"), (3, "fail")]);
+    assert_eq!(run(&h, &[1]), Verdict::Ok);
+    assert_eq!(run(&h, &[1, 2]), Verdict::Ok);
+    assert!(run(&h, &[1, 3]).violation().is_some());
+}
+
+#[test]
+fn phantom_names_a_witness_operation() {
+    let h = appends(&[(1, "ok"), (4, "fail")]);
+    let v = run(&h, &[1, 4]);
+    let v = v.violation().unwrap();
+    assert!(!v.witness.is_empty());
+    assert!(v.witness.iter().any(|o| o.arg == Some(4)));
+
+    let h = appends(&[(1, "ok")]);
+    let v = run(&h, &[1, 9]);
+    assert!(!v.violation().unwrap().witness.is_empty());
 }
 
 #[test]
@@ -131,13 +175,15 @@ fn overlapping_appends_on_one_log_are_not_modelled() {
 }
 
 #[test]
-fn append_after_an_unknown_append_counts_as_sequential() {
-    // An unknown append has no completion time, so the next append is ordered after its invoke only.
+fn append_after_an_unknown_append_by_the_same_client_is_unknown() {
     let mut b = Hb::new();
     b.invoke("w", 1, "append", "log", Some(1));
     b.info("w", 1, "append", "log");
     b.seq_ok("w", 2, "append", "log", Some(2), None);
-    assert_eq!(run(&b.build(), &[1, 2]), Verdict::Ok);
+    assert!(matches!(
+        run(&b.build(), &[1, 2]),
+        Verdict::Unknown(UnknownReason::UnsupportedShape { .. })
+    ));
 }
 
 #[test]
