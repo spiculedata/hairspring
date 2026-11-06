@@ -5,6 +5,7 @@ Rules (each is a regular expression over the source with comments removed):
   names      no name lookups: numeric 127.0.0.1 only
   random     no randomness: no rand, getrandom, math/rand, RandomState, no hash maps or sets whose iteration could
              reach output (tables are arrays)
+  seed       the seed comes from argv only: no HAIRSPRING_SEED anywhere in the programs
   oneline    no buffered stdout output: lines go out through one write(2) helper
   launcher   dsl never unshares, never calls setsid, never clones with namespace flags
 
@@ -27,6 +28,7 @@ RULES = [
     ("random", r"(?<![A-Za-z_])s?rand\s*\(|\brandom\s*\(|getrandom|arc4random|/dev/u?random"),
     ("random", r"math/rand|crypto/rand|RandomState|\bHashMap\b|\bHashSet\b|\brand::"),
     ("oneline", r"(?<![A-Za-z_])(printf|puts|putchar|fputs)\s*\(|fprintf\s*\(\s*stdout"),
+    ("seed", r"HAIRSPRING_SEED"),
     ("oneline", r"fmt\.Print|(?<![A-Za-z_])println!|(?<![A-Za-z_])print!"),
 ]
 LAUNCHER_RULES = [("launcher", r"\bunshare\b|\bsetsid\b|CLONE_NEW")]
@@ -37,6 +39,7 @@ SAMPLES = {
     "random": ["x = rand();", "getrandom(b, 8)", 'import "math/rand"', "let m: HashMap<u8,u8>", "srand(1)"],
     "oneline": ['printf("x")', 'fmt.Println("x")', 'println!("x")', "puts(s)"],
     "launcher": ["unshare(CLONE_NEWNS)", "setsid()"],
+    "seed": ['getenv("HAIRSPRING_SEED")', 'std::env::var("HAIRSPRING_SEED")'],
 }
 
 

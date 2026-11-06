@@ -27,8 +27,6 @@
 #define HB_INTERVAL_MS 20
 #define SUSPECT_MS 60
 #define IDLE_WAIT_MS 50
-#define MAX_IDLE_WAITS 2400 /* orphan guard: about 120 s of silence in epoll mode */
-#define IDLE_LIMIT_MS 120000 /* orphan guard in timeout mode: no request for this long (heartbeats do not count) */
 
 typedef enum { MODE_EPOLL, MODE_TIMEOUT, MODE_BLOCK } ds_mode;
 
@@ -127,7 +125,7 @@ static void handle_line(ds_conn *c, const char *line) {
     int n = sscanf(line, "%7s %15s %31s", cmd, a, b);
     if (n < 1) return;
     uint64_t now = S.mode == MODE_TIMEOUT ? ds_mono_ms() : 0;
-    if (strcmp(cmd, "HB") != 0 && strcmp(cmd, "HELLO") != 0) S.last_activity = now;
+    if (ds_counts_as_request(cmd)) S.last_activity = now;
     if (strcmp(cmd, "PUT") == 0 || strcmp(cmd, "REPL") == 0) {
         int is_put = cmd[0] == 'P';
         int k = n == 3 ? ds_key_index(a) : -1;
@@ -313,7 +311,7 @@ static int run_event_loop(void) {
                 next_hb = now + HB_INTERVAL_MS;
             }
             check_suspects(now);
-            if (now - S.last_activity > IDLE_LIMIT_MS) {
+            if (ds_idle_expired(now, S.last_activity, DS_IDLE_LIMIT_MS)) {
                 exit_code = 4;
                 break;
             }
@@ -329,7 +327,7 @@ static int run_event_loop(void) {
         }
         if (S.mode != MODE_TIMEOUT) {
             idle_waits = n == 0 ? idle_waits + 1 : 0;
-            if (idle_waits >= MAX_IDLE_WAITS) {
+            if (ds_idle_waits_expired(idle_waits)) {
                 exit_code = 4;
                 break;
             }

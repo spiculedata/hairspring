@@ -211,11 +211,11 @@ int main(int argc, char **argv) {
     close(hfd);
 
     if (reconnect) {
-        ds_emit("DSC0 v1 role=cli ops=%d ok=%u eof=%u reset=%u refused=%u resent=%u hist=%016llx\n", op_count, ok, eof,
-                reset, refused, resent, (unsigned long long)digest);
+        ds_emit("DSC0 v1 role=cli ops=%d ok=%u fail=%u eof=%u reset=%u refused=%u resent=%u hist=%016llx\n", op_count, ok,
+                fail, eof, reset, refused, resent, (unsigned long long)digest);
     } else {
         ds_emit("DSN0 v1 role=cli node=%s ops=%d ok=%u fail=%u refused=%u hist=%016llx\n", node, op_count, ok, fail,
                 refused, (unsigned long long)digest);
     }
-    return 0;
+    return fail > 0 ? 3 : 0; /* the launcher turns a failed client into ok=0 */
 }

@@ -17,7 +17,7 @@ nothing about any other environment.
 | `dsl` | C | The launcher. Starts one trial's processes, drives them to completion, merges and checks the history, prints one result line. In crash mode it also kills and restarts a node on a plan that is a pure function of a seed. |
 | `dskv` | C | A key-value server. Modes `epoll`, `timeout` (heartbeats and suspicion, with an optional second thread) and `block` (blocking `accept`/`recv`/`send`, no replication). |
 | `dscli` | C | A client with a fixed operation list. Records an invoke/return history ordered by a shared sequence counter. Modes: normal, `--per-op-conn`, `--reconnect`. |
-| `dsnode` | C | A node with an append-only record log, recovery, and a report region kept in a shared mapping. Options `--helper`, `--threads=2`, `--pause`. |
+| `dsnode` | C | A node with an append-only record log, recovery, and a report region kept in a shared mapping. Options `--threads=2`, `--pause`. |
 | `dsgo` | Go | The Go server of the ring (netpoller, one goroutine per connection). |
 | `dsgonode` | Go | The Go version of `dsnode`. |
 | `dsrs` | Rust (std only) | The Rust server of the ring (blocking sockets, one thread per connection). |
@@ -53,10 +53,11 @@ TRIAL=$(mktemp -d)
 build/dsl --crash=pid,2 --bin-dir=build --tmp="$TRIAL" --port=7201 --seed=620001
 ```
 
-`--crash=pid,K` or `--crash=pgid,K` with K of 1 or 2; `--node-bin=dsgonode` for the Go node; `--helper`, `--threads=2`
-and `--pause` are passed to the node; `--raw-write-kill` (with `--pause`, one kill) does a `write` immediately followed
-by the kill, with no other system call between. `build/dsl --print-plan --seed=S --kills=K` prints the crash plan and
-exits. The seed comes from `--seed` or from the `HAIRSPRING_SEED` environment variable.
+`--crash=pid,K` or `--crash=pgid,K` with K of 1 or 2; `--node-bin=dsgonode` for the Go node; `--threads=2` and
+`--pause` are passed to the node; `--helper` (with `pgid`) makes the launcher itself start a helper process in the first
+incarnation's process group; `--raw-write-kill` (with `--pause`, one kill) does an alive check, then a `write`
+immediately followed by the kill, with no other system call between. `build/dsl --print-plan --seed=S --kills=K` prints
+the crash plan and exits. The seed comes from `--seed` only; no environment variable is read.
 
 ## Output
 
@@ -71,14 +72,15 @@ role=cli node=<c1|c2> ops=40 ok fail refused hist=<hex16>
 role=launch servers=3 clients=2 exits=<n1:s,...> stragglers live_after seq seq_ok hist=<hex16> ok
 ```
 
-Crash trial (prefix `DSC0 v1`), plus one `HAIRSPRING_EVENT` line of kind `killed` per kill:
+Crash trial (prefix `DSC0 v1`), plus `HAIRSPRING_EVENT` lines of kind `killed` (one per confirmed kill) and `exited` (one
+per child process, with its raw wait status and a cause of `planned_kill`, `stop_kill`, `exit`, `signal` or `unreaped`):
 
 ```
 role=node tag=<n1.iK> recovered torn                 (one per incarnation, at start-up)
 role=node tag=<n1.iK> exit=quit done                 (the last incarnation, on QUIT)
-role=sup kill victim wifsig termsig reap_polls grp_gone planned_ms
-role=cli ops=60 ok eof reset refused resent hist=<hex16>
-role=launch kills restarts stragglers live_after seq_ok hist=<hex16> ok
+role=sup kill victim pre_dead wifsig termsig reap_polls grp_gone region_seen planned_ms
+role=cli ops=60 ok fail eof reset refused resent hist=<hex16>
+role=launch kills restarts stragglers unexpected live_after seq_ok hist=<hex16> ok
 ```
 
 The launcher exits 0 when every check passed and 3 otherwise (2 for a usage or set-up error). In `exits=`, a value is
@@ -145,12 +147,20 @@ Not run here: anything under Hermit, anything needing Linux x86-64 and Hermit.
 - In the raw write-then-kill trial there is no client and no restart. Its `planned_ms` is the drawn plan, although the
   supervisor waits a fixed 50 ms before it acts.
 - The `killed` line goes to stdout, with the other result lines.
-- The history of a client that did not get a valid reply records `FAIL` as the result; the client still exits 0 and the
-  launcher still prints `ok=1` if the numbering is intact. Read the `fail=` field of the client line as well.
+- The history of a client that did not get a valid reply records `FAIL` as the result, and the client exits 3. The
+  launcher then prints `ok=0` (ring trials: a non-zero exit status; crash trials: an unexpected `exited` line).
 - The test hooks `--test-exit-early`, `--test-ignore-quit` (`dskv`), `--test-skip-seq` (`dscli`) and `--test-leak-child`
-  (`dsl`), passed with `--server-arg=<node>:<arg>`, exist only so that the native tests can show a check failing.
+  (`dsl`), passed with `--server-arg=<node>:<arg>`, exist only so that the native tests can show a check failing. Two
+  compile-time options exist for the same reason and are defined only by the tests: `DS_MUTANT_PID_KILL` (a group-kill
+  trial that kills the pid alone) and `DS_STUB_WAITPID=1|2` (the first node's alive check errors, or the node is never
+  reaped). The built programs never define them.
 - A name that reaches a path (`--node`, `HAIRSPRING_PROC`) must be letters and digits (the tag exactly `<node>.i<digits>`),
   and a path or argument too long for the launcher's buffers is refused with status 2 rather than shortened.
-- In a process-group trial the helper child does not watch its parent: only the group kill removes it, so a kill that
-  missed the group shows as `grp_gone=0`. The launcher then also reports `ok=0` and removes the survivor.
-- In the raw write-then-kill trial the launcher reports `ok=0` unless the node's region file existed at the kill.
+- In a process-group trial the helper is a child of the launcher (not of the node), starts only with the first
+  incarnation, joins its process group, and watches nothing: only the group kill removes it, so a kill that missed the
+  group shows as `grp_gone=0` and an `exited` line with cause `stop_kill`. The launcher then reports `ok=0`.
+- The launcher does an alive check just before every kill. A victim that is already gone gets `pre_dead=1`, no kill and no
+  `killed` line; a victim that was not reaped after the kill gets no `killed` line either, and the plan stops.
+- In the raw write-then-kill trial the launcher reports `ok=0` unless the node's region file existed at the kill
+  (`region_seen=1`); its `planned_ms` is the fixed 50 ms it waits.
+- A line that would not fit 4,096 bytes is not written truncated: the program writes nothing for it and exits 2.

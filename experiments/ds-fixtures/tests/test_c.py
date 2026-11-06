@@ -18,6 +18,10 @@ import time
 
 import oracle
 from dstest import (
+    CLI_C0,
+    LAUNCH_C0,
+    SUP_C0,
+    parse_events,
     BIN,
     CRASH_PORT,
     HERE,
@@ -70,12 +74,16 @@ def test_crash_plan_matches_golden_and_oracle():
     check(len(plans) == len(PLAN_SEEDS), "the 20 seeds should give 20 different plans")
 
 
-def test_plan_takes_its_seed_from_the_environment():
+def test_the_seed_comes_only_from_the_seed_argument():
+    r = run([exe("dsl"), "--print-plan", "--kills=1", "--seed=620001"], env={"HAIRSPRING_SEED": "1"})
+    check(r.stdout.splitlines() == oracle.plan_lines(620001, 1), "the --seed argument must win")
+    # An environment variable is never a seed: without --seed the launcher refuses, whatever the environment holds.
     r = run([exe("dsl"), "--print-plan", "--kills=1"], env={"HAIRSPRING_SEED": "620001"})
-    check(r.stdout.splitlines() == oracle.plan_lines(620001, 1), "HAIRSPRING_SEED was not used")
-    env = {k: v for k, v in os.environ.items() if k != "HAIRSPRING_SEED"}
-    r = subprocess.run([exe("dsl"), "--print-plan", "--kills=1"], capture_output=True, text=True, env=env)
-    check(r.returncode == 2 and r.stdout == "", "a missing seed must be a usage error with no output")
+    check(r.returncode == 2 and r.stdout == "", "HAIRSPRING_SEED must not be read: rc %d %r" % (r.returncode, r.stdout))
+    with Trial() as tmp:
+        r = run([exe("dsl"), "--crash=pid,1", "--bin-dir=" + BIN, "--tmp=" + tmp, "--port=%d" % CRASH_PORT], env={"HAIRSPRING_SEED": "620001"})
+        check(r.returncode == 2 and r.stdout == "", "a crash trial without --seed must be refused: rc %d" % r.returncode)
+    check_no_leftovers([CRASH_PORT])
 
 
 def _listener(port):
@@ -355,6 +363,7 @@ def test_early_exit_of_a_server_gives_ok0_and_rc3():
     launch = [l for l in r.stdout.splitlines() if " role=launch " in l][0]
     f = kv(launch)
     check(f["ok"] == "0" and f["live_after"] == "0" and "n2:1" in f["exits"], "bad launcher line %r" % launch)
+    check("c1:3" in f["exits"] or "c2:3" in f["exits"], "a client with failed operations must exit 3: %r" % f["exits"])
     check_no_leftovers([PORT_BASE, PORT_BASE + 1, PORT_BASE + 2])
 
 
@@ -405,11 +414,250 @@ def test_crash_write_then_kill_diagnostic_trial():
         r = run_c0(620001, 1, flags=["--pause", "--raw-write-kill"], tmp=tmp)
         check(r.returncode == 0, "rc %d: %r" % (r.returncode, r.stdout))
         lines = r.stdout.splitlines()
+        check(len(lines) == 6, "expected 6 lines, got %r" % lines)
         check(lines[0] == "DSC0 v1 role=node tag=n1.i0 recovered=0 torn=0", "bad first line %r" % lines)
         check(lines[1] == "DSC0 v1 role=sup pre-kill" and len(lines[1]) + 1 == 26, "bad pre-kill line %r" % lines[1])
-        check(lines[2].startswith("HAIRSPRING_EVENT ") and ' role=sup kill=1 victim=n1.i0 wifsig=1 termsig=9 ' in lines[3], "bad kill lines %r" % lines)
-        check(re.match(r"^DSC0 v1 role=launch kills=1 restarts=0 stragglers=0 live_after=0 seq_ok=1 hist=[0-9a-f]{16} ok=1$", lines[4]), "bad launcher line %r" % lines[4])
-        check(len(lines) == 5, "unexpected extra lines %r" % lines)
+        _l, killed, exited, sups, launch = _split(r.stdout)
+        check(killed == [{"v": 1, "kind": "killed", "proc": "_launcher", "target": "n1.i0", "signal": 9, "seq": 1, "point": "t50"}], "killed %r" % killed)
+        check(exited == [{"v": 1, "kind": "exited", "proc": "_launcher", "target": "n1.i0", "status": 9, "cause": "planned_kill"}], "exited %r" % exited)
+        check(SUP_C0.match(lines[4]) and sups[0]["pre_dead"] == "0" and sups[0]["region_seen"] == "1" and sups[0]["planned_ms"] == "50", "sup %r" % lines[4])
+        check(LAUNCH_C0.match(lines[5]) and launch["kills"] == "1" and launch["restarts"] == "0", "launcher %r" % lines[5])
+    check_no_leftovers([CRASH_PORT])
+
+
+def _erring_server(port, ready, stop):
+    """A scripted server that answers every request with ERR."""
+    s = _listener(port)
+    ready.set()
+    conn, _ = s.accept()
+    conn.settimeout(10)
+    buf = b""
+    while not stop.is_set():
+        try:
+            data = conn.recv(4096)
+        except OSError:
+            break
+        if not data:
+            break
+        buf += data
+        while b"\n" in buf:
+            _, buf = buf.split(b"\n", 1)
+            conn.sendall(b"ERR\n")
+    conn.close()
+    s.close()
+
+
+def _client_against_erring_server(port, extra):
+    ready, stop = threading.Event(), threading.Event()
+    t = threading.Thread(target=_erring_server, args=(port, ready, stop))
+    t.start()
+    try:
+        ready.wait(10)
+        with Trial() as tmp:
+            os.mkdir(os.path.join(tmp, "ds-hist"))
+            with open(os.path.join(tmp, "ds-seq"), "wb") as f:
+                f.write(b"\0" * 4096)
+            return run([exe("dscli"), "--node=c1", "--servers=%d" % port, "--tmp=" + tmp] + extra)
+    finally:
+        stop.set()
+        t.join(20)
+
+
+def test_a_client_with_failed_operations_exits_3_in_both_modes():
+    r = _client_against_erring_server(PORT_BASE + 31, [])
+    f = kv(r.stdout.strip())
+    check(r.returncode == 3 and f["ok"] == "0" and f["fail"] == "40", "ring client: rc %d %r" % (r.returncode, r.stdout))
+    r = _client_against_erring_server(PORT_BASE + 32, ["--reconnect"])
+    check(CLI_C0.match(r.stdout.strip()), "crash client line has the wrong shape: %r" % r.stdout)
+    f = kv(r.stdout.strip())
+    check(r.returncode == 3 and f["ok"] == "0" and f["fail"] == "60", "crash client: rc %d %r" % (r.returncode, r.stdout))
+
+
+def _build_c(tmp, source, flags, name):
+    out = os.path.join(tmp, name)
+    cc = os.environ.get("CC", "cc")
+    b = subprocess.run([cc, "-std=gnu11", "-O1", "-pthread"] + flags + ["-o", out, source], capture_output=True, text=True)
+    check(b.returncode == 0, "build of %s failed: %s" % (name, b.stderr[-300:]))
+    return out
+
+
+def test_pure_helpers_and_the_output_and_path_guards():
+    with Trial() as tmp:
+        unit = _build_c(tmp, os.path.join(ROOT, "tests", "unit_c.c"), ["-Wall", "-Wextra"], "unit_c")
+        r = run([unit, "logic"])
+        check(r.returncode == 0, "helper checks failed: %s" % r.stderr)
+        # An output line of 4,096 bytes with its newline is written whole; one byte more is not written at all.
+        r = run([unit, "emit", "4096"])
+        check(r.returncode == 0 and len(r.stdout) == 4096 and r.stdout.endswith("\n"), "a 4096-byte line must be written whole")
+        for n in ("4097", "8192"):
+            r = run([unit, "emit", n])
+            check(r.returncode == 2 and r.stdout == "" and "too long" in r.stderr, "a %s-byte line must be refused: rc %d" % (n, r.returncode))
+        # A path that does not fit its buffer is refused, never shortened (63 characters fit a 64-byte buffer).
+        r = run([unit, "fmt", "63"])
+        check(r.returncode == 0 and r.stdout == "ok\n", "a path that fits must be accepted")
+        for n in ("64", "100", "8192"):
+            r = run([unit, "fmt", n])
+            check(r.returncode == 2 and r.stdout == "" and "too long" in r.stderr, "a %s-character path must be refused" % n)
+
+
+def _stop_leftover_nodes():
+    """Test cleanup: end any dsnode left by a stub trial, by pid, never by command line."""
+    out = subprocess.run(["pgrep", "-x", "dsnode"], capture_output=True, text=True).stdout.split()
+    for pid in out:
+        try:
+            os.kill(int(pid), signal.SIGKILL)
+        except OSError:
+            pass
+    time.sleep(0.2)
+
+
+def _trial_to_file(args, tmp):
+    """Run a launcher with stdout to a file (a stub trial can leave a node that holds a pipe open)."""
+    out = os.path.join(tmp, "stdout.txt")
+    with open(out, "w") as f:
+        rc = subprocess.run(args, stdout=f, stderr=subprocess.PIPE, text=True, timeout=120).returncode
+    return rc, open(out).read()
+
+
+def _crash_args(dsl, trial, bin_dir=None, seed=620001, kills=1, flags=None):
+    return [dsl, "--crash=pid,%d" % kills, "--bin-dir=" + (bin_dir or BIN), "--port=%d" % CRASH_PORT, "--seed=%d" % seed, "--pace-ms=10", "--tmp=" + trial] + (flags or [])
+
+
+def _split(stdout):
+    lines = stdout.splitlines()
+    events = parse_events(lines)
+    return (
+        lines,
+        [e for e in events if e["kind"] == "killed"],
+        [e for e in events if e["kind"] == "exited"],
+        [kv(l) for l in lines if " role=sup kill=" in l],
+        kv([l for l in lines if " role=launch " in l][0]),
+    )
+
+
+def test_a_victim_that_died_before_the_kill_is_not_reported_as_killed():
+    with Trial() as tmp:
+        p = subprocess.Popen(_crash_args(exe("dsl"), os.path.join(tmp, "t")), stdout=subprocess.PIPE, text=True)
+        try:
+            for _ in range(400):  # end the first incarnation early with QUIT, well before the 168 ms kill point
+                try:
+                    c = socket.create_connection(("127.0.0.1", CRASH_PORT), timeout=2)
+                    c.sendall(b"QUIT\n")
+                    c.close()
+                    break
+                except OSError:
+                    time.sleep(0.005)
+            out, _ = p.communicate(timeout=60)
+        finally:
+            if p.poll() is None:
+                p.kill()
+                p.wait()
+    lines, killed, exited, sups, launch = _split(out)
+    check(p.returncode == 3 and launch["ok"] == "0", "a pre-dead victim must give ok=0, rc 3: rc %d %r" % (p.returncode, launch))
+    check(sups[0]["pre_dead"] == "1" and killed == [], "no killed line for a pre-dead victim: %r %r" % (sups, killed))
+    first = [e for e in exited if e["target"] == "n1.i0"]
+    check(len(first) == 1 and first[0]["cause"] == "exit" and first[0]["status"] == 0, "cause must be exit, never planned_kill: %r" % first)
+    check(int(launch["unexpected"]) >= 1 and launch["restarts"] == "1", "bad launcher line %r" % launch)
+    check_no_leftovers([CRASH_PORT])
+
+
+def test_an_unexpected_death_of_the_final_incarnation_is_counted():
+    with Trial() as tmp:
+        p = subprocess.Popen(_crash_args(exe("dsl"), os.path.join(tmp, "t")), stdout=subprocess.PIPE, text=True)
+        head = []
+        try:
+            for line in p.stdout:
+                head.append(line)
+                if '"kind":"killed"' in line:
+                    break
+            pid = None
+            for _ in range(600):
+                found = subprocess.run(["pgrep", "-x", "dsnode"], capture_output=True, text=True).stdout.split()
+                if found:
+                    pid = int(found[0])
+                    break
+                time.sleep(0.005)
+            check(pid is not None, "the second incarnation never appeared")
+            os.kill(pid, signal.SIGKILL)
+            rest = p.stdout.read()
+            p.wait(timeout=60)
+        finally:
+            if p.poll() is None:
+                p.kill()
+                p.wait()
+    lines, killed, exited, sups, launch = _split("".join(head) + rest)
+    final = [e for e in exited if e["target"] == "n1.i1"]
+    check(len(final) == 1 and final[0]["cause"] == "signal" and final[0]["status"] == 9, "final incarnation: %r" % final)
+    check(p.returncode == 3 and launch["ok"] == "0" and int(launch["unexpected"]) >= 1, "bad launcher line %r rc %d" % (launch, p.returncode))
+    _stop_leftover_nodes()
+    check_no_leftovers([CRASH_PORT])
+
+
+def _fake_bin_dir(tmp, scripts):
+    d = os.path.join(tmp, "fakebin")
+    os.mkdir(d)
+    for name in ("dsl", "dscli", "dsnode", "dskv"):
+        os.symlink(exe(name), os.path.join(d, name))
+    for name, body in scripts.items():
+        path = os.path.join(d, name)
+        if os.path.lexists(path):
+            os.unlink(path)
+        with open(path, "w") as f:
+            f.write("#!/bin/sh\n" + body)
+        os.chmod(path, 0o755)
+    return d
+
+
+def test_a_client_that_exits_3_makes_the_trial_not_ok():
+    with Trial() as tmp:
+        fake = _fake_bin_dir(tmp, {"dscli": '%s "$@"\nexit 3\n' % exe("dscli")})
+        r = run(_crash_args(exe("dsl"), os.path.join(tmp, "t"), bin_dir=fake))
+    lines, killed, exited, sups, launch = _split(r.stdout)
+    client = [e for e in exited if e["target"] == "c1"]
+    check(len(client) == 1 and client[0]["status"] == 768 and client[0]["cause"] == "exit", "client exited line %r" % client)
+    check(r.returncode == 3 and launch["ok"] == "0" and int(launch["unexpected"]) >= 1, "bad launcher line %r" % launch)
+    check_no_leftovers([CRASH_PORT])
+
+
+def test_the_write_then_kill_trial_fails_when_the_node_never_started():
+    with Trial() as tmp:
+        fake = _fake_bin_dir(tmp, {"dsnode": "exec sleep 30\n"})
+        r = run_c0(620001, 1, flags=["--pause", "--raw-write-kill"], tmp=os.path.join(tmp, "t"), bin_dir=fake)
+    lines, killed, exited, sups, launch = _split(r.stdout)
+    check(sups[0]["region_seen"] == "0", "region_seen must be 0: %r" % sups)
+    check(r.returncode == 3 and launch["ok"] == "0", "the trial must not be ok: rc %d %r" % (r.returncode, launch))
+    check_no_leftovers([CRASH_PORT])
+
+
+def _stub_trial(mode, tmp):
+    dsl = _build_c(tmp, os.path.join(ROOT, "c", "dsl.c"), ["-DDS_STUB_WAITPID=%d" % mode], "dsl-stub%d" % mode)
+    rc, out = _trial_to_file(_crash_args(dsl, os.path.join(tmp, "t")), tmp)
+    _stop_leftover_nodes()
+    return rc, out
+
+
+def test_an_alive_check_error_is_not_alive_and_never_signals_the_pid():
+    with Trial() as tmp:
+        rc, out = _stub_trial(1, tmp)
+    lines, killed, exited, sups, launch = _split(out)
+    first = [e for e in exited if e["target"] == "n1.i0"]
+    check(sups[0]["pre_dead"] == "1" and killed == [], "pre_dead=1 and no killed line: %r %r" % (sups, killed))
+    check(len(first) == 1 and first[0]["status"] == -1 and first[0]["cause"] == "unreaped", "exited line %r" % first)
+    check(rc == 3 and launch["ok"] == "0" and int(launch["unexpected"]) >= 1, "bad launcher line %r rc %d" % (launch, rc))
+    check_no_leftovers([CRASH_PORT])
+
+
+def test_an_unreaped_victim_gets_no_killed_line_and_stops_the_plan():
+    with Trial() as tmp:
+        rc, out = _stub_trial(2, tmp)
+    lines, killed, exited, sups, launch = _split(out)
+    check(killed == [], "an unreaped victim must not get a killed line: %r" % killed)
+    check(sups[0]["pre_dead"] == "0" and sups[0]["wifsig"] == "0", "sup line %r" % sups)
+    first = [e for e in exited if e["target"] == "n1.i0"]
+    check(len(first) == 1 and first[0]["status"] == -1 and first[0]["cause"] == "unreaped", "exited line %r" % first)
+    starts = [l for l in lines if " recovered=" in l]
+    check(len(starts) == 1 and launch["restarts"] == "0", "the plan must stop: no restart (%r, %r)" % (starts, launch))
+    check(rc == 3 and launch["ok"] == "0" and int(launch["stragglers"]) >= 1, "the victim must be a straggler: %r rc %d" % (launch, rc))
     check_no_leftovers([CRASH_PORT])
 
 
@@ -451,16 +699,25 @@ def test_strace_raw_write_is_immediately_followed_by_kill():
     check_write_then_kill(_strace_run(["--pause", "--raw-write-kill"]))
 
 
+ALIVE_CHECK = re.compile(r"wait4\(\d+, .*WNOHANG.*\) += 0")  # waitpid(pid, &st, WNOHANG) answering "still alive"
+
+
 def check_write_then_kill(calls):
+    """Alive check, one write, kill: nothing else in between."""
     idx = [i for i, c in enumerate(calls) if c.startswith('write(1, "DSC0 v1 role=sup pre-kill\\n", 26)')]
     check(len(idx) == 1, "expected exactly one pre-kill write in the launcher's calls")
-    check(idx[0] + 1 < len(calls) and KILL_CALL.match(calls[idx[0] + 1]), "the call after the write is not the kill")
+    i = idx[0]
+    check(i > 0 and ALIVE_CHECK.match(calls[i - 1]), "the call before the write is not the alive check")
+    check(i + 1 < len(calls) and KILL_CALL.match(calls[i + 1]), "the call after the write is not the kill")
 
 
 def check_yield_then_kill(calls):
+    """Yield, alive check, kill: nothing else in between."""
     idx = [i for i, c in enumerate(calls) if KILL_CALL.match(c)]
     check(len(idx) == 1, "expected one kill in the launcher's calls, got %d" % len(idx))
-    check(idx[0] > 0 and calls[idx[0] - 1].startswith("sched_yield()"), "the call before the kill is not sched_yield")
+    i = idx[0]
+    check(i > 1 and ALIVE_CHECK.match(calls[i - 1]), "the call before the kill is not the alive check")
+    check(calls[i - 2].startswith("sched_yield()"), "the call before the alive check is not sched_yield")
 
 
 def test_strace_default_path_yields_before_the_kill():
@@ -481,23 +738,41 @@ def _expect_failure(fn, calls):
 
 def test_strace_checks_on_sample_traces():
     """The trace checks run everywhere, on sample strace -ff output of the launcher, so a Mac run exercises them."""
-    trace = [
+    wait = "wait4(101, 0x7ffd, WNOHANG, NULL) = 0"
+    ordinary = [
         'execve("/x/build/dsl", ["dsl"], 0x7ffd) = 0',
         "nanosleep({tv_sec=0, tv_nsec=168000000}, NULL) = 0",
         "sched_yield() = 0",
-        'write(1, "DSC0 v1 role=sup pre-kill\\n", 26) = 26',
+        wait,
         "kill(101, SIGKILL <unfinished ...>",
         "--- SIGCHLD {si_signo=SIGCHLD} ---",
         "<... kill resumed>) = 0",
         "+++ exited with 0 +++",
     ]
-    calls = _launcher_calls(trace)
-    check_write_then_kill(calls)
-    check_yield_then_kill([c for c in calls if not c.startswith("write")])
-    _expect_failure(check_yield_then_kill, calls)  # a write sits between the yield and the kill
-    bad = list(calls)
-    bad.insert(len(bad) - 1, "getpid() = 100")
-    _expect_failure(check_write_then_kill, bad)
+    raw = [
+        'execve("/x/build/dsl", ["dsl"], 0x7ffd) = 0',
+        "nanosleep({tv_sec=0, tv_nsec=50000000}, NULL) = 0",
+        "stat(\"/t/hairspring-region/n1.i0\", {st_mode=S_IFREG}) = 0",
+        wait,
+        'write(1, "DSC0 v1 role=sup pre-kill\\n", 26) = 26',
+        "kill(101, SIGKILL) = 0",
+    ]
+    check_yield_then_kill(_launcher_calls(ordinary))
+    check_write_then_kill(_launcher_calls(raw))
+    # Each mutant of the order must be rejected.
+    no_yield = [c for c in ordinary if not c.startswith("sched_yield")]
+    _expect_failure(check_yield_then_kill, _launcher_calls(no_yield))
+    no_alive = [c for c in ordinary if c != wait]
+    _expect_failure(check_yield_then_kill, _launcher_calls(no_alive))
+    extra = list(ordinary)
+    extra.insert(extra.index(wait) + 1, "getpid() = 100")  # a call between the alive check and the kill
+    _expect_failure(check_yield_then_kill, _launcher_calls(extra))
+    swapped = list(raw)
+    swapped[3], swapped[4] = swapped[4], swapped[3]  # write before the alive check
+    _expect_failure(check_write_then_kill, _launcher_calls(swapped))
+    between = list(raw)
+    between.insert(5, "getpid() = 100")
+    _expect_failure(check_write_then_kill, _launcher_calls(between))
 
 
 def _launch_fields(r):
@@ -580,21 +855,14 @@ def test_bad_node_and_tag_names_are_refused_before_any_path_is_built():
 def test_a_group_kill_that_only_killed_the_pid_is_caught():
     """Regression mutant: dsl built so that a group-kill trial kills the pid alone must fail the group checks."""
     with Trial() as tmp:
-        mutant = os.path.join(tmp, "dsl-mutant")
-        cc = os.environ.get("CC", "cc")
-        build = subprocess.run([cc, "-std=gnu11", "-O1", "-DDS_MUTANT_PID_KILL", "-pthread", "-o", mutant, os.path.join(ROOT, "c", "dsl.c")], capture_output=True, text=True)
-        check(build.returncode == 0, "mutant build failed: %s" % build.stderr[-300:])
-        trial = os.path.join(tmp, "t")
-        r = run_c0(620001, 1, kind="pgid", flags=["--helper"], tmp=trial, dsl=mutant)
-        sup = kv([l for l in r.stdout.splitlines() if " role=sup " in l][0])
-        check(sup["grp_gone"] == "0", "the helper survived a pid-only kill, so grp_gone must be 0: %r" % sup)
-        check(r.returncode == 3 and " ok=0" in r.stdout, "the launcher must report ok=0: rc %d" % r.returncode)
-        try:
-            check_c0_trial(r, trial, 620001, 1, group=True)
-        except AssertionError:
-            pass
-        else:
-            raise AssertionError("check_c0_trial accepted the pid-kill mutant")
+        mutant = _build_c(tmp, os.path.join(ROOT, "c", "dsl.c"), ["-DDS_MUTANT_PID_KILL"], "dsl-mutant")
+        args = [mutant, "--crash=pgid,1", "--helper", "--bin-dir=" + BIN, "--port=%d" % CRASH_PORT, "--seed=620001", "--pace-ms=10", "--tmp=" + os.path.join(tmp, "t")]
+        rc, out = _trial_to_file(args, tmp)
+    lines, killed, exited, sups, launch = _split(out)
+    check(sups[0]["grp_gone"] == "0", "the helper survived a pid-only kill, so grp_gone must be 0: %r" % sups)
+    helper = [e for e in exited if e["target"] == "n1.i0.h"]
+    check(len(helper) == 1 and helper[0]["cause"] == "stop_kill", "the surviving helper must be stopped by the launcher: %r" % helper)
+    check(rc == 3 and launch["ok"] == "0" and int(launch["unexpected"]) >= 1, "the launcher must report ok=0: rc %d %r" % (rc, launch))
     check_no_leftovers([CRASH_PORT])
 
 
@@ -605,7 +873,7 @@ def test_no_process_left_behind():
 TESTS = [
     test_operation_lists_match_golden_and_oracle,
     test_crash_plan_matches_golden_and_oracle,
-    test_plan_takes_its_seed_from_the_environment,
+    test_the_seed_comes_only_from_the_seed_argument,
     test_dskv_protocol_against_a_scripted_peer,
     test_dskv_retries_a_connect_made_before_the_peer_listens,
     test_dskv_block_mode_serves_one_connection_at_a_time,
@@ -625,6 +893,14 @@ TESTS = [
     test_long_paths_are_refused_or_work_never_truncated,
     test_bad_node_and_tag_names_are_refused_before_any_path_is_built,
     test_a_group_kill_that_only_killed_the_pid_is_caught,
+    test_a_client_with_failed_operations_exits_3_in_both_modes,
+    test_pure_helpers_and_the_output_and_path_guards,
+    test_a_victim_that_died_before_the_kill_is_not_reported_as_killed,
+    test_an_unexpected_death_of_the_final_incarnation_is_counted,
+    test_a_client_that_exits_3_makes_the_trial_not_ok,
+    test_the_write_then_kill_trial_fails_when_the_node_never_started,
+    test_an_alive_check_error_is_not_alive_and_never_signals_the_pid,
+    test_an_unreaped_victim_gets_no_killed_line_and_stops_the_plan,
     test_a_server_that_ignores_quit_is_killed_and_counted,
     _crash_test("k1", 1),
     _crash_test("kp", 1, kind="pgid", flags=["--helper"]),

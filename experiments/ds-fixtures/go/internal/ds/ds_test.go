@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // Golden values computed by the independent Python oracle (tests/oracle.py), not by this package.
@@ -194,6 +195,29 @@ func TestNamesAndTagsAreValidatedBeforeTheyReachAPath(t *testing.T) {
 		if ValidTag(bad, "n1") {
 			t.Errorf("tag %q should be rejected", bad)
 		}
+	}
+}
+
+func TestWatchIdle(t *testing.T) {
+	quit := make(chan struct{})
+	activity := make(chan struct{}, 1)
+	// No signal: the guard fires.
+	if !WatchIdle(20*time.Millisecond, activity, quit) {
+		t.Fatal("the guard should fire with no request")
+	}
+	// Requests keep it quiet; quit ends it without firing.
+	done := make(chan bool)
+	go func() { done <- WatchIdle(60*time.Millisecond, activity, quit) }()
+	for i := 0; i < 5; i++ {
+		time.Sleep(20 * time.Millisecond)
+		activity <- struct{}{}
+	}
+	close(quit)
+	if <-done {
+		t.Fatal("quit must end the watch without the guard firing")
+	}
+	if IdleLimit != 120*time.Second {
+		t.Fatalf("idle limit %v", IdleLimit)
 	}
 }
 

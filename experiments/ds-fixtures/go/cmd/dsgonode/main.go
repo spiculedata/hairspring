@@ -17,12 +17,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/spiculedata/hairspring/experiments/ds-fixtures/go/internal/ds"
 )
-
-const idleLimit = 120 * time.Second // orphan guard: no request for this long
 
 func fatal(msg string) {
 	fmt.Fprintln(os.Stderr, "error: "+msg)
@@ -146,15 +143,10 @@ func main() {
 		}
 	}()
 
-	for {
-		select {
-		case <-quit:
-			ds.Emit(fmt.Sprintf("DSC0 v1 role=node tag=%s exit=quit done=%d\n", tag, region.Done()))
-			os.Exit(0)
-		case <-activity:
-		case <-time.After(idleLimit):
-			ds.Emit(fmt.Sprintf("DSC0 v1 role=node tag=%s exit=idle done=%d\n", tag, region.Done()))
-			os.Exit(4)
-		}
+	if ds.WatchIdle(ds.IdleLimit, activity, quit) {
+		ds.Emit(fmt.Sprintf("DSC0 v1 role=node tag=%s exit=idle done=%d\n", tag, region.Done()))
+		os.Exit(4)
 	}
+	ds.Emit(fmt.Sprintf("DSC0 v1 role=node tag=%s exit=quit done=%d\n", tag, region.Done()))
+	os.Exit(0)
 }

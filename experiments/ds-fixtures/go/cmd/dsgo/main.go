@@ -25,7 +25,6 @@ import (
 const (
 	connectTries = 200
 	retrySleep   = 5 * time.Millisecond
-	idleLimit    = 120 * time.Second // orphan guard: no request for this long
 )
 
 func fatal(msg string) {
@@ -118,17 +117,12 @@ func main() {
 		}
 	}()
 
-	for {
-		select {
-		case <-quit:
-			ds.Emit(srv.ResultLine())
-			os.Exit(0)
-		case <-activity:
-		case <-time.After(idleLimit):
-			ds.Emit(srv.ResultLine())
-			os.Exit(4)
-		}
+	idle := ds.WatchIdle(ds.IdleLimit, activity, quit)
+	ds.Emit(srv.ResultLine())
+	if idle {
+		os.Exit(4)
 	}
+	os.Exit(0)
 }
 
 type discard struct{}

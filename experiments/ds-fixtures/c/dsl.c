@@ -14,7 +14,7 @@
  * an untracked child alive for a moment.
  *
  * The crash plan is a pure function of the seed (splitmix64 finaliser keyed by salt and kill index). The seed comes
- * from --seed or from the HAIRSPRING_SEED environment variable. Nothing here has been run under Hermit.
+ * from --seed only. Nothing here has been run under Hermit.
  */
 #include "ds_common.h"
 
@@ -34,6 +34,8 @@
 #define C0_OPS 60
 #define CRASH_SALT 0x6372617368ULL
 #define KW_WAIT_MS 50
+#define KW_PLANNED_MS 50
+#define HELPER_LOOPS 24000
 #define HIST_BUF_BYTES (64 * 1024)
 #define MAX_RECORDS 512
 #define DEFAULT_PACE_MS 10
@@ -47,7 +49,13 @@ typedef struct {
     int alive;
     int exited; /* a status was collected */
     int status;
-    int group; /* kill the whole process group, not only the pid */
+    char tag[24];          /* the name in an "exited" line */
+    int reported;          /* its "exited" line has been written */
+    int planned_sent;      /* the launcher sent a planned kill to it after finding it alive */
+    int stop_killed;       /* the launcher SIGKILLed it by pid at teardown */
+    int expect_clean_exit; /* a normal exit with status 0 is the expected end (client, final incarnation) */
+    int stub;              /* test stubs only (DS_STUB_WAITPID) */
+    int stub_used;
 } proc_t;
 
 typedef struct {
@@ -105,11 +113,31 @@ static pid_t spawn(proc_t *p, const char *name, argv_t *a, const char *tag) {
     return pid;
 }
 
+/* The one place the launcher asks whether a tracked child has ended. DS_STUB_WAITPID is a compile-time option used only
+ * by the native tests to reach cases that cannot happen natively: 1 = the first node's first answer is an error, 2 =
+ * the first node is never reaped. Real builds do not define it. */
+static pid_t ds_wait_child(proc_t *p, int *st) {
+#ifdef DS_STUB_WAITPID
+    if (p->stub) {
+#if DS_STUB_WAITPID == 1
+        if (!p->stub_used) {
+            p->stub_used = 1;
+            errno = ECHILD;
+            return -1;
+        }
+#else
+        return 0;
+#endif
+    }
+#endif
+    return waitpid(p->pid, st, WNOHANG);
+}
+
 /* One non-blocking attempt to collect a child. Returns 1 when it is gone. */
 static int reap_once(proc_t *p) {
     if (!p->alive) return 1;
     int st = 0;
-    pid_t r = waitpid(p->pid, &st, WNOHANG);
+    pid_t r = ds_wait_child(p, &st);
     if (r == p->pid) {
         p->alive = 0;
         p->exited = 1;
@@ -140,7 +168,8 @@ static unsigned kill_stragglers(proc_t *ps, int n) {
     for (int i = 0; i < n; i++) {
         if (!ps[i].alive) continue;
         count++;
-        kill(ps[i].group ? -ps[i].pid : ps[i].pid, SIGKILL);
+        ps[i].stop_killed = 1;
+        kill(ps[i].pid, SIGKILL);
     }
     if (count > 0) wait_all(ps, n, STRAGGLER_REAP_POLLS, 1);
     return count;
@@ -375,72 +404,174 @@ static void spawn_node(proc_t *p, const crash_cfg_t *cfg, int incarnation) {
     av_add(&a, "--node=n1");
     av_add(&a, "--port=%d", cfg->port);
     av_add(&a, "--tmp=%s", g_tmp);
-    if (cfg->helper) av_add(&a, "--helper");
     if (cfg->two_threads) av_add(&a, "--threads=2");
     if (cfg->pause) av_add(&a, "--pause");
     spawn(p, "n1", &a, tag);
-    p->group = cfg->use_group;
+    snprintf(p->tag, sizeof p->tag, "%s", tag);
 }
 
-/* Kill one incarnation, reap it, report it. Returns a bit set: 1 = not reaped in time, 2 = group not gone. */
-static unsigned kill_and_report(proc_t *victim, const crash_cfg_t *cfg, int j, unsigned planned_ms, int incarnation) {
-    if (cfg->raw) {
-        /* Exactly these two system calls, back to back: a write immediately followed by the kill. */
-        ssize_t w = write(1, PRE_KILL_LINE, sizeof PRE_KILL_LINE - 1);
-        int kr = kill(victim->pid, SIGKILL);
-        (void)w;
-        (void)kr;
+/* The helper of a process-group trial: a copy of this launcher that does not exec, joins the node's process group and
+ * loops on a 5 ms sleep for at most about 120 s. It watches neither its parent nor the node: only the group kill should
+ * end it, so a kill that misses it stays visible. */
+static void spawn_helper(proc_t *h, pid_t node_pid) {
+    pid_t pid = fork();
+    if (pid < 0) ds_die("fork failed");
+    if (pid == 0) {
+        if (setpgid(0, node_pid) != 0) _exit(2);
+        for (int i = 0; i < HELPER_LOOPS; i++) ds_sleep_ms(5);
+        _exit(0);
+    }
+    memset(h, 0, sizeof *h);
+    h->pid = pid;
+    h->alive = 1;
+    snprintf(h->name, sizeof h->name, "h");
+    snprintf(h->tag, sizeof h->tag, "n1.i0.h");
+}
+
+static unsigned g_unexpected;
+
+/* One "exited" line per child, ever. A line is expected only as a planned kill that ended in SIGKILL, or as a normal exit
+ * with status 0 of the client or of the final incarnation. */
+static void report_exited(proc_t *p) {
+    if (p->reported) return;
+    p->reported = 1;
+    const char *cause;
+    int status = -1;
+    if (!p->exited) {
+        cause = "unreaped";
     } else {
-        sched_yield();
+        status = p->status;
+        if (p->stop_killed) cause = "stop_kill";
+        else if (p->planned_sent && WIFSIGNALED(status) && WTERMSIG(status) == 9) cause = "planned_kill";
+        else cause = WIFEXITED(status) ? "exit" : "signal";
+    }
+    int expected = (strcmp(cause, "planned_kill") == 0 && status == 9) ||
+                   (strcmp(cause, "exit") == 0 && status == 0 && p->expect_clean_exit);
+    if (!expected) g_unexpected++;
+    ds_emit("HAIRSPRING_EVENT {\"v\":1,\"kind\":\"exited\",\"proc\":\"_launcher\",\"target\":\"%s\",\"status\":%d,"
+            "\"cause\":\"%s\"}\n",
+            p->tag, status, cause);
+}
+
+/* SIGKILL by pid, reap (at most 1,000 polls of 1 ms), remember that the launcher stopped it. */
+static void stop_kill(proc_t *p) {
+    if (!p->alive) return;
+    p->stop_killed = 1;
+    kill(p->pid, SIGKILL);
+    for (int k = 0; k < STRAGGLER_REAP_POLLS; k++) {
+        if (reap_once(p)) return;
+        ds_sleep_ms(1);
+    }
+}
+
+typedef struct {
+    int sent;      /* a kill was sent */
+    int pre_dead;  /* the victim was already gone at the alive check */
+    int confirmed; /* sent, and the victim node was reaped with SIGKILL */
+    int unreaped;  /* sent, but the victim was not reaped in time */
+    int grp_gone;  /* -1: not applicable */
+} kill_result_t;
+
+/* One planned kill, in this order: yield (not in the raw trial), alive check, kill with no system call between the check
+ * and the kill (in the raw trial: alive check, one write, kill), reap, group check, lines. */
+static kill_result_t do_kill(proc_t *victim, proc_t *helper, const crash_cfg_t *cfg, int j, unsigned planned_ms,
+                             int incarnation, int region_seen) {
+    kill_result_t res = {0, 0, 0, 0, cfg->use_group ? 0 : -1};
+    int st = 0;
+    if (!cfg->raw) sched_yield();
+    pid_t ar = ds_wait_child(victim, &st);
+    if (ar == 0) {
+        if (cfg->raw) {
+            ssize_t w = write(1, PRE_KILL_LINE, sizeof PRE_KILL_LINE - 1);
+            (void)w;
+        }
 #ifdef DS_MUTANT_PID_KILL
         /* Regression mutant (built only by the native tests): a group-kill trial that kills the pid alone. */
         kill(victim->pid, SIGKILL);
 #else
         kill(cfg->use_group ? -victim->pid : victim->pid, SIGKILL);
 #endif
+        res.sent = 1;
+    } else if (ar == victim->pid) {
+        victim->alive = 0;
+        victim->exited = 1;
+        victim->status = st;
+        res.pre_dead = 1;
+    } else {
+        victim->alive = 0; /* an alive-check error counts as "not alive": never signalled or waited for again */
+        res.pre_dead = 1;
     }
+    victim->planned_sent = res.sent;
+    if (helper != NULL) helper->planned_sent = res.sent;
+
     unsigned polls = 0;
-    while (polls < KILL_REAP_POLLS) {
-        polls++;
-        if (reap_once(victim)) break;
-        ds_sleep_ms(1);
-    }
-    const char *grp = "na";
-    if (cfg->use_group) {
-        grp = "0";
-        for (int k = 0; k < GROUP_GONE_POLLS; k++) {
-            if (kill(-victim->pid, 0) < 0 && errno == ESRCH) {
-                grp = "1";
-                break;
-            }
+    if (res.sent) {
+        while (polls < KILL_REAP_POLLS) {
+            polls++;
+            int v = reap_once(victim);
+            int h = helper == NULL || reap_once(helper);
+            if (v && h) break;
             ds_sleep_ms(1);
+        }
+        if (cfg->use_group && victim->exited && (helper == NULL || helper->exited)) {
+            for (int k = 0; k < GROUP_GONE_POLLS; k++) {
+                if (kill(-victim->pid, 0) < 0 && errno == ESRCH) {
+                    res.grp_gone = 1;
+                    break;
+                }
+                ds_sleep_ms(1);
+            }
         }
     }
     int wifsig = victim->exited && WIFSIGNALED(victim->status);
     int termsig = wifsig ? WTERMSIG(victim->status) : 0;
-    ds_emit("HAIRSPRING_EVENT {\"v\":1,\"kind\":\"killed\",\"proc\":\"_launcher\",\"target\":\"n1.i%d\",\"signal\":9,"
-            "\"seq\":%d,\"point\":\"t%u\"}\n",
-            incarnation, j, planned_ms);
-    ds_emit("DSC0 v1 role=sup kill=%d victim=n1.i%d wifsig=%d termsig=%d reap_polls=%u grp_gone=%s planned_ms=%u\n", j,
-            incarnation, wifsig, termsig, polls, grp, planned_ms);
-    unsigned bad = victim->alive ? 1u : 0u;
-    if (cfg->use_group && grp[0] == '0') {
-        bad |= 2u;
-        kill(-victim->pid, SIGKILL); /* clean up whatever the group kill missed */
+    res.confirmed = res.sent && wifsig && termsig == 9;
+    res.unreaped = res.sent && !victim->exited;
+
+    if (res.confirmed) {
+        ds_emit("HAIRSPRING_EVENT {\"v\":1,\"kind\":\"killed\",\"proc\":\"_launcher\",\"target\":\"n1.i%d\",\"signal\":9,"
+                "\"seq\":%d,\"point\":\"t%u\"}\n",
+                incarnation, j, planned_ms);
     }
-    return bad;
+    if (victim->exited || res.pre_dead) report_exited(victim);
+    if (helper != NULL && helper->exited) report_exited(helper);
+    char grp[4] = "na", seen[4] = "na";
+    if (res.grp_gone >= 0) snprintf(grp, sizeof grp, "%d", res.grp_gone);
+    if (region_seen >= 0) snprintf(seen, sizeof seen, "%d", region_seen);
+    ds_emit("DSC0 v1 role=sup kill=%d victim=n1.i%d pre_dead=%d wifsig=%d termsig=%d reap_polls=%u grp_gone=%s "
+            "region_seen=%s planned_ms=%u\n",
+            j, incarnation, res.pre_dead, wifsig, termsig, polls, grp, seen, planned_ms);
+    if (helper != NULL && res.sent && !helper->exited) {
+        stop_kill(helper);
+        report_exited(helper);
+    }
+    return res;
+}
+
+static int region_file_exists(int incarnation) {
+    char rel[64], path[512];
+    struct stat st;
+    snprintf(rel, sizeof rel, "hairspring-region/n1.i%d", incarnation);
+    path_in_tmp(path, sizeof path, rel);
+    return stat(path, &st) == 0;
 }
 
 static int run_c0(const crash_cfg_t *cfg) {
     setup_trial_files(1);
     maybe_leak_child();
     plan_t plan = crash_plan(cfg->seed, cfg->kills);
-    proc_t node, client;
+    proc_t nodes[MAX_KILLS + 1], helper, client;
+    memset(nodes, 0, sizeof nodes);
+    memset(&helper, 0, sizeof helper);
     memset(&client, 0, sizeof client);
     unsigned stragglers = 0, restarts = 0;
     int incarnation = 0, client_started = 0;
 
-    spawn_node(&node, cfg, incarnation);
+    spawn_node(&nodes[0], cfg, 0);
+#ifdef DS_STUB_WAITPID
+    nodes[0].stub = 1;
+#endif
+    if (cfg->helper) spawn_helper(&helper, nodes[0].pid);
     if (!cfg->pause) {
         argv_t a;
         av_init(&a, "dscli");
@@ -450,52 +581,69 @@ static int run_c0(const crash_cfg_t *cfg) {
         av_add(&a, "--reconnect");
         if (cfg->pace_ms > 0) av_add(&a, "--pace-ms=%u", cfg->pace_ms);
         spawn(&client, "c1", &a, NULL);
+        snprintf(client.tag, sizeof client.tag, "c1");
         client_started = 1;
     }
 
     unsigned wait_ms = cfg->raw ? KW_WAIT_MS : plan.d[0];
-    int kills_done = 0, node_started = 1, group_bad = 0;
+    int kills_done = 0, all_clean = 1, grp_ok = 1, region_seen = -1, plan_stopped = 0;
     for (int j = 1; j <= cfg->kills; j++) {
         ds_sleep_ms(wait_ms);
-        if (cfg->raw) {
-            /* The node's region file exists once it has recovered and started: evidence that it came up. */
-            char rel[64], path[512];
-            struct stat st;
-            snprintf(rel, sizeof rel, "hairspring-region/n1.i%d", incarnation);
-            path_in_tmp(path, sizeof path, rel);
-            node_started = stat(path, &st) == 0;
-        }
-        unsigned bad = kill_and_report(&node, cfg, j, plan.d[j - 1], incarnation);
+        if (cfg->raw) region_seen = region_file_exists(incarnation);
+        unsigned planned = cfg->raw ? KW_PLANNED_MS : plan.d[j - 1];
+        proc_t *h = incarnation == 0 && cfg->helper ? &helper : NULL;
+        kill_result_t res = do_kill(&nodes[incarnation], h, cfg, j, planned, incarnation, region_seen);
         kills_done++;
-        if (bad & 2u) group_bad = 1;
-        if (bad & 1u) break; /* the victim is still alive: never start the next incarnation over it */
+        if (res.pre_dead || !res.confirmed) all_clean = 0;
+        if (cfg->use_group && res.grp_gone != 1) grp_ok = 0;
+        if (res.unreaped) {
+            plan_stopped = 1; /* never start the next incarnation over a victim that may still be running */
+            break;
+        }
         if (cfg->raw) break;
         ds_sleep_ms(plan.r[j - 1]);
         incarnation++;
         restarts++;
-        spawn_node(&node, cfg, incarnation);
+        spawn_node(&nodes[incarnation], cfg, incarnation);
         if (j < cfg->kills) wait_ms = plan.d[j] - plan.d[j - 1] - plan.r[j - 1];
     }
 
+    /* Teardown. */
     if (client_started) {
         wait_all(&client, 1, CLIENT_POLLS, CLIENT_POLL_MS);
-        stragglers += kill_stragglers(&client, 1);
+        if (client.alive) stragglers++;
+        stop_kill(&client);
+        client.expect_clean_exit = 1;
+        report_exited(&client);
     }
-    if (!cfg->raw) {
-        if (node.alive) send_quit(cfg->port);
-        wait_all(&node, 1, SERVER_POLLS, SERVER_POLL_MS);
+    proc_t *live = &nodes[incarnation];
+    if (!cfg->raw && !plan_stopped) {
+        live->expect_clean_exit = 1;
+        if (live->alive) send_quit(cfg->port);
+        wait_all(live, 1, SERVER_POLLS, SERVER_POLL_MS);
+        if (live->alive) stragglers++;
+        stop_kill(live);
+    } else {
+        /* The raw trial's victim is already reaped; after an unreaped victim, whatever is left is stopped again. */
+        if (live->alive) stragglers++;
+        stop_kill(live);
     }
-    stragglers += kill_stragglers(&node, 1);
+    report_exited(live);
+    if (cfg->helper) {
+        stop_kill(&helper);
+        report_exited(&helper);
+    }
 
     const char *clients[1] = {"c1"};
     uint64_t digest;
     unsigned count;
     int seq_ok = check_history(clients, 1, client_started ? 2 * C0_OPS : 0, &digest, &count);
     int live_after = has_live_child();
-    int exits_ok = (!client_started || exited_zero(&client)) && (cfg->raw || exited_zero(&node));
-    int ok = exits_ok && stragglers == 0 && !live_after && seq_ok && node_started && !group_bad;
-    ds_emit("DSC0 v1 role=launch kills=%d restarts=%u stragglers=%u live_after=%d seq_ok=%d hist=%016llx ok=%d\n",
-            kills_done, restarts, stragglers, live_after, seq_ok, (unsigned long long)digest, ok);
+    int ok = kills_done == cfg->kills && all_clean && (int)restarts == (cfg->raw ? 0 : cfg->kills) && g_unexpected == 0 &&
+             stragglers == 0 && !live_after && seq_ok && grp_ok && (!cfg->raw || region_seen == 1);
+    ds_emit("DSC0 v1 role=launch kills=%d restarts=%u stragglers=%u unexpected=%u live_after=%d seq_ok=%d hist=%016llx "
+            "ok=%d\n",
+            kills_done, restarts, stragglers, g_unexpected, live_after, seq_ok, (unsigned long long)digest, ok);
     return ok ? 0 : 3;
 }
 
@@ -516,8 +664,7 @@ static void parse_extras(int argc, char **argv) {
 
 static uint64_t seed_from(int argc, char **argv) {
     const char *s = ds_opt(argc, argv, "--seed=");
-    if (s == NULL) s = getenv("HAIRSPRING_SEED");
-    if (s == NULL) ds_die("a seed is needed: --seed=S or HAIRSPRING_SEED");
+    if (s == NULL) ds_die("a seed is needed: --seed=S");
     return ds_parse_u64(s, "bad seed");
 }
 

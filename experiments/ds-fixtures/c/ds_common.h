@@ -41,6 +41,8 @@
 #define DS_CONNECT_TRIES 200
 #define DS_CONNECT_RETRY_MS 5
 #define DS_REPLY_WAIT_MS 10000
+#define DS_IDLE_LIMIT_MS 120000ULL /* orphan guard: this long without a request */
+#define DS_MAX_IDLE_WAITS 2400u    /* orphan guard: this many 50 ms readiness waits with nothing ready */
 
 #ifdef MSG_NOSIGNAL
 #define DS_SEND_FLAGS MSG_NOSIGNAL
@@ -50,15 +52,17 @@
 
 /* ---- output ---- */
 
+static inline void ds_die(const char *msg);
+
 /* One formatted line to stdout with a single write(2). Returns the length. */
 static inline int ds_emit(const char *fmt, ...) {
-    char buf[DS_LINE_MAX];
+    char buf[DS_LINE_MAX + 1];
     va_list ap;
     va_start(ap, fmt);
     int n = vsnprintf(buf, sizeof buf, fmt, ap);
     va_end(ap);
     if (n < 0) return -1;
-    if (n >= (int)sizeof buf) n = (int)sizeof buf - 1;
+    if (n > DS_LINE_MAX) ds_die("output line too long"); /* at most 4,096 bytes with the newline; never written truncated */
     ssize_t w = write(1, buf, (size_t)n);
     return w < 0 ? -1 : n;
 }
@@ -257,6 +261,20 @@ static inline uint64_t ds_table_digest(const ds_table *t) {
         h = ds_fnv(h, buf, (size_t)n);
     }
     return h;
+}
+
+/* ---- orphan guards (pure, so that tests can reach them without waiting 120 s) ---- */
+
+/* True when more than limit_ms have passed since the last request. */
+static inline int ds_idle_expired(uint64_t now_ms, uint64_t last_ms, uint64_t limit_ms) {
+    return now_ms > last_ms && now_ms - last_ms > limit_ms;
+}
+
+static inline int ds_idle_waits_expired(unsigned idle_waits) { return idle_waits >= DS_MAX_IDLE_WAITS; }
+
+/* Only a real request counts as activity: heartbeats and HELLO do not. */
+static inline int ds_counts_as_request(const char *cmd) {
+    return strcmp(cmd, "PUT") == 0 || strcmp(cmd, "GET") == 0 || strcmp(cmd, "REPL") == 0 || strcmp(cmd, "QUIT") == 0;
 }
 
 /* ---- the readiness loop: epoll on Linux, poll elsewhere; finite timeouts only ---- */

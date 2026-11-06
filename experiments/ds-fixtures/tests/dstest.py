@@ -134,20 +134,29 @@ def check_n0_ok(topo, result, conserve=False, mode=None):
 
 START_C0 = re.compile(r"^DSC0 v1 role=node tag=(n1\.i\d+) recovered=(\d+) torn=(\d+)$")
 EXIT_C0 = re.compile(r"^DSC0 v1 role=node tag=(n1\.i\d+) exit=quit done=(\d+)$")
-KILLED = re.compile(r"^HAIRSPRING_EVENT (\{.*\})$")
+EVENT = re.compile(r"^HAIRSPRING_EVENT (\{.*\})$")
 LAUNCH_C0 = re.compile(
-    r"^DSC0 v1 role=launch kills=(\d+) restarts=(\d+) stragglers=0 live_after=0 seq_ok=1 hist=[0-9a-f]{16} ok=1$"
+    r"^DSC0 v1 role=launch kills=(\d+) restarts=(\d+) stragglers=0 unexpected=0 live_after=0 seq_ok=1 "
+    r"hist=[0-9a-f]{16} ok=1$"
+)
+SUP_C0 = re.compile(
+    r"^DSC0 v1 role=sup kill=\d+ victim=n1\.i\d+ pre_dead=[01] wifsig=[01] termsig=\d+ reap_polls=\d+ "
+    r"grp_gone=(0|1|na) region_seen=(0|1|na) planned_ms=\d+$"
+)
+CLI_C0 = re.compile(
+    r"^DSC0 v1 role=cli ops=60 ok=\d+ fail=\d+ eof=\d+ reset=\d+ refused=\d+ resent=\d+ hist=[0-9a-f]{16}$"
 )
 
 
-def run_c0(seed, kills, kind="pid", node_bin="dsnode", flags=None, port=None, tmp=None, timeout=120, dsl=None):
+def run_c0(seed, kills, kind="pid", node_bin="dsnode", flags=None, port=None, tmp=None, timeout=120, dsl=None, bin_dir=None):
     args = [
         dsl or exe("dsl"),
         "--crash=%s,%d" % (kind, kills),
-        "--bin-dir=" + BIN,
+        "--bin-dir=" + (bin_dir or BIN),
         "--port=%d" % (CRASH_PORT if port is None else port),
         "--seed=%d" % seed,
         "--node-bin=" + node_bin,
+        "--pace-ms=10",
     ] + (flags or [])
     if tmp is None:
         with Trial() as t:
@@ -160,34 +169,61 @@ def read_bytes(path):
         return f.read()
 
 
-def check_c0_trial(result, tmp, seed, kills, group=False, expect_helper=False):
+def parse_events(lines):
+    """The HAIRSPRING_EVENT lines of a crash trial as dicts, in order."""
+    out = []
+    for l in lines:
+        m = EVENT.match(l)
+        if m:
+            out.append(json.loads(m.group(1)))
+    return out
+
+
+def expected_exited(kills, group):
+    """The exited lines of an OK trial as a set of (target, status, cause), as the line table says."""
+    want = {("n1.i%d" % i, 9, "planned_kill") for i in range(kills)}
+    if group:
+        want.add(("n1.i0.h", 9, "planned_kill"))
+    want.add(("c1", 0, "exit"))
+    want.add(("n1.i%d" % kills, 0, "exit"))
+    return want
+
+
+def check_c0_trial(result, tmp, seed, kills, group=False):
     """Verify one crash trial against the oracle. Returns (lands, resent_total)."""
     check(result.returncode == 0, "c0: rc %d, stdout %r stderr %r" % (result.returncode, result.stdout, result.stderr))
     lines = result.stdout.splitlines()
     starts = [START_C0.match(l) for l in lines if " role=node " in l and " recovered=" in l]
-    exits = [EXIT_C0.match(l) for l in lines if " exit=" in l]
-    sups = [kv(l) for l in lines if " role=sup " in l]
-    killed = [KILLED.match(l) for l in lines if l.startswith("HAIRSPRING_EVENT")]
-    clis = [kv(l) for l in lines if " role=cli " in l]
+    exits = [EXIT_C0.match(l) for l in lines if " role=node " in l and " exit=" in l]
+    sup_lines = [l for l in lines if " role=sup " in l]
+    events = parse_events(lines)
+    killed = [e for e in events if e["kind"] == "killed"]
+    exited = [e for e in events if e["kind"] == "exited"]
+    cli_lines = [l for l in lines if " role=cli " in l]
     launch = [l for l in lines if " role=launch " in l]
     check(all(starts) and len(starts) == kills + 1, "c0: expected %d start lines: %r" % (kills + 1, lines))
     check(len(exits) == 1 and exits[0], "c0: expected one exit line: %r" % lines)
-    check(len(sups) == kills and len(killed) == kills and len(clis) == 1 and len(launch) == 1, "c0: wrong line mix: %r" % lines)
-    check(len(lines) == len(starts) + 1 + 2 * kills + 1 + 1, "c0: unexpected extra lines: %r" % lines)
+    check(len(sup_lines) == kills and len(killed) == kills and len(cli_lines) == 1 and len(launch) == 1, "c0: wrong line mix: %r" % lines)
+    total = len(starts) + 1 + kills + len(exited) + kills + 1 + 1
+    check(len(lines) == total, "c0: unexpected extra lines (%d, want %d): %r" % (len(lines), total, lines))
+    check(len(lines) == {(1, False): 10, (1, True): 11, (2, False): 14}[(kills, group)], "c0: wrong total line count %d" % len(lines))
     check(LAUNCH_C0.match(launch[0]) and kv(launch[0])["kills"] == str(kills), "c0: bad launcher line %r" % launch)
     check(kv(launch[0])["restarts"] == str(kills), "c0: restarts should equal kills")
+    got = {(e["target"], e["status"], e["cause"]) for e in exited}
+    check(len(got) == len(exited) and got == expected_exited(kills, group), "c0: exited lines %r" % sorted(got))
+    check(CLI_C0.match(cli_lines[0]), "c0: bad client line %r" % cli_lines[0])
     plan = oracle.crash_plan(seed, kills)
     for j, (_, d, _r) in enumerate(plan, start=1):
         tag = "n1.i%d" % (j - 1)
-        s = sups[j - 1]
+        check(SUP_C0.match(sup_lines[j - 1]), "c0: bad sup line %r" % sup_lines[j - 1])
+        s = kv(sup_lines[j - 1])
         check(s["kill"] == str(j) and s["victim"] == tag, "c0: sup line %d wrong: %r" % (j, s))
-        check(s["wifsig"] == "1" and s["termsig"] == "9", "c0: kill %d was not a SIGKILL: %r" % (j, s))
+        check(s["pre_dead"] == "0" and s["wifsig"] == "1" and s["termsig"] == "9", "c0: kill %d was not a SIGKILL: %r" % (j, s))
         check(s["planned_ms"] == str(d), "c0: planned_ms %s differs from the oracle plan %d" % (s["planned_ms"], d))
-        check(s["grp_gone"] == ("1" if group else "na"), "c0: grp_gone wrong: %r" % s)
-        ev = json.loads(killed[j - 1].group(1))
+        check(s["grp_gone"] == ("1" if group else "na") and s["region_seen"] == "na", "c0: grp_gone or region_seen wrong: %r" % s)
         check(
-            ev == {"v": 1, "kind": "killed", "proc": "_launcher", "target": tag, "signal": 9, "seq": j, "point": "t%d" % d},
-            "c0: killed line %d wrong: %r" % (j, ev),
+            killed[j - 1] == {"v": 1, "kind": "killed", "proc": "_launcher", "target": tag, "signal": 9, "seq": j, "point": "t%d" % d},
+            "c0: killed line %d wrong: %r" % (j, killed[j - 1]),
         )
     # Region invariant for every incarnation, killed or not.
     log = read_bytes(os.path.join(tmp, "ds-data", "n1.log"))
@@ -201,10 +237,10 @@ def check_c0_trial(result, tmp, seed, kills, group=False, expect_helper=False):
         if inc == kills:
             check(exits[0].group(2) == str(region[4]), "c0: exit line done= differs from the region")
     written_by_killed = [sum(1 for r in records if r[1] == i and r[2] != oracle.HEARTBEAT_CLIENT) for i in range(kills)]
-    cli = clis[0]
+    cli = kv(cli_lines[0])
     seen = int(cli["resent"]) + int(cli["eof"]) + int(cli["reset"])
     lands = all(w >= 1 for w in written_by_killed) and seen >= 1
-    check(cli["ops"] == "60" and cli["ok"] == "60", "c0: client did not complete 60 operations: %r" % cli)
+    check(cli["ops"] == "60" and cli["ok"] == "60" and cli["fail"] == "0", "c0: client did not complete 60 operations: %r" % cli)
     return lands, int(cli["resent"])
 
 

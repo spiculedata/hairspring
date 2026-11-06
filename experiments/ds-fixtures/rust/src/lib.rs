@@ -17,6 +17,31 @@ pub fn fnv(mut h: u64, data: &[u8]) -> u64 {
     h
 }
 
+/// Orphan guard of `dsrs`: exit after this many one-second ticks with no request.
+pub const IDLE_TICKS: u32 = 120;
+
+/// Watch an activity counter once per `tick`; call `on_idle` when it has not moved for `limit_ticks` ticks in a row.
+/// The program calls it with a 1 s tick and `IDLE_TICKS`; the unit tests call it with a short tick.
+pub fn watch_idle(
+    activity: &std::sync::atomic::AtomicU64,
+    tick: std::time::Duration,
+    limit_ticks: u32,
+    on_idle: impl FnOnce(),
+) {
+    use std::sync::atomic::Ordering;
+    let (mut last, mut idle) = (activity.load(Ordering::Relaxed), 0);
+    loop {
+        std::thread::sleep(tick);
+        let now = activity.load(Ordering::Relaxed);
+        idle = if now == last { idle + 1 } else { 0 };
+        last = now;
+        if idle >= limit_ticks {
+            on_idle();
+            return;
+        }
+    }
+}
+
 /// A node name that is safe to use in a path: 1 to 16 ASCII letters and digits.
 pub fn valid_name(s: &str) -> bool {
     (1..=16).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric())
@@ -170,6 +195,35 @@ mod tests {
             format!("{:016x}", fnv(FNV_OFFSET, b"a")),
             "af63dc4c8601ec8c"
         );
+    }
+
+    #[test]
+    fn the_idle_guard_fires_only_after_enough_quiet_ticks() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+        let quiet = AtomicU64::new(0);
+        let started = Instant::now();
+        let mut fired = false;
+        watch_idle(&quiet, Duration::from_millis(5), 4, || fired = true);
+        assert!(fired && started.elapsed() >= Duration::from_millis(20));
+        // Activity on every tick keeps it quiet for at least twice the limit.
+        let busy = Arc::new(AtomicU64::new(0));
+        let feeder = Arc::clone(&busy);
+        let handle = std::thread::spawn(move || {
+            for _ in 0..40 {
+                feeder.fetch_add(1, Ordering::Relaxed);
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        });
+        let started = Instant::now();
+        watch_idle(&busy, Duration::from_millis(5), 4, || {});
+        handle.join().unwrap();
+        assert!(
+            started.elapsed() >= Duration::from_millis(80),
+            "the guard fired while requests kept arriving"
+        );
+        assert_eq!(IDLE_TICKS, 120);
     }
 
     #[test]

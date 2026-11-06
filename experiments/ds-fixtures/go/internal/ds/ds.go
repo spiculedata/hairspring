@@ -11,7 +11,25 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
+
+// IdleLimit is the orphan guard of the long-running Go programs: this long without a request.
+const IdleLimit = 120 * time.Second
+
+// WatchIdle returns false once quit is closed, or true if limit passes without a signal on activity. The programs call
+// it with IdleLimit; the unit tests call it with a short limit.
+func WatchIdle(limit time.Duration, activity <-chan struct{}, quit <-chan struct{}) bool {
+	for {
+		select {
+		case <-quit:
+			return false
+		case <-activity:
+		case <-time.After(limit):
+			return true
+		}
+	}
+}
 
 // Keys is the number of keys k0..k7.
 const Keys = 8

@@ -1,6 +1,6 @@
 /* dsnode: the crash experiment node. An append-only record log, recovery, and a report region that survives SIGKILL.
  *
- *   HAIRSPRING_PROC=<node>.i<k> dsnode --node=n1 --port=P --tmp=DIR [--helper] [--threads=2] [--pause]
+ *   HAIRSPRING_PROC=<node>.i<k> dsnode --node=n1 --port=P --tmp=DIR [--threads=2] [--pause]
  *   HAIRSPRING_PROC=<node>.i<k> dsnode --node=n1 --tmp=DIR --recover-only
  *
  * The variable only names the incarnation (no SDK is linked). The node:
@@ -11,7 +11,6 @@
  *      (started, done, acked) updated with release atomics and no syscall;
  *   3. listens and serves PUT k<d> <u64> (append one 32-byte record with ONE write(2), reply OK), GET, QUIT.
  *
- * --helper   forks a helper child (same process group) that loops on a 5 ms sleep, for the process-group kill test
  * --threads=2  a second thread appends a heartbeat record every 5 ms through the same lock and counters
  * --pause    after start-up, block in pause() (for the write-then-kill diagnostic)
  * --recover-only  recover, print the start line, exit (native tests)
@@ -29,10 +28,7 @@
 #define REGION_HEADER_BYTES 64
 #define HEARTBEAT_MS 5
 #define IDLE_WAIT_MS 50
-#define MAX_IDLE_WAITS 2400
 #define MAX_CONNS 32
-#define HELPER_MAX_LOOPS 24000
-#define HELPER_REAP_POLLS 1000
 
 typedef struct {
     uint32_t magic, incarnation, client, op, key;
@@ -169,13 +165,6 @@ static void handle_line(ds_conn *c, const char *line, int *quit) {
     }
 }
 
-/* The helper only loops on a 5 ms sleep, bounded at about 120 s. It does NOT watch its parent: a process-group kill
- * must be what removes it, so a kill that missed the group is visible. */
-static void run_helper(void) {
-    for (int i = 0; i < HELPER_MAX_LOOPS; i++) ds_sleep_ms(5);
-    _exit(0);
-}
-
 static int serve(int port, int use_thread) {
     ds_ev ev;
     ds_conn conns[MAX_CONNS];
@@ -198,7 +187,7 @@ static int serve(int port, int use_thread) {
             break;
         }
         idle = n == 0 ? idle + 1 : 0;
-        if (idle >= MAX_IDLE_WAITS) {
+        if (ds_idle_waits_expired(idle)) {
             exit_code = 4;
             break;
         }
@@ -267,24 +256,10 @@ int main(int argc, char **argv) {
     if (recover_only) return 0;
     create_region(tmp);
 
-    pid_t helper = -1;
-    if (ds_flag(argc, argv, "--helper")) {
-        helper = fork();
-        if (helper < 0) ds_die("cannot fork the helper");
-        if (helper == 0) run_helper();
-    }
     if (ds_flag(argc, argv, "--pause")) {
         int lfd = ds_listen(ds_parse_port(port), 1);
         if (lfd < 0) ds_die("cannot listen");
         for (;;) pause();
     }
-    int rc = serve(ds_parse_port(port), use_thread);
-    if (helper > 0) {
-        kill(helper, SIGKILL);
-        for (int i = 0; i < HELPER_REAP_POLLS; i++) {
-            if (waitpid(helper, NULL, WNOHANG) != 0) break;
-            ds_sleep_ms(1);
-        }
-    }
-    return rc;
+    return serve(ds_parse_port(port), use_thread);
 }

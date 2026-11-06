@@ -22,8 +22,6 @@ use dsrs::Server;
 
 const CONNECT_TRIES: u32 = 200;
 const RETRY_SLEEP: Duration = Duration::from_millis(5);
-/// Orphan guard: exit after this many one-second ticks with no request.
-const IDLE_TICKS: u32 = 120;
 static ACTIVITY: AtomicU64 = AtomicU64::new(0);
 
 fn fatal(msg: &str) -> ! {
@@ -135,17 +133,10 @@ fn main() {
 
     let watched = Arc::clone(&server);
     thread::spawn(move || {
-        let (mut last, mut idle) = (ACTIVITY.load(Ordering::Relaxed), 0);
-        loop {
-            thread::sleep(Duration::from_secs(1));
-            let now = ACTIVITY.load(Ordering::Relaxed);
-            idle = if now == last { idle + 1 } else { 0 };
-            last = now;
-            if idle >= IDLE_TICKS {
-                emit(&lock(&watched).result_line());
-                exit(4);
-            }
-        }
+        dsrs::watch_idle(&ACTIVITY, Duration::from_secs(1), dsrs::IDLE_TICKS, || {
+            emit(&lock(&watched).result_line());
+            exit(4);
+        })
     });
 
     for stream in listener.incoming() {
