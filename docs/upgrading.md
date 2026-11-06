@@ -4,32 +4,49 @@ Hairspring is experimental and changes quickly. This page says how to tell which
 the pre-release binary and a build of `main`, what happens to your results database when you upgrade, and how to remove
 Hairspring again. For running a server see [deploy.md](deploy.md).
 
-Everything on this page about commands was checked by running them on macOS (Apple silicon), with the v0.1-RC1 macOS
-binary and a build of `main`. Anything that needs Linux x86-64 is marked "not run here".
+Everything on this page about commands was checked by running them on macOS (Apple silicon), with the v0.1-RC2 and
+v0.1-RC1 macOS binaries and a build of `main`. Anything that needs Linux x86-64 is marked "not run here".
 
 ## Which build do I have?
 
 ```console
 $ hairspring --version
-hairspring 0.1.0 (0ba59f0 2026-11-05)
+hairspring 0.1.0 (c2687b8 2026-11-05)
 ```
 
-Since the version-string change, `hairspring --version` (or `-V`) prints the crate version, then the commit the binary was
-built from and that commit's date. The v0.1-RC1 pre-release binary was built before that change and prints only
-`hairspring 0.1.0`, so a bare `hairspring 0.1.0` with no commit means the pre-release (or another build older than the
-change); it also means you cannot tell two such builds apart from the version alone. The release notes for v0.1-RC1 name
-its commit: `f819c1a`, committed on 24 October 2026. A build from a source archive, or any build that had no git history, prints
+That line is what the v0.1-RC2 binary prints. `hairspring --version` (or `-V`) prints the crate version, then the commit
+the binary was built from and that commit's date. v0.1-RC2 was built from commit `c2687b8`. The v0.1-RC1 binary was
+built before the commit and date were added and prints only `hairspring 0.1.0`, so a bare `hairspring 0.1.0` with no
+commit means v0.1-RC1 (or another build older than the change); it also means you cannot tell two such builds apart from
+the version alone. The release notes for v0.1-RC1 name its commit: `f819c1a`, committed on 24 October 2026. A build from
+a source archive, or any build that had no git history, prints
 `hairspring 0.1.0 (unknown)`. When you report a problem, quote the whole line (see
 [Getting started and getting help](../README.md#getting-started-and-getting-help)).
 
 ## Pre-release binary or a build of `main`?
 
-The documentation in this repository describes `main`. The pre-release binary (v0.1-RC1, the one
-`bash scripts/install.sh --version v0.1-RC1` installs) is older. Comparing `--help` of the two on the command line
-(each subcommand's options, the v0.1-RC1 macOS binary against a build of `main`) shows these differences, and no others on
-the command line:
+The documentation in this repository describes `main`. The current pre-release is v0.1-RC2, which
+`bash scripts/install.sh --version v0.1-RC2` installs. Comparing `--help` of the v0.1-RC2 macOS binary with a build of
+`main` (commit `567d810`), for the top level and for every subcommand, showed no difference in commands, options or
+help text; the only difference in the output is the program name on the `Usage:` line, which is the downloaded file's
+name. `main` can still differ from the pre-release in behaviour that `--help` does not show: the "Unreleased" section of
+[CHANGELOG.md](../CHANGELOG.md) lists what has changed since v0.1-RC2 where it is visible to a user. The database
+schema is the same (version 8). If a page of the documentation describes something your binary does not do, check
+`hairspring --help` and `hairspring <command> --help` first, then your `hairspring --version`, and if the behaviour is
+in `main` only, build from source to use it:
 
-| Only in builds newer than v0.1-RC1 | What the pre-release says |
+```bash
+git clone https://github.com/spiculedata/hairspring && cd hairspring
+bash scripts/install.sh --with-ui      # builds the web UI (needs Node.js and npm) and the CLI, installs to ~/.local/bin
+# Leave --with-ui out for a build without the web UI: the server then shows a placeholder page.
+```
+
+### If you have v0.1-RC1
+
+The v0.1-RC1 binary is older than v0.1-RC2. Comparing `--help` of the v0.1-RC1 macOS binary with v0.1-RC2 (each
+subcommand's options) shows these differences, and no others on the command line:
+
+| Only in v0.1-RC2 and later | What v0.1-RC1 says |
 |---|---|
 | `hairspring gc` (retention) | `error: unrecognized subcommand 'gc'` |
 | `hairspring serve --trusted-proxy` | `error: unexpected argument '--trusted-proxy' found` |
@@ -38,15 +55,8 @@ the command line:
 | `hairspring test --confirm` (with `--sweep`) | not in `test --help`; not accepted |
 | the commit and date in `hairspring --version` | prints `hairspring 0.1.0` only |
 
-Changes inside the server and the web UI are not in this table: only the command line was compared. If a page of the
-documentation describes something your binary does not do, check `hairspring --help` and `hairspring <command> --help`
-first, and if it is in the table above, build from source to use it:
-
-```bash
-git clone https://github.com/spiculedata/hairspring && cd hairspring
-bash scripts/install.sh --with-ui      # builds the web UI (needs Node.js and npm) and the CLI, installs to ~/.local/bin
-# Leave --with-ui out for a build without the web UI: the server then shows a placeholder page.
-```
+Changes inside the server and the web UI are not in this table: only the command line was compared. To get them, install
+v0.1-RC2 or build from source as above.
 
 You need Rust and a C compiler and linker for that (see [quickstart.md](quickstart.md#what-you-need)). A pre-release
 binary is checked against the release's `SHA256SUMS` before it is installed, which catches a damaged download but does
@@ -78,13 +88,14 @@ error: storage error: database schema version 6 is not supported (expected 5)
 ```
 
 (exit status 2). That text was printed by the v0.1-RC1 binary for a copy of a database made by a build of `main` when `main`
-was at schema 6. `main` has since moved to schema 8, so the same binary on a database made by a current `main` build gives
+was at schema 6. With a database made by v0.1-RC2 or a current `main` build, which is at schema 8, the same binary gives
 
 ```text
 error: storage error: database schema version 8 is not supported (expected 5)
 ```
 
-(derived from the code, not run). The numbers change as schemas are added; the meaning does not. The number after
+(exit status 2; run). The v0.1-RC2 binary refuses a database made by a newer schema in the same way, with `(expected 8)`
+at the end. The numbers change as schemas are added; the meaning does not. The number after
 "version" is the database's; the number after "expected" is the highest your binary knows. The database is not damaged: the
 binary you are running is older than the one that last opened it. The table of what each version adds is in
 [architecture.md](architecture.md).

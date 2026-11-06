@@ -2,7 +2,7 @@
 # Install the `hairspring` command line, from a release asset (checked against its sha256 first) or from source.
 #
 #   scripts/install.sh                         build this checkout with 'cargo build --release --locked' and install it
-#   scripts/install.sh --version v0.1-RC1      download that GitHub release's binary, verify it, install it
+#   scripts/install.sh --version v0.1-RC2      download that GitHub release's binary, verify it, install it
 #
 # After installing it checks `hairspring --version`, runs `hairspring doctor`, and then reports whether this machine
 # can run the `process` backend (`hairspring doctor --process-backend`). That last check is information, not a failure,
@@ -56,7 +56,7 @@ Without --version the checkout this script lives in is built with 'cargo build -
 With --version the release asset for this platform is downloaded and verified before it is installed.
 
   --prefix DIR                Install to DIR/bin/hairspring. Default: \$HOME/.local
-  --version TAG               Download release TAG (for example v0.1-RC1) from GitHub instead of building.
+  --version TAG               Download release TAG (for example v0.1-RC2) from GitHub instead of building.
   --from-source               Build from the checkout (the default without --version).
   --repo OWNER/REPO           GitHub repository to download from. Default: $DEFAULT_REPO
   --sha256 HEX                Also require the downloaded binary to have exactly this sha256 (obtained out of band).
@@ -310,7 +310,7 @@ validate_args() {
   if [ -n "$VERSION" ]; then
     case "$VERSION" in
       v[0-9]*) ;;
-      *) usage_error "--version must be a release tag such as v0.1-RC1" ;;
+      *) usage_error "--version must be a release tag such as v0.1-RC2" ;;
     esac
     case "$VERSION" in
       *[!0-9A-Za-z._-]*) usage_error "--version contains characters a tag cannot have" ;;

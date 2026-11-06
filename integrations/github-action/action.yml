@@ -33,7 +33,7 @@ inputs:
   version:
     description: "Release tag to download the hairspring binary from. Default: the newest pre-release this action was tested with."
     required: false
-    default: "v0.1-RC1"
+    default: "v0.1-RC2"
   from-source:
     description: "Set to true to build the CLI with cargo from this action's own checkout instead of downloading a release binary."
     required: false

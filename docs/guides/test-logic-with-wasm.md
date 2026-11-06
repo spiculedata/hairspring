@@ -9,7 +9,7 @@ The backend is marked **Working** in the README's backend table. What it is not 
 real threads: see [what wasm cannot do](#what-wasm-cannot-do). To run an unmodified Linux program you need the `process`
 backend ([is my machine suitable?](is-my-machine-suitable.md)).
 
-Everything on this page was run on an Apple silicon Mac, with the released `v0.1-RC1` binary and with a build of
+Everything on this page was run on an Apple silicon Mac, with the `v0.1-RC1` binary (since superseded by v0.1-RC2, which this page was not re-run with) and with a build of
 `main` (`hairspring 0.1.0 (0ba59f0 2026-11-05)`), unless it says otherwise. The compiled guests were built in a
 `linux/amd64` Ubuntu 24.04 container and then run on the Mac.
 
@@ -118,7 +118,7 @@ $ echo $?
 1
 ```
 
-The released `v0.1-RC1` binary printed the same lines, with the same bundle name. The run found the failure on the
+The `v0.1-RC1` binary printed the same lines, with the same bundle name. The run found the failure on the
 first try and shrank four recorded decisions to one: the later decisions were not needed to reproduce it. Exit status 1
 means a property was violated (0 passed, 2 is an error).
 
