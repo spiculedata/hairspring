@@ -86,7 +86,8 @@ agents.
   `hairspring confirm` run there. Those checks decide where a failure stands and whether a claim counts it, so with
   the setting on, every holder of a `run` token can cause a confirmed failure to become not reproducible, or the
   other way round, on any failure the server's configuration can run. The caller chooses no command, budget or
-  option: the input is a failure id. At most N confirmations run at once (N from 1 to 4), a failure has one at a
+  option: the input is a failure id. Every way of confirming a stored failure refuses one whose stored bundle is for a different target than the
+  failure, so a worker cannot get checks recorded against a passing target by reporting another target's bundle. At most N confirmations run at once (N from 1 to 4), a failure has one at a
   time, and a request beyond either is refused (`429` with `Retry-After`, or `409`) and never queued, but a `run`
   token can keep all N slots busy for about two minutes at a time, repeatedly, until per-token quotas exist (listed under
   "Not yet implemented" above). Enable it only on a deployment where every `run` token holder is trusted with that, and size

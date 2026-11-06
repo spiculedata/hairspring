@@ -335,3 +335,67 @@ fn a_strict_verify_that_cannot_run_here_is_recorded_not_assumed() {
     );
     assert!(!out.contains("finding: verified"), "{out}");
 }
+
+/// Plants a failure and a run that holds it straight in the project's store, as older or forged data could: both are
+/// recorded under target `good`, but the bundle is the one for the failing target `svc`.
+fn plant_forged_failure(p: &Project) -> (String, String) {
+    use hairspring_store::{NewFailure, NewRun, SqliteStore, Store};
+    let store =
+        SqliteStore::open(&p.dir.join(".hairspring/hairspring.db")).expect("the store opens");
+    let bundle = std::fs::read(&p.bundle_file).expect("the bundle file");
+    let hash = store.put_blob(&bundle).unwrap();
+    let run = store
+        .create_run(
+            &NewRun {
+                target: "good".into(),
+                backend: "hermit".into(),
+                seed: 1,
+                config_json: "{}".into(),
+            },
+            1,
+        )
+        .unwrap();
+    let failure = store
+        .add_failure(
+            &NewFailure {
+                run_id: run.id.clone(),
+                target: "good".into(),
+                message: "m".into(),
+                original_len: 1,
+                shrunk_len: 1,
+                bundle_hash: hash,
+                steps_json: "[]".into(),
+            },
+            2,
+        )
+        .unwrap();
+    (run.id, failure.id)
+}
+
+#[test]
+fn a_stored_failure_whose_bundle_is_for_another_target_is_refused_by_failure_id_and_by_run_id() {
+    // Arrange: a real failure of `svc`, and a planted one under `good` that carries its bundle.
+    let p = project("forged");
+    let (forged_run, forged_failure) = plant_forged_failure(&p);
+    let words = "the failure's bundle is for a different target, so it cannot be confirmed";
+
+    for id in [forged_failure.as_str(), forged_run.as_str()] {
+        // Act
+        let o = p.run(&["confirm", id]);
+
+        // Assert: an error, in fixed words, and nothing was run or stored against the planted failure.
+        let out = text(&o);
+        assert_eq!(o.status.code(), Some(2), "{out}");
+        assert!(out.contains(words), "{out}");
+        assert!(!out.contains("finding"), "{out}");
+    }
+    use hairspring_store::{SqliteStore, Store};
+    let store = SqliteStore::open(&p.dir.join(".hairspring/hairspring.db")).unwrap();
+    assert!(store
+        .list_failure_checks(&forged_failure)
+        .unwrap()
+        .is_empty());
+    // The real failure still confirms.
+    let ok = p.run(&["confirm", &p.run_id]);
+    assert_eq!(ok.status.code(), Some(1), "{}", text(&ok));
+}

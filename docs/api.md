@@ -142,9 +142,12 @@ sends no body and chooses nothing but the failure: the reruns and the wall-clock
   (see [deploy.md](deploy.md#reference-serve-options)). With the default of 0 the route answers `403` with
   `confirmation from the browser is not enabled on this server` and `"code":"confirm_disabled"`, whatever the id.
 - **Role.** `run` or `admin`. A `read` token gets `403` (`this endpoint requires the run role`), checked first.
-- **The failure's bundle must be for the failure's target.** A confirmation reruns the bundle's own target. The server
-  refuses a failure whose stored bundle names a different target (`400`), and refuses to store such a failure when a
-  worker reports one, so a confirmation cannot record checks against a target they did not run.
+- **The failure's bundle must be for the failure's target.** A confirmation reruns the bundle's own target. Every way
+  of confirming a stored failure (this route, `hairspring confirm <failure id>`, `hairspring confirm <run id>` and
+  `hairspring test --confirm`) refuses one whose stored bundle names a different target or cannot be read, before
+  anything runs, and this route answers `400`. The server also refuses to store such a failure when a worker reports
+  one. So a confirmation cannot record checks against a target they did not run, even for data stored by an older
+  version.
 - **It runs on the server's own engine, never on a remote worker.** The server needs the failure's target in its own
   `hairspring.toml`, and only `process` targets can be confirmed, so on a server that cannot run them (no Hermit, a
   host that is not Linux on x86-64) a confirmation is stored with every check `inconclusive` and says Hermit could not
@@ -153,9 +156,9 @@ sends no body and chooses nothing but the failure: the reruns and the wall-clock
   move a failure's state, and a claim, in either direction. Any `run` token can start one while the setting is on.
 - **At most one at a time per failure, and at most N at once.** A second request for a failure that already has
   one running is `409`; a request when all N are running is `429` with `Retry-After`. Nothing is queued. A
-  confirmation keeps its slot until it ends, even if the client goes away. Stopping the server, with Ctrl-C or by
-  `shutdown`, ends a confirmation between checks (the check in progress finishes first); what ran is stored and the
-  rest is recorded as skipped.
+  confirmation keeps its slot until it ends, even if the client goes away. Stopping `hairspring serve` with Ctrl-C
+  or SIGTERM (what systemd sends by default) ends a confirmation between checks: the run in progress finishes, that
+  check is stored inconclusive (cancelled) and the rest are recorded as skipped. The server then exits.
 - The server logs one line when it starts and one when it ends, naming the failure id and the caller as
   `label (t:<key>)` (or the key alone), never the token.
 

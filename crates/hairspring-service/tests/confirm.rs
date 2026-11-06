@@ -414,6 +414,18 @@ fn a_later_confirmation_whose_every_check_is_inconclusive_moves_a_confirmed_fail
         "the earlier checks are still stored"
     );
     assert!(after.checks.iter().any(|c| c.status == "inconclusive"));
+    // Every check of the newest confirmation is inconclusive: that is what replaced the earlier, decisive one.
+    let newest = after.checks.last().expect("checks").confirmation_id.clone();
+    let of_newest: Vec<_> = after
+        .checks
+        .iter()
+        .filter(|c| c.confirmation_id == newest)
+        .collect();
+    assert!(!of_newest.is_empty());
+    assert!(
+        of_newest.iter().all(|c| c.status == "inconclusive"),
+        "{of_newest:?}"
+    );
     assert_eq!(
         svc.failure_checks(&failure).unwrap().unwrap().finding,
         "candidate"
@@ -422,6 +434,12 @@ fn a_later_confirmation_whose_every_check_is_inconclusive_moves_a_confirmed_fail
 
 /// A stored failure of target `svc` whose bundle text is `bundle`, on a service whose engine has process target `svc`.
 fn failure_with_bundle(bundle: &str) -> (Service, Engine, String) {
+    failure_stored_under("svc", bundle)
+}
+
+/// A stored failure of target `target` whose bundle text is `bundle`, planted straight in the store (as old or forged
+/// data could be), on a service whose engine has process target `svc`.
+fn failure_stored_under(target: &str, bundle: &str) -> (Service, Engine, String) {
     let (svc, store, _) = setup();
     let host = scratch("host-bundle");
     put(&host, "etc/ld.so.cache", "cache-one");
@@ -429,7 +447,7 @@ fn failure_with_bundle(bundle: &str) -> (Service, Engine, String) {
     let run = store
         .create_run(
             &hairspring_store::NewRun {
-                target: "svc".into(),
+                target: target.into(),
                 backend: "hermit".into(),
                 seed: 1,
                 config_json: "{}".into(),
@@ -442,7 +460,7 @@ fn failure_with_bundle(bundle: &str) -> (Service, Engine, String) {
         .add_failure(
             &hairspring_store::NewFailure {
                 run_id: run.id,
-                target: "svc".into(),
+                target: target.into(),
                 message: "m".into(),
                 original_len: 1,
                 shrunk_len: 1,
@@ -482,6 +500,39 @@ fn a_stored_bundle_that_names_another_target_is_not_confirmable_and_the_target_i
             .unwrap()
             .checks
             .is_empty());
+    }
+}
+
+#[test]
+fn confirming_a_stored_failure_refuses_a_bundle_for_another_target_whatever_the_caller() {
+    // Arrange: planted data, as an older server could hold. The failure sits under `good`, but its bundle is for the
+    // failing target `svc`, which this engine can run. `confirm_failure` is what the CLI and the server both call.
+    let hostile = "<script>alert(1)</script>";
+    for stored_under in ["good", hostile] {
+        let bundle = hairspring_core::bundle::Bundle::new(1, "t", vec![])
+            .with_target("svc")
+            .with_backend("hermit")
+            .with_param("sched_seed", "1")
+            .encode();
+        let (svc, engine, failure) = failure_stored_under(stored_under, &bundle);
+
+        // Act
+        let err = svc
+            .confirm_failure(&engine, &failure, &ConfirmRequest::default(), &mut |_| true)
+            .unwrap_err();
+
+        // Assert: refused in fixed words before anything runs, and nothing is stored against the failure.
+        let ServiceError::InvalidRequest(text) = err else {
+            panic!("expected a refusal, got {err}");
+        };
+        assert_eq!(
+            text,
+            "the failure's bundle is for a different target, so it cannot be confirmed"
+        );
+        assert!(!text.contains("script"));
+        let stored = svc.failure_checks(&failure).unwrap().unwrap();
+        assert!(stored.checks.is_empty());
+        assert_eq!(stored.finding, "candidate");
     }
 }
 

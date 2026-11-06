@@ -51,6 +51,19 @@ fn checked_failure_id(id: &str) -> Result<()> {
     }
 }
 
+/// Refuses bundle text that cannot be read, or that is for a target other than `failure_target`. The refusals are fixed
+/// words that repeat neither target.
+fn require_own_target(failure_target: &str, bundle_text: &str) -> Result<()> {
+    let bundle = Bundle::decode(bundle_text)
+        .map_err(|_| ServiceError::InvalidRequest(BUNDLE_UNREADABLE_REFUSAL.to_string()))?;
+    if bundle.target != failure_target {
+        return Err(ServiceError::InvalidRequest(
+            BUNDLE_TARGET_REFUSAL.to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn json<T: serde::Serialize>(value: &T) -> Result<String> {
     serde_json::to_string(value).map_err(|e| ServiceError::Internal(e.to_string()))
 }
@@ -107,6 +120,10 @@ impl Service {
         let detail = self
             .get_failure(failure_id)?
             .ok_or_else(|| ServiceError::NotFound(format!("failure {failure_id}")))?;
+        // Every way to confirm a stored failure comes through here, so this is where the bundle must be shown to be
+        // for the failure's own target: the engine reruns the bundle's target, and the result is stored against the
+        // failure. Data stored before the server checked this on ingest can hold a mismatch.
+        require_own_target(&detail.record.target, &detail.bundle)?;
         let checks = self.confirm_bundle(engine, &detail.bundle, req, progress)?;
         self.record_confirmation(failure_id, &Service::local_worker_id(), true, &checks)?;
         self.failure_checks(failure_id)?
@@ -142,14 +159,7 @@ impl Service {
         let text = self
             .get_bundle(&failure.bundle_hash)?
             .ok_or_else(|| ServiceError::InvalidRequest(BUNDLE_UNREADABLE_REFUSAL.to_string()))?;
-        let bundle = Bundle::decode(&text)
-            .map_err(|_| ServiceError::InvalidRequest(BUNDLE_UNREADABLE_REFUSAL.to_string()))?;
-        if bundle.target != failure.target {
-            return Err(ServiceError::InvalidRequest(
-                BUNDLE_TARGET_REFUSAL.to_string(),
-            ));
-        }
-        Ok(())
+        require_own_target(&failure.target, &text)
     }
 
     /// Runs the pipeline on bundle text without storing anything: for a bundle that is not a stored failure.

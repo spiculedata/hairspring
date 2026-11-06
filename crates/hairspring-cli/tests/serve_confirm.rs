@@ -259,9 +259,19 @@ const SLOW_HERMIT: &str = "#!/bin/sh\n[ \"$1\" = \"--version\" ] && { echo 'fake
 
 #[test]
 fn ctrl_c_stops_a_running_confirmation_promptly_and_stores_the_rest_as_skipped() {
+    stops_a_running_confirmation_on("INT", "sigint");
+}
+
+#[test]
+fn sigterm_stops_a_running_confirmation_promptly_and_stores_the_rest_as_skipped() {
+    // What systemd sends by default when it stops the service.
+    stops_a_running_confirmation_on("TERM", "sigterm");
+}
+
+fn stops_a_running_confirmation_on(signal: &str, name: &str) {
     // Arrange: a stored failure, then a Hermit that takes two seconds per start, so a whole confirmation (three
     // reruns and a replay) would take about eight.
-    let (dir, hermit) = project("sigint");
+    let (dir, hermit) = project(name);
     std::fs::write(&hermit, SLOW_HERMIT).unwrap();
     let (mut server, base, _errors) =
         serve(&dir, &hermit, &["--max-confirmations", "1"], &tokens());
@@ -280,10 +290,10 @@ fn ctrl_c_stops_a_running_confirmation_promptly_and_stores_the_rest_as_skipped()
         std::thread::sleep(Duration::from_millis(20));
     }
 
-    // Act: Ctrl-C, as a terminal sends it.
+    // Act: the signal, as a terminal (INT) or a service manager (TERM) sends it.
     let asked = Instant::now();
     let sent = Command::new("kill")
-        .args(["-INT", &server.0.id().to_string()])
+        .args([&format!("-{signal}"), &server.0.id().to_string()])
         .status()
         .expect("kill runs");
     assert!(sent.success());
@@ -310,6 +320,8 @@ fn ctrl_c_stops_a_running_confirmation_promptly_and_stores_the_rest_as_skipped()
         "a partial confirmation is stored: {checks}"
     );
     assert!(all.iter().any(|c| c["status"] == "skipped"), "{checks}");
+    // The run in progress finished (it cannot be taken back), and its check is stored inconclusive, not as a result.
+    assert_eq!(all[0]["status"], "inconclusive", "{checks}");
 }
 
 #[test]

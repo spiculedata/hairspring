@@ -289,6 +289,11 @@ ReadWritePaths=/var/lib/hairspring
 WantedBy=multi-user.target
 ```
 
+systemd stops the unit with SIGTERM by default, and `hairspring serve` treats SIGTERM like Ctrl-C: it stops accepting
+requests, ends a confirmation that is running between checks (the run in progress finishes, which takes up to the
+target's trial time; its check is stored inconclusive and the rest skipped), and exits. Leave `TimeoutStopSec` at its
+default or raise it above your targets' trial timeout, or systemd will send SIGKILL first and nothing is stored.
+
 `/etc/hairspring/tokens` must be owned by the `hairspring` user and readable by nobody else (mode 600), as created in
 [the token section](#3-create-tokens). The server listens on loopback; the worker's `--server` address is the proxy's
 public `https://` name, which forwards to that port ([reverse proxy](#9-reverse-proxy-and-tls)). A worker sends its results to the

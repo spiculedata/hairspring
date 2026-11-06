@@ -104,7 +104,7 @@ pub struct ServerConfig {
     /// A confirmation runs target code on this server for up to two minutes, so one beyond the cap is refused with
     /// 429 and `Retry-After` rather than queued, and a failure has at most one at a time.
     pub max_confirmations: usize,
-    /// Shut down on Ctrl-C (for the CLI).
+    /// Shut down on Ctrl-C, and on Unix on SIGTERM (for the CLI).
     pub handle_ctrl_c: bool,
     /// The organisation's name, shown in the web UI's top bar when set. Plain text of at most
     /// [`MAX_ORGANISATION_CHARS`] characters; a blank name is none. `GET /api/health` serves it, and only to a caller
@@ -373,6 +373,23 @@ async fn harden(req: Request, next: Next) -> Response {
     res
 }
 
+/// Resolves when the process is asked to stop: Ctrl-C (SIGINT), and on Unix SIGTERM, which is what a service manager
+/// such as systemd sends by default. If SIGTERM cannot be listened for, Ctrl-C alone is waited for.
+async fn stop_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        if let Ok(mut term) = signal(SignalKind::terminate()) {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
+            return;
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
+}
+
 fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(api::health))
@@ -520,7 +537,7 @@ pub fn start(config: ServerConfig, svc: Service, engine: Engine) -> io::Result<R
     let workers = spawn_workers(config.embedded_workers, &svc, &engine, &stopping);
     let (tx, rx) = tokio::sync::oneshot::channel::<()>();
     let ctrl_c = config.handle_ctrl_c;
-    let stopping_on_ctrl_c = stopping.clone();
+    let stopping_on_signal = stopping.clone();
     let thread = std::thread::Builder::new()
         .name("hairspring-server".to_string())
         .spawn(move || {
@@ -550,10 +567,10 @@ pub fn start(config: ServerConfig, svc: Service, engine: Engine) -> io::Result<R
                         _ = rx => {}
                         _ = async {
                             if ctrl_c {
-                                let _ = tokio::signal::ctrl_c().await;
+                                stop_signal().await;
                                 // Before anything waits for the work in progress: the runtime waits for a confirmation
                                 // running on the blocking pool, and it ends between checks once this is set.
-                                stopping_on_ctrl_c.store(true, Ordering::SeqCst);
+                                stopping_on_signal.store(true, Ordering::SeqCst);
                             } else {
                                 std::future::pending::<()>().await
                             }
