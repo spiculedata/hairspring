@@ -41,6 +41,8 @@ mod trace;
 mod trial_log;
 mod trial_tmp;
 #[cfg(test)]
+mod verdict_table_tests;
+#[cfg(test)]
 mod verdict_tests;
 
 pub use backend::HermitBackend;
