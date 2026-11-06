@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """Check the static site in site/ without a browser or any network access.
 
-Checks, for every .html file: a <title>, exactly one <h1> (404.html included), local links, anchors and images that
-resolve, <img> with alt, width and height, no external script, stylesheet or font URLs, no inline event handlers.
-Also checks the size budget (HTML, CSS and JS together; images are counted separately).
+Checks, for every .html file: a <title>, exactly one <h1> (404.html included), local links, anchors and assets that
+resolve, <img> with alt, width and height, no inline event handlers, and no external asset: nothing that makes the
+browser fetch from another origin. That covers script, img, source, iframe, video, audio, track, embed, object and
+input src or data attributes, link elements other than canonical and alternate (stylesheet, icon, preload, preconnect,
+manifest and so on), and url(...) and @import with an http(s) or protocol-relative address in <style> text and in style
+attributes. Plain <a href> links to other sites are allowed, as are canonical and Open Graph URLs.
+Also checks the size budget (HTML, CSS and JS together; images are counted separately), and that 404.html,
+robots.txt and index.html exist (robots.txt is harmless and stays so a crawler never has to guess).
 
 Usage: python3 scripts/check-site.py [site-dir]
 Exit status: 0 when every check passes, 1 otherwise.
 """
+import re
 import sys
 from html.parser import HTMLParser
 from pathlib import Path
@@ -19,6 +25,12 @@ TEXT_SUFFIXES = {".html", ".css", ".js", ".txt", ".svg"}
 IMAGE_SUFFIXES = {".webp", ".png", ".jpg", ".jpeg", ".gif", ".avif"}
 
 
+ASSET_SRC_TAGS = {"script", "img", "source", "iframe", "video", "audio", "track", "embed", "input"}
+# <link rel> values that name a document, not something the browser fetches while rendering.
+NON_ASSET_LINK_RELS = {"canonical", "alternate", "author", "license", "help", "next", "prev"}
+CSS_URL = re.compile(r"url\(\s*(?:\"([^\"]*)\"|'([^']*)'|([^)\"'\s]*))\s*\)|@import\s+(?:\"([^\"]*)\"|'([^']*)')", re.I)
+
+
 class PageParser(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -28,11 +40,16 @@ class PageParser(HTMLParser):
         self.refs = []  # (tag, attribute, value)
         self.problems = []
         self._in_title = False
+        self._in_style = False
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
         if tag == "title":
             self._in_title = True
+        if tag == "style":
+            self._in_style = True
+        if a.get("style"):
+            self._scan_css(a["style"], f"style attribute on <{tag}>")
         if tag == "h1":
             self.h1_count += 1
         if a.get("id"):
@@ -44,18 +61,17 @@ class PageParser(HTMLParser):
             self.refs.append((tag, "href", a["href"]))
         if tag == "img":
             self._check_img(a)
-        if tag == "script":
-            if a.get("src"):
-                self.refs.append((tag, "src", a["src"]))
-        if tag == "link":
-            rel = (a.get("rel") or "").lower()
-            if a.get("href") and ("stylesheet" in rel or "icon" in rel or "preload" in rel):
-                self.refs.append((tag, "href", a["href"]))
-        if tag in ("img", "source"):
-            for attr in ("src", "srcset"):
-                if a.get(attr):
-                    for part in a[attr].split(","):
+        if tag in ASSET_SRC_TAGS:
+            for attr in ("src", "srcset", "poster"):
+                for part in (a.get(attr) or "").split(","):
+                    if part.strip():
                         self.refs.append((tag, attr, part.strip().split()[0]))
+        if tag == "object" and a.get("data"):
+            self.refs.append((tag, "data", a["data"]))
+        if tag == "link" and a.get("href"):
+            rels = set((a.get("rel") or "").lower().split())
+            if not rels <= NON_ASSET_LINK_RELS:
+                self.refs.append((tag, "href", a["href"]))
 
     def _check_img(self, a):
         if "alt" not in a:
@@ -66,10 +82,25 @@ class PageParser(HTMLParser):
     def handle_endtag(self, tag):
         if tag == "title":
             self._in_title = False
+        if tag == "style":
+            self._in_style = False
 
     def handle_data(self, data):
         if self._in_title:
             self.title += data
+        if self._in_style:
+            self._scan_css(data, "<style>")
+
+    def _scan_css(self, css, where):
+        for match in CSS_URL.finditer(css):
+            value = (match.group(1) or match.group(2) or match.group(3)
+                     or match.group(4) or match.group(5) or "").strip()
+            if value.startswith("data:"):
+                continue
+            if is_external(value):
+                self.problems.append(f"external asset in {where}: {value}")
+            else:
+                self.refs.append(("css", "url", value))
 
 
 def is_external(value):
@@ -95,7 +126,7 @@ def check_refs(path, parser, site, ids_by_page, problems):
         if value.startswith("data:") or value.startswith(("mailto:", "tel:")):
             continue
         if is_external(value):
-            if tag in ("script", "link", "img", "source"):
+            if tag != "a":
                 problems.append(f"{rel}: external {tag} {attr} {value}")
             continue
         parsed = urlparse(value)

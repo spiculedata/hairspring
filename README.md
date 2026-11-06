@@ -294,6 +294,7 @@ experiments/             the early determinism experiments behind docs/determini
 
 - **Experimental.** APIs and the bundle format will change. `hairspring-core` has a small, tested surface; the rest is young.
 - **macOS has no system-level determinism.** Process targets need Linux x86-64 and hardware performance counters (bare metal, or a VM that exposes them). Apple Silicon cannot run Hermit.
+- **Not a multi-machine simulator.** Hairspring does not simulate several machines or a network between them.
 - **Hermit** is a third-party project we do not control. We build against the maintained fork; review it before running it on anything important. Runs are roughly an order of magnitude slower than native.
 - **Hermit's guest sees host files and environment as inputs.** The backend pins the environment and freezes Python's bytecode caches; other mutable host state (caches, config) can still change results. `hairspring doctor` detects this.
 - The doctor is probabilistic for in-process leaks: check several seeds.

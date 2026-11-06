@@ -6,7 +6,9 @@
 <title>Hairspring: find concurrency bugs and replay them exactly</title>
 <meta name="description" content="Hairspring finds concurrency bugs in your own program and replays them exactly, using deterministic simulation. Open source, experimental, Apache-2.0.">
 <meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://spiculedata.github.io/hairspring/">
 <meta property="og:type" content="website">
+<meta property="og:url" content="https://spiculedata.github.io/hairspring/">
 <meta property="og:title" content="Hairspring: find concurrency bugs and replay them exactly">
 <meta property="og:description" content="Deterministic simulation testing you can run on your laptop and your own servers. Open source, experimental.">
 <meta name="twitter:card" content="summary">
@@ -104,8 +106,9 @@ pre {
 }
 pre code { background: none; padding: 0; font-size: inherit; overflow-wrap: normal; }
 pre:focus-visible { outline-offset: 0; }
+.copyable { display: flex; flex-direction: column; }
 .copy {
-  position: absolute; top: 8px; right: 8px; font: inherit; font-size: 0.8rem; font-weight: 600;
+  order: -1; align-self: flex-end; margin-bottom: 6px; font: inherit; font-size: 0.8rem; font-weight: 600;
   background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; cursor: pointer;
 }
 .copy:hover { border-color: var(--accent); }
@@ -172,11 +175,11 @@ footer.site p { max-width: 42rem; }
       </div>
       <div class="card">
         <h3>Real Linux programs, under Hermit</h3>
-        <p>Point Hairspring at an unmodified Linux program. It runs the program under <a href="https://github.com/rrnewton/hermit">Hermit</a> with a different scheduler seed for each trial.</p>
+        <p>Point Hairspring at an unmodified Linux program. It runs the program under <a href="https://github.com/spiculedata/hermit">a pinned fork of Hermit</a> with a different scheduler seed for each trial.</p>
         <ul class="plain">
           <li>Needs Linux on x86-64: bare metal, or a VM that passes hardware performance counters through.</li>
           <li>Does not run on macOS or Apple silicon.</li>
-          <li>Hermit is a young third-party project, built from a pinned source revision by the installer.</li>
+          <li>Hermit is a young third-party project. <code>scripts/install-hermit.sh</code> builds a pinned fork of it from source.</li>
           <li>Experimental. Runs are roughly an order of magnitude slower than native.</li>
         </ul>
       </div>
@@ -223,7 +226,7 @@ footer.site p { max-width: 42rem; }
       </div>
       <div class="card">
         <h3>GitHub Action</h3>
-        <p>Run simulation and WebAssembly targets in CI, with SARIF findings and the bundles kept as an artifact.</p>
+        <p>A GitHub Action for simulation and WebAssembly targets, with SARIF findings and the bundles kept as an artifact. Its steps were tested in a shell, not yet on GitHub; see the <a href="https://github.com/spiculedata/hairspring/blob/main/docs/ci.md">CI guide</a>.</p>
       </div>
     </div>
     <p>A few options (for example <code>hairspring gc</code> and <code>hairspring test --sweep --confirm</code>) are only in builds newer than the v0.1-RC1 pre-release. <a href="https://github.com/spiculedata/hairspring/blob/main/docs/upgrading.md">Upgrading</a> lists the differences.</p>
@@ -233,24 +236,23 @@ footer.site p { max-width: 42rem; }
 <section id="try" class="alt" aria-labelledby="try-h">
   <div class="wrap">
     <h2 id="try-h">Try it in two minutes</h2>
-    <p>This uses the built-in simulation targets, so it works on macOS (Apple silicon) and Linux x86-64 with no other setup. The installer downloads the pre-release binary and checks its sha256 against the release&rsquo;s <code>SHA256SUMS</code> before installing it.</p>
+    <p>This uses the built-in simulation targets, so it works on macOS and Linux with no other setup. It builds the CLI and the web UI from source, which needs a Rust toolchain with a C compiler and linker, and Node.js with npm for the web UI.</p>
 
     <h3>1. Install</h3>
     <div class="codeblock copyable">
 <pre tabindex="0"><code>git clone https://github.com/spiculedata/hairspring &amp;&amp; cd hairspring
-bash scripts/install.sh --version v0.1-RC1
+bash scripts/install.sh --with-ui
 export PATH="$HOME/.local/bin:$PATH"</code></pre>
     </div>
-    <p>The installer ends by running <code>hairspring doctor</code>. Part of what it prints (abridged: the download and install-path lines are left out):</p>
+    <p>The installer then runs <code>hairspring doctor</code> and <code>hairspring doctor --process-backend</code>. Part of what it prints (abridged: the web UI and cargo build output, and the <code>version:</code>, <code>installed:</code>, <code>sha256:</code> and <code>note:</code> lines, are left out):</p>
     <div class="codeblock">
-<pre tabindex="0"><code>sha256 verified: 1b1dcc8fd0ec37ca1922fcf12a22fff7ad32cdb26b0f7ccacfd63a12d7dc4204
-version: hairspring 0.1.0
-running: hairspring doctor
+<pre tabindex="0"><code>running: hairspring doctor
 lock-lease: deterministic over 8 seeds x 200 steps
 pubsub-atomic: deterministic over 8 seeds x 200 steps
 pubsub-buggy: deterministic over 8 seeds x 200 steps</code></pre>
     </div>
-    <p class="step-note">That hash is the macOS arm64 binary. To build from source instead, use <code>bash scripts/install.sh</code> with no <code>--version</code>; it needs a Rust toolchain.</p>
+    <p>On a Mac the second command reports that the process backend cannot run there. That is expected, and the simulation and WebAssembly backends are not affected.</p>
+    <p class="step-note">Without <code>--with-ui</code> the server shows a placeholder page instead of the web UI. To install a pre-release binary instead (the sha256 is checked against the release&rsquo;s <code>SHA256SUMS</code> first), use <code>bash scripts/install.sh --version v0.1-RC1</code>; it is older than <code>main</code> and its web UI differs, see <a href="https://github.com/spiculedata/hairspring/blob/main/docs/upgrading.md">upgrading</a>.</p>
 
     <h3>2. Find a bug and shrink it</h3>
     <p><code>pubsub-buggy</code> is a built-in model of an at-least-once consumer that can apply a message twice.</p>
@@ -293,15 +295,15 @@ replaying 8 steps on target `pubsub-buggy` (backend sim)
     8. Step(0)
 reproduced: the property is still violated</code></pre>
     </div>
-    <p>It exits 1 while the bug exists. Run <code>hairspring serve</code> and open <a href="http://127.0.0.1:7878">http://127.0.0.1:7878</a> to see the web UI. It listens on loopback only unless you configure tokens.</p>
-    <p>That output came from the v0.1-RC1 macOS binary. To run your own software, see the <a href="https://github.com/spiculedata/hairspring/wiki">wiki</a> (Installation, Your first run, Running your own software) and the <a href="https://github.com/spiculedata/hairspring/blob/main/docs/quickstart.md">quickstart</a>, which covers the Hermit steps for Linux.</p>
+    <p>It exits 1 while the bug exists. Run <code>hairspring serve</code> and open <a href="http://127.0.0.1:7878">http://127.0.0.1:7878</a> to see the web UI. It listens on 127.0.0.1 by default and refuses any other address unless tokens are configured.</p>
+    <p>That output came from a build of <code>main</code> on macOS (Apple silicon). To run your own software, see the <a href="https://github.com/spiculedata/hairspring/wiki">wiki</a> (Installation, Your first run, Running your own software) and the <a href="https://github.com/spiculedata/hairspring/blob/main/docs/quickstart.md">quickstart</a>, which covers the Hermit steps for Linux.</p>
   </div>
 </section>
 
 <section id="ui" aria-labelledby="ui-h">
   <div class="wrap">
     <h2 id="ui-h">The web UI</h2>
-    <p>Screenshots taken against a scratch server holding runs of the built-in simulation targets. They follow your light or dark setting.</p>
+    <p>Screenshots of a build of <code>main</code>, against a scratch server holding runs of the built-in simulation targets. The v0.1-RC1 pre-release has an older web UI without the Confirmation section; build from source with <code>bash scripts/install.sh --with-ui</code> to get this one. They follow your light or dark setting.</p>
     <div class="shots">
       <figure>
         <picture>
