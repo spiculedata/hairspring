@@ -7,7 +7,7 @@ use crate::downgrade::{V7_INDEXES, V8_INDEXES, V8_TABLES_DROP_ORDER};
 use crate::run_mode::{mode_of_config, SEARCH_MODE, SWEEP_MODE};
 use crate::sqlite_index_check::sqlite_index_fits;
 use crate::types::{Result, StoreError};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 pub(crate) const SCHEMA_VERSION: i64 = 8;
 
@@ -261,19 +261,42 @@ const RUN_INPUTS_COLUMNS: [(&str, &str, i64, i64); 8] = [
 /// migration would create: the table with these columns and the reference to `runs`, the index on `runs(target,
 /// created_at)`.
 fn verify_v8_definitions(conn: &Connection) -> Result<()> {
+    // Something else may be called `run_inputs`: a view, say. It is not what the migration creates, and the checks below
+    // read the table's own definition.
+    let kind: Option<String> = conn
+        .query_row(
+            "SELECT type FROM sqlite_master WHERE name='run_inputs' AND type IN ('table', 'view')",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if kind.as_deref() != Some("table") {
+        return Err(StoreError::Backend(
+            "run_inputs exists but is invalid or has a different definition (it is not a table): rename or drop it and open the database again"
+                .to_string(),
+        ));
+    }
+    // `table_xinfo`, not `table_info`: the latter leaves out generated columns, which would hide an extra one. `hidden`
+    // is 0 for an ordinary column, and 2 or 3 for a VIRTUAL or STORED generated one.
     let mut stmt = conn.prepare(
-        "SELECT name, upper(type), \"notnull\", pk FROM pragma_table_info('run_inputs') ORDER BY cid",
+        "SELECT name, upper(type), \"notnull\", pk, hidden FROM pragma_table_xinfo('run_inputs') ORDER BY cid",
     )?;
-    let columns = stmt
+    let all_columns = stmt
         .query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, i64>(2)?,
                 r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    let any_hidden = all_columns.iter().any(|c| c.4 != 0);
+    let columns: Vec<(String, String, i64, i64)> = all_columns
+        .into_iter()
+        .map(|(n, t, nn, pk, _)| (n, t, nn, pk))
+        .collect();
     let wanted: Vec<(String, String, i64, i64)> = RUN_INPUTS_COLUMNS
         .iter()
         .map(|(n, t, nn, pk)| (n.to_string(), t.to_string(), *nn, *pk))
@@ -301,7 +324,7 @@ fn verify_v8_definitions(conn: &Connection) -> Result<()> {
         |r| r.get(0),
     )?;
     let has_check = sql.to_ascii_uppercase().contains("CHECK");
-    if columns != wanted || references_runs != 2 || extra_indexes != 0 || has_check {
+    if columns != wanted || any_hidden || references_runs != 2 || extra_indexes != 0 || has_check {
         return Err(StoreError::Backend(
             "table run_inputs exists but has a different definition: rename or drop it and open the database again"
                 .to_string(),
