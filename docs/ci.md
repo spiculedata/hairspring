@@ -144,7 +144,7 @@ jobs:
       contents: read
       security-events: write
     env:
-      HAIRSPRING_VERSION: v0.1-RC1
+      HAIRSPRING_VERSION: v0.1-RC2
       HAIRSPRING_ASSET: hairspring-linux-x86_64
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -326,7 +326,7 @@ body of a job in GitLab CI, Jenkins, CircleCI or anything else that can run a sh
 
 ```sh
 set -eu
-version=v0.1-RC1
+version=v0.1-RC2
 asset=hairspring-linux-x86_64
 base="https://github.com/spiculedata/hairspring/releases/download/$version"
 
@@ -422,7 +422,7 @@ Run while writing this page, on macOS arm64:
   that call the action were checked the same way against this repository's `action.yml` as a local action, which
   validates the input names.
 - The shell of the install and run steps of the workflow without the action, and the plain shell script, were run
-  against the real v0.1-RC1 release with the macOS asset in place of the Linux one (a Mac was what was to hand), with a
+  against the real v0.1-RC2 release with the macOS asset in place of the Linux one (a Mac was what was to hand), with a
   `sha256sum` that calls `shasum -a 256` standing in for GNU's.
 
 Not run here:

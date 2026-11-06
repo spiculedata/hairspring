@@ -36,7 +36,7 @@ Your repository needs a `hairspring.toml` (or pass `config:`).
   stops with an error if they differ. The checksum guards against a corrupted download or a single swapped asset. It
   does not protect against a compromised release, because `SHA256SUMS` comes from the same place as the binary. Other
   runners get an error that points at the options below.
-- `version`: the release tag to download. The default (`v0.1-RC1`) is the release this action's commit was written
+- `version`: the release tag to download. The default (`v0.1-RC2`) is the release this action's commit was written
   against. Pin the action commit and the version together. The tag is checked to be a plain `v...` name before it is
   used in a URL, and downloads are HTTPS only.
 - `from-source: true`: build the CLI with `cargo` from the action's own checkout instead. Needs a Rust toolchain on
@@ -104,7 +104,7 @@ jobs:
 | `format` | `sarif` | `sarif`, `junit` or `text` |
 | `sweep` | `false` | Run a sweep |
 | `seeds` | empty | Sweep seed range, `FIRST..END`; replaces `seed` |
-| `version` | `v0.1-RC1` | Release tag to download |
+| `version` | `v0.1-RC2` | Release tag to download |
 | `from-source` | `false` | Build with cargo instead of downloading |
 | `hairspring-bin` | empty | Use this binary; skip install |
 | `upload-sarif` | `true` | Upload SARIF (only when `format` is `sarif`) |

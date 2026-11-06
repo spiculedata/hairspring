@@ -72,8 +72,8 @@ project) is production-hardened. See [Limitations](#limitations).
 New to Hairspring? Start with the [wiki](https://github.com/spiculedata/hairspring/wiki): Installation, Your first run,
 then Running your own software. Pre-release binaries are on the
 [releases page](https://github.com/spiculedata/hairspring/releases). This README and `docs/` describe the `main` branch,
-which is ahead of the pre-release: [docs/upgrading.md](docs/upgrading.md) lists what the pre-release lacks and how to
-tell which build you have. To run a server for a team, see [docs/deploy.md](docs/deploy.md); to run it in CI, see [docs/ci.md](docs/ci.md); for the HTTP API, see [docs/api.md](docs/api.md).
+which can be ahead of the pre-release (currently v0.1-RC2): [docs/upgrading.md](docs/upgrading.md) says how to tell
+which build you have and what v0.1-RC1 lacks. To run a server for a team, see [docs/deploy.md](docs/deploy.md); to run it in CI, see [docs/ci.md](docs/ci.md); for the HTTP API, see [docs/api.md](docs/api.md).
 
 Questions and bugs: [open an issue](https://github.com/spiculedata/hairspring/issues/new/choose) and include the output of
 `hairspring --version`, `uname -a` and, if you use the process backend, `hairspring doctor --process-backend`. Security problems: do not open an issue; see

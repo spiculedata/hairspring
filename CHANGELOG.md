@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed
+
+- The GitHub Action's `version` input now defaults to `v0.1-RC2` (it was `v0.1-RC1`). A workflow that does not set
+  `version` downloads the v0.1-RC2 binary, checked against that release's `SHA256SUMS`; set `version: v0.1-RC1` to keep
+  the old one. `docs/ci.md`, `docs/deploy.md`, `docs/quickstart.md` and `docs/upgrading.md` and the installer's help now
+  name v0.1-RC2 as the current pre-release.
+
 ## v0.1-RC2 (2026-11-05)
 
 ### Added

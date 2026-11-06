@@ -28,8 +28,8 @@ Hairspring is experimental. Before you expose a server beyond one machine, read 
 
 Install the `hairspring` command on the server and on every worker host. See [quickstart.md](quickstart.md#install) for
 the options and [upgrading.md](upgrading.md#which-build-do-i-have) for the difference between the pre-release binary and
-a build of `main`. Several options on this page exist only in builds newer than the v0.1-RC1 pre-release; each is marked
-"newer than v0.1-RC1".
+a build of `main`. The current pre-release is v0.1-RC2. Several options on this page are not in the older v0.1-RC1; each
+is marked "not in v0.1-RC1", and v0.1-RC2 has all of them.
 
 ```bash
 # From a checkout (needs Rust, a C compiler and linker; --with-ui also builds the web UI, which needs Node.js and npm.
@@ -37,7 +37,7 @@ a build of `main`. Several options on this page exist only in builds newer than 
 bash scripts/install.sh --with-ui      # builds, installs to ~/.local/bin, then runs `hairspring doctor`
 
 # Or a pre-release binary, checked against the release's SHA256SUMS:
-bash scripts/install.sh --version v0.1-RC1
+bash scripts/install.sh --version v0.1-RC2
 
 hairspring --version
 ```
@@ -145,7 +145,7 @@ hairspring serve --addr 0.0.0.0:7878 --tokens-file /etc/hairspring/tokens --work
   come from this file, on whichever machine runs the job.
 - `--db` is the SQLite results database (default `.hairspring/hairspring.db`, in the directory you start the server
   from).
-- Newer than v0.1-RC1: `--organisation NAME` (shown in the web UI's top bar), `--max-connections`, `--max-replays` and
+- Not in v0.1-RC1: `--organisation NAME` (shown in the web UI's top bar), `--max-connections`, `--max-replays` and
   `--trusted-proxy`; see [`hairspring serve --help`](#reference-serve-options) and [the reverse proxy](#9-reverse-proxy-and-tls)
   below.
 
@@ -354,7 +354,7 @@ that directory too if you rely on them. Tokens and `hairspring.toml` are not in 
 database in place and an older build then refuses it. The CLI has no downgrade command: to go back, restore the backup. Details and
 the exact error are in [upgrading.md](upgrading.md#the-schema-version-error).
 
-**Retention.** Stored runs accumulate. `hairspring gc` (newer than v0.1-RC1) reports what it would remove and removes
+**Retention.** Stored runs accumulate. `hairspring gc` (not in v0.1-RC1) reports what it would remove and removes
 nothing until you repeat it with the arguments the report prints:
 
 ```bash
@@ -373,7 +373,7 @@ including the event-stream timeouts, are in SECURITY.md under
 there is one copy.
 
 In short: without `--trusted-proxy` the server counts every request under the address it is connected from, so every
-caller behind a proxy shares one rate-limit allowance. With `--trusted-proxy ADDR[,ADDR...]` (newer than v0.1-RC1; also
+caller behind a proxy shares one rate-limit allowance. With `--trusted-proxy ADDR[,ADDR...]` (not in v0.1-RC1; also
 `HAIRSPRING_TRUSTED_PROXY`) the server reads the right-most `X-Forwarded-For` entry that is not itself a listed proxy,
 but only on connections that come from a listed proxy. Configure the proxy to **overwrite** `X-Forwarded-For` with the
 address it saw, list only proxies you control, and keep the server's port unreachable except through them.
@@ -440,7 +440,7 @@ From `hairspring serve --help` on a build of `main`:
 | `--rate-limit N` | Requests per minute per caller; 0 disables (default 1200) |
 | `--register-limit N` | Workers one token may register per hour; 0 disables (default 100; counted in memory) |
 | `--tokens-file FILE` | `token:role` or `token:role label` lines, an alternative to `HAIRSPRING_TOKENS` |
-| `--max-connections N` | Open connections at once, 1 to 1000000 (default 512). Newer than v0.1-RC1 |
-| `--max-replays N` | Replays at once, 1 to 64 (default 2). Newer than v0.1-RC1 |
-| `--organisation NAME` | Name shown in the web UI's top bar (also `HAIRSPRING_ORGANISATION`). Newer than v0.1-RC1 |
-| `--trusted-proxy ADDR[,ADDR...]` | Proxies whose `X-Forwarded-For` is read (also `HAIRSPRING_TRUSTED_PROXY`). Newer than v0.1-RC1 |
+| `--max-connections N` | Open connections at once, 1 to 1000000 (default 512). Not in v0.1-RC1 |
+| `--max-replays N` | Replays at once, 1 to 64 (default 2). Not in v0.1-RC1 |
+| `--organisation NAME` | Name shown in the web UI's top bar (also `HAIRSPRING_ORGANISATION`). Not in v0.1-RC1 |
+| `--trusted-proxy ADDR[,ADDR...]` | Proxies whose `X-Forwarded-For` is read (also `HAIRSPRING_TRUSTED_PROXY`). Not in v0.1-RC1 |

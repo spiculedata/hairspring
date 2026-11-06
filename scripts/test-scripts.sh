@@ -1082,19 +1082,19 @@ t_cli_help_and_errors_show_a_tag_that_exists() {
   new_sandbox "$1"
   installer_run -- --help
   assert_rc 0
-  assert_out_has "v0.1-RC1"
+  assert_out_has "v0.1-RC2"
   assert_out_lacks "v0.1.0"
   installer_run -- --version latest
   assert_rc 2
-  assert_err_has "such as v0.1-RC1"
+  assert_err_has "such as v0.1-RC2"
 }
 
 t_cli_tags_of_both_shapes_are_accepted() {
   new_sandbox "$1"
   make_release "$SB/rel" hairspring-linux-x86_64
-  installer_run "HAIRSPRING_RELEASE_BASE_URL=file://$SB/rel" -- --version v0.1-RC1 --prefix "$SB/prefix" --dry-run
+  installer_run "HAIRSPRING_RELEASE_BASE_URL=file://$SB/rel" -- --version v0.1-RC2 --prefix "$SB/prefix" --dry-run
   assert_rc 0
-  assert_out_has "release v0.1-RC1 found"
+  assert_out_has "release v0.1-RC2 found"
   installer_run "HAIRSPRING_RELEASE_BASE_URL=file://$SB/rel" -- --version v1.2.3 --prefix "$SB/prefix" --dry-run
   assert_rc 0
 }
@@ -1117,11 +1117,11 @@ stub_release_curl() {
 t_cli_dry_run_asks_github_for_the_release_headers_only() {
   new_sandbox "$1"
   stub_release_curl
-  installer_run FAKE_CURL_CODE=302 -- --version v0.1-RC1 --prefix "$SB/prefix" --dry-run
+  installer_run FAKE_CURL_CODE=302 -- --version v0.1-RC2 --prefix "$SB/prefix" --dry-run
   assert_rc 0
-  assert_out_has "release v0.1-RC1 found"
+  assert_out_has "release v0.1-RC2 found"
   assert_log_has "--head"
-  assert_log_has "https://github.com/spiculedata/hairspring/releases/download/v0.1-RC1/SHA256SUMS"
+  assert_log_has "https://github.com/spiculedata/hairspring/releases/download/v0.1-RC2/SHA256SUMS"
   assert_log_lacks "--location"
   assert_count "$SB/calls.log" "curl " 1
 }
@@ -1138,12 +1138,12 @@ t_cli_dry_run_offline_warns_and_succeeds() {
   new_sandbox "$1"
   stub_release_curl
   # curl exit 6: could not resolve the host.
-  installer_run FAKE_CURL_CODE=000 FAKE_CURL_RC=6 -- --version v0.1-RC1 --prefix "$SB/prefix" --dry-run
+  installer_run FAKE_CURL_CODE=000 FAKE_CURL_RC=6 -- --version v0.1-RC2 --prefix "$SB/prefix" --dry-run
   assert_rc 0
-  assert_err_has "warning: could not check that release v0.1-RC1 exists"
+  assert_err_has "warning: could not check that release v0.1-RC2 exists"
   assert_err_has "offline?"
   assert_out_has "dry run"
-  installer_run FAKE_CURL_CODE=503 -- --version v0.1-RC1 --prefix "$SB/prefix" --dry-run
+  installer_run FAKE_CURL_CODE=503 -- --version v0.1-RC2 --prefix "$SB/prefix" --dry-run
   assert_rc 0
   assert_err_has "answered HTTP 503"
 }
@@ -1284,8 +1284,8 @@ run_mutations() {
   mutate cli-require-backend-ignored install.sh '[ "$REQUIRE_PROCESS_BACKEND" != "yes" ] || exit 1' 'true'
   mutate cli-doctor-failure-ignored install.sh '"$bin" doctor) || die "'"'"'hairspring doctor'"'"' failed"' '"$bin" doctor) || true'
   mutate cli-tag-unchecked install.sh '      v[0-9]*) ;;
-      *) usage_error "--version must be a release tag such as v0.1-RC1" ;;' '      *) ;;'
-  mutate cli-help-shows-a-missing-tag install.sh '(for example v0.1-RC1)' '(for example v0.1.0)'
+      *) usage_error "--version must be a release tag such as v0.1-RC2" ;;' '      *) ;;'
+  mutate cli-help-shows-a-missing-tag install.sh '(for example v0.1-RC2)' '(for example v0.1.0)'
   mutate cli-dry-run-skips-the-release-check install.sh 'die "curl is required to download a release"
       check_release_exists' 'die "curl is required to download a release"'
   mutate cli-missing-release-accepted install.sh '"$CURL_FILE_UNREADABLE"/*) die' '"$CURL_FILE_UNREADABLE"/*) say'

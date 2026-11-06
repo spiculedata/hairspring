@@ -45,7 +45,7 @@ bash scripts/install.sh
 
 # Or, instead of 3 and once a release has been published, download its binary. The sha256 is checked against the
 # release's SHA256SUMS before anything is installed.
-bash scripts/install.sh --version v0.1-RC1
+bash scripts/install.sh --version v0.1-RC2
 
 # 4. Tell Hairspring which Hermit to use, and check the whole picture in one place.
 export HAIRSPRING_HERMIT="$HOME/.local/share/hairspring/hermit/bin/hermit"
