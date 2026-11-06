@@ -121,7 +121,9 @@ jobs:
   macos-arm64:
     name: macOS arm64
     needs: web
-    runs-on: macos-14
+    # Apple silicon. `macos-14` was retired; `macos-latest` is the label ci.yml already runs on (image macos-26-arm64),
+    # and it follows GitHub's current arm64 image instead of a version that gets retired again.
+    runs-on: macos-latest
     timeout-minutes: 60
     permissions:
       contents: read
