@@ -6,9 +6,6 @@ use crate::trace::behaviour_hash;
 use hairspring_props::{AssertKind, FailureReason, PropertyFailure, TrialProps};
 use std::collections::BTreeSet;
 
-/// Failures named in a verdict message before the rest are summarised as a count.
-const MAX_NAMED_FAILURES: usize = 3;
-
 /// The identity of a failing property: what a confirmation or replay must reproduce.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FailureKey {
@@ -70,19 +67,6 @@ pub fn failing_keys(t: &Trial) -> BTreeSet<FailureKey> {
 /// The property a bundle records for the trial: the first failure, in id order.
 pub fn primary_key(t: &Trial) -> Option<FailureKey> {
     failures(t).into_iter().next().map(key_of)
-}
-
-/// A one-line reason naming the id, thread and ordinal of each failure (the first few).
-pub fn describe(failures: &[PropertyFailure]) -> String {
-    let named: Vec<String> = failures
-        .iter()
-        .take(MAX_NAMED_FAILURES)
-        .map(PropertyFailure::describe)
-        .collect();
-    match failures.len().saturating_sub(MAX_NAMED_FAILURES) {
-        0 => named.join("; "),
-        n => format!("{}; and {n} more", named.join("; ")),
-    }
 }
 
 /// Why a trial that otherwise looks fine cannot be called a pass: its event data was unusable, lost or contradictory,

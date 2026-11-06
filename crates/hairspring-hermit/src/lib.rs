@@ -40,6 +40,9 @@ mod tally_log_tests;
 mod trace;
 mod trial_log;
 mod trial_tmp;
+mod verdict_facts;
+#[cfg(test)]
+mod verdict_table_tests;
 #[cfg(test)]
 mod verdict_tests;
 

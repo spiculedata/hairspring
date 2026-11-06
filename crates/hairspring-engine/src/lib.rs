@@ -19,6 +19,7 @@ pub mod sim_backend;
 mod sim_sweep;
 pub mod sweep;
 pub mod trial_log;
+pub mod verdict;
 
 use std::fmt;
 

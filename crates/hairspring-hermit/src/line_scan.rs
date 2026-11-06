@@ -1,13 +1,8 @@
 //! The lines of a stream that decide a verdict, found while the stream is read, at their true line starts.
 //!
-//! The capture keeps only the head and the tail of a long stream, and the tail begins at an arbitrary byte. A verdict
-//! that searched that text would miss a violation marker in the omitted middle and could take the end of a long line
-//! for the start of a marker. So the lines the verdict reads are noted here instead, one line at a time, in memory
-//! that does not grow with the stream.
-
-pub const VIOLATION_MARKER: &str = "HAIRSPRING_VIOLATION";
-/// Programs written under the project's former name (Anthill) still report violations this way.
-pub const LEGACY_VIOLATION_MARKER: &str = "ANTHILL_VIOLATION";
+//! The reading itself (line splitting, bounded memory, needles split across reads, the guest's violation marker) is
+//! the engine's. What belongs here is the words Hermit's own tooling prints and what they mean.
+use hairspring_engine::verdict::{LineRules, LineScan as EngineScan};
 
 const INTERNAL_FAILURE: &str = "HERMIT_INTERNAL_FAILURE";
 const USAGE: &str = "Usage: hermit";
@@ -19,10 +14,6 @@ const OVERSHOOT: &str = "overshoot";
 const DEADLOCK: &str = "Deadlock detected: ";
 const ERROR_UPPER: &str = "Error:";
 const ERROR_LOWER: &str = "error:";
-
-/// Most bytes of a line kept to report it. A longer line is cut; a marker's reason this long is already clipped
-/// further on.
-const LINE_HEAD_BYTES: usize = 1024;
 
 /// What the lines of one stream said. Every field answers a question the verdict asks of the whole stream.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -54,89 +45,32 @@ impl Findings {
     }
 }
 
-/// What a line contained, as bits.
-const HAS_INTERNAL_FAILURE: u8 = 1;
-const HAS_ERROR_UPPER: u8 = 1 << 1;
-const HAS_USAGE: u8 = 1 << 2;
-const HAS_ERROR_LOWER: u8 = 1 << 3;
-const HAS_SKID: u8 = 1 << 4;
-const HAS_PANICKED: u8 = 1 << 5;
-const HAS_OVERSHOOT: u8 = 1 << 6;
+/// The bits of `LineRules::line`'s `seen`, in the order of `NEEDLES`.
+const HAS_INTERNAL_FAILURE: u32 = 1;
+const HAS_ERROR_UPPER: u32 = 1 << 1;
+const HAS_USAGE: u32 = 1 << 2;
+const HAS_ERROR_LOWER: u32 = 1 << 3;
+const HAS_SKID: u32 = 1 << 4;
+const HAS_PANICKED: u32 = 1 << 5;
+const HAS_OVERSHOOT: u32 = 1 << 6;
 
-const NEEDLES: [(&str, u8); 7] = [
-    (INTERNAL_FAILURE, HAS_INTERNAL_FAILURE),
-    (ERROR_UPPER, HAS_ERROR_UPPER),
-    (USAGE, HAS_USAGE),
-    (ERROR_LOWER, HAS_ERROR_LOWER),
-    (SKID_OVERSHOOT, HAS_SKID),
-    (PANICKED, HAS_PANICKED),
-    (OVERSHOOT, HAS_OVERSHOOT),
-];
-
-/// Bytes of the previous piece of a line kept so a needle split across two reads is still found: one less than the
-/// longest needle.
-const CARRY_BYTES: usize = INTERNAL_FAILURE.len() - 1;
-
-/// Reads a stream in pieces of any size and notes the lines the verdict cares about.
+/// Notes what Hermit's own words on a line mean.
 #[derive(Debug, Default)]
-pub struct LineScan {
-    /// The first bytes of the current line.
-    head: Vec<u8>,
-    /// The last bytes of the current line so far.
-    carry: Vec<u8>,
-    seen: u8,
-    in_line: bool,
-    found: Findings,
-}
+struct HermitLines(Findings);
 
-impl LineScan {
-    pub fn feed(&mut self, bytes: &[u8]) {
-        let mut rest = bytes;
-        while !rest.is_empty() {
-            let end = rest.iter().position(|b| *b == b'\n');
-            self.piece(&rest[..end.unwrap_or(rest.len())]);
-            if end.is_some() {
-                self.end_line();
-            }
-            rest = &rest[end.map_or(rest.len(), |i| i + 1)..];
-        }
-    }
+impl LineRules for HermitLines {
+    const NEEDLES: &'static [&'static str] = &[
+        INTERNAL_FAILURE,
+        ERROR_UPPER,
+        USAGE,
+        ERROR_LOWER,
+        SKID_OVERSHOOT,
+        PANICKED,
+        OVERSHOOT,
+    ];
 
-    pub fn finish(mut self) -> Findings {
-        if self.in_line {
-            self.end_line();
-        }
-        self.found
-    }
-
-    fn piece(&mut self, piece: &[u8]) {
-        if piece.is_empty() {
-            return;
-        }
-        self.in_line = true;
-        let room = LINE_HEAD_BYTES.saturating_sub(self.head.len());
-        self.head.extend_from_slice(&piece[..piece.len().min(room)]);
-        let window = [self.carry.as_slice(), piece].concat();
-        for (needle, bit) in NEEDLES {
-            if contains(&window, needle.as_bytes()) {
-                self.seen |= bit;
-            }
-        }
-        let keep_from = window.len().saturating_sub(CARRY_BYTES);
-        self.carry = window[keep_from..].to_vec();
-    }
-
-    fn end_line(&mut self) {
-        let head = std::mem::take(&mut self.head);
-        let seen = std::mem::take(&mut self.seen);
-        self.carry.clear();
-        self.in_line = false;
-        let line = String::from_utf8_lossy(&head);
-        let line = line.trim_end_matches('\r');
-        if self.found.violation_line.is_none() && is_marker_line(line) {
-            self.found.violation_line = Some(line.to_string());
-        }
-        let found = &mut self.found;
+    fn line(&mut self, line: &str, seen: u32) {
+        let found = &mut self.0;
         found.internal_failure |= seen & HAS_INTERNAL_FAILURE != 0;
         found.usage |= seen & HAS_USAGE != 0;
         found.skid_overshoot |= seen & HAS_SKID != 0;
@@ -156,13 +90,22 @@ impl LineScan {
     }
 }
 
-fn is_marker_line(line: &str) -> bool {
-    let l = line.trim_start();
-    l.starts_with(VIOLATION_MARKER) || l.starts_with(LEGACY_VIOLATION_MARKER)
-}
+/// Reads a stream in pieces of any size and notes the lines the verdict cares about.
+#[derive(Debug, Default)]
+pub struct LineScan(EngineScan<HermitLines>);
 
-fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack.windows(needle.len()).any(|w| w == needle)
+impl LineScan {
+    pub fn feed(&mut self, bytes: &[u8]) {
+        self.0.feed(bytes);
+    }
+
+    pub fn finish(self) -> Findings {
+        let scanned = self.0.finish();
+        Findings {
+            violation_line: scanned.violation_line,
+            ..scanned.rules.0
+        }
+    }
 }
 
 #[cfg(test)]

@@ -30,18 +30,6 @@ pub fn excluded_digest(trial: &Trial) -> TrialDigest {
     }
 }
 
-fn verdict_parts(v: &Verdict) -> (ReportedVerdict, &str) {
-    match v {
-        Verdict::Pass => (ReportedVerdict::Pass, ""),
-        Verdict::Violation(r) => (ReportedVerdict::Violation, r),
-        // A deadlock is a finding; the stored verdict set has no separate kind, so the reason says what it was.
-        Verdict::Deadlock(r) => (ReportedVerdict::Violation, r),
-        Verdict::Hang(r) => (ReportedVerdict::Inconclusive, r),
-        Verdict::Inconclusive(r) => (ReportedVerdict::Unusable, r),
-        Verdict::Infra(r) => (ReportedVerdict::Infra, r),
-    }
-}
-
 /// `reason` followed by `note`, within [`MAX_REASON_CHARS`]: it is the reason that is cut, never the note, so a long
 /// reason cannot hide what was said about the trial.
 pub fn with_note(reason: &str, note: &str) -> String {
@@ -131,7 +119,7 @@ pub fn build(
     verdict: &Verdict,
     counted: Option<Counted>,
 ) -> TrialReport {
-    let (kind, reason) = verdict_parts(verdict);
+    let (kind, reason) = verdict.reported();
     let (digest, catalog, props) = match counted {
         Some(c) => (c.digest, c.updates, Some(c.props)),
         None => (excluded_digest(trial), Vec::new(), None),
