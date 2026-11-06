@@ -100,7 +100,9 @@ rejected, from reading the Hermit source at the pinned revision (not by running 
 
 So the fix needs a Hermit change (a temporary-directory variable that Hermit strips the way it strips
 `HERMIT_VERIFY_TMPDIR`), or a way to name Hermit's files exactly at the moment of the timeout. Until then the
-recommendation is `--base-env=minimal` wherever leftovers matter, as the examples that pass it do. A test pins the current
+recommendation is `--base-env=minimal` wherever leftovers matter, as the examples that pass it do. (Under `minimal` the
+program still receives the target's `env`, the seed and the other variables: see [the guest's environment under
+`--base-env=minimal` and `empty`](#the-guests-environment-under---base-envminimal-and-empty).) A test pins the current
 behaviour: in both modes the trial directory appears in neither Hermit's arguments nor the guest's environment.
 
 What this changes for a guest: nothing it can see. The guest's environment, `/tmp` and `/proc/self/mountinfo` are as
@@ -138,6 +140,68 @@ the engine's standard error and never changes the trial's verdict.
 A directory the engine makes for a trial is not removed if the engine itself is killed with `SIGKILL`. It is empty then
 except for what a running trial held, and is named `hairspring-trials-<uid>-<pid>-<hex>`.
 
+### The guest's environment under `--base-env=minimal` and `empty`
+
+Hairspring starts Hermit with the guest's variables set on Hermit's own process: the pinned `PATH`, `LANG`, `LC_ALL`
+and `TZ`, the target's `env`, `HAIRSPRING_SEED`, `HAIRSPRING_PROC`, and `HAIRSPRING_EVENTS_FILE` when the events file is
+on. Under Hermit's default base environment (`host`) the guest inherits all of that. Under `--base-env=minimal` Hermit
+builds the guest's environment from `HOSTNAME`, `PATH` and `HOME` of its own, and under `empty` from nothing, and then
+adds only what `--env` names. Before this change none were named, so under those two modes the target's `env`, the
+seed, the process tag and the events file path did not reach the program: `env` entries silently did nothing, and an
+SDK that was meant to write to the events file fell back to standard error.
+
+Hairspring now adds one `--env=NAME` for each of these variables when it can:
+
+| Added | When |
+|---|---|
+| `PATH`, `LANG`, `LC_ALL`, `TZ`, `HAIRSPRING_SEED`, `HAIRSPRING_PROC` | always |
+| `PYTHONDONTWRITEBYTECODE`, `PYTHONPYCACHEPREFIX`, `PYTHONHASHSEED` | the command is a `python` program |
+| `HAIRSPRING_EVENTS_FILE` | the events file is on |
+| every key of the target's `env` | always |
+
+- **Names only.** The entry is `--env=NAME`, not `--env=NAME=VALUE`. Hermit copies the value from its own environment, where
+  Hairspring already put it. No value appears on a command line, in a process list or in a stored confirm command.
+- **Order.** The entries are sorted by byte, one per name, and placed just before the target's own `hermit_args`.
+- **Your own `--env` wins.** A name the target already passes in `hermit_args` (`--env`, `-e`, joined or separate) is
+  not added, so the value you gave stays.
+- **Never passed.** `HAIRSPRING_PROC_PID` (the root process always has the tag `p1`), the per-trial `TMPDIR` and
+  `HERMIT_VERIFY_TMPDIR` the engine gives Hermit, and variables that only the Hermit process is given. A target that
+  sets `TMPDIR` in its own `env` gets that fixed value.
+- **Refused names.** A target `env` key, or an `--env` in `hermit_args`, that names `HAIRSPRING_PROC`,
+  `HAIRSPRING_PROC_PID` or `HAIRSPRING_EVENTS_FILE` is a configuration error: Hairspring sets those. Under
+  `minimal`/`empty`, an `env` key that is not printable ASCII, is empty or contains `=` is refused too, because Hermit
+  cannot pass such a name (Hairspring also refuses control characters, which Hermit would accept); rename it or set
+  `pass_env = false`.
+- **`--env=HAIRSPRING_SEED=N` in `hermit_args` still overrides the seed** in every mode, as it did before: the name is
+  skipped like any other name the target passes itself. The `-e` spellings Hermit reads are recognised, including `-e` in a
+  cluster with `-u` (`-ueNAME=VALUE`).
+- **`--base-env` is read case-insensitively**, as Hermit reads it (`--base-env=Minimal` is `minimal`).
+- **Not added** under `host` or no `--base-env` flag (the guest already has everything), under an unknown mode, or when
+  `hermit_args` contain `--config`, `--from` or `--image`. A run config file replaces an `--env` list given on the
+  command line, and an image brings its own environment. For those three, with `pass_env` on, the run prints one
+  warning per target: the program gets the variables only if the file or image passes them.
+- **Hermit still forces** `ASAN_OPTIONS` and `LSAN_OPTIONS` (`detect_leaks=0`) in every mode.
+
+The target key `pass_env` (a boolean on `kind = "process"` targets, default `true`) controls this. `pass_env = false`
+gives the command line and the guest environment that earlier versions produced, in every mode. It is refused on
+`sim` and `wasm` targets. The setting is part of the target's listing in the API.
+
+What it changes for results. The launch environment is an input to a schedule (see above), so a target that uses
+`--base-env=minimal` or `empty` now starts its program from a different environment and can follow different
+schedules for the same seeds. Every added value is fixed for a given target and seed, so the same input is expected
+to keep giving the same schedule; that has not been measured. A result, rate or bundle obtained under
+the earlier behaviour is for that configuration, which is `pass_env = false`. A change to the variable list in a
+future version raises the version number recorded below, so bundles from either side report a change.
+
+A bundle records the setting as `env.guest.passed` (below). Replaying an older `minimal` or `empty` bundle with the
+default reports a changed environment, and a replay that does not fail exits `3` (inconclusive), never "fixed". To replay
+it as recorded, set `pass_env = false` on the target. Replay a bundle with the engine that recorded it, or a newer one: an
+older engine ignores the field and would replay a `hairspring-1` bundle without the variables, with no warning. The
+bundle format version is unchanged.
+
+Not run on a live Hermit by the change that introduced this: it was checked against a stand-in that models how the
+pinned Hermit source (revision `25781c5c`) builds the guest's environment, not against a real Linux x86-64 Hermit.
+
 ### Recorded environment
 
 The measurements above mean a recorded schedule depends on more than the seed and the Hermit flags. Two cases
@@ -157,7 +221,8 @@ A Hermit bundle therefore records these fields (as `param.<name>` lines, which m
 | `host.loader.ld_so_preload.sha256` | hash of `/etc/ld.so.preload`, or `absent` | yes |
 | `host.container` | `docker`, `podman` or `none`, from the usual marker files | yes |
 | `hermit.path.sha256`, `hermit.version` | hash of the Hermit executable and the first line of `hermit --version` (left out if it does not finish within a second; asked again after an upgrade in place, because the answer is kept per executable hash) | yes |
-| `env.base_env` | the `--base-env` mode in the target's `hermit_args`: `minimal`, `host` or `empty`; `default` when the flag is absent (Hermit's own default applies); `unknown` when the value is not one of those | yes |
+| `env.base_env` | the `--base-env` mode in the target's `hermit_args`: `minimal`, `host` or `empty` (read case-insensitively, as Hermit reads it); `default` when the flag is absent (Hermit's own default applies); `unknown` when the value is not one of those | yes |
+| `env.guest.passed` | whether Hairspring named its variables for the guest with `--env=NAME`: `hairspring-1` (version 1 of the list above) or `none`. A bundle recorded before the field existed reads as `none` | yes |
 | `env.guest.names` | the sorted names of the variables the guest and the Hermit process are given; replaced by `env.guest.names.sha256` (a hash of the same list) when the list is too long to record | names can reveal what a deployment uses; check them before publishing a bundle |
 | `env.guest.allowlisted.sha256` | hash of `NAME=value` lines for an allowlist of non-secret variables only (`PATH`, `LANG`, `LANGUAGE`, `TZ`, `LC_*`, `PYTHONDONTWRITEBYTECODE`, `PYTHONHASHSEED`) | yes. Values of every other variable are not recorded or hashed, since a hash of a short secret can be guessed offline |
 | `target.exe.sha256` | hash of the program the command starts, only if it is a regular file (not of its arguments or input files) | yes |

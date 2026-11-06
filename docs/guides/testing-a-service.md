@@ -55,7 +55,10 @@ Otherwise an infrastructure problem looks like a bug in your service.
   environment (`PATH=/usr/local/bin:/usr/bin:/bin`, `LANG=C`, `LC_ALL=C`, `TZ=UTC`) plus what you put in `env`, with an
   empty standard input. Anything you exported in your terminal does not reach the driver. The driver passes its own
   environment to the service (`os.Environ()` below), so a variable set in `env` reaches both. Hairspring also sets `HAIRSPRING_SEED` to the trial's seed; the driver can
-  read it if it wants to derive its workload from the seed, and it reaches the service the same way.
+  read it if it wants to derive its workload from the seed, and it reaches the service the same way. This also holds with
+  `--base-env=minimal` or `empty` in the target's `hermit_args`: Hairspring names each of these variables with
+  `--env=NAME` so Hermit passes it on (`pass_env = false` on the target turns that off; see
+  [determinism.md](../determinism.md#the-guests-environment-under---base-envminimal-and-empty)).
 - **Wait for readiness by connecting, with a bound.** Poll the port for a short, fixed total time and give up with an
   infrastructure exit code. Do not sleep for a guessed duration.
 - **Stop the service on every exit path.** In the first version of the driver written for this page, one error path

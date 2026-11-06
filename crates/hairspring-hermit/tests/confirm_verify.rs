@@ -249,6 +249,38 @@ fn a_verify_miss_on_a_changed_environment_is_inconclusive() {
 }
 
 #[test]
+fn a_verify_miss_on_an_old_minimal_bundle_under_the_new_default_is_inconclusive() {
+    let o = RigOptions {
+        hermit_args: vec!["--base-env=minimal".to_string()],
+        ..RigOptions::default()
+    };
+    let rig = rig("verify-healed-passed", o);
+    rig.set("verify", "heal");
+    let recorded = rig.bundle();
+    assert_eq!(
+        recorded.params.get("env.guest.passed").map(String::as_str),
+        Some("hairspring-1")
+    );
+    let old = hairspring_core::bundle::Bundle {
+        params: recorded
+            .params
+            .iter()
+            .filter(|(k, _)| k.as_str() != "env.guest.passed")
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+        ..recorded
+    };
+    let checks = rig.engine.confirm(&old, &strict(), &mut |_| true).unwrap();
+    let verify = verify_of(&checks);
+    assert_eq!(verify.status, CheckStatus::Inconclusive, "{verify:?}");
+    let why = detail(verify, "inconclusive");
+    assert!(
+        why.contains("env.guest.passed (recorded none, now hairspring-1)"),
+        "{why}"
+    );
+}
+
+#[test]
 fn a_verify_that_fails_a_different_kind_of_way_does_not_verify() {
     let o = RigOptions {
         svc_script: Some(EXITS_ZERO.to_string()),

@@ -21,6 +21,7 @@
 //! Hermit run config file (whose contents cannot be read here).
 use crate::host_identity::base_env_mode;
 use crate::summary_dir::ScratchDir;
+use hairspring_engine::hermit_args::names_passed_through;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -30,20 +31,6 @@ const VERIFY_TMPDIR: &str = "HERMIT_VERIFY_TMPDIR";
 const SELF_CONTAINED_BASE_ENVS: [&str; 2] = ["minimal", "empty"];
 /// Base environments whose guest environment is known: those above, and the one that passes Hermit's through.
 const KNOWN_BASE_ENVS: [&str; 4] = ["minimal", "empty", "host", "default"];
-
-/// Whether an argument passes variable `name` from Hermit's environment to the guest: `--env NAME`, `-e NAME`, and the
-/// joined forms.
-fn passes_through(args: &[String], name: &str) -> bool {
-    args.iter().enumerate().any(|(i, arg)| {
-        let joined = ["--env=", "-e=", "-e"]
-            .iter()
-            .find_map(|prefix| arg.strip_prefix(prefix));
-        let separate = matches!(arg.as_str(), "--env" | "-e")
-            .then(|| args.get(i + 1).map(String::as_str))
-            .flatten();
-        joined == Some(name) || separate == Some(name)
-    })
-}
 
 /// Hermit can read a run config file that sets the base environment and the variables passed on; none of that can be
 /// read here.
@@ -63,10 +50,11 @@ pub(crate) fn hermit_temp_env(
         return Vec::new();
     }
     let mode = base_env_mode(hermit_args);
+    let passed = names_passed_through(hermit_args);
     let free = |name: &str| {
         !guest_env.contains_key(name)
             && !extra_env.iter().any(|(n, _)| n == name)
-            && !passes_through(hermit_args, name)
+            && !passed.contains(name)
     };
     let mut vars = Vec::new();
     if SELF_CONTAINED_BASE_ENVS.contains(&mode.as_str()) && free(TMPDIR) {
@@ -145,6 +133,26 @@ mod tests {
         );
         assert_eq!(names(&["--base-env=minimal", "--env=TMPDIR_NOT=1"]), BOTH);
         assert_eq!(names(&["--base-env=minimal", "--env=A=TMPDIR"]), BOTH);
+    }
+
+    #[test]
+    fn a_name_and_value_given_to_the_guest_does_not_stop_hermits_own_variable() {
+        // `--env=NAME=VALUE` sets the guest's variable; Hermit's own TMPDIR and verify directory are separate.
+        assert_eq!(
+            names(&["--base-env=minimal", "--env=TMPDIR=/x"]),
+            BOTH,
+            "minimal"
+        );
+        assert_eq!(
+            names(&["--base-env=minimal", "-e", "TMPDIR=/x"]),
+            BOTH,
+            "separate"
+        );
+        assert_eq!(names(&["--env=HERMIT_VERIFY_TMPDIR=/x"]), [VERIFY_TMPDIR]);
+        assert_eq!(
+            names(&["--base-env=host", "-eHERMIT_VERIFY_TMPDIR=/x"]),
+            [VERIFY_TMPDIR]
+        );
     }
 
     #[test]

@@ -66,6 +66,7 @@ fn engine_with_wall(
             scheduler: SchedulerSpec::default(),
             hang_is_violation,
             parallelism: 1,
+            pass_env: true,
         },
         budget: Budget {
             max_steps: 1,

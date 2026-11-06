@@ -81,6 +81,7 @@ fn engine_full(
             scheduler: SchedulerSpec::default(),
             hang_is_violation: false,
             parallelism: 1,
+            pass_env: true,
         },
         budget: Budget {
             max_steps: 1,

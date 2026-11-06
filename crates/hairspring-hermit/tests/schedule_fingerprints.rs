@@ -86,6 +86,7 @@ fn rig(
             scheduler: SchedulerSpec::default(),
             hang_is_violation: false,
             parallelism,
+            pass_env: true,
         },
         budget: Budget {
             max_steps: 1,
@@ -275,6 +276,7 @@ fn a_symlink_planted_where_the_private_directory_goes_is_not_followed() {
             scheduler: SchedulerSpec::default(),
             hang_is_violation: false,
             parallelism: 1,
+            pass_env: true,
         },
         budget: Budget {
             max_steps: 1,

@@ -62,6 +62,10 @@ queued --lease--> running --finish_job--> done            (run: passed | failed 
   `HERMIT_VERIFY_TMPDIR` under the default base environment, which passes Hermit's environment to the guest. So in that
   mode Hermit's private guest `/tmp` and its `/etc/group` copy can still be left after a timeout. No `--tmp` is
   passed for this, because, from reading Hermit's source (not run live), it could change the guest's `/proc/self/mountinfo`. See [determinism.md](determinism.md#hermits-temporary-files-and-a-trial-timeout).
+- **Guest variables under `--base-env=minimal` and `empty`.** Hermit builds the guest's environment from its own base
+  and `--env` only, so the engine adds one `--env=NAME` (names only, byte-sorted, before the target's `hermit_args`) for
+  each variable it sets for the guest, unless the target sets `pass_env = false`. The same map is set on Hermit's process
+  and read for the names. See [determinism.md](determinism.md#the-guests-environment-under---base-envminimal-and-empty).
 - Jobs that exhaust their attempts through expiry are reported by `fail_expired_jobs` so their runs never hang.
 - **Ctrl-C.** `hairspring test` and `hairspring confirm` catch the first SIGINT (a second one ends the process in the
   usual way). The foreground run is cancelled like any other cancel, so it ends `cancelled` and keeps the trials already

@@ -7,6 +7,7 @@ use hairspring_core::environment::{
     is_unsafe_display_char, sha256_file, EnvironmentIdentity, MAX_FIELD_VALUE_CHARS,
 };
 use hairspring_core::point::encoding::sha256_hex;
+use hairspring_engine::hermit_args;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -36,11 +37,6 @@ const CONTAINER_MARKERS: [(&str, &str); 2] =
     [(".dockerenv", "docker"), ("run/.containerenv", "podman")];
 /// Said when `/etc/ld.so.preload` does not exist, so "no preload" is a recorded value rather than a gap.
 const ABSENT: &str = "absent";
-/// What the record says when Hermit's own default decides the base environment, and when the flag cannot be read.
-const BASE_ENV_DEFAULT: &str = "default";
-const BASE_ENV_UNKNOWN: &str = "unknown";
-const BASE_ENV_MODES: [&str; 3] = ["minimal", "host", "empty"];
-const BASE_ENV_FLAG: &str = "--base-env";
 /// Variables whose values are recorded (as one hash). Anything else may be a secret, and a hash of a short secret can
 /// be guessed offline, so other variables contribute their name only.
 const ALLOWLISTED_VARS: [&str; 6] = [
@@ -102,6 +98,8 @@ pub struct GuestInputs<'a> {
     pub env: &'a BTreeMap<String, String>,
     pub extra_env_names: &'a [String],
     pub hermit_args: &'a [String],
+    /// The target's `pass_env` setting: whether the engine names its variables for the guest where it can.
+    pub pass_env: bool,
 }
 
 /// The identity of the host and the run's inputs.
@@ -129,6 +127,7 @@ pub fn collect(
         ("hermit.path.sha256", hermit.sha256.clone()),
         ("hermit.version", hermit.version.clone()),
         ("env.base_env", Some(base_env_mode(guest.hermit_args))),
+        ("env.guest.passed", Some(guest_passed(guest))),
         ("env.guest.names", names.listed()),
         ("env.guest.names.sha256", names.fallback_hash()),
         (
@@ -146,6 +145,19 @@ pub fn collect(
             // A value the record format cannot hold is left out, like one the host did not offer.
             id.clone().with_field(name, value).unwrap_or(id)
         })
+}
+
+/// Which version of the list of variables the engine names for the guest was in force: `none` when it names none.
+/// Bump the number when that list changes, so a bundle from either side reports a change instead of matching.
+const PASSED_LIST_VERSION: u32 = 1;
+const PASSED_NONE: &str = "none";
+
+fn guest_passed(guest: &GuestInputs) -> String {
+    if hermit_args::pass_through_active(guest.hermit_args, guest.pass_env) {
+        format!("hairspring-{PASSED_LIST_VERSION}")
+    } else {
+        PASSED_NONE.to_string()
+    }
 }
 
 fn read_trimmed(path: &Path) -> Option<String> {
@@ -233,30 +245,9 @@ fn allowlisted_hash(env: &BTreeMap<String, String>) -> String {
     sha256_hex(text.as_bytes())
 }
 
-/// The base-environment mode Hermit was asked for. With no flag Hermit's own default decides, which this cannot
-/// see; a flag with a value we do not know, or none, fails closed to `unknown`.
+/// The base-environment mode Hermit was asked for (see [`hermit_args::base_env_mode`]).
 pub(crate) fn base_env_mode(args: &[String]) -> String {
-    let mut mode = BASE_ENV_DEFAULT.to_string();
-    let mut i = 0;
-    while i < args.len() {
-        let value = if args[i] == BASE_ENV_FLAG {
-            i += 1;
-            Some(args.get(i).map(String::as_str))
-        } else {
-            args[i]
-                .strip_prefix(BASE_ENV_FLAG)
-                .and_then(|rest| rest.strip_prefix('='))
-                .map(Some)
-        };
-        if let Some(value) = value {
-            mode = match value {
-                Some(v) if BASE_ENV_MODES.contains(&v) => v.to_string(),
-                _ => BASE_ENV_UNKNOWN.to_string(),
-            };
-        }
-        i += 1;
-    }
-    mode
+    hermit_args::base_env_mode(args)
 }
 
 fn is_regular_file(path: &Path) -> bool {

@@ -252,6 +252,7 @@ mod tests {
             scheduler,
             hang_is_violation: false,
             parallelism: 1,
+            pass_env: true,
         }
     }
 

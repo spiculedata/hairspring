@@ -4,6 +4,18 @@
 
 ### Changed
 
+- Programs run with `--base-env=minimal` or `--base-env=empty` now receive the target's `env`, `HAIRSPRING_SEED`,
+  `HAIRSPRING_PROC`, the events-file path (when the events file is on) and the pinned `PATH`, `LANG`, `LC_ALL` and
+  `TZ`. Before, Hermit dropped them under those modes, so `env` entries and the events file silently did nothing there.
+  Hairspring adds one `--env=NAME` per variable. Values stay out of the command line. A name you already pass with
+  your own `--env` keeps your value. Nothing changes under the default base environment, or with a Hermit `--config`,
+  `--from` or `--image`, where you get a warning instead. This changes what such programs see, so their schedules
+  change. The new target key `pass_env = false` restores the previous behaviour. Bundles now record the setting
+  (`env.guest.passed`). Replaying an older `--base-env=minimal` bundle with the new default reports a changed
+  environment, and a replay that does not fail exits 3 (inconclusive). `--base-env` is now read case-insensitively, as
+  Hermit reads it, so `env.base_env` records the real mode for a spelling such as `Minimal`. A target `env` key, or an
+  `--env` in `hermit_args`, that names `HAIRSPRING_PROC`, `HAIRSPRING_PROC_PID` or `HAIRSPRING_EVENTS_FILE` is now a
+  configuration error.
 - The GitHub Action's `version` input now defaults to `v0.1-RC2` (it was `v0.1-RC1`). A workflow that does not set
   `version` downloads the v0.1-RC2 binary, checked against that release's `SHA256SUMS`; set `version: v0.1-RC1` to keep
   the old one. `docs/ci.md`, `docs/deploy.md`, `docs/quickstart.md` and `docs/upgrading.md` and the installer's help now

@@ -1,5 +1,6 @@
 //! Running one trial: spawn hermit, capture bounded output, enforce a timeout.
 use crate::capture::{drain, Captured};
+use crate::env::{engine_guest_env, pass_through_args, PROC_PID_ENV, ROOT_PROC_ENV, ROOT_PROC_TAG};
 use crate::events::{self, EventsFault};
 use crate::head_tail::Omitted;
 use crate::interrupt;
@@ -7,7 +8,7 @@ use crate::line_scan::Findings;
 use crate::summary::{self, Summary};
 use crate::summary_dir::{PrivateDir, ScratchDir};
 use crate::trial_tmp::hermit_temp_env;
-use crate::{env::guest_env, HermitSettings};
+use crate::HermitSettings;
 use hairspring_engine::scheduler::{Heuristic, SchedulerSpec};
 use hairspring_props::TrialProps;
 use std::collections::BTreeMap;
@@ -16,11 +17,6 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-/// The environment variable an SDK reads for its process tag, and the fixed tag the backend gives the root process.
-const ROOT_PROC_ENV: &str = "HAIRSPRING_PROC";
-const ROOT_PROC_TAG: &str = "p1";
-/// Set by an SDK for the processes it forks; inheriting it would turn the root into `p1.s<pid>`.
-const PROC_PID_ENV: &str = "HAIRSPRING_PROC_PID";
 const POLL: Duration = Duration::from_millis(10);
 const READER_GRACE: Duration = Duration::from_secs(2);
 
@@ -36,6 +32,8 @@ pub struct ProcessSpec<'a> {
     pub scheduler: &'a SchedulerSpec,
     pub hang_is_violation: bool,
     pub parallelism: u32,
+    /// Whether Hairspring names its variables with `--env=NAME` under `--base-env=minimal` and `empty`.
+    pub pass_env: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -139,14 +137,37 @@ pub fn scheduler_flags(s: &SchedulerSpec) -> Vec<String> {
     flags
 }
 
-/// Arguments for `hermit`: `run <flags> -- <command...>`. `extra` are flags a caller adds for one kind of run (the
-/// strict verify's), placed before the target's own `hermit_args`.
+/// Arguments for `hermit`: `run <flags> <--env=NAME...> <hermit_args> -- <command...>`. `extra` are flags a caller adds
+/// for one kind of run (the strict verify's), placed before the variable names and the target's own `hermit_args`.
+/// `events_env` says whether the guest is given the events-file variable, which is one of the names passed.
 pub fn hermit_args(
     settings: &HermitSettings,
     spec: &ProcessSpec,
     seed: u64,
     summary: Option<&std::path::Path>,
     events: Option<&ScratchDir>,
+    extra: &[String],
+) -> Vec<String> {
+    hermit_args_for(
+        settings,
+        spec,
+        seed,
+        summary,
+        events,
+        events.is_some(),
+        extra,
+    )
+}
+
+/// [`hermit_args`] with the events variable decided by the caller, for a record of a run whose events directory is not
+/// part of what is recorded.
+pub(crate) fn hermit_args_for(
+    settings: &HermitSettings,
+    spec: &ProcessSpec,
+    seed: u64,
+    summary: Option<&std::path::Path>,
+    events: Option<&ScratchDir>,
+    events_env: bool,
     extra: &[String],
 ) -> Vec<String> {
     let mut args = vec!["run".to_string(), format!("--epoch={}", settings.epoch)];
@@ -159,6 +180,8 @@ pub fn hermit_args(
         args.push(events::tmp_arg(dir));
     }
     args.extend(extra.iter().cloned());
+    let guest = engine_guest_env(spec.command, spec.env, seed, events_env);
+    args.extend(pass_through_args(spec.hermit_args, spec.pass_env, &guest));
     args.extend(spec.hermit_args.iter().cloned());
     args.push("--".to_string());
     args.extend(spec.command.iter().cloned());
@@ -359,7 +382,7 @@ fn run_trial_with_summary(
     extra: &[String],
 ) -> Result<Trial, SpawnError> {
     let (events_dir, temp_dir) = (dirs.events, dirs.temp);
-    let guest = guest_env(spec.command, spec.env);
+    let guest = engine_guest_env(spec.command, spec.env, seed, events_dir.is_some());
     // Hermit's own temporary files; see `trial_tmp` for which variables are safe in which base environment.
     let temp_env = temp_dir.map_or_else(Vec::new, |dir| {
         hermit_temp_env(spec.hermit_args, &guest, &settings.extra_env, dir)
@@ -369,9 +392,9 @@ fn run_trial_with_summary(
         settings, spec, seed, summary, events_dir, extra,
     ))
     .env_clear()
+    // The same map the `--env=NAME` names come from. Under `--base-env=minimal` and `empty` only those names reach the
+    // guest; under the default base environment all of it does.
     .envs(guest)
-    // The trial seed is an input like any other; tools such as hairspring-dapr-sim derive their faults from it.
-    .env("HAIRSPRING_SEED", seed.to_string())
     .envs(settings.extra_env.iter().map(|(k, v)| (k, v)))
     .envs(temp_env)
     .envs(events_dir.map(|_| (events::EVENTS_FILE_ENV, events::GUEST_EVENTS_FILE)))

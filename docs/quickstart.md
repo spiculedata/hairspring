@@ -624,8 +624,10 @@ An SDK adds named properties (`always`, `sometimes`, `reachable`) that are track
 - **Hermit is a third-party project** that Hairspring does not control, and a young one. The installer builds a pinned
   fork at a pinned commit with a small backport patch. Read what it builds before running it on anything important.
 - **The guest sees the host.** Files, environment and timestamps are inputs. The backend starts the program from a
-  minimal pinned environment and freezes Python's bytecode caches, but other mutable host state can still change a
-  schedule. A package upgrade that changes the loader can stop an old bundle replaying; replay says so.
+  minimal pinned environment (with `--base-env=minimal` or `empty` in `hermit_args` it names each variable with `--env=NAME`, and
+  `pass_env = false` on the target restores the earlier behaviour; with `--config`, `--from` or `--image` it cannot add
+  them and warns) and freezes Python's
+  bytecode caches, but other mutable host state can still change a schedule. A package upgrade that changes the loader can stop an old bundle replaying; replay says so.
 - **Runs are slower than native**, by an amount that depends on the program and the kernel. Set `trial_timeout_secs`
   accordingly.
 - **Privileges.** The recorded measurements ran Hermit as root. Unprivileged use was not tested.
@@ -646,4 +648,7 @@ An SDK adds named properties (`always`, `sometimes`, `reachable`) that are track
 | `Hermit was not found` | `HAIRSPRING_HERMIT` is unset and `hermit` is not on `PATH`. Export the path the installer printed |
 | `Inherited descriptor cleanup failed ... close_range` | The environment (an emulated or restricted container) does not implement `close_range`. Run on a native Linux host |
 | `environment mismatch` on replay | The loader changed since the bundle was recorded. See determinism.md |
+| `env.guest.passed (recorded none, now hairspring-1)` on replay | The bundle was recorded before Hairspring passed its variables under `--base-env=minimal` or `empty`. Set `pass_env = false` on the target to replay it as recorded. A replay that does not fail exits 3 (inconclusive) |
+| ``target `NAME`: an `env` key cannot be passed to the guest by Hermit (names must be printable ASCII without '='); rename it or set pass_env = false`` | With `--base-env=minimal` or `empty`, an `env` key is empty, contains `=` or is not printable ASCII. Rename it, or set `pass_env = false` |
+| ``target `NAME`: `env` must not contain `HAIRSPRING_PROC`: Hairspring sets it for the guest`` and ``target `NAME`: `hermit_args` must not pass `HAIRSPRING_PROC` with `--env`: Hairspring sets it for the guest`` (also for `HAIRSPRING_PROC_PID` and `HAIRSPRING_EVENTS_FILE`) | Hairspring sets these for the guest and refuses a target that sets them. Remove them |
 | `no stored run` or a 404 for a run you had a link to | The run may have been removed by `hairspring gc`. The UI says "This run does not exist here. It may have been removed." but not why; check with whoever runs it |

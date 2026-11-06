@@ -1,5 +1,6 @@
 //! `hairspring.toml` parsing and validation.
 use crate::erased::Registry;
+use crate::hermit_args::{is_passable_name, pass_through_active, ENGINE_OWNED_VARS};
 use crate::scheduler::{check_hermit_args, Heuristic, SchedulerSpec};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -61,6 +62,9 @@ pub enum TargetKind {
         hang_is_violation: bool,
         /// Trials run at the same time (consecutive seeds in a batch); 1 runs them one by one.
         parallelism: u32,
+        /// Under `--base-env=minimal` or `empty`, name the variables Hairspring sets (and the target's `env`) with
+        /// `--env=NAME` so Hermit passes them to the guest. `false` is the behaviour before that existed.
+        pass_env: bool,
     },
     Wasm {
         module: String,
@@ -137,6 +141,7 @@ struct RawTarget {
     skid_margin: Option<u32>,
     hang_is_violation: Option<bool>,
     parallelism: Option<u32>,
+    pass_env: Option<bool>,
     module: Option<String>,
     #[serde(default)]
     budget: Budget,
@@ -169,6 +174,29 @@ fn valid_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
 }
 
+/// What the target's `env` may name. A variable the engine owns is refused whatever the base environment. A name
+/// Hermit cannot pass is refused only when Hairspring would pass it: the message does not repeat the key.
+fn check_env(
+    target: &str,
+    env: &BTreeMap<String, String>,
+    hermit_args: &[String],
+    pass_env: bool,
+) -> Result<(), ConfigError> {
+    if let Some(owned) = ENGINE_OWNED_VARS.iter().find(|v| env.contains_key(**v)) {
+        return Err(ConfigError::Invalid(format!(
+            "target `{target}`: `env` must not contain `{owned}`: Hairspring sets it for the guest"
+        )));
+    }
+    let refused =
+        pass_through_active(hermit_args, pass_env) && env.keys().any(|key| !is_passable_name(key));
+    if refused {
+        return Err(ConfigError::Invalid(format!(
+            "target `{target}`: an `env` key cannot be passed to the guest by Hermit (names must be printable ASCII without '='); rename it or set pass_env = false"
+        )));
+    }
+    Ok(())
+}
+
 fn convert(name: String, raw: RawTarget) -> Result<TargetSpec, ConfigError> {
     if !valid_name(&name) {
         return Err(ConfigError::Invalid(format!(
@@ -178,10 +206,13 @@ fn convert(name: String, raw: RawTarget) -> Result<TargetSpec, ConfigError> {
     let missing = |what: &str| ConfigError::Invalid(format!("target `{name}` requires `{what}`"));
     let scheduler = raw.scheduler();
     if !matches!(raw.kind, RawKind::Process)
-        && (!scheduler.is_default() || raw.hang_is_violation.is_some() || raw.parallelism.is_some())
+        && (!scheduler.is_default()
+            || raw.hang_is_violation.is_some()
+            || raw.parallelism.is_some()
+            || raw.pass_env.is_some())
     {
         return Err(ConfigError::Invalid(format!(
-            "target `{name}`: scheduler options (heuristic, chaos, ...), hang_is_violation and parallelism are only valid for kind = \"process\""
+            "target `{name}`: scheduler options (heuristic, chaos, ...), hang_is_violation, parallelism and pass_env are only valid for kind = \"process\""
         )));
     }
     let kind = match raw.kind {
@@ -200,6 +231,8 @@ fn convert(name: String, raw: RawTarget) -> Result<TargetSpec, ConfigError> {
                 .validate()
                 .and_then(|()| check_hermit_args(&raw.hermit_args))
                 .map_err(|m| ConfigError::Invalid(format!("target `{name}`: {m}")))?;
+            let pass_env = raw.pass_env.unwrap_or(true);
+            check_env(&name, &raw.env, &raw.hermit_args, pass_env)?;
             let parallelism = raw.parallelism.unwrap_or(1);
             if !(1..=MAX_PARALLELISM).contains(&parallelism) {
                 return Err(ConfigError::Invalid(format!(
@@ -215,6 +248,7 @@ fn convert(name: String, raw: RawTarget) -> Result<TargetSpec, ConfigError> {
                 scheduler,
                 hang_is_violation: raw.hang_is_violation.unwrap_or(false),
                 parallelism,
+                pass_env,
             }
         }
         RawKind::Wasm => TargetKind::Wasm {

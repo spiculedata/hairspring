@@ -20,6 +20,9 @@ const TARGET_DIFFERS: &str = "command line or working directory differs from the
 const TARGET_DIFFERS_EFFECT: &str =
     "replay started the program from the current configuration; a program that reads its own paths can follow a different schedule";
 
+const GUEST_PASSED: &str = "env.guest.passed";
+const PASSED_NONE: &str = "none";
+
 /// Added to a miss when the command line or working directory differs.
 pub const MISS_WITH_CHANGED_TARGET: &str =
     "possible cause: the command line or working directory differs from the recording";
@@ -60,6 +63,25 @@ fn target_not_recorded(recorded: &EnvironmentIdentity) -> Option<String> {
             missing.join(" and ")
         )
     })
+}
+
+/// The line that says how to replay with the recorded `pass_env` setting, when `env.guest.passed` is what differs. A
+/// recording from before the field existed reads as `none`, so replaying one under the default says so too.
+fn guest_passed_note(comparison: &EnvironmentComparison) -> Option<String> {
+    let EnvironmentComparison::Differs(changes) = comparison else {
+        return None;
+    };
+    let change = changes.iter().find(|c| c.name == GUEST_PASSED)?;
+    let now = change.current.as_deref().unwrap_or("unavailable");
+    let advice = if change.recorded == PASSED_NONE {
+        "set pass_env = false on the target to replay as recorded"
+    } else {
+        "set pass_env = true on the target, with the --base-env it had, to replay as recorded"
+    };
+    Some(format!(
+        "the bundle was recorded with {GUEST_PASSED}={} and this target now uses {now}; {advice}",
+        change.recorded
+    ))
 }
 
 fn loader_changed(comparison: &EnvironmentComparison) -> bool {
@@ -105,6 +127,7 @@ pub fn check(
         warnings.extend(target_not_recorded(recorded));
     }
     warnings.extend(comparison.warning());
+    warnings.extend(guest_passed_note(&comparison));
     let target_changed = changed_target_fields(&comparison);
     if !target_changed.is_empty() {
         warnings.push(format!(
@@ -187,6 +210,56 @@ mod tests {
     #[test]
     fn a_hash_present_and_equal_on_both_sides_gives_no_warning() {
         assert!(warnings(&with_hash(), &with_hash()).is_empty());
+    }
+
+    fn with_passed(value: &str) -> EnvironmentIdentity {
+        with_hash().with_field(GUEST_PASSED, value).unwrap()
+    }
+
+    fn passed_notes(recorded: &EnvironmentIdentity, current: &EnvironmentIdentity) -> Vec<String> {
+        warnings(recorded, current)
+            .into_iter()
+            .filter(|w| w.starts_with("the bundle was recorded with"))
+            .collect()
+    }
+
+    #[test]
+    fn an_old_recording_under_the_new_default_says_how_to_replay_as_recorded() {
+        let notes = passed_notes(&with_hash(), &with_passed("hairspring-1"));
+        assert_eq!(
+            notes,
+            ["the bundle was recorded with env.guest.passed=none and this target now uses hairspring-1; set pass_env = false on the target to replay as recorded"]
+        );
+        let check = check(
+            &bundle_with(&with_hash()),
+            &with_passed("hairspring-1"),
+            false,
+        )
+        .unwrap();
+        assert!(check.differs);
+    }
+
+    #[test]
+    fn a_new_recording_replayed_with_passing_off_says_how_to_turn_it_on() {
+        let notes = passed_notes(&with_passed("hairspring-1"), &with_passed("none"));
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(
+            notes[0].contains("env.guest.passed=hairspring-1"),
+            "{notes:?}"
+        );
+        assert!(notes[0].contains("now uses none"), "{notes:?}");
+        assert!(notes[0].contains("set pass_env = true"), "{notes:?}");
+    }
+
+    #[test]
+    fn no_note_when_the_setting_is_the_same_or_an_old_recording_meets_none() {
+        assert!(passed_notes(&with_passed("none"), &with_passed("none")).is_empty());
+        assert!(passed_notes(&with_hash(), &with_passed("none")).is_empty());
+        assert!(
+            !check(&bundle_with(&with_hash()), &with_passed("none"), false)
+                .unwrap()
+                .differs
+        );
     }
 
     #[test]

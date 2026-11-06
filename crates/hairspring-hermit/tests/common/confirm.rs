@@ -197,6 +197,7 @@ fn process(
             scheduler,
             hang_is_violation,
             parallelism: 1,
+            pass_env: true,
         },
         budget: Budget {
             max_steps: 1,
