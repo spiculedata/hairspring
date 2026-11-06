@@ -177,8 +177,9 @@ fn a_malformed_recorded_field_counts_as_a_change() {
         .with_param("host.loader.libc.sha256", "not-a-hash");
     let out = check(&bundle, &host, false).unwrap();
     assert!(out.differs);
-    assert!(out.warnings.iter().any(|w| w
-        == "malformed recorded environment fields, not compared: host.loader.libc.sha256"));
+    assert!(out.warnings.iter().any(
+        |w| w == "malformed recorded environment fields, not compared: host.loader.libc.sha256"
+    ));
 }
 
 #[test]
@@ -187,4 +188,49 @@ fn a_bundle_without_an_environment_gets_only_the_no_record_note() {
     assert!(!out.differs);
     assert_eq!(out.warnings.len(), 1);
     assert!(out.warnings[0].starts_with("no environment recorded"));
+}
+
+// Bundles written by a newer build: fields this build does not know.
+
+fn bundle_listing(listed: &str) -> Bundle {
+    now()
+        .apply_to(Bundle::new(1, "b", vec![]))
+        .with_param("env.fields", listed)
+}
+
+#[test]
+fn a_bundle_with_a_field_this_build_does_not_know_is_a_changed_environment() {
+    let listed = "env.base_env,env.guest.passed,hermit.future_flag,hermit.path.sha256,host.container,host.kernel_release,host.loader.ld_so_cache.sha256,target.command.sha256,target.cwd.sha256";
+    let out = check(&bundle_listing(listed), &now(), false).unwrap();
+    assert!(out.differs);
+    assert_eq!(out.warnings.len(), 1, "{:?}", out.warnings);
+    assert!(out.warnings[0].starts_with(
+        "environment differs: this bundle records environment fields this build does not know (hermit.future_flag)"
+    ));
+    assert!(out.warnings[0].contains("upgrade Hairspring"));
+}
+
+#[test]
+fn an_unknown_field_marked_informational_changes_nothing() {
+    let bundle = bundle_listing("env.base_env,~hermit.future_note")
+        .with_param("hermit.future_note", "anything");
+    let out = check(&bundle, &now(), false).unwrap();
+    assert!(!out.differs);
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+}
+
+#[test]
+fn an_unknown_field_is_not_refused_as_a_loader_change() {
+    let bundle =
+        bundle_listing("host.loader.future_thing").with_param("host.loader.future_thing", "x");
+    let out = check(&bundle, &now(), false).unwrap();
+    assert!(out.differs);
+}
+
+#[test]
+fn a_bundle_that_lists_only_known_fields_behaves_as_before() {
+    let bundle = now().apply_to(Bundle::new(1, "b", vec![]));
+    assert!(bundle.params.contains_key("env.fields"));
+    let out = check(&bundle, &now(), false).unwrap();
+    assert_eq!((out.differs, out.warnings), (false, vec![]));
 }

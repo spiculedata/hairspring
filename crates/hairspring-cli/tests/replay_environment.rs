@@ -255,3 +255,91 @@ fn a_new_bundle_holds_no_path_text() {
     assert!(!body.contains(d.to_str().unwrap()), "{body}");
     assert!(body.contains("param.target.cwd.sha256="), "{body}");
 }
+
+#[test]
+fn a_new_bundle_lists_the_environment_fields_it_recorded() {
+    let (_, _, body) = recorded("fieldlist");
+    let line = body
+        .lines()
+        .find_map(|l| l.strip_prefix("param.env.fields="))
+        .unwrap_or_else(|| panic!("{body}"));
+    for name in ["hermit.path.sha256", "env.guest.passed", "host.container"] {
+        assert!(line.split(',').any(|n| n == name), "{line}");
+    }
+}
+
+/// The bundle as a newer build might write it: one more recorded field, named in the list of recorded fields.
+fn from_newer_build(bundle: &str, field: &str) -> String {
+    let listed: String = bundle
+        .lines()
+        .map(|l| match l.strip_prefix("param.env.fields=") {
+            Some(names) => format!("param.env.fields={names},{field}\n"),
+            None => format!("{l}\n"),
+        })
+        .collect();
+    with_extra_param(&listed, &format!("param.{field}=on"))
+}
+
+#[test]
+fn a_miss_on_a_bundle_with_a_field_this_build_does_not_know_exits_inconclusive_not_zero() {
+    let (d, hermit, body) = recorded("newer-miss");
+    let edited = from_newer_build(&passing_seed(&body), "hermit.future_flag");
+    let file = write_bundle(&d, "b.hairspring", &edited);
+    let o = run(&d, &hermit, &["replay", &file]);
+    assert_eq!(o.status.code(), Some(3), "{}", text(&o));
+    assert!(
+        text(&o).contains("does not know (hermit.future_flag)"),
+        "{}",
+        text(&o)
+    );
+    assert!(text(&o).contains("upgrade Hairspring"), "{}", text(&o));
+    assert!(text(&o).contains("inconclusive"), "{}", text(&o));
+}
+
+#[test]
+fn a_reproduction_on_such_a_bundle_still_reproduces_and_still_warns() {
+    let (d, hermit, body) = recorded("newer-hit");
+    let file = write_bundle(
+        &d,
+        "b.hairspring",
+        &from_newer_build(&body, "hermit.future_flag"),
+    );
+    let o = run(&d, &hermit, &["replay", &file]);
+    assert_eq!(o.status.code(), Some(1), "{}", text(&o));
+    assert!(
+        text(&o).contains("warning: environment differs"),
+        "{}",
+        text(&o)
+    );
+}
+
+#[test]
+fn an_unknown_field_marked_informational_does_not_stop_a_miss_exiting_zero() {
+    let (d, hermit, body) = recorded("newer-info");
+    let edited = from_newer_build(&passing_seed(&body), "~hermit.future_note").replace(
+        "param.~hermit.future_note=on",
+        "param.hermit.future_note=on",
+    );
+    let file = write_bundle(&d, "b.hairspring", &edited);
+    let o = run(&d, &hermit, &["replay", &file]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+}
+
+#[test]
+fn an_unknown_field_without_a_list_is_still_caught_by_its_namespace() {
+    let (d, hermit, body) = recorded("newer-nolist");
+    let edited = with_extra_param(&passing_seed(&body), "param.host.future_fact=1");
+    let file = write_bundle(&d, "b.hairspring", &edited);
+    let o = run(&d, &hermit, &["replay", &file]);
+    assert_eq!(o.status.code(), Some(3), "{}", text(&o));
+}
+
+#[test]
+fn a_hostile_unknown_name_is_never_echoed() {
+    let (d, hermit, body) = recorded("newer-hostile");
+    let edited = with_extra_param(&passing_seed(&body), "param.host.%0Aforged line=1");
+    let file = write_bundle(&d, "b.hairspring", &edited);
+    let o = run(&d, &hermit, &["replay", &file]);
+    assert_eq!(o.status.code(), Some(3), "{}", text(&o));
+    assert!(!text(&o).contains("forged line"), "{}", text(&o));
+}

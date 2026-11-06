@@ -1,7 +1,7 @@
 //! `env.guest.passed`: whether the engine named its variables for the guest. A recording without it reads as `none`.
 use hairspring_core::bundle::Bundle;
 use hairspring_core::environment::{
-    compare, EnvError, EnvironmentComparison, EnvironmentIdentity, FieldChange, KNOWN_FIELDS,
+    compare, known_field_names, EnvError, EnvironmentComparison, EnvironmentIdentity, FieldChange,
 };
 
 const PASSED: &str = "env.guest.passed";
@@ -24,8 +24,8 @@ fn with_passed(value: &str) -> EnvironmentIdentity {
 
 #[test]
 fn the_field_is_known_and_takes_none_or_a_versioned_name() {
-    assert!(KNOWN_FIELDS.contains(&PASSED));
-    assert_eq!(KNOWN_FIELDS.len(), 18);
+    assert!(known_field_names().any(|n| n == PASSED));
+    assert_eq!(known_field_names().count(), 18);
     for ok in ["none", "hairspring-1", "hairspring-12"] {
         assert!(recorded().with_field(PASSED, ok).is_ok(), "{ok}");
     }

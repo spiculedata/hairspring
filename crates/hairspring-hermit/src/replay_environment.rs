@@ -104,8 +104,10 @@ pub fn check(
     let parsed = EnvironmentIdentity::from_bundle(bundle);
     let comparison = compare(parsed.identity.as_ref(), current);
     let mut warnings: Vec<String> = parsed.warning().into_iter().collect();
+    warnings.extend(parsed.unknown_warning());
     // A field that could not be read cannot be checked, so it counts as a change: it must not let a miss pass as a fix.
-    let tampered = !parsed.malformed.is_empty();
+    // The same goes for a field this build does not know: it was written by a newer build and cannot be compared.
+    let tampered = parsed.is_partly_unreadable();
     if loader_changed(&comparison) && !allow_change {
         let detail = comparison.warning().unwrap_or_default();
         return Err(EngineError::EnvironmentMismatch(format!(

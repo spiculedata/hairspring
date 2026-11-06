@@ -64,9 +64,10 @@ fn only_the_preload_hash_may_be_the_word_absent() {
 
 #[test]
 fn text_fields_take_printable_ascii_up_to_the_limit() {
-    for name in NAMES.iter().filter(|n| {
-        !n.ends_with(".sha256") && **n != "env.guest.passed"
-    }) {
+    for name in NAMES
+        .iter()
+        .filter(|n| !n.ends_with(".sha256") && **n != "env.guest.passed")
+    {
         assert!(accepts(name, &"x".repeat(MAX_FIELD_VALUE_CHARS)), "{name}");
         assert!(
             !accepts(name, &"x".repeat(MAX_FIELD_VALUE_CHARS + 1)),

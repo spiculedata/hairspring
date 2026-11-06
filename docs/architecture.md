@@ -1174,6 +1174,21 @@ A bundle that records an execution environment (a fixed list of `param.host.*`, 
 `param.target.*` names) starts with `hairspring-bundle v3`; every other bundle is still written as v2, so older readers keep
 working. Readers accept v1, v2 and v3. See [Recorded environment](determinism.md#recorded-environment).
 
+### Environment identity and replay
+
+The fields a bundle may record are declared in one registry in `hairspring-core` (`environment/registry.rs`), one table
+per owner: the engine for the host, guest and program facts every backend records, and one per backend (today Hermit's
+`hermit.*` and `host.loader.*`). Each field has a name, a value grammar and a comparison rule, `must-match` or
+`informational`. The comparison and the bundle reader take their field list from the registry, so neither names a field;
+what a backend does about a particular difference (the Hermit loader refusal, the notes about the command line) stays
+in that backend's crate. Existing fields, names, values and replay results are unchanged.
+
+Bundles also carry `param.env.fields`, the list of the field names they recorded. A build that finds a field in a
+bundle that it does not know reports a changed environment, so a replay that does not reproduce exits `3` instead of
+reporting a fix. This holds for builds that include this rule only; see [Bundles written by a newer
+build](determinism.md#bundles-written-by-a-newer-build). The header was not raised for it: it still means that the
+bundle records an environment.
+
 ## Point addresses and hashes
 
 `hairspring_core::point` is a pure library for naming a place inside a trial. An address is
