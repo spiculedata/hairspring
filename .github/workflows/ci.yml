@@ -311,6 +311,30 @@ jobs:
         if: matrix.dir == 'go'
         run: make -C examples/language-fixtures/go test-race
 
+  # Experiment fixtures for the distributed-systems track (experiments/ds-fixtures): small C, Go and Rust programs with
+  # native self-tests only. Nothing here runs under Hermit and nothing is a product feature. It is its own job because
+  # the fixtures are not language-fixtures (they are not built with an SDK) and because their Linux-only paths (epoll,
+  # strace checks of the kill supervisor, the full native kill counts) cannot be exercised on a Mac.
+  ds-fixtures:
+    name: DS fixtures (native)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GOTOOLCHAIN: local
+      GOPROXY: "off"
+      DS_REQUIRE_STRACE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.x
+          cache: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install strace
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends strace
+      - name: Native self-tests
+        run: make -C experiments/ds-fixtures test RUNS=20 KILLS=1000 GO_KILLS=200
+
   # Build records for the artifacts that are pinned for the acceptance run. B3 (seccomp) and B5 (strace) need a native
   # x86-64 Linux host, which an emulated container is not, so the records are produced here. Manual only.
   # Each job uploads the record and, next to it, the artifact it describes (the binary, or the staged Python package,

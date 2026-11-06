@@ -1,0 +1,21 @@
+[package]
+name = "dsrs"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "DS experiment fixture: the Rust server of the multi-process loopback ring. Not a product feature."
+
+# Standalone: not a member of the repository workspace, so its build outputs and lock file stay here.
+[workspace]
+
+[lib]
+name = "dsrs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dsrs"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 2
+debug = false
