@@ -73,11 +73,18 @@ fn a_gap_is_not_a_prefix() {
 fn an_unknown_append_followed_by_later_appends_is_never_a_violation() {
     // A timed-out append may never land, or may land late, so any recovered log could be explained.
     let h = appends(&[(1, "info"), (2, "ok")]);
-    for recovered in [&[2][..], &[2, 1], &[1, 2], &[], &[1]] {
+    for recovered in [&[2][..], &[2, 1], &[1, 2]] {
         let v = run(&h, recovered);
         assert!(
             matches!(v, Verdict::Unknown(UnknownReason::UnsupportedShape { .. })),
             "{recovered:?} gave {v:?}"
+        );
+    }
+    // Whatever the unknown append does, the acknowledged 2 must be there.
+    for recovered in [&[][..], &[1]] {
+        assert_eq!(
+            run(&h, recovered).violation().unwrap().kind,
+            ViolationKind::LostAcknowledgedWrite { value: 2 }
         );
     }
     let h = appends(&[(1, "ok"), (2, "info"), (3, "ok")]);
@@ -184,6 +191,33 @@ fn append_after_an_unknown_append_by_the_same_client_is_unknown() {
         run(&b.build(), &[1, 2]),
         Verdict::Unknown(UnknownReason::UnsupportedShape { .. })
     ));
+}
+
+#[test]
+fn a_restarted_writer_must_use_a_new_client_name() {
+    // The writer was killed mid-append, so its append has no completion record. A restarted writer that reuses the
+    // name is a second open operation for one client.
+    let mut b = Hb::new();
+    b.seq_ok("w", 1, "append", "log", Some(1), None);
+    b.invoke("w", 2, "append", "log", Some(2));
+    b.seq_ok("w", 3, "append", "log", Some(3), None);
+    assert_eq!(
+        History::from_records(b.records(), Completeness::Complete),
+        Err(HistoryError::ClientOverlap {
+            client: "w".into(),
+            id: 3
+        })
+    );
+
+    // Under a new name the history is valid, and the checker decides what it can.
+    let mut b = Hb::new();
+    b.seq_ok("w", 1, "append", "log", Some(1), None);
+    b.invoke("w", 2, "append", "log", Some(2));
+    b.seq_ok("w.restart1", 1, "append", "log", Some(3), None);
+    assert_eq!(
+        run(&b.build(), &[3]).violation().unwrap().kind,
+        ViolationKind::LostAcknowledgedWrite { value: 1 }
+    );
 }
 
 #[test]

@@ -231,3 +231,46 @@ pub(crate) fn linearizable(
 ) -> Result<bool, Exhausted> {
     Search::new(ops, initial).run(steps_left, max_memo_entries)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Four overlapping required writes, then reads of 1 and 2 in sequence: not linearizable. Once the search
+    /// backtracks into a later write, the earlier ones are already placed and are skipped over while looking for the
+    /// next candidate.
+    fn overlapping_writes_then_contradiction() -> Vec<RegOp> {
+        let op = |source, invoke, complete, kind| RegOp {
+            source,
+            invoke,
+            complete,
+            required: true,
+            kind,
+        };
+        let mut ops: Vec<RegOp> = (0..4u64)
+            .map(|i| op(i as usize, i, 4 + i, Kind::Write(i as i64)))
+            .collect();
+        ops.push(op(4, 10, 11, Kind::Read(Some(1))));
+        ops.push(op(5, 12, 13, Kind::Read(Some(2))));
+        ops
+    }
+
+    /// The smallest step budget with which the search decides the history.
+    fn least_deciding_budget(ops: &[RegOp]) -> u64 {
+        (0..)
+            .find(|&budget| {
+                let mut left = budget;
+                linearizable(ops, None, &mut left, usize::MAX) == Ok(false)
+            })
+            .expect("some budget decides")
+    }
+
+    #[test]
+    fn cursor_skips_count_as_steps() {
+        let ops = overlapping_writes_then_contradiction();
+        assert_eq!(least_deciding_budget(&ops), KNOWN_BUDGET);
+    }
+
+    /// Golden value: 57 candidate tries plus 37 skips of already-placed operations. If skips stop counting, this drops.
+    const KNOWN_BUDGET: u64 = 94;
+}
