@@ -229,30 +229,31 @@ footer.site p { max-width: 42rem; }
         <p>A GitHub Action for simulation and WebAssembly targets, with SARIF findings and the bundles kept as an artifact. Its steps were tested in a shell, not yet on GitHub; see the <a href="https://github.com/spiculedata/hairspring/blob/main/docs/ci.md">CI guide</a>.</p>
       </div>
     </div>
-    <p>A few options (for example <code>hairspring gc</code> and <code>hairspring test --sweep --confirm</code>) are only in builds newer than the v0.1-RC1 pre-release. <a href="https://github.com/spiculedata/hairspring/blob/main/docs/upgrading.md">Upgrading</a> lists the differences.</p>
   </div>
 </section>
 
 <section id="try" class="alt" aria-labelledby="try-h">
   <div class="wrap">
     <h2 id="try-h">Try it on your machine</h2>
-    <p>This uses the built-in simulation targets, so it works on macOS and Linux without Hermit or special hardware. It builds the CLI and the web UI from source. That needs a stable Rust toolchain, 1.96 or newer (<a href="https://rustup.rs">rustup</a> keeps it current), with a C compiler and linker, and Node.js 20.19 or newer (or 22.12 or newer) with npm. The first build compiles a few hundred crates and can take several minutes.</p>
+    <p>This uses the built-in simulation targets, so it works without Hermit or special hardware. It installs the v0.1-RC2 pre-release binary for macOS on Apple silicon or Linux on x86-64, and checks its sha256 against the release&rsquo;s <code>SHA256SUMS</code> before installing it. You do not need Rust or Node.js for this route.</p>
 
     <h3>1. Install</h3>
     <div class="codeblock copyable">
 <pre tabindex="0"><code>git clone https://github.com/spiculedata/hairspring &amp;&amp; cd hairspring
-bash scripts/install.sh --with-ui
+bash scripts/install.sh --version v0.1-RC2
 export PATH="$HOME/.local/bin:$PATH"</code></pre>
     </div>
-    <p>The installer then runs <code>hairspring doctor</code> and <code>hairspring doctor --process-backend</code>. Part of what it prints (abridged: the web UI and cargo build output, and the <code>version:</code>, <code>installed:</code>, <code>sha256:</code> and <code>note:</code> lines, are left out):</p>
+    <p>The installer then runs <code>hairspring doctor</code> and <code>hairspring doctor --process-backend</code>. Part of what it prints (abridged: the <code>plan:</code>, <code>downloading</code>, <code>installed:</code>, <code>sha256:</code> and <code>note:</code> lines, and the output of the second command, are left out):</p>
     <div class="codeblock">
-<pre tabindex="0"><code>running: hairspring doctor
+<pre tabindex="0"><code>sha256 verified: c19e94fe40e0139dbff9ebfcc00908066a89b462f01e82dbe22ad1ca53e88ccb
+version: hairspring 0.1.0 (c2687b8 2026-11-05)
+running: hairspring doctor
 lock-lease: deterministic over 8 seeds x 200 steps
 pubsub-atomic: deterministic over 8 seeds x 200 steps
 pubsub-buggy: deterministic over 8 seeds x 200 steps</code></pre>
     </div>
-    <p>On a Mac the second command reports that the process backend cannot run there. That is expected, and the simulation and WebAssembly backends are not affected.</p>
-    <p class="step-note">Without <code>--with-ui</code> the server shows a placeholder page instead of the web UI. To install a pre-release binary instead (the sha256 is checked against the release&rsquo;s <code>SHA256SUMS</code> first), use <code>bash scripts/install.sh --version v0.1-RC1</code>; it is older than <code>main</code>: it lacks some command-line options and the Confirmation section of the web UI. <a href="https://github.com/spiculedata/hairspring/blob/main/docs/upgrading.md">Upgrading</a> lists the command-line differences.</p>
+    <p>On a Mac the second command reports that the process backend cannot run there. That is expected, and the simulation and WebAssembly backends are not affected. The hash above is the macOS arm64 binary.</p>
+    <p class="step-note">To build from source instead, for example to follow <code>main</code>, use <code>bash scripts/install.sh --with-ui</code>. That needs a stable Rust toolchain, 1.96 or newer (<a href="https://rustup.rs">rustup</a> keeps it current), with a C compiler and linker, and Node.js 20.19 or newer (or 22.12 or newer) with npm. The first build compiles a few hundred crates and can take several minutes. Without <code>--with-ui</code> the server shows a placeholder page instead of the web UI. <a href="https://github.com/spiculedata/hairspring/blob/main/docs/upgrading.md">Upgrading</a> says which build you have.</p>
 
     <h3>2. Find a bug and shrink it</h3>
     <p><code>pubsub-buggy</code> is a built-in model of an at-least-once consumer that can apply a message twice.</p>
@@ -296,14 +297,14 @@ replaying 8 steps on target `pubsub-buggy` (backend sim)
 reproduced: the property is still violated</code></pre>
     </div>
     <p>It exits 1 while the bug exists. Run <code>hairspring serve</code> and open <a href="http://127.0.0.1:7878">http://127.0.0.1:7878</a> to see the web UI. It listens on 127.0.0.1 by default and refuses any other address unless tokens are configured.</p>
-    <p>That output came from a build of <code>main</code> on macOS (Apple silicon). To run your own software, see the <a href="https://github.com/spiculedata/hairspring/wiki">wiki</a> (Installation, Your first run, Running your own software) and the <a href="https://github.com/spiculedata/hairspring/blob/main/docs/quickstart.md">quickstart</a>, which covers the Hermit steps for Linux.</p>
+    <p>That output came from the v0.1-RC2 macOS binary. To run your own software, see the <a href="https://github.com/spiculedata/hairspring/wiki">wiki</a> (Installation, Your first run, Running your own software) and the <a href="https://github.com/spiculedata/hairspring/blob/main/docs/quickstart.md">quickstart</a>, which covers the Hermit steps for Linux.</p>
   </div>
 </section>
 
 <section id="ui" aria-labelledby="ui-h">
   <div class="wrap">
     <h2 id="ui-h">The web UI</h2>
-    <p>Screenshots of a build of <code>main</code>, against a scratch server holding runs of the built-in simulation targets. The v0.1-RC1 pre-release has an older web UI without the Confirmation section; build from source with <code>bash scripts/install.sh --with-ui</code> to get this one. They follow your light or dark setting.</p>
+    <p>Screenshots of a build of <code>main</code>, against a scratch server holding runs of the built-in simulation targets. The v0.1-RC2 pre-release serves the same web UI build as <code>main</code> does at the time of writing. They follow your light or dark setting.</p>
     <div class="shots">
       <figure>
         <picture>
