@@ -85,6 +85,9 @@ struct Search<'a> {
     required_left: usize,
     memo: HashSet<(Vec<u64>, Option<i64>)>,
     stack: Vec<Frame>,
+    /// Steps spent on candidates tried, and on placed operations skipped (their sum is what `steps_left` loses).
+    tried: u64,
+    skipped: u64,
 }
 
 impl<'a> Search<'a> {
@@ -99,6 +102,8 @@ impl<'a> Search<'a> {
             register: initial,
             memo: HashSet::new(),
             stack: Vec::new(),
+            tried: 0,
+            skipped: 0,
         }
     }
 
@@ -137,6 +142,7 @@ impl<'a> Search<'a> {
                 self.stack[depth].cursor = i + 1;
                 return Ok(Some(i));
             }
+            self.skipped += 1;
             spend(steps_left)?;
             i += 1;
         }
@@ -192,6 +198,7 @@ impl<'a> Search<'a> {
                 }
                 continue;
             };
+            self.tried += 1;
             spend(steps_left)?;
             let Some(next) = apply(self.ops[i].kind, self.register) else {
                 continue;
@@ -255,22 +262,19 @@ mod tests {
         ops
     }
 
-    /// The smallest step budget with which the search decides the history.
-    fn least_deciding_budget(ops: &[RegOp]) -> u64 {
-        (0..)
-            .find(|&budget| {
-                let mut left = budget;
-                linearizable(ops, None, &mut left, usize::MAX) == Ok(false)
-            })
-            .expect("some budget decides")
-    }
-
     #[test]
     fn cursor_skips_count_as_steps() {
         let ops = overlapping_writes_then_contradiction();
-        assert_eq!(least_deciding_budget(&ops), KNOWN_BUDGET);
+        let mut search = Search::new(&ops, None);
+        let mut left = 1_000_000;
+        assert_eq!(search.run(&mut left, usize::MAX), Ok(false));
+        let used = 1_000_000 - left;
+        // Skips happen, and every one of them was charged on top of the candidates tried.
+        assert!(search.skipped > 0);
+        assert_eq!(used, search.tried + search.skipped);
+        assert!(used > search.tried);
+        // Golden value, kept so that a change to the search order or pruning is noticed and reviewed: for this
+        // history it is 57 candidates tried plus 37 skips.
+        assert_eq!((search.tried, search.skipped), (57, 37));
     }
-
-    /// Golden value: 57 candidate tries plus 37 skips of already-placed operations. If skips stop counting, this drops.
-    const KNOWN_BUDGET: u64 = 94;
 }

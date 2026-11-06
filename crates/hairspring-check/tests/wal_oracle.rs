@@ -183,6 +183,7 @@ struct Stats {
     unordered_violations: u64,
     unordered_phantoms: u64,
     unordered_losses: u64,
+    unordered_misorders: u64,
     unordered_unknown: u64,
 }
 
@@ -227,6 +228,9 @@ fn no_verdict_the_oracle_disagrees_with_on_random_multi_client_histories() {
                             ViolationKind::LostAcknowledgedWrite { .. } => {
                                 stats.unordered_losses += 1
                             }
+                            ViolationKind::AcknowledgedOutOfOrder { .. } => {
+                                stats.unordered_misorders += 1
+                            }
                             _ => panic!("unexpected kind in the unordered shape: {}", context()),
                         }
                     }
@@ -250,6 +254,11 @@ fn no_verdict_the_oracle_disagrees_with_on_random_multi_client_histories() {
     );
     assert!(stats.unordered_losses > 1_000, "{}", stats.unordered_losses);
     assert!(
+        stats.unordered_misorders > 1_000,
+        "{}",
+        stats.unordered_misorders
+    );
+    assert!(
         stats.unordered_unknown > 1_000,
         "{}",
         stats.unordered_unknown
@@ -257,7 +266,7 @@ fn no_verdict_the_oracle_disagrees_with_on_random_multi_client_histories() {
     assert!(stats.unordered_violations > 2_000);
 }
 
-fn e1_history(retry: bool) -> (Vec<Spec>, History) {
+fn restarted_writer_history(retry: bool) -> (Vec<Spec>, History) {
     // Writer w1 appends 1 (acknowledged), appends 2 and is killed (the client records info), then a restarted writer
     // under a NEW name appends 3, preceded in the retry variant by a retry of 2.
     let mut records = vec![
@@ -307,9 +316,9 @@ fn e1_history(retry: bool) -> (Vec<Spec>, History) {
 }
 
 #[test]
-fn e1_shapes_get_the_verdicts_the_oracle_allows() {
+fn restarted_writer_shapes_get_the_verdicts_the_oracle_allows() {
     let limits = Limits::default();
-    let (specs, history) = e1_history(false);
+    let (specs, history) = restarted_writer_history(false);
     let expect = |recovered: &[i64], valid: bool, check: &dyn Fn(&Verdict)| {
         assert_eq!(oracle_valid(&specs, recovered), valid, "{recovered:?}");
         check(&check_wal_prefix(&history, "log", recovered, &limits));
@@ -343,9 +352,9 @@ fn e1_shapes_get_the_verdicts_the_oracle_allows() {
 }
 
 #[test]
-fn e1_retry_shapes_agree_with_the_oracle() {
+fn restarted_writer_retry_shapes_agree_with_the_oracle() {
     let limits = Limits::default();
-    let (specs, history) = e1_history(true);
+    let (specs, history) = restarted_writer_history(true);
     for recovered in [
         &[1, 2, 2, 3][..],
         &[1, 2, 3],

@@ -119,7 +119,40 @@ fn decide_unordered(
             );
         }
     }
+    if let Some(misordered) = first_unmatched_acknowledgement(&acked, recovered) {
+        return violation(
+            key,
+            ViolationKind::AcknowledgedOutOfOrder {
+                value: misordered.1,
+            },
+            misordered.0,
+        );
+    }
     Verdict::Unknown(unsupported_shape(key, "append after an unknown append"))
+}
+
+/// Acknowledged appends land in the order they were acknowledged, so their values must appear in `recovered` as a
+/// subsequence (unknown appends may sit between them). Returns the first acknowledged append that cannot be matched
+/// after its predecessor, with that predecessor, and its value.
+fn first_unmatched_acknowledgement<'a>(
+    acked: &BTreeMap<i64, Vec<&'a Operation>>,
+    recovered: &[i64],
+) -> Option<(Vec<&'a Operation>, i64)> {
+    let mut in_order: Vec<(&Operation, i64)> = acked
+        .iter()
+        .flat_map(|(&value, ops)| ops.iter().map(move |&op| (op, value)))
+        .collect();
+    in_order.sort_by_key(|(op, _)| op.invoke_seq);
+    let mut from = 0;
+    let mut previous: Option<&Operation> = None;
+    for (op, value) in in_order {
+        let Some(offset) = recovered[from..].iter().position(|v| *v == value) else {
+            return Some((previous.into_iter().chain([op]).collect(), value));
+        };
+        from += offset + 1;
+        previous = Some(op);
+    }
+    None
 }
 
 /// Check `recovered` (the log's records after recovery, in order) against the `append` operations on `key`.
@@ -134,8 +167,11 @@ fn decide_unordered(
 ///   never land or may land late, so the order of the log is not determined and order-dependent claims are `Unknown`.
 ///   Two things still hold whatever the unknown append does, and are decided: a value in `recovered` more times than
 ///   there are non-failed appends of it is a `Phantom`, and an acknowledged value present fewer times than it was
-///   acknowledged is a `LostAcknowledgedWrite`. A clean result in this shape is `Unknown`, not `Ok`. An unknown
-///   append at the very end of the log is fine (it may or may not be present) and is checked exactly.
+///   acknowledged is a `LostAcknowledgedWrite`; and acknowledged appends whose values cannot be found in
+///   `recovered` in the order they were acknowledged are an `AcknowledgedOutOfOrder`. A clean result in this shape is
+///   `Unknown`, not `Ok`. Known conservative case: an unknown append recovered before an acknowledged append that had
+///   already finished when it began is invalid, but is not detected and stays `Unknown`. An unknown append at the very
+///   end of the log is fine (it may or may not be present) and is checked exactly.
 /// - Appends whose invoke-to-completion intervals overlap.
 /// - Any function other than `append`, or an append with no value.
 ///
@@ -143,7 +179,8 @@ fn decide_unordered(
 /// completion record, and reusing the name for the next append is a second open operation for that client
 /// ([`crate::HistoryError::ClientOverlap`]). A client that records `info` and carries on may keep its name.
 ///
-/// Linear time.
+/// Linear time when the order is determined; `O(n log n)` in the operations and the recovered log when an unknown
+/// append precedes others (the counts are kept in ordered maps).
 pub fn check_wal_prefix(
     history: &History,
     key: &str,

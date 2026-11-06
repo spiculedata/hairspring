@@ -194,6 +194,30 @@ fn append_after_an_unknown_append_by_the_same_client_is_unknown() {
 }
 
 #[test]
+fn acknowledged_appends_out_of_order_are_a_violation_even_after_an_unknown_append() {
+    let h = appends(&[(1, "ok"), (2, "info"), (3, "ok")]);
+    for recovered in [&[3, 1][..], &[3, 2, 1]] {
+        let v = run(&h, recovered);
+        assert!(
+            matches!(
+                v.violation().map(|v| &v.kind),
+                Some(ViolationKind::AcknowledgedOutOfOrder { .. })
+            ),
+            "{recovered:?} gave {v:?}"
+        );
+        assert!(!v.violation().unwrap().witness.is_empty());
+    }
+    // Orders the model allows stay undecided, not passed; so does [2, 1, 3], which the model rejects (the unknown
+    // append began after 1 finished) but the checker does not detect.
+    for recovered in [&[1, 2, 3][..], &[1, 3], &[1, 3, 2], &[2, 1, 3]] {
+        assert!(matches!(
+            run(&h, recovered),
+            Verdict::Unknown(UnknownReason::UnsupportedShape { .. })
+        ));
+    }
+}
+
+#[test]
 fn a_restarted_writer_must_use_a_new_client_name() {
     // The writer was killed mid-append, so its append has no completion record. A restarted writer that reuses the
     // name is a second open operation for one client.
