@@ -205,7 +205,16 @@ fn acknowledged_appends_out_of_order_are_a_violation_even_after_an_unknown_appen
             ),
             "{recovered:?} gave {v:?}"
         );
-        assert!(!v.violation().unwrap().witness.is_empty());
+        // The witness is the predecessor in acknowledgement order and the append that cannot follow it.
+        let violation = v.violation().unwrap();
+        assert_eq!(
+            violation.kind,
+            ViolationKind::AcknowledgedOutOfOrder { value: 3 }
+        );
+        let ids: Vec<u64> = violation.witness.iter().map(|o| o.id).collect();
+        assert_eq!(ids, vec![0, 2], "{recovered:?}");
+        let args: Vec<Option<i64>> = violation.witness.iter().map(|o| o.arg).collect();
+        assert_eq!(args, vec![Some(1), Some(3)]);
     }
     // Orders the model allows stay undecided, not passed; so does [2, 1, 3], which the model rejects (the unknown
     // append began after 1 finished) but the checker does not detect.
@@ -215,6 +224,23 @@ fn acknowledged_appends_out_of_order_are_a_violation_even_after_an_unknown_appen
             Verdict::Unknown(UnknownReason::UnsupportedShape { .. })
         ));
     }
+}
+
+#[test]
+fn a_repeated_acknowledged_value_must_be_matched_once_per_acknowledgement() {
+    // After an unknown append: x, x, y acknowledged (ids 1, 2, 3). In [x, y, x] the second x is found only after y,
+    // so y cannot follow it; matching one recovered x to both acknowledgements would hide that.
+    let h = appends(&[(9, "info"), (5, "ok"), (5, "ok"), (6, "ok")]);
+    let v = run(&h, &[5, 6, 5]);
+    let v = v.violation().expect("violation");
+    assert_eq!(v.kind, ViolationKind::AcknowledgedOutOfOrder { value: 6 });
+    let ids: Vec<u64> = v.witness.iter().map(|o| o.id).collect();
+    assert_eq!(ids, vec![2, 3]);
+    // Both xs present in order, then y: undecided, not a violation.
+    assert!(matches!(
+        run(&h, &[5, 5, 6]),
+        Verdict::Unknown(UnknownReason::UnsupportedShape { .. })
+    ));
 }
 
 #[test]

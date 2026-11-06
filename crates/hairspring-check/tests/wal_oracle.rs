@@ -166,6 +166,17 @@ fn has_unordered_shape(specs: &[Spec]) -> bool {
     })
 }
 
+/// Two acknowledged appends of the same value (the generator draws from four values, so this is common).
+fn has_repeated_acknowledged_value(specs: &[Spec]) -> bool {
+    specs.iter().enumerate().any(|(i, a)| {
+        a.fate == Fate::Ok
+            && specs
+                .iter()
+                .skip(i + 1)
+                .any(|b| b.fate == Fate::Ok && b.value == a.value)
+    })
+}
+
 /// A completed append (ok or failed) that was still running when a later one began.
 fn has_overlap(specs: &[Spec]) -> bool {
     specs.iter().any(|a| {
@@ -184,6 +195,7 @@ struct Stats {
     unordered_phantoms: u64,
     unordered_losses: u64,
     unordered_misorders: u64,
+    misorders_with_repeated_acked: u64,
     unordered_unknown: u64,
 }
 
@@ -229,7 +241,10 @@ fn no_verdict_the_oracle_disagrees_with_on_random_multi_client_histories() {
                                 stats.unordered_losses += 1
                             }
                             ViolationKind::AcknowledgedOutOfOrder { .. } => {
-                                stats.unordered_misorders += 1
+                                stats.unordered_misorders += 1;
+                                if has_repeated_acknowledged_value(&specs) {
+                                    stats.misorders_with_repeated_acked += 1;
+                                }
                             }
                             _ => panic!("unexpected kind in the unordered shape: {}", context()),
                         }
@@ -253,6 +268,11 @@ fn no_verdict_the_oracle_disagrees_with_on_random_multi_client_histories() {
         stats.unordered_phantoms
     );
     assert!(stats.unordered_losses > 1_000, "{}", stats.unordered_losses);
+    assert!(
+        stats.misorders_with_repeated_acked > 300,
+        "{}",
+        stats.misorders_with_repeated_acked
+    );
     assert!(
         stats.unordered_misorders > 1_000,
         "{}",
