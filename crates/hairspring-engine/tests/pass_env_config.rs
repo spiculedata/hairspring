@@ -129,6 +129,9 @@ fn the_target_cannot_name_a_variable_the_engine_owns_in_hermit_args() {
             format!("[\"-e\", \"{name}=x\"]"),
             format!("[\"-e{name}\"]"),
             format!("[\"-e={name}\"]"),
+            format!("[\"-ue{name}=x\"]"),
+            format!("[\"-ue\", \"{name}\"]"),
+            format!("[\"-uue={name}\"]"),
         ] {
             let text = message(parse(&format!("hermit_args = {form}")));
             assert!(text.contains(name), "{form}: {text}");
@@ -143,4 +146,17 @@ fn the_seed_variable_and_ordinary_names_are_not_refused() {
         parse("hermit_args = [\"--env=HAIRSPRING_SEED=1\", \"--env=GOTRACEBACK=all\"]").is_ok()
     );
     assert!(parse("env = { HAIRSPRING_SEED = \"1\", HAIRSPRING_EVENTS = \"1\" }").is_ok());
+}
+
+#[test]
+fn an_env_key_with_a_control_character_is_refused_under_pass_through() {
+    for key in ["A\\nB", "A\\rB", "A\\u0007B", "A\\u001bB", "A\\tB"] {
+        let env = format!("env = {{ \"{key}\" = \"1\" }}");
+        let args = "hermit_args = [\"--base-env=minimal\"]";
+        assert!(parse(&format!("{args}\n{env}")).is_err(), "{key}");
+        assert!(
+            parse(&format!("{args}\npass_env = false\n{env}")).is_ok(),
+            "{key}"
+        );
+    }
 }

@@ -170,7 +170,11 @@ Hairspring now adds one `--env=NAME` for each of these variables when it can:
 - **Refused names.** A target `env` key, or an `--env` in `hermit_args`, that names `HAIRSPRING_PROC`,
   `HAIRSPRING_PROC_PID` or `HAIRSPRING_EVENTS_FILE` is a configuration error: Hairspring sets those. Under
   `minimal`/`empty`, an `env` key that is not printable ASCII, is empty or contains `=` is refused too, because Hermit
-  cannot pass such a name; rename it or set `pass_env = false`.
+  cannot pass such a name (Hairspring also refuses control characters, which Hermit would accept); rename it or set
+  `pass_env = false`.
+- **`--env=HAIRSPRING_SEED=N` in `hermit_args` still overrides the seed** in every mode, as it did before: the name is
+  skipped like any other name the target passes itself. The `-e` spellings Hermit reads are recognised, including `-e` in a
+  cluster with `-u` (`-ueNAME=VALUE`).
 - **`--base-env` is read case-insensitively**, as Hermit reads it (`--base-env=Minimal` is `minimal`).
 - **Not added** under `host` or no `--base-env` flag (the guest already has everything), under an unknown mode, or when
   `hermit_args` contain `--config`, `--from` or `--image`. A run config file replaces an `--env` list given on the

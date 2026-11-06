@@ -186,3 +186,39 @@ fn a_hit_across_the_change_still_exits_1() {
     assert_eq!(o.status.code(), Some(1), "{}", text(&o));
     assert!(text(&o).contains("env.guest.passed"), "{}", text(&o));
 }
+
+fn stderr_of(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stderr).into_owned()
+}
+
+#[test]
+fn a_target_with_a_run_config_is_warned_about_once_and_pass_env_off_silences_it() {
+    for (flag, said) in [
+        ("\"--config=f.yaml\"", "`--config` or `--from`"),
+        ("\"--from=m.yaml\"", "`--config` or `--from`"),
+        ("\"--image=x\"", "`--image`"),
+    ] {
+        let r = record("warn", flag, None);
+        let o = run(&r.dir, &r.hermit, &["test", "svc", "--seed", "1"]);
+        let err = stderr_of(&o);
+        let count = err
+            .matches("hairspring: warning: target svc: `hermit_args` name")
+            .count();
+        assert_eq!(count, 1, "{flag}: {err}");
+        assert!(err.contains(said), "{flag}: {err}");
+        r.set_project(flag, Some(false));
+        let quiet = run(&r.dir, &r.hermit, &["test", "svc", "--seed", "1"]);
+        assert!(!stderr_of(&quiet).contains("hermit_args` name"), "{flag}");
+    }
+}
+
+#[test]
+fn a_plain_minimal_target_gets_no_such_warning() {
+    let r = record("nowarn", MINIMAL, None);
+    let o = run(&r.dir, &r.hermit, &["test", "svc", "--seed", "1"]);
+    assert!(
+        !stderr_of(&o).contains("hermit_args` name"),
+        "{}",
+        stderr_of(&o)
+    );
+}

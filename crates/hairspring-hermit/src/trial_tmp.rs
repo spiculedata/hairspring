@@ -21,7 +21,7 @@
 //! Hermit run config file (whose contents cannot be read here).
 use crate::host_identity::base_env_mode;
 use crate::summary_dir::ScratchDir;
-use hairspring_engine::hermit_args::names_passed;
+use hairspring_engine::hermit_args::names_passed_through;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -50,7 +50,7 @@ pub(crate) fn hermit_temp_env(
         return Vec::new();
     }
     let mode = base_env_mode(hermit_args);
-    let passed = names_passed(hermit_args);
+    let passed = names_passed_through(hermit_args);
     let free = |name: &str| {
         !guest_env.contains_key(name)
             && !extra_env.iter().any(|(n, _)| n == name)
@@ -133,6 +133,26 @@ mod tests {
         );
         assert_eq!(names(&["--base-env=minimal", "--env=TMPDIR_NOT=1"]), BOTH);
         assert_eq!(names(&["--base-env=minimal", "--env=A=TMPDIR"]), BOTH);
+    }
+
+    #[test]
+    fn a_name_and_value_given_to_the_guest_does_not_stop_hermits_own_variable() {
+        // `--env=NAME=VALUE` sets the guest's variable; Hermit's own TMPDIR and verify directory are separate.
+        assert_eq!(
+            names(&["--base-env=minimal", "--env=TMPDIR=/x"]),
+            BOTH,
+            "minimal"
+        );
+        assert_eq!(
+            names(&["--base-env=minimal", "-e", "TMPDIR=/x"]),
+            BOTH,
+            "separate"
+        );
+        assert_eq!(names(&["--env=HERMIT_VERIFY_TMPDIR=/x"]), [VERIFY_TMPDIR]);
+        assert_eq!(
+            names(&["--base-env=host", "-eHERMIT_VERIFY_TMPDIR=/x"]),
+            [VERIFY_TMPDIR]
+        );
     }
 
     #[test]

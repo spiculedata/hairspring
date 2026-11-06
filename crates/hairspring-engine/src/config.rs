@@ -191,7 +191,7 @@ fn check_env(
         pass_through_active(hermit_args, pass_env) && env.keys().any(|key| !is_passable_name(key));
     if refused {
         return Err(ConfigError::Invalid(format!(
-            "target `{target}`: an `env` key cannot be passed to the guest by Hermit (names must be ASCII without '='); rename it or set pass_env = false"
+            "target `{target}`: an `env` key cannot be passed to the guest by Hermit (names must be printable ASCII without '='); rename it or set pass_env = false"
         )));
     }
     Ok(())

@@ -50,25 +50,55 @@ pub fn base_env_mode(args: &[String]) -> String {
     mode
 }
 
-/// The names of the variables the arguments pass to the guest with `--env NAME[=V]`, `--env=NAME[=V]`, `-e NAME[=V]`,
-/// `-eNAME[=V]` or `-e=NAME[=V]`.
+/// The `NAME[=VALUE]` text of every `--env` the arguments give Hermit, as the pinned Hermit's parser reads them:
+/// `--env X`, `--env=X`, `-e X`, `-e=X`, `-eX`, and `-e` at the end of a cluster of short flags, where `-u` (a flag
+/// without a value) may come first (`-ueX`, `-uu-e`...). `-e` takes the rest of its cluster as its value.
+fn env_specs(args: &[String]) -> Vec<&str> {
+    let mut specs = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        if arg == "--env" {
+            i += 1;
+            specs.extend(args.get(i).map(String::as_str));
+        } else if let Some(spec) = arg.strip_prefix("--env=") {
+            specs.push(spec);
+        } else if let Some(cluster) = arg.strip_prefix('-').filter(|rest| !rest.starts_with('-')) {
+            let rest = cluster.trim_start_matches('u');
+            if let Some(value) = rest.strip_prefix('e') {
+                let value = value.strip_prefix('=').unwrap_or(value);
+                if value.is_empty() {
+                    i += 1;
+                    specs.extend(args.get(i).map(String::as_str));
+                } else {
+                    specs.push(value);
+                }
+            }
+        }
+        i += 1;
+    }
+    specs
+}
+
+fn name_of(spec: &str) -> &str {
+    spec.split('=').next().unwrap_or(spec)
+}
+
+/// The names of the variables the arguments set for the guest with `--env`, with or without a value.
 pub fn names_passed(args: &[String]) -> BTreeSet<String> {
-    let name_of = |spec: &str| spec.split('=').next().unwrap_or(spec).to_string();
-    args.iter()
-        .enumerate()
-        .filter_map(|(i, arg)| {
-            let joined = ["--env=", "-e=", "-e"]
-                .iter()
-                .find_map(|prefix| arg.strip_prefix(prefix));
-            let separate = matches!(arg.as_str(), "--env" | "-e")
-                .then(|| args.get(i + 1).map(String::as_str))
-                .flatten();
-            // A bare `-e` is the separate form, whose name is the next argument.
-            joined
-                .filter(|name| !name.is_empty())
-                .or(separate)
-                .map(name_of)
-        })
+    env_specs(args)
+        .into_iter()
+        .map(|spec| name_of(spec).to_string())
+        .collect()
+}
+
+/// The names the arguments pass through from Hermit's own environment: `--env NAME` without a value. A name given a
+/// value is not among them, because it says nothing about Hermit's own variable of that name.
+pub fn names_passed_through(args: &[String]) -> BTreeSet<String> {
+    env_specs(args)
+        .into_iter()
+        .filter(|spec| !spec.contains('='))
+        .map(str::to_string)
         .collect()
 }
 
@@ -104,13 +134,13 @@ pub fn pass_through_active(hermit_args: &[String], pass_env: bool) -> bool {
         && SELF_CONTAINED.contains(&base_env_mode(hermit_args).as_str())
 }
 
-/// Whether Hermit accepts `name` as the name in `--env=NAME`: printable ASCII and the control characters BEL to US,
-/// without `=`.
+/// Whether `name` can be the name in `--env=NAME`: printable ASCII without `=`. Hermit also accepts the control
+/// characters BEL to US; those are refused here so a name can always be shown and quoted on one line.
 pub fn is_passable_name(name: &str) -> bool {
     !name.is_empty()
         && name
             .bytes()
-            .all(|b| (0x07..=0x7e).contains(&b) && b != b'=')
+            .all(|b| (0x20..=0x7e).contains(&b) && b != b'=')
 }
 
 #[cfg(test)]
@@ -157,6 +187,53 @@ mod tests {
     }
 
     #[test]
+    fn short_flag_clusters_are_read_as_the_pinned_parser_reads_them() {
+        for spelling in [
+            &["-ueA"][..],
+            &["-uuea"][..],
+            &["-ue", "A"][..],
+            &["-ue=A"][..],
+            &["-ueA=1"][..],
+            &["-u", "-eA"][..],
+        ] {
+            let got = names(spelling);
+            assert!(got == ["A"] || got == ["a"], "{spelling:?}: {got:?}");
+        }
+        // `-e` takes the rest of the cluster as its value.
+        assert_eq!(names(&["-eu"]), ["u"]);
+        // A cluster without `-e`, and `-u` alone, name nothing.
+        assert!(names(&["-u", "-uu", "-x"]).is_empty());
+    }
+
+    #[test]
+    fn engine_owned_names_are_found_in_every_spelling() {
+        for spelling in [
+            &["-ueHAIRSPRING_PROC=x"][..],
+            &["-ueHAIRSPRING_PROC"][..],
+            &["-ue", "HAIRSPRING_PROC=x"][..],
+            &["-ue=HAIRSPRING_PROC"][..],
+        ] {
+            assert!(
+                names_passed(&args(spelling)).contains("HAIRSPRING_PROC"),
+                "{spelling:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_name_without_a_value_passes_hermits_own_variable_through() {
+        let through = |list: &[&str]| -> Vec<String> {
+            names_passed_through(&args(list)).into_iter().collect()
+        };
+        assert_eq!(
+            through(&["--env=A", "--env=B=1", "-e", "C", "-eD=2"]),
+            ["A", "C"]
+        );
+        assert_eq!(through(&["-ueX"]), ["X"]);
+        assert!(through(&["--env=X=1", "-e", "Y=2"]).is_empty());
+    }
+
+    #[test]
     fn other_arguments_name_nothing() {
         assert!(names(&["--base-env=minimal", "--epoch=1", "--tmp=/x"]).is_empty());
         assert_eq!(names(&["--env=B", "-e", "A", "--env=B"]), ["A", "B"]);
@@ -198,5 +275,9 @@ mod tests {
         assert!(!is_passable_name("café"));
         assert!(!is_passable_name("A\u{1}B"));
         assert!(!is_passable_name("A\u{7f}"));
+        for control in ["A\nB", "A\rB", "A\u{7}B", "A\u{1b}B", "A\tB", "\n"] {
+            assert!(!is_passable_name(control), "{control:?}");
+        }
+        assert!(is_passable_name("A B"));
     }
 }

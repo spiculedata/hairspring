@@ -500,3 +500,20 @@ fn the_events_file_works_under_minimal_and_empty_only_when_the_variable_is_passe
         );
     }
 }
+
+#[test]
+fn the_events_variable_is_named_on_the_command_line_only_when_the_events_file_is_on() {
+    let on = Setup::new(MINIMAL)
+        .events_file()
+        .script("true")
+        .rig("pt-ev-argv-on");
+    let _ = on.run(2);
+    assert!(on
+        .argv(2)
+        .contains(&"--env=HAIRSPRING_EVENTS_FILE".to_string()));
+    let off = Setup::new(MINIMAL).script("true").rig("pt-ev-argv-off");
+    let _ = off.run(2);
+    assert!(!off
+        .argv(2)
+        .contains(&"--env=HAIRSPRING_EVENTS_FILE".to_string()));
+}

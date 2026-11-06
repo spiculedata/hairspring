@@ -125,4 +125,20 @@ mod tests {
         let line = line(&HermitSettings::default(), &p, 1, &[]);
         assert!(!line.contains("--env="), "{line}");
     }
+
+    #[test]
+    fn the_stored_command_names_the_events_variable_only_when_the_events_file_is_on() {
+        let env = BTreeMap::new();
+        let command = vec!["./svc".to_string()];
+        let hermit_args = vec!["--base-env=minimal".to_string()];
+        let scheduler = SchedulerSpec::default();
+        let p = spec(&env, &command, &hermit_args, &scheduler);
+        let off = line(&HermitSettings::default(), &p, 1, &[]);
+        assert!(!off.contains("HAIRSPRING_EVENTS_FILE"), "{off}");
+        let on = HermitSettings {
+            events_file: true,
+            ..HermitSettings::default()
+        };
+        assert!(line(&on, &p, 1, &[]).contains("--env=HAIRSPRING_EVENTS_FILE "));
+    }
 }
