@@ -37,6 +37,7 @@ pub(super) struct Pace<'a> {
     progress: &'a mut dyn FnMut(Progress) -> bool,
     runs: u64,
     cancelled: bool,
+    cut: bool,
 }
 
 impl<'a> Pace<'a> {
@@ -47,6 +48,7 @@ impl<'a> Pace<'a> {
             progress,
             runs: 0,
             cancelled: false,
+            cut: false,
         }
     }
 
@@ -68,7 +70,7 @@ impl<'a> Pace<'a> {
     }
 
     /// Whether the caller asked to stop by the time the run that has just ended was over, as [`Pace::ran`] heard it
-    /// (call this after `ran`). A run that ended with the stop is not a result about the program (its process may have
+    /// (call this after `ran`, as every caller does). A run that ended with the stop is not a result about the program (its process may have
     /// been killed by the same stop), so the caller records it inconclusive, never as a miss. `may_be_cut` is true when
     /// the run's end looks like a kill or a miss, and then the stop is waited for a moment, because it can arrive just
     /// after the run does; a run that ended well gets no wait and costs the caller no extra call. A run that finished
@@ -88,6 +90,18 @@ impl<'a> Pace<'a> {
             }
         }
         false
+    }
+
+    /// Records that the run that has just ended was cut by the stop, so the check it belonged to did not finish and says
+    /// nothing. [`super::step`] then stores that check as skipped, as it does for Ctrl-C at a terminal, which keeps the
+    /// confirmation unfinished: the finding is read from an earlier one and a cut run can neither lift nor withdraw it.
+    pub(super) fn mark_cut(&mut self) {
+        self.cut = true;
+    }
+
+    /// Whether a run of the check just finished was cut by the stop (see [`Pace::mark_cut`]).
+    pub(super) fn was_cut(&self) -> bool {
+        self.cut
     }
 
     fn asked_to_stop(&mut self) -> bool {

@@ -392,9 +392,16 @@ flag first, before the server waits for the work in progress. `Service::confirm_
 decodes the stored bundle first and refuses a failure whose bundle names a different target than the failure (or cannot be read), because the engine
 reruns the bundle's target; `check_confirmable` shares the check so the server answers 400 before taking a slot, and
 `clean_failure` refuses to store such a failure from a worker. An all-inconclusive confirmation is a finished
-one and replaces the finding from the earlier one (a confirmed failure can return to candidate); a test pins this. A run that ends with the caller's stop (its Hermit process killed by the same stop, or a rerun or
-replay that missed just as the stop arrived, waited for up to half a second) is recorded inconclusive, "stopped:
-cancelled", never as a miss, in the reruns, the replay and the control; a stop therefore cannot withdraw a finding.
+one and replaces the finding from the earlier one (a confirmed failure can return to candidate); a test pins this.
+A run that ends with the caller's stop is not a result about the program. The progress callback's answer after each run
+says whether the stop came; if it did, a rerun that missed, a replay that did not reproduce, or a control that
+died of SIGHUP, SIGINT or SIGTERM is not judged: its whole check is stored skipped ("cancelled"), the way
+`hairspring confirm` stores the check Ctrl-C interrupted, so the confirmation is unfinished and the finding stays
+where the newest finished confirmation put it. A run that ended by one of those signals, or a replay that did not
+reproduce, waits up to half a second (`STOP_GRACE` in `confirm/pace.rs`) for the stop to be heard, because a service
+manager's signals to the server and to Hermit can arrive a little apart; a stop heard later than that is not noticed
+and the run is judged as it always was. A run that matched is kept as evidence whatever the stop did. The strict
+verify has no cut handling.
 
 Opening a version 4 database adds the table and its index in the same transaction as the version bump. A version 4
 database that lost one of its own tables or indexes is refused rather than repaired, on both backends, and a current

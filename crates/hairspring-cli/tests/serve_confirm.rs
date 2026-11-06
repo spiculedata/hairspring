@@ -453,7 +453,6 @@ fn a_stop_that_also_kills_the_running_hermit_does_not_withdraw_a_confirmed_findi
         )
         .1,
     );
-    // eprintln!("DEBUG {:?}", after["checks"].as_array().unwrap().iter().map(|c| (c["confirmation_id"].as_str().unwrap()[..9].to_string(), c["kind"].to_string(), c["status"].to_string(), c["guest"]["detail"].to_string())).collect::<Vec<_>>());
     assert_eq!(after["finding"], "confirmed", "{after}");
     let all = after["checks"].as_array().unwrap();
     let newest = all.last().unwrap()["confirmation_id"].clone();
@@ -463,5 +462,5 @@ fn a_stop_that_also_kills_the_running_hermit_does_not_withdraw_a_confirmed_findi
         .collect();
     assert_ne!(newest, after["confirmation_id"], "{after}");
     assert!(of_newest.iter().all(|c| c["status"] != "fail"), "{after}");
-    assert_eq!(of_newest[0]["status"], "inconclusive", "{after}");
+    assert_eq!(of_newest[0]["status"], "skipped", "{after}");
 }

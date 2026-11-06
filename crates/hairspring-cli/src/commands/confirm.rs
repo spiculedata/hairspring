@@ -269,8 +269,18 @@ pub fn run(
             crate::EXIT_ERROR
         };
         if args.json {
-            // One document however many failures the run has: an array with an entry per failure confirmed.
-            writeln!(out, "{}", serde_json::to_string(&all)?)?;
+            // One document however many failures the run has: an array with an entry per failure. A failure the service
+            // refused has `{"failure_id": ..., "refused": "<its words>"}` in place of its checks.
+            let mut entries = all
+                .iter()
+                .map(serde_json::to_value)
+                .collect::<Result<Vec<_>, _>>()?;
+            entries.extend(
+                refused
+                    .iter()
+                    .map(|(id, words)| serde_json::json!({ "failure_id": id, "refused": words })),
+            );
+            writeln!(out, "{}", serde_json::to_string(&entries)?)?;
             return Ok(all
                 .iter()
                 .map(|c| exit_code(&c.finding))

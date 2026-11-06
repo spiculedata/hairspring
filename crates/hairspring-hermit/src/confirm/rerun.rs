@@ -176,7 +176,8 @@ pub(super) fn check(ctx: &Ctx, pace: &mut Pace) -> CheckResult {
         let killed = a.trial.as_ref().is_ok_and(died_of_stop_signal);
         let cut = pace.stop_arrived(killed);
         let outcome = match (&a.trial, skid_text(&a)) {
-            (Ok(t), _) if cut && !matches!(judge(ctx, t, &first), Rerun::Match) => {
+            (Ok(t), _) if cut && matches!(judge(ctx, t, &first), Rerun::Mismatch(_)) => {
+                pace.mark_cut();
                 Rerun::Inconclusive(CUT_BY_STOP)
             }
             (Err(SpawnError::Interrupted), _) => Rerun::Inconclusive("interrupted"),

@@ -292,11 +292,14 @@ WantedBy=multi-user.target
 
 systemd stops the unit with SIGTERM, and `hairspring serve` treats SIGTERM like Ctrl-C: it stops accepting requests,
 ends a confirmation that is running between checks, and exits. With the default `KillMode=control-group` systemd sends
-that SIGTERM to every process in the unit at once, so the Hermit run in progress is killed too. The server records a run
-that ends that way as inconclusive ("stopped: cancelled"), never as a miss, so a stop cannot withdraw a confirmed
-finding; but the confirmation is cut short and its check carries no result. With `KillMode=mixed`, as in the unit above,
-SIGTERM goes to the server alone: the run in progress finishes (which takes up to the target's trial time), its check is
-stored with the checks that finished, the rest are skipped, and the server exits. Any processes still left after that
+that SIGTERM to every process in the unit at once, so the Hermit run in progress is killed too. The server does not judge a
+run that ended with the stop: that check is stored skipped, as for Ctrl-C, so the confirmation is unfinished and the
+finding stays where the last finished confirmation left it. This depends on the server hearing the stop within half a
+second of the Hermit process dying; with the default mode both signals are sent together, which is well inside that,
+but a stop that reaches the server later is not noticed and the killed run counts as a miss. The strict verify has no
+such handling. With `KillMode=mixed`, as in the unit above, SIGTERM goes to the server alone: the run in progress
+finishes (which takes up to the target's trial time), its check is stored with the checks that finished, the rest are
+skipped, and the server exits, with no window to depend on. Any processes still left after that
 get SIGKILL, so keep `TimeoutStopSec` at its default or raise it above your targets' trial timeout, or systemd will
 send SIGKILL first and nothing is stored. The unit was edited for `KillMode=mixed` after `systemd-analyze verify` was
 run on it, and was not run through systemd again; the behaviour of both modes is from systemd's documentation, and was

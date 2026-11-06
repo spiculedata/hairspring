@@ -37,9 +37,9 @@ pub(super) fn check(ctx: &Ctx, pace: &mut Pace) -> CheckResult {
     // A replay that did not reproduce may have been cut by the stop (the process killed with the server): wait a moment
     // for the stop to be heard before calling it a miss.
     let may_be_cut = matches!(&outcome, Ok(r) if !r.reproduced && !r.environment_changed);
-    let cut = pace.stop_arrived(may_be_cut);
     pace.ran("replay".to_string());
-    if cut && may_be_cut {
+    if pace.stop_arrived(may_be_cut) && may_be_cut {
+        pace.mark_cut();
         return ctx
             .result(kind, CheckStatus::Inconclusive, started)
             .with_command(command)

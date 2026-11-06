@@ -67,8 +67,8 @@ pub(super) fn check(
         .trial
         .as_ref()
         .is_ok_and(|t| t.exit_code.is_none() && matches!(t.signal, Some(1 | 2 | 15)));
-    let cut = pace.stop_arrived(killed);
     pace.ran("control".to_string());
+    let cut = pace.stop_arrived(killed);
     let result = ctx
         .result(kind, CheckStatus::Inconclusive, started)
         .with_environment_fields(
@@ -94,6 +94,7 @@ pub(super) fn check(
         result
     };
     if cut && killed {
+        pace.mark_cut();
         return result
             .with_counts(0, 0, 1)
             .with_detail("inconclusive", CUT_BY_STOP)

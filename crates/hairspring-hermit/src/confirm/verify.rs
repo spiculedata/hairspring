@@ -73,6 +73,9 @@ pub(super) fn check(ctx: &Ctx, pace: &mut Pace) -> CheckResult {
     };
     let result_path = private.file_for(ctx.seed);
     let extra = flags(&result_path.display().to_string());
+    // Not handled here: a strict verify whose Hermit process is killed together with the server's stop (see
+    // `Pace::mark_cut`) is not recognised as cut, so it can be stored as a failed verify. A failed verify never moves a
+    // finding below where the other checks put it, which is why this was left; it is a known gap, not a design.
     // The two runs get twice a single run's time; the result file replaces the summary file.
     let timeout = pace.run_timeout(ctx.backend.trial_timeout(ctx.p) * 2);
     let staging = Staging::watch(ctx.p.cwd);

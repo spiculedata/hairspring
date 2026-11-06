@@ -73,10 +73,32 @@ fn engine_with_bin(host: &Path, guest: &str, bin: PathBuf) -> Engine {
         summary_dir: None,
         ..HermitSettings::default()
     };
+    let fixed = TargetSpec {
+        name: "fixed".into(),
+        kind: match &spec.kind {
+            TargetKind::Process {
+                env,
+                hermit_args,
+                scheduler,
+                ..
+            } => TargetKind::Process {
+                command: vec!["/bin/sh".into(), "-c".into(), "echo fixed".into()],
+                env: env.clone(),
+                cwd: None,
+                hermit_args: hermit_args.clone(),
+                trial_timeout_secs: None,
+                scheduler: scheduler.clone(),
+                hang_is_violation: false,
+                parallelism: 1,
+            },
+            _ => unreachable!("the target above is a process target"),
+        },
+        ..spec.clone()
+    };
     Engine::new(
         Arc::new(Registry::new()),
         Config {
-            targets: BTreeMap::from([("svc".to_string(), spec)]),
+            targets: BTreeMap::from([("svc".to_string(), spec), ("fixed".to_string(), fixed)]),
         },
     )
     .with_backend(Arc::new(
@@ -432,94 +454,229 @@ fn a_later_confirmation_whose_every_check_is_inconclusive_moves_a_confirmed_fail
     );
 }
 
-/// A Hermit that runs the guest directly, but while a file named `cut` sits beside it, leaves a file named `started`
-/// and kills itself with SIGTERM: what a service manager's stop does to a run that is in progress.
-const CUTTABLE_HERMIT: &str = "#!/bin/sh\n[ \"$1\" = \"--version\" ] && { echo 'fake-hermit 0.0'; exit 0; }\n[ -f \"$(dirname \"$0\")/cut\" ] && { touch \"$(dirname \"$0\")/started\"; kill -TERM $$; }\nshift\nwhile [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n";
+/// A Hermit that runs the guest directly and counts its starts in a file named `count`. Once a file named `cut_at`
+/// holds a number, the start with that number, and every start after it, leaves a file named `started` and kills itself
+/// with SIGTERM: what a service manager's stop does to the run in progress.
+const CUTTABLE_HERMIT: &str = "#!/bin/sh\n[ \"$1\" = \"--version\" ] && { echo 'fake-hermit 0.0'; exit 0; }\nd=$(dirname \"$0\")\nn=$(cat \"$d/count\" 2>/dev/null || echo 0)\nn=$((n+1))\necho $n > \"$d/count\"\nif [ -f \"$d/cut_at\" ] && [ \"$n\" -ge \"$(cat \"$d/cut_at\")\" ]; then touch \"$d/started\"; kill -TERM $$; fi\nshift\nwhile [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n";
 
-#[test]
-fn a_run_cut_short_by_the_stop_is_stored_inconclusive_and_an_earlier_confirmed_finding_stays() {
-    // Arrange: a stored failure, confirmed once on an engine whose Hermit can be made to die of SIGTERM mid-run.
-    let (svc, _, _) = setup();
-    let host = scratch("host-cut");
-    put(&host, "etc/ld.so.cache", "cache-one");
-    let bin_dir = scratch("bin-cut");
-    let bin = bin_dir.join("fake-hermit");
-    std::fs::write(&bin, CUTTABLE_HERMIT).unwrap();
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let engine = engine_with_bin(&host, FAILING_GUEST, bin);
-    let run = svc
-        .run_sync(
-            &engine,
-            &StartRun {
-                target: "svc".into(),
-                seed: Some(1),
-                budget: None,
-            },
-        )
-        .unwrap();
-    let failure = run.failures[0].id.clone();
-    assert_eq!(confirm(&svc, &engine, &failure).finding, "confirmed");
+/// A stored failure on an engine whose Hermit can be cut, and its directory.
+struct CutRig {
+    svc: Service,
+    engine: Engine,
+    dir: PathBuf,
+    failure: String,
+}
 
-    // Act: the stop arrives while a rerun is running. The caller's stop flag is set at the same moment the Hermit
-    // process is killed, as `systemctl stop` does to the service and its processes together.
-    std::fs::write(bin_dir.join("cut"), "").unwrap();
-    let started = bin_dir.join("started");
-    let after = svc
-        .confirm_failure(&engine, &failure, &ConfirmRequest::default(), &mut |_| {
-            !started.exists()
-        })
-        .unwrap();
+impl CutRig {
+    fn new(name: &str) -> CutRig {
+        let (svc, _, _) = setup();
+        let host = scratch(&format!("host-{name}"));
+        put(&host, "etc/ld.so.cache", "cache-one");
+        let dir = scratch(&format!("bin-{name}"));
+        let bin = dir.join("fake-hermit");
+        std::fs::write(&bin, CUTTABLE_HERMIT).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let engine = engine_with_bin(&host, FAILING_GUEST, bin);
+        let run = svc
+            .run_sync(
+                &engine,
+                &StartRun {
+                    target: "svc".into(),
+                    seed: Some(1),
+                    budget: None,
+                },
+            )
+            .unwrap();
+        let failure = run.failures[0].id.clone();
+        CutRig {
+            svc,
+            engine,
+            dir,
+            failure,
+        }
+    }
 
-    // Assert: the cut run is not a verdict about the program. The finding stays where the earlier confirmation put it,
-    // and the cut confirmation's own checks are inconclusive (the one that was cut) or skipped (the rest).
-    assert_eq!(after.finding, "confirmed", "{:?}", after.checks);
+    /// The failure confirmed once, with nothing cut, so that its finding is "confirmed".
+    fn confirmed(name: &str) -> CutRig {
+        let rig = CutRig::new(name);
+        assert_eq!(
+            confirm(&rig.svc, &rig.engine, &rig.failure).finding,
+            "confirmed"
+        );
+        rig
+    }
+
+    /// From the `n`th Hermit start from now on, every start is cut by SIGTERM.
+    fn cut_from(&self, n: u32) {
+        std::fs::write(self.dir.join("count"), "0").unwrap();
+        std::fs::write(self.dir.join("cut_at"), n.to_string()).unwrap();
+    }
+
+    fn started(&self) -> PathBuf {
+        self.dir.join("started")
+    }
+
+    fn confirm_with(
+        &self,
+        req: &ConfirmRequest,
+        stop: &mut dyn FnMut() -> bool,
+    ) -> hairspring_service::FailureChecks {
+        self.svc
+            .confirm_failure(&self.engine, &self.failure, req, &mut |_| !stop())
+            .unwrap()
+    }
+}
+
+/// The checks of the newest confirmation, as (kind, status, why).
+fn newest(after: &hairspring_service::FailureChecks) -> Vec<(String, String, String)> {
     let newest = after.checks.last().expect("checks").confirmation_id.clone();
-    let of_newest: Vec<_> = after
+    after
         .checks
         .iter()
         .filter(|c| c.confirmation_id == newest)
-        .collect();
-    assert_ne!(Some(&newest), after.confirmation_id.as_ref());
-    assert_eq!(of_newest[0].kind, "same_seed_rerun");
-    assert_eq!(of_newest[0].status, "inconclusive", "{:?}", of_newest[0]);
+        .map(|c| {
+            let why = c
+                .guest
+                .detail
+                .get("skipped")
+                .or_else(|| c.guest.detail.get("inconclusive"))
+                .cloned()
+                .unwrap_or_default();
+            (c.kind.clone(), c.status.clone(), why)
+        })
+        .collect()
+}
+
+#[test]
+fn a_rerun_cut_short_by_the_stop_is_stored_skipped_and_an_earlier_confirmed_finding_stays() {
+    // Arrange: confirmed once. The stop arrives while the first rerun runs, and the Hermit process is killed with it.
+    let rig = CutRig::confirmed("cut-rerun");
+    rig.cut_from(1);
+    let started = rig.started();
+
+    // Act
+    let after = rig.confirm_with(&ConfirmRequest::default(), &mut || started.exists());
+
+    // Assert: stored as the CLI's Ctrl-C stores it, the cut check and the rest skipped, so the finding does not move.
+    assert_eq!(after.finding, "confirmed", "{:?}", after.checks);
+    let mine = newest(&after);
+    assert_eq!(mine[0].0, "same_seed_rerun");
     assert!(
-        of_newest[0].guest.detail["inconclusive"].contains("cancelled"),
-        "{:?}",
-        of_newest[0]
+        mine.iter()
+            .all(|(_, status, why)| status == "skipped" && why == "cancelled"),
+        "{mine:?}"
     );
-    assert!(of_newest.iter().skip(1).all(|c| c.status == "skipped"));
-    assert!(of_newest.iter().all(|c| c.status != "fail"));
+}
+
+#[test]
+fn a_replay_cut_short_by_the_stop_is_stored_skipped_and_an_earlier_confirmed_finding_stays() {
+    // The replay is the last check, so nothing after it is skipped for it: the cut replay itself must say
+    // "unfinished", or the cut confirmation counts as the newest finished one.
+    let rig = CutRig::confirmed("cut-replay");
+    rig.cut_from(4); // three reruns, then the replay
+    let started = rig.started();
+
+    let after = rig.confirm_with(&ConfirmRequest::default(), &mut || started.exists());
+
+    assert_eq!(after.finding, "confirmed", "{:?}", after.checks);
+    let mine = newest(&after);
+    assert_eq!(mine.len(), 2, "{mine:?}");
+    assert_eq!(
+        mine[0].1, "pass",
+        "the reruns before the stop count: {mine:?}"
+    );
+    assert_eq!(
+        (mine[1].0.as_str(), mine[1].1.as_str(), mine[1].2.as_str()),
+        ("bundle_replay", "skipped", "cancelled")
+    );
+}
+
+#[test]
+fn a_control_cut_short_by_the_stop_is_stored_skipped_and_does_not_make_the_control_fail() {
+    let rig = CutRig::confirmed("cut-control");
+    rig.cut_from(5); // three reruns, the replay, then the control
+    let started = rig.started();
+    let req = ConfirmRequest {
+        control: Some("fixed".into()),
+        ..ConfirmRequest::default()
+    };
+
+    let after = rig.confirm_with(&req, &mut || started.exists());
+
+    assert_eq!(after.finding, "confirmed", "{:?}", after.checks);
+    let mine = newest(&after);
+    assert_eq!(mine.len(), 3, "{mine:?}");
+    assert_eq!(
+        (mine[2].0.as_str(), mine[2].1.as_str(), mine[2].2.as_str()),
+        ("fixed_control", "skipped", "cancelled")
+    );
+}
+
+#[test]
+fn a_stop_that_reaches_the_server_a_moment_after_the_run_died_is_still_heard() {
+    // The Hermit process dies first and the stop is noticed 150 ms later, as when a service manager's signals arrive
+    // a little apart. Without the short wait the dead run is judged a miss before the stop is known.
+    let rig = CutRig::confirmed("cut-late");
+    rig.cut_from(1);
+    let started = rig.started();
+    let heard_late = move || {
+        std::fs::metadata(&started)
+            .and_then(|m| m.modified())
+            .is_ok_and(|at| {
+                at.elapsed().unwrap_or_default() >= std::time::Duration::from_millis(150)
+            })
+    };
+
+    let after = rig.confirm_with(&ConfirmRequest::default(), &mut { heard_late });
+
+    assert_eq!(after.finding, "confirmed", "{:?}", after.checks);
+    assert!(newest(&after)
+        .iter()
+        .all(|(_, status, _)| status == "skipped"));
+}
+
+#[test]
+fn a_stop_noticed_long_after_the_run_died_is_not_heard_and_the_run_counts_as_a_miss() {
+    // The limit, pinned: the wait is half a second. A stop that reaches the server later than that is not noticed,
+    // and a run killed by SIGTERM is judged as it always was.
+    let rig = CutRig::confirmed("cut-too-late");
+    rig.cut_from(1);
+    let started = rig.started();
+    let heard_far_too_late = move || {
+        std::fs::metadata(&started)
+            .and_then(|m| m.modified())
+            .is_ok_and(|at| {
+                at.elapsed().unwrap_or_default() >= std::time::Duration::from_millis(3_000)
+            })
+    };
+
+    let after = rig.confirm_with(&ConfirmRequest::default(), &mut { heard_far_too_late });
+
+    assert_eq!(after.finding, "not_reproducible", "{:?}", after.checks);
+}
+
+#[test]
+fn a_death_by_sigterm_with_no_stop_is_still_a_miss() {
+    // So that a change to how cut runs are read cannot hide real misses: every run dies of SIGTERM and nobody asked to
+    // stop. The reruns and the replay fail, and the finding is withdrawn.
+    let rig = CutRig::confirmed("sigterm-no-stop");
+    rig.cut_from(1);
+
+    let after = rig.confirm_with(&ConfirmRequest::default(), &mut || false);
+
+    assert_eq!(after.finding, "not_reproducible", "{:?}", after.checks);
+    let mine = newest(&after);
+    assert_eq!(mine[0].1, "fail", "{mine:?}");
+    assert_eq!(mine[1].1, "fail", "{mine:?}");
 }
 
 #[test]
 fn a_run_cut_short_by_the_stop_does_not_turn_a_never_confirmed_failure_into_not_reproducible() {
-    let (svc, _, _) = setup();
-    let host = scratch("host-cut-first");
-    put(&host, "etc/ld.so.cache", "cache-one");
-    let bin_dir = scratch("bin-cut-first");
-    let bin = bin_dir.join("fake-hermit");
-    std::fs::write(&bin, CUTTABLE_HERMIT).unwrap();
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let engine = engine_with_bin(&host, FAILING_GUEST, bin);
-    let run = svc
-        .run_sync(
-            &engine,
-            &StartRun {
-                target: "svc".into(),
-                seed: Some(1),
-                budget: None,
-            },
-        )
-        .unwrap();
-    let failure = run.failures[0].id.clone();
-    std::fs::write(bin_dir.join("cut"), "").unwrap();
-    let started = bin_dir.join("started");
+    let rig = CutRig::new("cut-first");
+    rig.cut_from(1);
+    let started = rig.started();
 
-    let after = svc
-        .confirm_failure(&engine, &failure, &ConfirmRequest::default(), &mut |_| {
-            !started.exists()
-        })
-        .unwrap();
+    let after = rig.confirm_with(&ConfirmRequest::default(), &mut || started.exists());
 
     assert_eq!(after.finding, "candidate", "{:?}", after.checks);
     assert!(after.checks.iter().all(|c| c.status != "fail"));
