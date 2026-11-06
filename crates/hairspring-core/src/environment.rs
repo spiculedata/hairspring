@@ -4,49 +4,41 @@
 //! environment all change what a run does. A bundle therefore carries a small set of named fields (stored as bundle
 //! params) and replay reports which of them differ now, so a failure to reproduce is not mistaken for nondeterminism.
 //!
-//! Only the fields in [`KNOWN_FIELDS`] exist. Fields hold hashes and short identifiers, never host names, user names
+//! Only the fields in the [`registry`] exist. Fields hold hashes and short identifiers, never host names, user names
 //! or absolute paths.
 use crate::bundle::Bundle;
 use std::collections::BTreeMap;
 
-/// Every field a bundle may record. A param with any other name is not part of the environment.
-pub const KNOWN_FIELDS: [&str; 18] = [
-    "host.kernel_release",
-    "host.cpu_model",
-    "host.cpu_flags.sha256",
-    "host.container",
-    "host.loader.ld_so_cache.sha256",
-    "host.loader.libc.sha256",
-    "host.loader.ld_so.sha256",
-    "host.loader.ld_so_preload.sha256",
-    "hermit.path.sha256",
-    "hermit.version",
-    "env.base_env",
-    "env.guest.names",
-    "env.guest.names.sha256",
-    "env.guest.allowlisted.sha256",
-    "env.guest.passed",
-    "target.exe.sha256",
-    "target.command.sha256",
-    "target.cwd.sha256",
-];
+mod fieldset;
+pub mod registry;
+
+pub use fieldset::{Listed, MARKER as FIELD_LIST_PARAM};
+pub use registry::{
+    FieldSpec, Grammar, OwnerFields, Registry, Rule, ENGINE_FIELDS, HERMIT_FIELDS, REGISTRY,
+};
+
 pub const MAX_FIELD_VALUE_CHARS: usize = 256;
 /// Changes named in one warning; the rest are counted. A bundle is untrusted input, so the line must stay short.
 pub const MAX_LISTED_CHANGES: usize = 8;
 /// Characters of a hash shown in a warning; enough to tell two hashes apart without flooding the line.
 const SHORT_HASH_CHARS: usize = 12;
 const HASH_FIELD_SUFFIX: &str = ".sha256";
-
-/// Fields a recording may lack because it predates them, and what such a recording is read as when the current side
-/// has the field. `env.guest.passed`: before the engine named its variables for the guest there was nothing to record,
-/// and what it did then is `none`. The rule lives here so that every reader of a bundle applies the same one.
-pub const FIELD_DEFAULTS_WHEN_ABSENT: [(&str, &str); 1] = [("env.guest.passed", "none")];
-const PASSED_FIELD: &str = "env.guest.passed";
-const PASSED_NONE: &str = "none";
-const PASSED_PREFIX: &str = "hairspring-";
+/// Shown in place of a field name that cannot be shown safely.
+const LISTED_NOT_RECORDED: &str = "listed, not recorded";
+const UNREADABLE_NAME: &str = "(unreadable field name)";
 
 pub fn is_known_field(name: &str) -> bool {
-    KNOWN_FIELDS.contains(&name)
+    REGISTRY.is_known(name)
+}
+
+/// Every field name the product's registry knows, whichever owner declares it.
+pub fn known_field_names() -> impl Iterator<Item = &'static str> {
+    REGISTRY.fields().map(|f| f.name)
+}
+
+/// Whether a bundle param belongs to the recorded environment: a field, or the list of recorded fields.
+pub fn is_environment_param(name: &str) -> bool {
+    is_known_field(name) || name == FIELD_LIST_PARAM
 }
 
 /// Characters that can reorder or hide text when shown (bidirectional controls, zero-width and byte-order marks) or
@@ -89,51 +81,25 @@ pub struct EnvironmentIdentity {
     fields: BTreeMap<String, String>,
 }
 
-fn validate(name: &str, value: &str) -> Result<(), EnvError> {
-    if !is_known_field(name) {
-        return Err(EnvError::UnknownField(name.to_string()));
-    }
-    let printable_ascii = value.bytes().all(|b| (0x20..=0x7E).contains(&b));
-    let well_formed = if name.ends_with(HASH_FIELD_SUFFIX) {
-        is_hash_value(name, value)
-    } else if name == PASSED_FIELD {
-        is_passed_value(value)
-    } else {
-        printable_ascii
-    };
-    if value.len() > MAX_FIELD_VALUE_CHARS || !well_formed {
+fn validate(registry: &Registry, name: &str, value: &str) -> Result<(), EnvError> {
+    let spec = registry
+        .spec(name)
+        .ok_or_else(|| EnvError::UnknownField(name.to_string()))?;
+    if value.len() > MAX_FIELD_VALUE_CHARS || !spec.grammar.accepts(value) {
         return Err(EnvError::BadValue(name.to_string()));
     }
     Ok(())
 }
 
-/// The one hash field whose value may be the word `absent` (no `/etc/ld.so.preload`).
-const PRELOAD_FIELD: &str = "host.loader.ld_so_preload.sha256";
-const ABSENT: &str = "absent";
-
-/// `none`, or `hairspring-<n>` for version `n` of the list of variables the engine names.
-fn is_passed_value(value: &str) -> bool {
-    value == PASSED_NONE
-        || value
-            .strip_prefix(PASSED_PREFIX)
-            .is_some_and(|n| !n.is_empty() && n.len() <= 6 && n.bytes().all(|b| b.is_ascii_digit()))
-}
-
-fn is_hash_value(name: &str, value: &str) -> bool {
-    if name == PRELOAD_FIELD && value == ABSENT {
-        return true;
-    }
-    !value.is_empty()
-        && value
-            .bytes()
-            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-}
-
-/// What a bundle recorded: the fields that could be read, and the names of recorded fields that could not.
+/// What a bundle recorded: the fields that could be read, the names of recorded fields that could not, and the
+/// fields it lists that this build does not know.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ParsedEnvironment {
     pub identity: Option<EnvironmentIdentity>,
     pub malformed: Vec<String>,
+    /// Fields the bundle records (or lists) that no owner in the registry declares: possibly written by a newer build. They are
+    /// never compared, since this build cannot read them; see [`ParsedEnvironment::unknown_must_match`].
+    pub unknown: Vec<Listed>,
 }
 
 impl ParsedEnvironment {
@@ -145,6 +111,41 @@ impl ParsedEnvironment {
             )
         })
     }
+
+    /// Names of unknown fields the writer reads a difference in as a change (everything not marked informational).
+    /// Replay cannot tell whether these changed, so it must not report a miss as a fix.
+    pub fn unknown_must_match(&self) -> Vec<&str> {
+        self.unknown
+            .iter()
+            .filter(|f| f.rule == Rule::MustMatch)
+            .map(|f| f.name.as_str())
+            .collect()
+    }
+
+    /// The line replay shows when the bundle records fields this build cannot compare.
+    pub fn unknown_warning(&self) -> Option<String> {
+        let names = self.unknown_must_match();
+        if names.is_empty() {
+            return None;
+        }
+        let mut list: Vec<String> = names
+            .iter()
+            .take(MAX_LISTED_CHANGES)
+            .map(|n| n.to_string())
+            .collect();
+        if names.len() > MAX_LISTED_CHANGES {
+            list.push(format!("and {} more", names.len() - MAX_LISTED_CHANGES));
+        }
+        Some(format!(
+            "environment differs: this bundle records environment fields this build does not know ({}); it may have been written by a newer build, so upgrade Hairspring to compare them",
+            list.join(", ")
+        ))
+    }
+
+    /// Whether some recorded field could not be compared, so a miss cannot be told apart from a changed environment.
+    pub fn is_partly_unreadable(&self) -> bool {
+        !self.malformed.is_empty() || !self.unknown_must_match().is_empty()
+    }
 }
 
 impl EnvironmentIdentity {
@@ -154,8 +155,18 @@ impl EnvironmentIdentity {
         name: impl Into<String>,
         value: impl Into<String>,
     ) -> Result<Self, EnvError> {
+        self.with_field_in(&REGISTRY, name, value)
+    }
+
+    /// [`Self::with_field`] against another registry.
+    pub fn with_field_in(
+        self,
+        registry: &Registry,
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Result<Self, EnvError> {
         let (name, value) = (name.into(), value.into());
-        validate(&name, &value)?;
+        validate(registry, &name, &value)?;
         let mut fields = self.fields;
         fields.insert(name, value);
         Ok(EnvironmentIdentity { fields })
@@ -173,29 +184,99 @@ impl EnvironmentIdentity {
         self.fields.is_empty()
     }
 
-    /// The bundle with these fields added as params.
+    /// The bundle with these fields added as params, and the list of their names (see [`FIELD_LIST_PARAM`]) so that a
+    /// build which does not know one of them can tell.
     pub fn apply_to(&self, bundle: Bundle) -> Bundle {
+        self.apply_to_in(&REGISTRY, bundle)
+    }
+
+    /// [`Self::apply_to`] against another registry.
+    pub fn apply_to_in(&self, registry: &Registry, bundle: Bundle) -> Bundle {
+        if self.is_empty() {
+            return bundle;
+        }
+        let listed = fieldset::render(self.fields.keys().map(|name| {
+            let rule = registry.spec(name).map_or(Rule::MustMatch, |s| s.rule);
+            (name.as_str(), rule)
+        }));
         self.fields
             .iter()
             .fold(bundle, |b, (k, v)| b.with_param(k.clone(), v.clone()))
+            .with_param(FIELD_LIST_PARAM, listed)
     }
 
     /// The environment a bundle recorded. Each field is read on its own: a malformed one is listed and skipped, and the
     /// others are still compared.
     pub fn from_bundle(bundle: &Bundle) -> ParsedEnvironment {
+        Self::from_bundle_in(&REGISTRY, bundle)
+    }
+
+    /// [`Self::from_bundle`] against another registry.
+    pub fn from_bundle_in(registry: &Registry, bundle: &Bundle) -> ParsedEnvironment {
         let mut identity = EnvironmentIdentity::default();
         let mut malformed = Vec::new();
-        for (name, value) in bundle.params.iter().filter(|(k, _)| is_known_field(k)) {
-            match identity.clone().with_field(name.clone(), value.clone()) {
+        for (name, value) in bundle.params.iter().filter(|(k, _)| registry.is_known(k)) {
+            match identity
+                .clone()
+                .with_field_in(registry, name.clone(), value.clone())
+            {
                 Ok(next) => identity = next,
                 Err(_) => malformed.push(name.clone()),
             }
         }
+        let unknown = unknown_fields(registry, bundle, &mut malformed);
         ParsedEnvironment {
             identity: (!identity.is_empty()).then_some(identity),
             malformed,
+            unknown,
         }
     }
+}
+
+/// The fields a bundle records that `registry` does not declare. A name counts if the bundle's own list names it, or if
+/// it sits in a namespace the registry owns (a bundle with no list, from a build that forgot one, is still caught).
+/// The list says whether the writer reads a difference as information only; a name found only by its namespace is
+/// read as a change. Anything that cannot be read safely is reported as malformed, never guessed at.
+fn unknown_fields(
+    registry: &Registry,
+    bundle: &Bundle,
+    malformed: &mut Vec<String>,
+) -> Vec<Listed> {
+    let mut found: BTreeMap<String, Rule> = BTreeMap::new();
+    if let Some(value) = bundle.params.get(FIELD_LIST_PARAM) {
+        match fieldset::parse(value) {
+            Some(listed) => {
+                for entry in listed {
+                    if !registry.is_known(&entry.name) {
+                        found.insert(entry.name, entry.rule);
+                    } else if !bundle.params.contains_key(&entry.name) {
+                        malformed.push(format!("{} ({LISTED_NOT_RECORDED})", entry.name));
+                    }
+                }
+            }
+            None => malformed.push(FIELD_LIST_PARAM.to_string()),
+        }
+    }
+    let by_namespace = bundle.params.keys().filter(|name| {
+        name.as_str() != FIELD_LIST_PARAM
+            && !registry.is_known(name)
+            && registry.in_known_namespace(name)
+    });
+    let mut unreadable = false;
+    for name in by_namespace {
+        if fieldset::is_listable_name(name) {
+            found.entry(name.clone()).or_insert(Rule::MustMatch);
+        } else {
+            unreadable = true;
+        }
+    }
+    if unreadable {
+        malformed.push(UNREADABLE_NAME.to_string());
+    }
+    found
+        .into_iter()
+        .map(|(name, rule)| Listed { name, rule })
+        .collect()
 }
 
 /// One recorded field whose value is not the same now.
@@ -215,22 +296,38 @@ pub enum EnvironmentComparison {
     Differs(Vec<FieldChange>),
 }
 
-/// Compares what a bundle recorded with the current host. Fields only the current host knows are not differences.
+/// Compares what a bundle recorded with the current host. Fields only the current host knows are not differences, and
+/// neither are fields the registry declares informational.
 pub fn compare(
+    recorded: Option<&EnvironmentIdentity>,
+    current: &EnvironmentIdentity,
+) -> EnvironmentComparison {
+    compare_in(&REGISTRY, recorded, current)
+}
+
+/// [`compare`] against another registry.
+pub fn compare_in(
+    registry: &Registry,
     recorded: Option<&EnvironmentIdentity>,
     current: &EnvironmentIdentity,
 ) -> EnvironmentComparison {
     let Some(recorded) = recorded else {
         return EnvironmentComparison::NotRecorded;
     };
-    let defaults = FIELD_DEFAULTS_WHEN_ABSENT
-        .iter()
-        .filter(|(name, _)| recorded.get(name).is_none() && current.get(name).is_some())
-        .copied();
+    let defaults = registry.fields().filter_map(|f| {
+        let default = f.default_when_absent?;
+        (recorded.get(f.name).is_none() && current.get(f.name).is_some())
+            .then_some((f.name, default))
+    });
     let mut read: Vec<(&str, &str)> = recorded.fields().chain(defaults).collect();
     read.sort_unstable_by_key(|(name, _)| *name);
     let changes: Vec<FieldChange> = read
         .into_iter()
+        .filter(|(name, _)| {
+            registry
+                .spec(name)
+                .is_none_or(|spec| spec.rule == Rule::MustMatch)
+        })
         .filter(|(name, value)| current.get(name) != Some(value))
         .map(|(name, value)| FieldChange {
             name: name.to_string(),

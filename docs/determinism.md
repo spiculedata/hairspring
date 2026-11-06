@@ -229,8 +229,51 @@ A Hermit bundle therefore records these fields (as `param.<name>` lines, which m
 | `target.command.sha256` | hash of the command line: the program as resolved (a path as given, joined to the working directory when relative; a bare name looked up on the guest's `PATH`) followed by every argument exactly as configured, each separated so `a b` and `a`, `b` differ. Paths are not canonicalised, because the text of a path is what a program can react to. | the arguments and path text themselves are never stored, but a hash is not a disguise for guessable text: anyone holding the bundle can hash candidate argument lists or program paths offline and compare. A short argument list, or a path such as `/home/<name>/project`, can be found that way. Treat it as public only if you are content for those guesses to succeed |
 | `target.cwd.sha256` | hash of the directory the program starts in: the target's `cwd`, or, when it is unset, the directory the engine itself runs from (which the program inherits) | the path is hashed, never stored, but it can be guessed offline: anyone holding the bundle can hash candidate directories (for example `/home/<name>/project`) and compare, which can reveal a user name. Check before publishing a bundle from a directory whose name is sensitive |
 
-Only these names exist. A bundle becomes v3 only when it carries one of them; a `host.*` or `env.*` param with any
-other name is ignored on read, so an unknown or hostile param can neither change the header nor be compared.
+Only these names exist. Each is declared in a registry in `hairspring-core` (`environment/registry.rs`): the engine
+declares the host, guest and program fields it records for every backend, and the Hermit backend declares the
+`hermit.*` and `host.loader.*` fields. A declaration gives the name, what a value looks like, and how a difference is
+read: `must-match` (the environment changed, so a miss is not evidence the bug is fixed) or `informational` (recorded
+for the reader, never a change). All eighteen fields above are `must-match`. A backend added later declares its own
+fields in its own namespace, and no comparison code names a field. A bundle becomes v3 only when it carries one of
+these names (or the list described next); a param with any other name in none of these namespaces is an ordinary replay
+parameter and is not read as environment.
+
+#### Bundles written by a newer build
+
+A build ignores a field it does not know, so before this rule a bundle with a field added by a newer build could replay
+on an older one as if the environment were unchanged, and a miss would print `NOT reproduced` and exit `0`. The header
+version was not raised when fields such as `env.guest.passed` were added, so it cannot tell. Every bundle that records
+an environment now also carries `param.env.fields`, the comma-separated list of the field names it recorded (a name is
+prefixed with `~` when the writer reads a difference in it as informational). On replay, a build that finds a field it
+does not know, either in that list or as a param in a namespace it owns (`host.`, `hermit.`, `env.` or `target.`),
+says so and treats it as a change:
+
+- `warning: environment differs: this bundle records environment fields this build does not know (<names>); it was
+  may have been written by a newer build, so upgrade Hairspring to compare them`. The replay still runs. If it reproduces the
+  failure, that stands (exit `1`). If it does not, the miss is a changed environment (exit `3`), never `NOT
+  reproduced`. Up to eight names are listed and the rest counted.
+- An unknown field is `must-match` unless the bundle's own list marks it `~` (informational), because a build cannot
+  judge a field it cannot read. An unknown informational field is ignored.
+- A build ignores `~` on a field it does know: it applies its own rule for that field, so a `~` in a bundle never
+  makes a known field informational.
+- An unknown field is never a reason to refuse the replay, including an unknown `host.loader.` field: only a changed
+  hash of a loader field this build knows is refused. An unknown field only turns a miss into exit `3`.
+- A list that cannot be read is reported as a malformed field and counts as changed. That covers an empty entry, an
+  unsafe or over-long name (over 64 characters), a list of more than 4096 characters, a name listed twice (with or
+  without `~`, in either order), and a known field that the list names but the bundle does not record (shown as
+  `<name> (listed, not recorded)`). A param name that cannot be shown safely is reported as `(unreadable field name)`,
+  not echoed.
+- When a replay or confirmation also finds a concrete change, that line comes first and the unknown-field line after it;
+  a confirmation's summary joins both.
+- Known fields are compared exactly as before, so a bundle with the list and nothing unknown replays with no new
+  warning.
+
+What this cannot do. It works only in builds that contain it. A build from before this change does not read
+`param.env.fields` and still ignores fields it does not know, so it can still give a false `NOT reproduced` on a bundle
+from a newer build; the only protection there is to replay with a current build. A bundle written before the list
+existed carries no list, so a build with the rule can catch an unknown field in it only by its namespace. The bundle
+`build` value is the crate version and is not compared: it does not change between commits, so it cannot say that a
+build is newer.
 
 No path, host name or user name is stored: files are named by role, not by where they were found. A source the
 host does not offer is left out rather than invented. On replay such a field is reported as `now unavailable`, and

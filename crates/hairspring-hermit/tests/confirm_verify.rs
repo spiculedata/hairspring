@@ -265,7 +265,8 @@ fn a_verify_miss_on_an_old_minimal_bundle_under_the_new_default_is_inconclusive(
         params: recorded
             .params
             .iter()
-            .filter(|(k, _)| k.as_str() != "env.guest.passed")
+            // A bundle from before the field also predates the list of recorded fields.
+            .filter(|(k, _)| k.as_str() != "env.guest.passed" && k.as_str() != "env.fields")
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
         ..recorded

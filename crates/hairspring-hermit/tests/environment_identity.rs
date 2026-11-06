@@ -463,7 +463,10 @@ fn without_command_and_cwd(bundle: &Bundle) -> Bundle {
         params: bundle
             .params
             .iter()
-            .filter(|(k, _)| !COMMAND_CWD_FIELDS.contains(&k.as_str()))
+            // A bundle from before these fields existed also predates the list of recorded fields.
+            .filter(|(k, _)| {
+                !COMMAND_CWD_FIELDS.contains(&k.as_str()) && k.as_str() != "env.fields"
+            })
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
         ..bundle.clone()

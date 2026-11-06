@@ -45,6 +45,19 @@ fn refuse_logging(backend: &HermitBackend, p: &ProcessSpec) -> Result<(), Engine
     }
 }
 
+/// Every warning that says the environment differs, joined, so a concrete change is not hidden behind another line
+/// that also says so (for example a field this build does not know).
+fn environment_summary(warnings: &[String]) -> Option<String> {
+    let lines: Vec<&str> = warnings
+        .iter()
+        .map(String::as_str)
+        .filter(|w| w.contains(DIFFERS))
+        .collect();
+    (!lines.is_empty()).then(|| lines.join("; "))
+}
+
+const DIFFERS: &str = "environment differs";
+
 /// How the host compares with the bundle's recorded environment.
 fn environment_state(
     bundle: &Bundle,
@@ -54,10 +67,7 @@ fn environment_state(
     match replay_environment::check(bundle, identity, allow_change) {
         Ok(check) => Ok(EnvState::Open {
             differs: check.differs,
-            summary: check
-                .warnings
-                .into_iter()
-                .find(|w| w.contains("environment differs")),
+            summary: environment_summary(&check.warnings),
         }),
         Err(EngineError::EnvironmentMismatch(why)) => Ok(EnvState::Refused(why)),
         Err(other) => Err(other),
@@ -145,5 +155,35 @@ fn step(
             }
             result
         }
+    }
+}
+
+#[cfg(test)]
+mod summary_tests {
+    use super::environment_summary;
+
+    #[test]
+    fn every_line_that_says_the_environment_differs_is_kept_in_order() {
+        let warnings = vec![
+            "malformed recorded environment fields, not compared: x".to_string(),
+            "environment differs: host.kernel_release (recorded a, now b)".to_string(),
+            "environment differs: this bundle records environment fields this build does not know (h.x)".to_string(),
+        ];
+        let summary = environment_summary(&warnings).unwrap();
+        assert!(
+            summary.starts_with("environment differs: host.kernel_release"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("; environment differs: this bundle records"),
+            "{summary}"
+        );
+        assert!(!summary.contains("malformed"), "{summary}");
+    }
+
+    #[test]
+    fn no_such_line_gives_no_summary() {
+        assert_eq!(environment_summary(&["something else".to_string()]), None);
+        assert_eq!(environment_summary(&[]), None);
     }
 }
