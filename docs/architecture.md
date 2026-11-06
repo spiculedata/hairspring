@@ -526,8 +526,10 @@ changes.
   its trials replace the earlier attempt's. Its inputs do too: a record from a later attempt replaces the row whole
   (fields, missing names, reporter and trust), the same attempt again is a repeat (the first reporter, trust and time
   stay) or, if different, a conflict, and a record from an earlier attempt is refused as stale. A record is also stale when its attempt is older than the attempt the run's stored trials
-  belong to, even with no row to compare to (the check and the write are one transaction, and the run row is locked, so
-  recorders for one run, and a trial batch starting an attempt, queue one after the other). When the new attempt's
+  belong to, even with no row to compare to (the check and the write are one transaction. On PostgreSQL it locks the run row with `SELECT ... FOR UPDATE`, as a
+  trial batch does before it starts an attempt, so recorders for one run and a trial batch queue one after the other;
+  without that lock the two deadlock or leave the earlier attempt's inputs behind. On SQLite the transaction starts
+  with `BEGIN IMMEDIATE`, which takes the database-wide write lock, so every writer queues, up to the busy timeout). When the new attempt's
   trials start, any inputs left by an earlier attempt are removed with the other rows of that attempt, so a worker
   that records nothing (one from an older release) never inherits the first attempt's.
 - **Digests, never values.** The identity text holds the working directory and the guest environment in plain text, so

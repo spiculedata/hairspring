@@ -18,6 +18,86 @@ pub fn run_all_run_inputs(make: &dyn Fn() -> Arc<dyn Store>) {
     a_newer_attempt_replaces_the_inputs_and_an_older_one_is_stale(&*make());
     inputs_older_than_the_runs_trials_are_stale_even_with_no_row(&*make());
     concurrent_recorders_never_error_and_the_newest_attempt_wins(make);
+    recording_racing_a_new_attempts_first_trials_never_fails_or_leaves_stale_inputs(make);
+}
+
+/// Recording and the first batch of trials of a new attempt both touch the run row and `run_inputs`. In the wrong order
+/// they deadlock (PostgreSQL) or leave the earlier attempt's inputs behind. Many rounds, several runs at once, each
+/// round released together from a barrier: every call must succeed, and whatever order won, no inputs of an attempt
+/// older than the run's trials may remain. Without the row lock in `put_run_inputs` this fails within a few rounds on
+/// PostgreSQL.
+fn recording_racing_a_new_attempts_first_trials_never_fails_or_leaves_stale_inputs(
+    make: &dyn Fn() -> Arc<dyn Store>,
+) {
+    const LANES: usize = 4;
+    const ROUNDS: usize = 40;
+    let store = make();
+    let lanes: Vec<_> = (0..LANES)
+        .map(|lane| {
+            let s = store.clone();
+            std::thread::spawn(move || -> Vec<String> {
+                let mut problems = Vec::new();
+                for round in 0..ROUNDS {
+                    let run = new_run(&*s, 10);
+                    // Attempt 1: trials stored, inputs recorded, then the worker is lost.
+                    s.enqueue_job(&run.id, "run", "{}", 2).unwrap();
+                    let first = s.lease_run_job(&run.id, "w", 600, 10).unwrap().unwrap();
+                    s.ingest_trials(&first.id, "w", true, &batch(&passes(1), 0), 11)
+                        .unwrap();
+                    // Even rounds record the first attempt's inputs; odd rounds leave them out.
+                    if round % 2 == 0 {
+                        s.put_run_inputs(&inputs(&run.id), 12).unwrap();
+                    }
+                    assert!(s.fail_job(&first.id, "w", "lost", 13).unwrap());
+                    let second = s.lease_run_job(&run.id, "w2", 600, 14).unwrap().unwrap();
+                    assert_eq!(second.attempts, 2);
+                    // Attempt 2 starts its trials while a recorder reports: the second attempt's inputs in the even
+                    // rounds, a late report from the first attempt in the odd ones.
+                    let barrier = Arc::new(std::sync::Barrier::new(2));
+                    let recorder = {
+                        let (s, b, run_id) = (s.clone(), barrier.clone(), run.id.clone());
+                        std::thread::spawn(move || {
+                            let mut new = inputs(&run_id);
+                            new.attempt = if round % 2 == 0 { 2 } else { 1 };
+                            b.wait();
+                            s.put_run_inputs(&new, 15)
+                        })
+                    };
+                    let ingest = {
+                        let (s, b, job_id) = (s.clone(), barrier.clone(), second.id.clone());
+                        std::thread::spawn(move || {
+                            b.wait();
+                            s.ingest_trials(&job_id, "w2", true, &batch(&passes(1), 0), 16)
+                        })
+                    };
+                    let recorded = recorder.join().unwrap();
+                    let ingested = ingest.join().unwrap();
+                    if let Err(e) = &recorded {
+                        problems.push(format!("lane {lane} round {round}: recording failed: {e}"));
+                    }
+                    if !matches!(&ingested, Ok(IngestOutcome::Applied { .. })) {
+                        problems.push(format!("lane {lane} round {round}: ingest: {ingested:?}"));
+                    }
+                    if let Some(kept) = s.get_run_inputs(&run.id).unwrap() {
+                        if kept.attempt < 2 {
+                            problems.push(format!(
+                                "lane {lane} round {round}: inputs of attempt {} outlived the new attempt's trials",
+                                kept.attempt
+                            ));
+                        }
+                    }
+                }
+                problems
+            })
+        })
+        .collect();
+    let problems: Vec<String> = lanes.into_iter().flat_map(|l| l.join().unwrap()).collect();
+    assert!(
+        problems.is_empty(),
+        "{} problems: {:?}",
+        problems.len(),
+        &problems[..problems.len().min(5)]
+    );
 }
 
 /// A report from attempt 1 that arrives after attempt 2's trials started (the lease check and the write are separate

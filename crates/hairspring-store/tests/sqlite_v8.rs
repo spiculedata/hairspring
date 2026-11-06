@@ -401,3 +401,75 @@ fn a_planted_value_is_refused_and_never_reaches_the_file() {
     }
     cleanup(&path);
 }
+
+const OK_COLUMNS: &str = "run_id TEXT PRIMARY KEY REFERENCES runs(id), scheme TEXT NOT NULL, fields_json TEXT NOT NULL, missing_json TEXT NOT NULL, reporter_id TEXT NOT NULL, reporter_trusted INTEGER NOT NULL, attempt INTEGER NOT NULL, created_at INTEGER NOT NULL";
+
+/// `pragma_table_info` leaves generated columns out, so a table that is right except for an extra VIRTUAL or STORED
+/// generated column looked like the migration's table. PostgreSQL refuses the same table; so must SQLite.
+#[test]
+fn a_table_with_an_extra_generated_column_is_refused() {
+    for generated in [
+        "extra INTEGER GENERATED ALWAYS AS (attempt + 1) VIRTUAL",
+        "extra INTEGER GENERATED ALWAYS AS (attempt + 1) STORED",
+        "extra INTEGER AS (attempt + 1)",
+    ] {
+        for at_open in [false, true] {
+            let path = temp_db("generated");
+            drop(SqliteStore::open(&path).unwrap());
+            let conn = Connection::open(&path).unwrap();
+            if at_open {
+                // Replaced after the migration: a current database whose table is no longer the migration's.
+                conn.execute_batch("DROP TABLE run_inputs").unwrap();
+            } else {
+                make_v7(&path);
+            }
+            conn.execute_batch(&format!(
+                "CREATE TABLE run_inputs ({OK_COLUMNS}, {generated})"
+            ))
+            .unwrap();
+            let err = SqliteStore::open(&path)
+                .err()
+                .unwrap_or_else(|| panic!("{generated}: must refuse"));
+            assert!(
+                err.to_string()
+                    .contains("table run_inputs exists but has a different definition"),
+                "{generated}: {err}"
+            );
+            if !at_open {
+                assert_eq!(user_version(&conn), 7, "{generated}: no half upgrade");
+            }
+            drop(conn);
+            cleanup(&path);
+        }
+    }
+}
+
+/// A view called `run_inputs` is not a table. Opening says so in the usual words, not "Query returned no rows".
+#[test]
+fn a_view_named_run_inputs_is_refused_in_clear_words() {
+    for at_open in [false, true] {
+        let path = temp_db("view");
+        drop(SqliteStore::open(&path).unwrap());
+        let conn = Connection::open(&path).unwrap();
+        if at_open {
+            conn.execute_batch("DROP TABLE run_inputs").unwrap();
+        } else {
+            make_v7(&path);
+        }
+        conn.execute_batch("CREATE VIEW run_inputs AS SELECT id AS run_id FROM runs")
+            .unwrap();
+        let err = SqliteStore::open(&path).err().expect("must refuse");
+        let text = err.to_string();
+        assert!(text.contains("run_inputs"), "{text}");
+        assert!(!text.contains("Query returned no rows"), "{text}");
+        if !at_open {
+            assert!(
+                text.contains("exists but is invalid or has a different definition"),
+                "{text}"
+            );
+            assert_eq!(user_version(&conn), 7, "no half upgrade");
+        }
+        drop(conn);
+        cleanup(&path);
+    }
+}
