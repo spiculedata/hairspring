@@ -150,8 +150,7 @@ hairspring serve --addr 0.0.0.0:7878 --tokens-file /etc/hairspring/tokens --work
   from).
 - Not in v0.1-RC1: `--organisation NAME` (shown in the web UI's top bar), `--max-connections`, `--max-replays` and
   `--trusted-proxy`; see [`hairspring serve --help`](#reference-serve-options) and [the reverse proxy](#9-reverse-proxy-and-tls)
-  `--max-confirmations` (not in v0.1-RC1 or v0.1-RC2) is described below.
-  below.
+  below. `--max-confirmations` is in neither v0.1-RC1 nor v0.1-RC2.
 
 At start the server prints where it is listening. Open the address in a browser for the web UI and sign in with a token.
 Everything the server speaks is plain HTTP: put TLS in front of it before the address is reachable beyond one machine.
