@@ -26,7 +26,7 @@ fn obj(props: Value, required: &[&str]) -> Value {
 }
 
 const TOOLS: &[Tool] = &[
-    Tool { name: "list_targets", role: Role::Read, description: "List the targets that can be explored, with their kind and default budget.", schema: || obj(json!({}), &[]) },
+    Tool { name: "list_targets", role: Role::Read, description: "List the targets that can be explored, with their kind, the backend that runs each one, what that backend can do (capabilities; null when this server has no backend registered for the target) and the default budget.", schema: || obj(json!({}), &[]) },
     Tool {
         name: "start_run",
         role: Role::Run,

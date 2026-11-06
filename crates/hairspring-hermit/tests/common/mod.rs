@@ -99,6 +99,7 @@ pub fn engine(
             hang_is_violation: o.hang_is_violation,
             parallelism: o.parallelism,
             pass_env: true,
+            backend: None,
         },
         budget: Budget {
             max_steps: 1,

@@ -2,6 +2,7 @@
 //! pluggable backends and reports. Everything above this crate (CLI, server,
 //! MCP) talks to [`engine::Engine`].
 pub mod backend;
+pub mod backend_info;
 pub mod config;
 pub mod confirm;
 pub mod demos;
@@ -27,6 +28,9 @@ use std::fmt;
 pub enum EngineError {
     UnknownTarget(String),
     BackendUnavailable(String),
+    /// The backend a target names is not usable: it is not registered, two backends claim its id, or it cannot run
+    /// the target's kind. The text uses fixed words and never repeats text from a file.
+    BackendChoice(String),
     InvalidBundle(String),
     Replay(String),
     Backend(String),
@@ -44,6 +48,7 @@ impl fmt::Display for EngineError {
             EngineError::BackendUnavailable(k) => {
                 write!(f, "no backend available for target kind `{k}`")
             }
+            EngineError::BackendChoice(m) => write!(f, "backend choice refused: {m}"),
             EngineError::InvalidBundle(m) => write!(f, "invalid bundle: {m}"),
             EngineError::Replay(m) => write!(f, "replay failed: {m}"),
             EngineError::Backend(m) => write!(f, "backend error: {m}"),

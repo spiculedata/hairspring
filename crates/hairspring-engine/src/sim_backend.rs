@@ -1,5 +1,6 @@
 //! Tree-exploration backend for registry `Sim` targets.
 use crate::backend::{Backend, Progress, RunRequest};
+use crate::backend_info::Capabilities;
 use crate::config::{Budget, TargetKind, TargetSpec};
 use crate::erased::{Erased, ErasedAction, Registry};
 use crate::report::{
@@ -9,7 +10,7 @@ use crate::EngineError;
 use hairspring_core::bundle::Bundle;
 use hairspring_core::doctor::doctor;
 use hairspring_core::explore::{branching, Config as ExploreConfig, Failure};
-use hairspring_core::point::{CommonInputs, IdentityDraft, Recorded};
+use hairspring_core::point::{BackendKind, CommonInputs, IdentityDraft, Recorded};
 use hairspring_core::replay::find_action;
 use hairspring_core::shrink::shrink;
 use hairspring_core::{ActionId, Sim};
@@ -76,10 +77,10 @@ pub(crate) fn failure_report(
     let steps = trace(root, &shrunk)?;
     let bundle = Bundle::new(seed, BUILD, shrunk.clone())
         .with_target(req.target.clone())
-        .with_backend("sim");
+        .with_backend(BackendKind::Sim.as_str());
     Ok(FailureReport {
         target: req.target.clone(),
-        backend: "sim".to_string(),
+        backend: BackendKind::Sim.as_str().to_string(),
         message: format!(
             "invariant violated; shrunk from {} to {} steps",
             found.path.len(),
@@ -134,8 +135,20 @@ fn start_hashing_the_image() {
 fn start_hashing_the_image() {}
 
 impl Backend for SimBackend {
-    fn name(&self) -> &'static str {
-        "sim"
+    fn id(&self) -> &'static str {
+        BackendKind::Sim.as_str()
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Simulation"
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            replay: true,
+            shrink: true,
+            ..Capabilities::default()
+        }
     }
 
     fn run_inputs(&self, spec: &TargetSpec) -> Option<IdentityDraft> {

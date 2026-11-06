@@ -109,6 +109,36 @@ fn tools_list_has_schemas_and_expected_tools() {
 }
 
 #[test]
+fn list_targets_keeps_its_fields_and_adds_the_backend_and_its_capabilities() {
+    let s = server();
+    let r = tool(&s, Role::Read, "list_targets", json!({}));
+    let target = structured(&r)["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "lock-lease")
+        .expect("lock-lease is listed")
+        .clone();
+    for kept in ["name", "kind", "description", "budget"] {
+        assert!(!target[kept].is_null(), "{kept} missing from {target}");
+    }
+    assert_eq!(target["kind"], "sim");
+    assert_eq!(target["backend"], "sim");
+    assert_eq!(
+        target["capabilities"],
+        json!({
+            "replay": true,
+            "confirm": false,
+            "shrink": true,
+            "strict_verify": false,
+            "snapshot_branch": false,
+            "fault_injection": false,
+            "multi_process": false
+        })
+    );
+}
+
+#[test]
 fn full_agent_loop_find_inspect_replay() {
     let s = server();
     let targets = tool(&s, Role::Run, "list_targets", json!({}));

@@ -198,6 +198,7 @@ fn process(
             hang_is_violation,
             parallelism: 1,
             pass_env: true,
+            backend: None,
         },
         budget: Budget {
             max_steps: 1,

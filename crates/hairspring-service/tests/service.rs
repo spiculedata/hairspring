@@ -372,7 +372,7 @@ struct SlowBackend {
 }
 
 impl Backend for SlowBackend {
-    fn name(&self) -> &'static str {
+    fn id(&self) -> &'static str {
         "wasm"
     }
     fn supports(&self, kind: &TargetKind) -> bool {

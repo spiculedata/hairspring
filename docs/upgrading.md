@@ -135,6 +135,13 @@ results you want to keep, and restore a backup instead.
 If you only want to try a newer build without touching your results, run it with a different database (`--db`) in a
 different directory.
 
+### Configs that use `backend`
+
+A config with a `backend` key on a `process` target (see [architecture.md](architecture.md#backends)) is read by this
+build as before. A build from before the key existed refuses such a config, because `backend` is an unknown key for it
+(`unknown field `backend``, followed by the list of keys that build knows). Remove the key to use the config with the
+older build; it means the same as the default, `hermit`.
+
 ### Bundles from a newer build
 
 A bundle written by a newer build can record environment fields an older build does not know. A build with this check

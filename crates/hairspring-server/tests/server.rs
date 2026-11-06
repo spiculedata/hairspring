@@ -205,6 +205,41 @@ fn refuses_to_listen_publicly_without_auth() {
 }
 
 #[test]
+fn the_targets_listing_adds_the_backend_and_capabilities_to_each_target() {
+    let (srv, _) = boot(tokens(), 0, 0);
+    let listing = client(srv.addr(), Some(READ)).get("/api/targets").json();
+    let target = listing["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "lock-lease")
+        .expect("lock-lease is listed")
+        .clone();
+    let mut keys: Vec<&str> = target
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "backend",
+            "budget",
+            "capabilities",
+            "description",
+            "kind",
+            "name"
+        ]
+    );
+    assert_eq!(target["kind"], "sim");
+    assert_eq!(target["backend"], "sim");
+    assert_eq!(target["capabilities"]["replay"], true);
+    assert_eq!(target["capabilities"]["confirm"], false);
+}
+
+#[test]
 fn full_lifecycle_over_http() {
     let (srv, _) = boot(tokens(), 2, 0);
     let c = client(srv.addr(), Some(ADMIN));

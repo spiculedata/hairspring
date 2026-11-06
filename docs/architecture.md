@@ -33,9 +33,9 @@ flowchart LR
 
 | Crate | Responsibility | Depends on |
 |---|---|---|
-| `hairspring-core` | `Sim`, explorer, shrinker, bundle format, point addresses and hashes, doctor. Std and `sha2` only | nothing |
+| `hairspring-core` | `Sim`, explorer, shrinker, bundle format, point addresses and hashes, backend ids and identity schemes, doctor. Std and `sha2` only | nothing |
 | `hairspring-engine` | Type-erased registry, `hairspring.toml`, `Backend` trait, sim backend, the verdict ladder, JUnit/SARIF/text | core |
-| `hairspring-store` | `Store` trait, SQLite, PostgreSQL, shared conformance suite | nothing |
+| `hairspring-store` | `Store` trait, SQLite, PostgreSQL, shared conformance suite | core |
 | `hairspring-service` | The only place that mutates run/job state; validates and sanitises worker results | engine, store |
 | `hairspring-hermit`, `hairspring-wasm` | Additional backends | engine |
 | `hairspring-mcp`, `hairspring-server`, `hairspring-worker`, `hairspring-cli` | Front ends and plumbing | service |
@@ -54,6 +54,49 @@ one fixed order and returns the verdict. Two rules hold for every backend: a tim
 ladder cannot classify is never a pass. What a backend's own words mean (for the Hermit backend, its internal-failure,
 usage, skid-overshoot and deadlock lines) stays in that backend's crate; the order they are weighed in does not.
 [guest-protocol.md](guest-protocol.md#how-the-hermit-backend-judges-a-trial) lists the order.
+
+## Backends
+
+A backend runs and replays targets of one kind. The engine holds the backends the binary was built with and picks one
+for a target by **id**: the id is the `backend` key of the target, or the default for its kind. It never picks "the
+first backend that can run this kind", so a second backend for the same kind could not be shadowed by the first.
+
+| Target kind | Default backend id | `backend` key |
+|---|---|---|
+| `sim` | `sim` | not allowed |
+| `wasm` | `wasm` | not allowed |
+| `process` | `hermit` | optional; `"hermit"` is the only value there is today |
+
+A config without a `backend` key means what it meant before the key existed: every `process` target runs under Hermit.
+Naming `hermit` explicitly changes nothing. A value that is not an id of a backend that can run `process` targets is
+refused when the config is read (`unknown `backend` for a process target; known: hermit`), and, for a string value, the message does not
+repeat the value (a value of another type gets the TOML library's snippet, as for every other key). When a config names a backend that this build does not have, the run stops with
+`backend choice refused: backend `hermit` is not available in this build` (a hand-built target naming an id this build does not know gets `the named backend is not available in this build`); the target is never moved to another
+backend. The same refusal covers two backends registered under one id (`more than one backend is registered as ...`)
+and a backend that cannot run the target's kind.
+
+The ids come from one list in `hairspring-core` (`BackendKind`), which also gives the identity scheme each backend
+records (`sim/1`, `wasm/1`, `hermit/1`). The service and the store use that list rather than their own copies, so a
+run's stored `backend` is always the id the engine routed it by.
+
+Each backend states, through the `Backend` trait, who it is and what it has:
+
+- **Identity:** `id`, a display name and a version (the version of the crate that implements it; the version and hash
+  of an external program only where they are known without running anything, which is not the case for Hermit today).
+- **Capabilities,** all `false` unless the backend really has the feature: `replay`, `confirm`, `shrink`,
+  `strict_verify`, `snapshot_branch` (exposed to callers: `false` for every backend today, including `sim` and `wasm`), `fault_injection`, `multi_process`. They describe the backend, not the host:
+  a Hermit target on macOS still lists `confirm: true`, and still cannot run there.
+- **Limits,** `null` unless the backend states one: `max_parallelism` and `max_trial_seconds`.
+
+| Backend | `replay` | `confirm` | `shrink` | `strict_verify` | `snapshot_branch` | `fault_injection` | `multi_process` | `max_parallelism` |
+|---|---|---|---|---|---|---|---|---|
+| `sim` | yes | no | yes | no | no | no | no | not stated |
+| `wasm` | yes | no | yes | no | no | no | no | not stated |
+| `hermit` | yes | yes | no | yes | no | no | yes | 64 |
+
+`GET /api/targets` and the MCP `list_targets` tool add each target's `backend` and `capabilities` (see
+[api.md](api.md#get-apitargets)). Bundles, stored runs and run identities are unchanged: a bundle still records the
+backend id it was produced on, and replay still refuses a bundle from another backend than the target's.
 
 ## Job lifecycle
 

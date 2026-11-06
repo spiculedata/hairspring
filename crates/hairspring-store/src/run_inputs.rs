@@ -7,7 +7,7 @@
 //!
 //! The rules both stores share live here, so SQLite and PostgreSQL cannot differ: what a record may hold, and when a
 //! second record for the same run is a repeat or a conflict.
-use crate::lineage::IDENTITY_SCHEMES;
+use crate::lineage::is_identity_scheme;
 use crate::lineage_fields::is_sha256_hex;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -101,7 +101,7 @@ pub(crate) fn prepare(new: &NewRunInputs) -> Result<Prepared, &'static str> {
     if !text_ok(&new.run_id, MAX_RUN_ID_BYTES) {
         return Err("run id is empty, too long or has a NUL");
     }
-    if !IDENTITY_SCHEMES.contains(&new.scheme.as_str()) {
+    if !is_identity_scheme(&new.scheme) {
         return Err("unknown input scheme");
     }
     if new.attempt == 0 || new.attempt > MAX_ATTEMPT {

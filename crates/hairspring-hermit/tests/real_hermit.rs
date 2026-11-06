@@ -71,6 +71,7 @@ fn engine(bin: &std::path::Path, trials: u64) -> Engine {
             hang_is_violation: false,
             parallelism: 1,
             pass_env: true,
+            backend: None,
         },
         budget: Budget {
             max_steps: 1,

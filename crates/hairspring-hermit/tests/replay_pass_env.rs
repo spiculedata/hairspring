@@ -60,6 +60,7 @@ fn engine(host: &Path, hermit_args: &[&str], pass_env: bool, script: &str) -> En
             hang_is_violation: false,
             parallelism: 1,
             pass_env,
+            backend: None,
         },
         budget: Budget {
             max_steps: 1,
