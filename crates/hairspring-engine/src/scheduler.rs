@@ -2,6 +2,7 @@
 //!
 //! The scheduling strategy decides which interleavings a seed can reach, so it is part of the target definition and is
 //! recorded in every bundle. Defaults reproduce the original behaviour: uniform random scheduling driven by the seed.
+use crate::hermit_args::{names_passed, ENGINE_OWNED_VARS};
 use serde::{Deserialize, Serialize};
 
 /// Hermit flags the backend sets itself. Passing them again in `hermit_args` is either a usage error in Hermit or a
@@ -138,8 +139,14 @@ impl SchedulerSpec {
     }
 }
 
-/// Rejects `hermit_args` entries that name a flag the backend owns.
+/// Rejects `hermit_args` entries that name a flag the backend owns, or pass a variable it owns.
 pub fn check_hermit_args(args: &[String]) -> Result<(), String> {
+    let passed = names_passed(args);
+    if let Some(owned) = ENGINE_OWNED_VARS.iter().find(|v| passed.contains(**v)) {
+        return Err(format!(
+            "`hermit_args` must not pass `{owned}` with `--env`: Hairspring sets it for the guest"
+        ));
+    }
     for arg in args {
         let name = arg.split('=').next().unwrap_or(arg);
         if OWNED_HERMIT_FLAGS.contains(&name) {

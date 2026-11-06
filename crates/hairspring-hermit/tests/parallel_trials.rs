@@ -56,6 +56,7 @@ fn engine(dir: &Path, script: &str, trials: u64, parallelism: u32, timeout: Opti
             scheduler: SchedulerSpec::default(),
             hang_is_violation: false,
             parallelism,
+            pass_env: true,
         },
         budget: Budget {
             max_steps: 1,

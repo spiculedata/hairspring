@@ -92,6 +92,12 @@ A backend MUST strip any `HAIRSPRING_PROC` and `HAIRSPRING_PROC_PID` from the en
 `HAIRSPRING_PROC` itself and no `HAIRSPRING_PROC_PID`; a stray inherited pair makes the first process look like a
 spawned child.
 
+The Hermit backend gives a guest `HAIRSPRING_PROC=p1` (and no `HAIRSPRING_PROC_PID`) under every base environment, and
+`HAIRSPRING_EVENTS_FILE` too when the file transport is on. Under `--base-env=minimal` and `empty`, where Hermit starts
+the guest from almost nothing, it does so with `--env=NAME` entries (names only), unless the target sets
+`pass_env = false`, which restores the earlier behaviour: the variables were then not delivered at all. See
+[determinism.md](determinism.md#the-guests-environment-under---base-envminimal-and-empty).
+
 SDKs MUST send exactly one `assert` per `(proc, id)`, merging call sites that were inlined or duplicated (the same id
 at two call sites is one catalogued id: `catalog` may be repeated, and `end.sites` counts distinct ids after merging). If a second
 `assert` for the same pair does arrive, its counts are **added** (nothing that could be a failure is discarded) and

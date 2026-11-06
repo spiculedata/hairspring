@@ -11,6 +11,7 @@ pub mod format;
 mod format_props;
 mod format_rate;
 mod format_sweep;
+pub mod hermit_args;
 pub mod mode;
 pub mod report;
 pub mod scheduler;

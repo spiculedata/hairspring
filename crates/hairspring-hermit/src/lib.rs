@@ -24,6 +24,7 @@ mod hermit_version;
 pub mod host_identity;
 pub mod interrupt;
 mod line_scan;
+mod pass_env_warning;
 mod program;
 mod property_verdict;
 mod replay_environment;

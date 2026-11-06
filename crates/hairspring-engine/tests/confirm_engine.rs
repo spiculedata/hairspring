@@ -25,6 +25,7 @@ fn process(name: &str) -> TargetSpec {
             scheduler: SchedulerSpec::default(),
             hang_is_violation: false,
             parallelism: 1,
+            pass_env: true,
         },
         budget: Budget::default(),
     }

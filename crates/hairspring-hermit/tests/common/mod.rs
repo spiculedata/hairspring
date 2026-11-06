@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 pub mod confirm;
 pub mod events;
+pub mod minimal_fake;
 pub mod multi;
 pub mod props;
 use hairspring_engine::config::{Budget, Config, TargetKind, TargetSpec};
@@ -97,6 +98,7 @@ pub fn engine(
             scheduler: o.scheduler,
             hang_is_violation: o.hang_is_violation,
             parallelism: o.parallelism,
+            pass_env: true,
         },
         budget: Budget {
             max_steps: 1,

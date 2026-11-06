@@ -38,6 +38,7 @@ struct Inputs {
     env: BTreeMap<String, String>,
     extra: Vec<String>,
     args: Vec<String>,
+    pass_env: bool,
 }
 
 impl Default for Inputs {
@@ -48,6 +49,7 @@ impl Default for Inputs {
             env: BTreeMap::from([("PATH".to_string(), "/bin".to_string())]),
             extra: vec![],
             args: vec![],
+            pass_env: true,
         }
     }
 }
@@ -62,6 +64,7 @@ fn run(root: &Path, hermit: &HermitIdentity, i: &Inputs) -> EnvironmentIdentity 
             env: &i.env,
             extra_env_names: &i.extra,
             hermit_args: &i.args,
+            pass_env: i.pass_env,
         },
     )
 }
@@ -317,6 +320,50 @@ fn the_base_env_mode_comes_from_the_hermit_arguments() {
     assert_eq!(mode(&["--base-env", "empty"]).as_deref(), Some("empty"));
     assert_eq!(mode(&["--base-env=surprise"]).as_deref(), Some("unknown"));
     assert_eq!(mode(&["--base-env"]).as_deref(), Some("unknown"));
+}
+
+#[test]
+fn the_base_env_mode_is_read_as_hermit_reads_it() {
+    let root = fake_host("baseenv-case");
+    let mode = |arg: &str| {
+        let inputs = Inputs {
+            args: vec![arg.to_string()],
+            ..Inputs::default()
+        };
+        run(&root, &hermit(), &inputs)
+            .get("env.base_env")
+            .map(str::to_string)
+    };
+    assert_eq!(mode("--base-env=Minimal").as_deref(), Some("minimal"));
+    assert_eq!(mode("--base-env=EMPTY").as_deref(), Some("empty"));
+    assert_eq!(mode("--base-env=HOST").as_deref(), Some("host"));
+}
+
+#[test]
+fn the_guest_passed_field_says_whether_the_engine_names_its_variables() {
+    let root = fake_host("passed");
+    let passed = |args: &[&str], pass_env: bool| {
+        let inputs = Inputs {
+            args: args.iter().map(|a| a.to_string()).collect(),
+            pass_env,
+            ..Inputs::default()
+        };
+        run(&root, &hermit(), &inputs)
+            .get("env.guest.passed")
+            .map(str::to_string)
+    };
+    let yes = Some("hairspring-1".to_string());
+    let no = Some("none".to_string());
+    assert_eq!(passed(&["--base-env=minimal"], true), yes);
+    assert_eq!(passed(&["--base-env=Empty"], true), yes);
+    assert_eq!(passed(&["--base-env", "minimal"], true), yes);
+    assert_eq!(passed(&["--base-env=minimal"], false), no);
+    assert_eq!(passed(&[], true), no);
+    assert_eq!(passed(&["--base-env=host"], true), no);
+    assert_eq!(passed(&["--base-env=surprise"], true), no);
+    assert_eq!(passed(&["--base-env=minimal", "--config=f.yaml"], true), no);
+    assert_eq!(passed(&["--base-env=minimal", "--from=m.yaml"], true), no);
+    assert_eq!(passed(&["--base-env=minimal", "--image=x"], true), no);
 }
 
 #[test]

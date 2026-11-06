@@ -10,7 +10,7 @@ use crate::bundle::Bundle;
 use std::collections::BTreeMap;
 
 /// Every field a bundle may record. A param with any other name is not part of the environment.
-pub const KNOWN_FIELDS: [&str; 17] = [
+pub const KNOWN_FIELDS: [&str; 18] = [
     "host.kernel_release",
     "host.cpu_model",
     "host.cpu_flags.sha256",
@@ -25,6 +25,7 @@ pub const KNOWN_FIELDS: [&str; 17] = [
     "env.guest.names",
     "env.guest.names.sha256",
     "env.guest.allowlisted.sha256",
+    "env.guest.passed",
     "target.exe.sha256",
     "target.command.sha256",
     "target.cwd.sha256",
@@ -35,6 +36,14 @@ pub const MAX_LISTED_CHANGES: usize = 8;
 /// Characters of a hash shown in a warning; enough to tell two hashes apart without flooding the line.
 const SHORT_HASH_CHARS: usize = 12;
 const HASH_FIELD_SUFFIX: &str = ".sha256";
+
+/// Fields a recording may lack because it predates them, and what such a recording is read as when the current side
+/// has the field. `env.guest.passed`: before the engine named its variables for the guest there was nothing to record,
+/// and what it did then is `none`. The rule lives here so that every reader of a bundle applies the same one.
+pub const FIELD_DEFAULTS_WHEN_ABSENT: [(&str, &str); 1] = [("env.guest.passed", "none")];
+const PASSED_FIELD: &str = "env.guest.passed";
+const PASSED_NONE: &str = "none";
+const PASSED_PREFIX: &str = "hairspring-";
 
 pub fn is_known_field(name: &str) -> bool {
     KNOWN_FIELDS.contains(&name)
@@ -87,6 +96,8 @@ fn validate(name: &str, value: &str) -> Result<(), EnvError> {
     let printable_ascii = value.bytes().all(|b| (0x20..=0x7E).contains(&b));
     let well_formed = if name.ends_with(HASH_FIELD_SUFFIX) {
         is_hash_value(name, value)
+    } else if name == PASSED_FIELD {
+        is_passed_value(value)
     } else {
         printable_ascii
     };
@@ -99,6 +110,14 @@ fn validate(name: &str, value: &str) -> Result<(), EnvError> {
 /// The one hash field whose value may be the word `absent` (no `/etc/ld.so.preload`).
 const PRELOAD_FIELD: &str = "host.loader.ld_so_preload.sha256";
 const ABSENT: &str = "absent";
+
+/// `none`, or `hairspring-<n>` for version `n` of the list of variables the engine names.
+fn is_passed_value(value: &str) -> bool {
+    value == PASSED_NONE
+        || value
+            .strip_prefix(PASSED_PREFIX)
+            .is_some_and(|n| !n.is_empty() && n.len() <= 6 && n.bytes().all(|b| b.is_ascii_digit()))
+}
 
 fn is_hash_value(name: &str, value: &str) -> bool {
     if name == PRELOAD_FIELD && value == ABSENT {
@@ -204,8 +223,14 @@ pub fn compare(
     let Some(recorded) = recorded else {
         return EnvironmentComparison::NotRecorded;
     };
-    let changes: Vec<FieldChange> = recorded
-        .fields()
+    let defaults = FIELD_DEFAULTS_WHEN_ABSENT
+        .iter()
+        .filter(|(name, _)| recorded.get(name).is_none() && current.get(name).is_some())
+        .copied();
+    let mut read: Vec<(&str, &str)> = recorded.fields().chain(defaults).collect();
+    read.sort_unstable_by_key(|(name, _)| *name);
+    let changes: Vec<FieldChange> = read
+        .into_iter()
         .filter(|(name, value)| current.get(name) != Some(value))
         .map(|(name, value)| FieldChange {
             name: name.to_string(),

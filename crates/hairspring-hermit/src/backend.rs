@@ -192,6 +192,7 @@ impl HermitBackend {
     pub(crate) fn process<'a>(&self, spec: &'a TargetSpec) -> Result<ProcessSpec<'a>, EngineError> {
         let p = Self::process_spec(spec)?;
         crate::program::check(&p)?;
+        crate::pass_env_warning::warn_once(&p);
         Ok(p)
     }
 
@@ -206,6 +207,7 @@ impl HermitBackend {
                 scheduler,
                 hang_is_violation,
                 parallelism,
+                pass_env,
             } => Ok(ProcessSpec {
                 target: &spec.name,
                 command,
@@ -216,6 +218,7 @@ impl HermitBackend {
                 scheduler,
                 hang_is_violation: *hang_is_violation,
                 parallelism: *parallelism,
+                pass_env: *pass_env,
             }),
             other => Err(EngineError::BackendUnavailable(other.name().to_string())),
         }

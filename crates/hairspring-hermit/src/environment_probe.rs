@@ -83,6 +83,7 @@ impl EnvironmentProbe {
                 env: &env,
                 extra_env_names,
                 hermit_args: p.hermit_args,
+                pass_env: p.pass_env,
             },
         )
     }

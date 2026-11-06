@@ -7,7 +7,7 @@
 //! The program is named by its file name only (a stored command is read by other people, and the path to Hermit on one
 //! host is not part of what ran). The per-run plumbing Hermit is given (the summary file, the events directory) is left
 //! out, and the strict verify's result file is written as `verify.json`.
-use crate::exec::{hermit_args, ProcessSpec};
+use crate::exec::{hermit_args_for, ProcessSpec};
 use crate::HermitSettings;
 
 /// Characters that need no quoting in a shell word.
@@ -38,7 +38,15 @@ pub(super) fn line(
         |n| n.to_string_lossy().into_owned(),
     );
     std::iter::once(program)
-        .chain(hermit_args(settings, p, seed, None, None, extra))
+        .chain(hermit_args_for(
+            settings,
+            p,
+            seed,
+            None,
+            None,
+            settings.events_file,
+            extra,
+        ))
         .map(|w| quote(&w))
         .collect::<Vec<_>>()
         .join(" ")
@@ -46,7 +54,9 @@ pub(super) fn line(
 
 #[cfg(test)]
 mod tests {
-    use super::quote;
+    use super::*;
+    use hairspring_engine::scheduler::SchedulerSpec;
+    use std::collections::BTreeMap;
 
     #[test]
     fn plain_words_are_left_alone_and_others_quoted() {
@@ -54,5 +64,65 @@ mod tests {
         assert_eq!(quote("echo fine"), "'echo fine'");
         assert_eq!(quote("it's"), "'it'\\''s'");
         assert_eq!(quote(""), "''");
+    }
+
+    fn spec<'a>(
+        env: &'a BTreeMap<String, String>,
+        command: &'a [String],
+        hermit_args: &'a [String],
+        scheduler: &'a SchedulerSpec,
+    ) -> ProcessSpec<'a> {
+        ProcessSpec {
+            target: "svc",
+            command,
+            env,
+            cwd: None,
+            hermit_args,
+            trial_timeout_secs: None,
+            scheduler,
+            hang_is_violation: false,
+            parallelism: 1,
+            pass_env: true,
+        }
+    }
+
+    #[test]
+    fn the_stored_command_names_the_passed_variables_and_never_a_value() {
+        let env = BTreeMap::from([("API_TOKEN".to_string(), "s3cret-value".to_string())]);
+        let command = vec!["./svc".to_string()];
+        let hermit_args = vec!["--base-env=minimal".to_string()];
+        let scheduler = SchedulerSpec::default();
+        let p = spec(&env, &command, &hermit_args, &scheduler);
+        let settings = HermitSettings {
+            events_file: true,
+            ..HermitSettings::default()
+        };
+        let line = line(&settings, &p, 41, &[]);
+        for name in [
+            "API_TOKEN",
+            "HAIRSPRING_SEED",
+            "HAIRSPRING_PROC",
+            "HAIRSPRING_EVENTS_FILE",
+            "PATH",
+        ] {
+            assert!(line.contains(&format!("--env={name} ")), "{name}: {line}");
+        }
+        assert!(!line.contains("s3cret-value"), "{line}");
+        assert!(!line.contains("--env=HAIRSPRING_SEED="), "{line}");
+        assert!(!line.contains("SEED=41"), "{line}");
+    }
+
+    #[test]
+    fn with_passing_off_the_stored_command_has_no_env_words() {
+        let env = BTreeMap::new();
+        let command = vec!["./svc".to_string()];
+        let hermit_args = vec!["--base-env=minimal".to_string()];
+        let scheduler = SchedulerSpec::default();
+        let p = ProcessSpec {
+            pass_env: false,
+            ..spec(&env, &command, &hermit_args, &scheduler)
+        };
+        let line = line(&HermitSettings::default(), &p, 1, &[]);
+        assert!(!line.contains("--env="), "{line}");
     }
 }
