@@ -749,6 +749,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "hairspring-check"
+version = "0.1.0"
+
+[[package]]
 name = "hairspring-cli"
 version = "0.1.0"
 dependencies = [
