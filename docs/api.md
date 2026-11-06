@@ -117,9 +117,10 @@ Role `read`. The targets this server's configuration and built-in registry defin
 - `backend` is the id of the backend that runs the target: `sim`, `wasm`, or for a `process` target the `backend` key
   of its config, `hermit` when it names none.
 - `capabilities` says what that backend can do: `replay`, `confirm`, `shrink`, `strict_verify`, `snapshot_branch`,
-  `fault_injection`, `multi_process`, each `true` or `false`. A flag is `true` only if the backend has the feature.
+  `fault_injection`, `multi_process`, each `true` or `false`. A flag is `true` only if the backend has the feature;
+  `snapshot_branch` means it is exposed to callers, which is `false` for every backend today, `sim` and `wasm` included.
   It describes the backend, not the machine the server runs on. The value is `null` when this server's engine has no
-  usable backend for the target (a worker that has one can still run it), so `null` means "not known here", not "no".
+  backend registered for the target (a worker that has one can still run it), so `null` means "not registered here", not "no".
 
 The MCP `list_targets` tool returns the same fields.
 

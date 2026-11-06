@@ -7,6 +7,7 @@
 //! Digests are kept, never served: a short value can be guessed from its digest. A reader is told which inputs were
 //! recorded and which were not, by name, and whether the reporter was trusted.
 use crate::{Result, Service, ServiceError};
+use hairspring_core::point::address::BackendKind;
 use hairspring_core::point::encoding::{escape_value, sha256_hex};
 use hairspring_core::point::input_hashes::{known_fields, InputHashes, MAX_INPUT_FIELDS};
 use hairspring_engine::engine::Engine;
@@ -65,7 +66,9 @@ fn check(sub: &RunInputsSubmission, run: &RunRecord) -> Result<()> {
     let Some(known) = known_fields(&sub.scheme) else {
         return Err(invalid("unknown input scheme"));
     };
-    if sub.scheme != format!("{}/1", run.backend) {
+    let belongs =
+        BackendKind::from_id(&run.backend).is_some_and(|kind| kind.scheme() == sub.scheme);
+    if !belongs {
         return Err(invalid("the inputs do not belong to this run's backend"));
     }
     if sub.fields.len() + sub.missing.len() > MAX_INPUT_FIELDS {

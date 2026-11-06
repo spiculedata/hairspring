@@ -190,6 +190,10 @@ fn a_hand_built_unknown_id_is_not_repeated_in_the_error() {
     let err = ran_on(&Engine::new(Arc::new(Registry::new()), config)).unwrap_err();
     assert!(!err.to_string().contains("zz-secret-marker"), "{err}");
     assert!(!err.to_string().contains('\n'), "{err}");
+    assert_eq!(
+        err.to_string(),
+        "backend choice refused: the named backend is not available in this build"
+    );
 }
 
 struct Described;

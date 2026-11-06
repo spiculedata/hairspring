@@ -69,9 +69,9 @@ first backend that can run this kind", so a second backend for the same kind cou
 
 A config without a `backend` key means what it meant before the key existed: every `process` target runs under Hermit.
 Naming `hermit` explicitly changes nothing. A value that is not an id of a backend that can run `process` targets is
-refused when the config is read (`unknown `backend` for a process target; known: hermit`), and the message does not
-repeat the value. When a config names a backend that this build does not have, the run stops with
-`backend choice refused: backend `hermit` is not available in this build`; the target is never moved to another
+refused when the config is read (`unknown `backend` for a process target; known: hermit`), and, for a string value, the message does not
+repeat the value (a value of another type gets the TOML library's snippet, as for every other key). When a config names a backend that this build does not have, the run stops with
+`backend choice refused: backend `hermit` is not available in this build` (a hand-built target naming an id this build does not know gets `the named backend is not available in this build`); the target is never moved to another
 backend. The same refusal covers two backends registered under one id (`more than one backend is registered as ...`)
 and a backend that cannot run the target's kind.
 
@@ -84,7 +84,7 @@ Each backend states, through the `Backend` trait, who it is and what it has:
 - **Identity:** `id`, a display name and a version (the version of the crate that implements it; the version and hash
   of an external program only where they are known without running anything, which is not the case for Hermit today).
 - **Capabilities,** all `false` unless the backend really has the feature: `replay`, `confirm`, `shrink`,
-  `strict_verify`, `snapshot_branch`, `fault_injection`, `multi_process`. They describe the backend, not the host:
+  `strict_verify`, `snapshot_branch` (exposed to callers: `false` for every backend today, including `sim` and `wasm`), `fault_injection`, `multi_process`. They describe the backend, not the host:
   a Hermit target on macOS still lists `confirm: true`, and still cannot run there.
 - **Limits,** `null` unless the backend states one: `max_parallelism` and `max_trial_seconds`.
 

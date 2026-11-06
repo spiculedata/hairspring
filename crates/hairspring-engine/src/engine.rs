@@ -48,7 +48,7 @@ impl Engine {
         self.backends.iter().map(|b| b.info()).collect()
     }
 
-    /// What the backend that runs `spec` says about itself, or `None` when this engine has no usable backend for it.
+    /// What the backend that runs `spec` says about itself, or `None` when this engine has no backend registered for it.
     pub fn backend_info(&self, spec: &TargetSpec) -> Option<BackendInfo> {
         self.backend_for(spec).ok().map(|b| b.info())
     }
@@ -58,23 +58,29 @@ impl Engine {
     fn backend_for(&self, spec: &TargetSpec) -> Result<&Arc<dyn Backend>, EngineError> {
         let id = spec.kind.backend_id();
         // Only an id this build knows is repeated in a message: the id of a hand-built spec is not trusted text.
-        let shown = if BackendKind::from_id(id).is_some() {
+        let known = BackendKind::from_id(id).is_some();
+        let shown = if known {
+            format!("backend `{id}`")
+        } else {
+            "the named backend".to_string()
+        };
+        let registered_as = if known {
             format!("`{id}`")
         } else {
-            "the one named".to_string()
+            "the named id".to_string()
         };
         let mut named = self.backends.iter().filter(|b| b.id() == id);
         let backend = named.next().ok_or_else(|| {
-            EngineError::BackendChoice(format!("backend {shown} is not available in this build"))
+            EngineError::BackendChoice(format!("{shown} is not available in this build"))
         })?;
         if named.next().is_some() {
             return Err(EngineError::BackendChoice(format!(
-                "more than one backend is registered as {shown}"
+                "more than one backend is registered as {registered_as}"
             )));
         }
         if !backend.supports(&spec.kind) {
             return Err(EngineError::BackendChoice(format!(
-                "backend {shown} cannot run {} targets",
+                "{shown} cannot run {} targets",
                 spec.kind.name()
             )));
         }

@@ -184,7 +184,7 @@ Hairspring now adds one `--env=NAME` for each of these variables when it can:
 
 The target key `pass_env` (a boolean on `kind = "process"` targets, default `true`) controls this. `pass_env = false`
 gives the command line and the guest environment that earlier versions produced, in every mode. It is refused on
-`sim` and `wasm` targets. The setting is part of the target's listing in the API.
+`sim` and `wasm` targets.
 
 What it changes for results. The launch environment is an input to a schedule (see above), so a target that uses
 `--base-env=minimal` or `empty` now starts its program from a different environment and can follow different

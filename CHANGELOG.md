@@ -6,14 +6,15 @@
 
 - Backends are now chosen by id. A `process` target may carry an optional `backend` key; without it the target runs
   under Hermit, as before, and every existing config means what it did. `"hermit"` is the only value accepted today; any
-  other value is refused when the config is read, and the message does not repeat it. A target is never moved to
+  other value is refused when the config is read, and, for a string value, the message does not repeat it (a value of another type gets the TOML library's snippet, as for every other key). A target is never moved to
   another backend when the one it names is missing: the run stops with `backend choice refused: ...`. Two backends
   registered under one id, or a backend that cannot run the target's kind, are refused the same way.
 - Each backend now states its identity (id, display name, version), its capabilities (`replay`, `confirm`, `shrink`,
   `strict_verify`, `snapshot_branch`, `fault_injection`, `multi_process`, all `false` unless the backend has the
   feature) and its limits. `GET /api/targets` and the MCP `list_targets` tool add `backend` and `capabilities` to each
-  target; `capabilities` is `null` when the server's engine has no usable backend for the target. The existing
-  fields are unchanged.
+  target; `capabilities` is `null` when the server's engine has no backend registered for the target (not "no capabilities"). A flag
+  `snapshot_branch` means the feature is exposed to callers, which no backend does today. The existing fields are
+  unchanged.
 - Confirming a failure from the web UI or the API, off by default. `hairspring serve --max-confirmations N` (0 to 4,
   default 0) turns on `POST /api/failures/{id}/confirm` for the `run` role. It runs the confirmation pipeline on the
   server's own engine with the defaults of `hairspring confirm` (3 reruns, 120 seconds) and stores the checks the same
