@@ -28,5 +28,9 @@ Every result above except Java's was measured on this configuration and no other
 - Measured between 2026-10-21 and 2026-10-25 (Java: see below).
 - Java used `skid_margin = 35` and the JVM flags above.
 - Java was measured on 2026-10-26 and 2026-10-27.
+- These results were measured before Hairspring passed its own variables (`HAIRSPRING_SEED`, `HAIRSPRING_PROC`, the
+  events-file path, the pinned `PATH`, `LANG`, `LC_ALL` and `TZ`) and the target's `env` to programs run with
+  `--base-env=minimal`. That configuration is `pass_env = false` on the target. The default is now `pass_env = true`,
+  which has not been through the acceptance test yet.
 
 The results apply only to that configuration. We make no claim about other hosts, kernels or Hermit builds.
