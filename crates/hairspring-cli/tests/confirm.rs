@@ -399,3 +399,46 @@ fn a_stored_failure_whose_bundle_is_for_another_target_is_refused_by_failure_id_
     let ok = p.run(&["confirm", &p.run_id]);
     assert_eq!(ok.status.code(), Some(1), "{}", text(&ok));
 }
+
+#[test]
+fn confirming_a_run_goes_on_past_a_refused_failure_and_exits_with_an_error_at_the_end() {
+    use hairspring_store::{NewFailure, SqliteStore, Store};
+    // Arrange: the run's real failure, plus a forged one added to the same run that is listed before it.
+    const FAR_FUTURE_MS: i64 = 9_999_999_999_999;
+    let p = project("run-refusal");
+    let store =
+        SqliteStore::open(&p.dir.join(".hairspring/hairspring.db")).expect("the store opens");
+    let bundle = std::fs::read(&p.bundle_file).expect("the bundle file");
+    let hash = store.put_blob(&bundle).unwrap();
+    let forged = store
+        .add_failure(
+            &NewFailure {
+                run_id: p.run_id.clone(),
+                target: "good".into(),
+                message: "m".into(),
+                original_len: 1,
+                shrunk_len: 1,
+                bundle_hash: hash,
+                steps_json: "[]".into(),
+            },
+            FAR_FUTURE_MS,
+        )
+        .unwrap();
+    drop(store);
+
+    // Act
+    let o = p.run(&["confirm", &p.run_id]);
+
+    // Assert: the forged one is reported as refused in fixed words, the real one was confirmed after it, and the
+    // exit status is an error (2) or worse, not the 1 that "the failure repeats" would give.
+    let out = text(&o);
+    assert!(
+        out.contains(&format!(
+            "failure {}: not confirmed: the failure's bundle is for a different target, so it cannot be confirmed",
+            forged.id
+        )),
+        "{out}"
+    );
+    assert!(out.contains("finding: confirmed"), "{out}");
+    assert!(o.status.code().is_some_and(|c| c >= 2), "{out}");
+}

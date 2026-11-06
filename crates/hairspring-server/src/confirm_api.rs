@@ -194,14 +194,38 @@ fn run(s: &AppState, mut running: Running, id: &str, who: &str) {
         Ok(checks) => {
             running.succeeded = true;
             eprintln!(
-                "hairspring-server: confirmation of {id} by {who} finished: {}",
-                checks.finding
+                "hairspring-server: confirmation of {id} by {who} {}",
+                outcome_text(&checks)
             );
         }
         Err(e) => eprintln!(
             "hairspring-server: confirmation of {id} by {who} ended with an error: {}",
             public_text(&e.to_string())
         ),
+    }
+}
+
+/// How the confirmation that has just ended went, in words for the log, from its own checks: "finished" when every
+/// check ran, or why it stopped early (`cancelled`, `wall budget exhausted`). The failure's finding, which comes from
+/// the newest confirmation that finished and so can be an earlier one, is given beside it and is not the outcome.
+fn outcome_text(checks: &hairspring_service::FailureChecks) -> String {
+    let newest = checks.checks.last().map(|c| c.confirmation_id.as_str());
+    let own = || {
+        checks
+            .checks
+            .iter()
+            .filter(move |c| Some(c.confirmation_id.as_str()) == newest)
+    };
+    let stopped = own().find_map(|c| {
+        c.guest
+            .detail
+            .get("stopped")
+            .or_else(|| c.guest.detail.get("skipped"))
+    });
+    let finding = &checks.finding;
+    match stopped {
+        Some(why) => format!("stopped early: {why}; the failure's finding is {finding}"),
+        None => format!("finished; the failure's finding is {finding}"),
     }
 }
 
@@ -289,5 +313,85 @@ mod tests {
         }
 
         assert_eq!(confirms.attempts().len(), MAX_REMEMBERED_FAILURES);
+    }
+
+    fn view(
+        confirmation: &str,
+        status: &str,
+        detail: &[(&str, &str)],
+    ) -> hairspring_service::CheckView {
+        hairspring_service::CheckView {
+            id: "chk".into(),
+            confirmation_id: confirmation.into(),
+            ordinal: 0,
+            kind: "same_seed_rerun".into(),
+            status: status.into(),
+            counts: hairspring_engine::confirm::CheckCounts {
+                passed: 0,
+                failed: 0,
+                inconclusive: 0,
+            },
+            artefacts: vec![],
+            environment: Default::default(),
+            started_at: 0,
+            finished_at: 0,
+            runner_trusted: true,
+            created_at: 0,
+            guest: hairspring_service::CheckGuest {
+                command: String::new(),
+                detail: detail
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+            },
+        }
+    }
+
+    fn checks(
+        finding: &str,
+        list: Vec<hairspring_service::CheckView>,
+    ) -> hairspring_service::FailureChecks {
+        hairspring_service::FailureChecks {
+            failure_id: A.into(),
+            finding: finding.into(),
+            confirmation_id: Some("conf_old".into()),
+            environment_pinned: false,
+            checks: list,
+        }
+    }
+
+    #[test]
+    fn a_cancelled_confirmation_is_logged_as_stopped_not_as_the_finding_of_an_earlier_one() {
+        let list = vec![
+            view("conf_old", "pass", &[]),
+            view("conf_new", "inconclusive", &[("stopped", "cancelled")]),
+            view("conf_new", "skipped", &[("skipped", "cancelled")]),
+        ];
+
+        let text = outcome_text(&checks("confirmed", list));
+
+        assert_eq!(
+            text,
+            "stopped early: cancelled; the failure's finding is confirmed"
+        );
+    }
+
+    #[test]
+    fn a_confirmation_that_ran_every_check_is_logged_as_finished() {
+        let list = vec![view("conf_new", "pass", &[]), view("conf_new", "pass", &[])];
+
+        let text = outcome_text(&checks("confirmed", list));
+
+        assert_eq!(text, "finished; the failure's finding is confirmed");
+    }
+
+    #[test]
+    fn an_earlier_confirmations_stop_is_not_attributed_to_the_newest() {
+        let list = vec![
+            view("conf_old", "skipped", &[("skipped", "cancelled")]),
+            view("conf_new", "pass", &[]),
+        ];
+
+        assert!(outcome_text(&checks("rerun_repeated", list)).starts_with("finished;"));
     }
 }

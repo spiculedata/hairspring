@@ -9,7 +9,9 @@ use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
-const FAKE_HERMIT: &str = "#!/bin/sh\n[ \"$1\" = \"--version\" ] && { echo 'fake-hermit 0.0'; exit 0; }\nshift\nseed=0\nwhile [ \"$1\" != \"--\" ]; do case \"$1\" in --sched-seed=*) seed=${1#--sched-seed=};; esac; shift; done\nshift\nFAKE_SCHED_SEED=$seed exec \"$@\"\n";
+/// The Hermit every test uses; it only waits while a file named `sleep` is beside it, so it is the same file (and the
+/// same recorded identity) before and after a test makes it slow.
+const FAKE_HERMIT: &str = SLOW_HERMIT;
 const PROJECT: &str = "[target.svc]\nkind = \"process\"\ncommand = [\"/bin/sh\", \"-c\", \"[ $((FAKE_SCHED_SEED % 5)) -eq 3 ] && { echo 'HAIRSPRING_VIOLATION: lost update'; exit 1; }; echo ok\"]\n[target.svc.budget]\nmax_trials = 20\n";
 const RUN: &str = "run-token-0123456789abcdef";
 const READ: &str = "read-token-0123456789abcdef";
@@ -255,7 +257,7 @@ fn wait_for_exit(child: &mut Child, limit: Duration) -> Option<std::process::Exi
 
 /// A Hermit that takes two seconds to start while a file named `sleep` sits beside it, and leaves a file named
 /// `started` when it does.
-const SLOW_HERMIT: &str = "#!/bin/sh\n[ \"$1\" = \"--version\" ] && { echo 'fake-hermit 0.0'; exit 0; }\n[ -f \"$(dirname \"$0\")/sleep\" ] && { touch \"$(dirname \"$0\")/started\"; sleep 2; }\nshift\nseed=0\nwhile [ \"$1\" != \"--\" ]; do case \"$1\" in --sched-seed=*) seed=${1#--sched-seed=};; esac; shift; done\nshift\nFAKE_SCHED_SEED=$seed exec \"$@\"\n";
+const SLOW_HERMIT: &str = "#!/bin/sh\n[ \"$1\" = \"--version\" ] && { echo 'fake-hermit 0.0'; exit 0; }\n[ -f \"$(dirname \"$0\")/sleep\" ] && { echo $$ > \"$(dirname \"$0\")/hermit.pid\"; touch \"$(dirname \"$0\")/started\"; sleep 2; }\nshift\nseed=0\nwhile [ \"$1\" != \"--\" ]; do case \"$1\" in --sched-seed=*) seed=${1#--sched-seed=};; esac; shift; done\nshift\nFAKE_SCHED_SEED=$seed exec \"$@\"\n";
 
 #[test]
 fn ctrl_c_stops_a_running_confirmation_promptly_and_stores_the_rest_as_skipped() {
@@ -272,7 +274,6 @@ fn stops_a_running_confirmation_on(signal: &str, name: &str) {
     // Arrange: a stored failure, then a Hermit that takes two seconds per start, so a whole confirmation (three
     // reruns and a replay) would take about eight.
     let (dir, hermit) = project(name);
-    std::fs::write(&hermit, SLOW_HERMIT).unwrap();
     let (mut server, base, _errors) =
         serve(&dir, &hermit, &["--max-confirmations", "1"], &tokens());
     let failure = the_failure(&base);
@@ -385,4 +386,82 @@ fn a_server_without_hermit_answers_with_stored_inconclusive_checks_and_does_not_
         !all.is_empty() && all.iter().all(|c| c["status"] == "inconclusive"),
         "{checks}"
     );
+}
+
+#[test]
+fn a_stop_that_also_kills_the_running_hermit_does_not_withdraw_a_confirmed_finding() {
+    // Arrange: a failure confirmed once (so the finding is "confirmed"), then a slow Hermit for the second.
+    let (dir, hermit) = project("group-kill");
+    let (mut server, base, errors) = serve(&dir, &hermit, &["--max-confirmations", "1"], &tokens());
+    let failure = the_failure(&base);
+    let post = || {
+        http(
+            "POST",
+            &format!("{base}/api/failures/{failure}/confirm"),
+            RUN,
+        )
+    };
+    assert_eq!(post().0, 202);
+    wait_idle(&base, &failure);
+    let before = json(
+        &http(
+            "GET",
+            &format!("{base}/api/failures/{failure}/checks"),
+            READ,
+        )
+        .1,
+    );
+    assert_eq!(before["finding"], "confirmed", "{before}");
+    std::fs::write(dir.join("sleep"), "").unwrap();
+    assert_eq!(post().0, 202);
+    let started = dir.join("started");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !started.exists() {
+        assert!(Instant::now() < deadline, "the confirmation never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // Act: SIGTERM to the server and to the Hermit it started, in one call, as systemd's default control-group stop does
+    // (the Hermit is not in the server's process group, so the test names it by the pid it wrote).
+    let hermit_pid = std::fs::read_to_string(dir.join("hermit.pid")).expect("the pid file");
+    let sent = Command::new("kill")
+        .args(["-TERM", &server.0.id().to_string(), hermit_pid.trim()])
+        .status()
+        .expect("kill runs");
+    assert!(sent.success());
+    assert!(wait_for_exit(&mut server.0, Duration::from_secs(30)).is_some());
+    // The log says the confirmation was stopped, not that it "finished: confirmed" on the strength of an earlier one.
+    let mut log = Vec::new();
+    while let Ok(line) = errors.recv_timeout(Duration::from_secs(3)) {
+        log.push(line);
+    }
+    assert!(
+        log.iter()
+            .any(|l| l.contains(&format!("confirmation of {failure} by"))
+                && l.contains("stopped early: cancelled")),
+        "{log:?}"
+    );
+
+    // Assert: the run that was cut is stored inconclusive and the finding is where the first confirmation left it.
+    std::fs::remove_file(dir.join("sleep")).unwrap();
+    let (_second, base2, _) = serve(&dir, &hermit, &["--max-confirmations", "1"], &tokens());
+    let after = json(
+        &http(
+            "GET",
+            &format!("{base2}/api/failures/{failure}/checks"),
+            READ,
+        )
+        .1,
+    );
+    // eprintln!("DEBUG {:?}", after["checks"].as_array().unwrap().iter().map(|c| (c["confirmation_id"].as_str().unwrap()[..9].to_string(), c["kind"].to_string(), c["status"].to_string(), c["guest"]["detail"].to_string())).collect::<Vec<_>>());
+    assert_eq!(after["finding"], "confirmed", "{after}");
+    let all = after["checks"].as_array().unwrap();
+    let newest = all.last().unwrap()["confirmation_id"].clone();
+    let of_newest: Vec<&Value> = all
+        .iter()
+        .filter(|c| c["confirmation_id"] == newest)
+        .collect();
+    assert_ne!(newest, after["confirmation_id"], "{after}");
+    assert!(of_newest.iter().all(|c| c["status"] != "fail"), "{after}");
+    assert_eq!(of_newest[0]["status"], "inconclusive", "{after}");
 }

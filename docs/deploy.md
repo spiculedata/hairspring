@@ -276,6 +276,8 @@ ExecStart=/usr/local/bin/hairspring serve \
     --workers 0
 Restart=on-failure
 RestartSec=5
+# Send SIGTERM to the server only, not to every process in the unit (see below).
+KillMode=mixed
 # Well above --max-connections (512 by default) plus 128.
 LimitNOFILE=4096
 # Sandboxing: the process may write only to its data directory.
@@ -289,10 +291,17 @@ ReadWritePaths=/var/lib/hairspring
 WantedBy=multi-user.target
 ```
 
-systemd stops the unit with SIGTERM by default, and `hairspring serve` treats SIGTERM like Ctrl-C: it stops accepting
-requests, ends a confirmation that is running between checks (the run in progress finishes, which takes up to the
-target's trial time; its check is stored inconclusive and the rest skipped), and exits. Leave `TimeoutStopSec` at its
-default or raise it above your targets' trial timeout, or systemd will send SIGKILL first and nothing is stored.
+systemd stops the unit with SIGTERM, and `hairspring serve` treats SIGTERM like Ctrl-C: it stops accepting requests,
+ends a confirmation that is running between checks, and exits. With the default `KillMode=control-group` systemd sends
+that SIGTERM to every process in the unit at once, so the Hermit run in progress is killed too. The server records a run
+that ends that way as inconclusive ("stopped: cancelled"), never as a miss, so a stop cannot withdraw a confirmed
+finding; but the confirmation is cut short and its check carries no result. With `KillMode=mixed`, as in the unit above,
+SIGTERM goes to the server alone: the run in progress finishes (which takes up to the target's trial time), its check is
+stored with the checks that finished, the rest are skipped, and the server exits. Any processes still left after that
+get SIGKILL, so keep `TimeoutStopSec` at its default or raise it above your targets' trial timeout, or systemd will
+send SIGKILL first and nothing is stored. The unit was edited for `KillMode=mixed` after `systemd-analyze verify` was
+run on it, and was not run through systemd again; the behaviour of both modes is from systemd's documentation, and was
+checked here only with a test that signals the server and a fake Hermit together.
 
 `/etc/hairspring/tokens` must be owned by the `hairspring` user and readable by nobody else (mode 600), as created in
 [the token section](#3-create-tokens). The server listens on loopback; the worker's `--server` address is the proxy's

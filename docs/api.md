@@ -157,8 +157,11 @@ sends no body and chooses nothing but the failure: the reruns and the wall-clock
 - **At most one at a time per failure, and at most N at once.** A second request for a failure that already has
   one running is `409`; a request when all N are running is `429` with `Retry-After`. Nothing is queued. A
   confirmation keeps its slot until it ends, even if the client goes away. Stopping `hairspring serve` with Ctrl-C
-  or SIGTERM (what systemd sends by default) ends a confirmation between checks: the run in progress finishes, that
-  check is stored inconclusive (cancelled) and the rest are recorded as skipped. The server then exits.
+  or SIGTERM (what systemd sends) ends a confirmation between checks: the run in progress finishes, that check is
+  stored inconclusive (cancelled) and the rest are recorded as skipped. The server then exits. A run that the stop
+  itself cut short, for example because systemd also signalled the Hermit process, is recorded the same way,
+  inconclusive and never as a miss, so a stop does not change a failure's finding; see
+  [deploy.md](deploy.md#7-keep-it-running-a-systemd-unit) for `KillMode=mixed`.
 - The server logs one line when it starts and one when it ends, naming the failure id and the caller as
   `label (t:<key>)` (or the key alone), never the token.
 

@@ -432,7 +432,102 @@ fn a_later_confirmation_whose_every_check_is_inconclusive_moves_a_confirmed_fail
     );
 }
 
+/// A Hermit that runs the guest directly, but while a file named `cut` sits beside it, leaves a file named `started`
+/// and kills itself with SIGTERM: what a service manager's stop does to a run that is in progress.
+const CUTTABLE_HERMIT: &str = "#!/bin/sh\n[ \"$1\" = \"--version\" ] && { echo 'fake-hermit 0.0'; exit 0; }\n[ -f \"$(dirname \"$0\")/cut\" ] && { touch \"$(dirname \"$0\")/started\"; kill -TERM $$; }\nshift\nwhile [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n";
+
+#[test]
+fn a_run_cut_short_by_the_stop_is_stored_inconclusive_and_an_earlier_confirmed_finding_stays() {
+    // Arrange: a stored failure, confirmed once on an engine whose Hermit can be made to die of SIGTERM mid-run.
+    let (svc, _, _) = setup();
+    let host = scratch("host-cut");
+    put(&host, "etc/ld.so.cache", "cache-one");
+    let bin_dir = scratch("bin-cut");
+    let bin = bin_dir.join("fake-hermit");
+    std::fs::write(&bin, CUTTABLE_HERMIT).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let engine = engine_with_bin(&host, FAILING_GUEST, bin);
+    let run = svc
+        .run_sync(
+            &engine,
+            &StartRun {
+                target: "svc".into(),
+                seed: Some(1),
+                budget: None,
+            },
+        )
+        .unwrap();
+    let failure = run.failures[0].id.clone();
+    assert_eq!(confirm(&svc, &engine, &failure).finding, "confirmed");
+
+    // Act: the stop arrives while a rerun is running. The caller's stop flag is set at the same moment the Hermit
+    // process is killed, as `systemctl stop` does to the service and its processes together.
+    std::fs::write(bin_dir.join("cut"), "").unwrap();
+    let started = bin_dir.join("started");
+    let after = svc
+        .confirm_failure(&engine, &failure, &ConfirmRequest::default(), &mut |_| {
+            !started.exists()
+        })
+        .unwrap();
+
+    // Assert: the cut run is not a verdict about the program. The finding stays where the earlier confirmation put it,
+    // and the cut confirmation's own checks are inconclusive (the one that was cut) or skipped (the rest).
+    assert_eq!(after.finding, "confirmed", "{:?}", after.checks);
+    let newest = after.checks.last().expect("checks").confirmation_id.clone();
+    let of_newest: Vec<_> = after
+        .checks
+        .iter()
+        .filter(|c| c.confirmation_id == newest)
+        .collect();
+    assert_ne!(Some(&newest), after.confirmation_id.as_ref());
+    assert_eq!(of_newest[0].kind, "same_seed_rerun");
+    assert_eq!(of_newest[0].status, "inconclusive", "{:?}", of_newest[0]);
+    assert!(
+        of_newest[0].guest.detail["inconclusive"].contains("cancelled"),
+        "{:?}",
+        of_newest[0]
+    );
+    assert!(of_newest.iter().skip(1).all(|c| c.status == "skipped"));
+    assert!(of_newest.iter().all(|c| c.status != "fail"));
+}
+
+#[test]
+fn a_run_cut_short_by_the_stop_does_not_turn_a_never_confirmed_failure_into_not_reproducible() {
+    let (svc, _, _) = setup();
+    let host = scratch("host-cut-first");
+    put(&host, "etc/ld.so.cache", "cache-one");
+    let bin_dir = scratch("bin-cut-first");
+    let bin = bin_dir.join("fake-hermit");
+    std::fs::write(&bin, CUTTABLE_HERMIT).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let engine = engine_with_bin(&host, FAILING_GUEST, bin);
+    let run = svc
+        .run_sync(
+            &engine,
+            &StartRun {
+                target: "svc".into(),
+                seed: Some(1),
+                budget: None,
+            },
+        )
+        .unwrap();
+    let failure = run.failures[0].id.clone();
+    std::fs::write(bin_dir.join("cut"), "").unwrap();
+    let started = bin_dir.join("started");
+
+    let after = svc
+        .confirm_failure(&engine, &failure, &ConfirmRequest::default(), &mut |_| {
+            !started.exists()
+        })
+        .unwrap();
+
+    assert_eq!(after.finding, "candidate", "{:?}", after.checks);
+    assert!(after.checks.iter().all(|c| c.status != "fail"));
+}
+
 /// A stored failure of target `svc` whose bundle text is `bundle`, on a service whose engine has process target `svc`.
+const MISSING_BLOB: &str = "<no blob>";
+
 fn failure_with_bundle(bundle: &str) -> (Service, Engine, String) {
     failure_stored_under("svc", bundle)
 }
@@ -455,7 +550,12 @@ fn failure_stored_under(target: &str, bundle: &str) -> (Service, Engine, String)
             1,
         )
         .unwrap();
-    let hash = store.put_blob(bundle.as_bytes()).unwrap();
+    let hash = if bundle == MISSING_BLOB {
+        // A hash no blob has: what is left after a blob was lost or the failure was written without one.
+        "0".repeat(64)
+    } else {
+        store.put_blob(bundle.as_bytes()).unwrap()
+    };
     let failure = store
         .add_failure(
             &hairspring_store::NewFailure {
@@ -533,6 +633,24 @@ fn confirming_a_stored_failure_refuses_a_bundle_for_another_target_whatever_the_
         let stored = svc.failure_checks(&failure).unwrap().unwrap();
         assert!(stored.checks.is_empty());
         assert_eq!(stored.finding, "candidate");
+    }
+}
+
+#[test]
+fn a_failure_whose_bundle_blob_is_missing_is_refused_in_fixed_words_by_both_paths() {
+    let (svc, engine, failure) = failure_with_bundle(MISSING_BLOB);
+    let words = "the failure's bundle cannot be read, so it cannot be confirmed";
+
+    let guard = svc.check_confirmable(&engine, &failure).unwrap_err();
+    let confirm = svc
+        .confirm_failure(&engine, &failure, &ConfirmRequest::default(), &mut |_| true)
+        .unwrap_err();
+
+    for err in [guard, confirm] {
+        assert!(
+            matches!(&err, ServiceError::InvalidRequest(t) if t == words),
+            "{err}"
+        );
     }
 }
 

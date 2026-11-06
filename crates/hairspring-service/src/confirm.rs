@@ -117,14 +117,19 @@ impl Service {
         progress: &mut dyn FnMut(Progress) -> bool,
     ) -> Result<FailureChecks> {
         checked_failure_id(failure_id)?;
-        let detail = self
+        let record = self
+            .store
             .get_failure(failure_id)?
             .ok_or_else(|| ServiceError::NotFound(format!("failure {failure_id}")))?;
+        // A bundle that is not stored is not "internal": say so in the fixed words the server uses for it.
+        let bundle = self
+            .get_bundle(&record.bundle_hash)?
+            .ok_or_else(|| ServiceError::InvalidRequest(BUNDLE_UNREADABLE_REFUSAL.to_string()))?;
         // Every way to confirm a stored failure comes through here, so this is where the bundle must be shown to be
         // for the failure's own target: the engine reruns the bundle's target, and the result is stored against the
         // failure. Data stored before the server checked this on ingest can hold a mismatch.
-        require_own_target(&detail.record.target, &detail.bundle)?;
-        let checks = self.confirm_bundle(engine, &detail.bundle, req, progress)?;
+        require_own_target(&record.target, &bundle)?;
+        let checks = self.confirm_bundle(engine, &bundle, req, progress)?;
         self.record_confirmation(failure_id, &Service::local_worker_id(), true, &checks)?;
         self.failure_checks(failure_id)?
             .ok_or_else(|| ServiceError::NotFound(format!("failure {failure_id}")))
