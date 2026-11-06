@@ -48,7 +48,7 @@ bash scripts/install.sh --with-ui      # builds the web UI (needs Node.js and np
 # Leave --with-ui out for a build without the web UI: the server then shows a placeholder page.
 ```
 
-You need Rust and a C compiler and linker for that (see [quickstart.md](quickstart.md#what-you-need)). A pre-release
+You need Rust 1.96 or newer, a C compiler and linker, and for `--with-ui` Node.js 20.19 or newer (or 22.12 or newer) with npm (see [quickstart.md](quickstart.md#what-you-need)). A pre-release
 binary is checked against the release's `SHA256SUMS` before it is installed, which catches a damaged download but does
 not prove who built it; to pin a hash you got another way, pass `--sha256` to the installer.
 

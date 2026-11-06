@@ -1,8 +1,7 @@
 name: Pages
 
-# Publishes site/ to GitHub Pages. It needs Pages to be switched on for the repository first
-# (Settings > Pages > Build and deployment > Source: GitHub Actions). Until then the deploy job fails with
-# GitHub's own error; nothing else is affected.
+# Publishes site/ to GitHub Pages (Settings > Pages > Build and deployment > Source: GitHub Actions).
+# The site check runs first, so a broken page is never deployed.
 on:
   push:
     branches: [main]

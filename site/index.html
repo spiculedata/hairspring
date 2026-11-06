@@ -153,7 +153,7 @@ footer.site p { max-width: 42rem; }
     <p class="lede">Hairspring uses deterministic simulation. It explores many executions of a system, finds the rare interleaving that breaks a property, shrinks it to a short trace, and gives you a bundle that replays the failure.</p>
     <p class="status">Experimental, open source (Apache-2.0), and it runs on your laptop or your own servers.</p>
     <div class="buttons">
-      <a class="btn" href="#try">Try it in two minutes</a>
+      <a class="btn" href="#try">Try it</a>
       <a class="btn secondary" href="https://github.com/spiculedata/hairspring">View on GitHub</a>
     </div>
   </div>
@@ -235,8 +235,8 @@ footer.site p { max-width: 42rem; }
 
 <section id="try" class="alt" aria-labelledby="try-h">
   <div class="wrap">
-    <h2 id="try-h">Try it in two minutes</h2>
-    <p>This uses the built-in simulation targets, so it works on macOS and Linux with no other setup. It builds the CLI and the web UI from source, which needs a Rust toolchain with a C compiler and linker, and Node.js with npm for the web UI.</p>
+    <h2 id="try-h">Try it on your machine</h2>
+    <p>This uses the built-in simulation targets, so it works on macOS and Linux without Hermit or special hardware. It builds the CLI and the web UI from source. That needs a stable Rust toolchain, 1.96 or newer (<a href="https://rustup.rs">rustup</a> keeps it current), with a C compiler and linker, and Node.js 20.19 or newer (or 22.12 or newer) with npm. The first build compiles a few hundred crates and can take several minutes.</p>
 
     <h3>1. Install</h3>
     <div class="codeblock copyable">
@@ -252,7 +252,7 @@ pubsub-atomic: deterministic over 8 seeds x 200 steps
 pubsub-buggy: deterministic over 8 seeds x 200 steps</code></pre>
     </div>
     <p>On a Mac the second command reports that the process backend cannot run there. That is expected, and the simulation and WebAssembly backends are not affected.</p>
-    <p class="step-note">Without <code>--with-ui</code> the server shows a placeholder page instead of the web UI. To install a pre-release binary instead (the sha256 is checked against the release&rsquo;s <code>SHA256SUMS</code> first), use <code>bash scripts/install.sh --version v0.1-RC1</code>; it is older than <code>main</code> and its web UI differs, see <a href="https://github.com/spiculedata/hairspring/blob/main/docs/upgrading.md">upgrading</a>.</p>
+    <p class="step-note">Without <code>--with-ui</code> the server shows a placeholder page instead of the web UI. To install a pre-release binary instead (the sha256 is checked against the release&rsquo;s <code>SHA256SUMS</code> first), use <code>bash scripts/install.sh --version v0.1-RC1</code>; it is older than <code>main</code>: it lacks some command-line options and the Confirmation section of the web UI. <a href="https://github.com/spiculedata/hairspring/blob/main/docs/upgrading.md">Upgrading</a> lists the command-line differences.</p>
 
     <h3>2. Find a bug and shrink it</h3>
     <p><code>pubsub-buggy</code> is a built-in model of an at-least-once consumer that can apply a message twice.</p>

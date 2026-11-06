@@ -4,9 +4,11 @@
 Checks, for every .html file: a <title>, exactly one <h1> (404.html included), local links, anchors and assets that
 resolve, <img> with alt, width and height, no inline event handlers, and no external asset: nothing that makes the
 browser fetch from another origin. That covers script, img, source, iframe, video, audio, track, embed, object and
-input src or data attributes, link elements other than canonical and alternate (stylesheet, icon, preload, preconnect,
-manifest and so on), and url(...) and @import with an http(s) or protocol-relative address in <style> text and in style
-attributes. Plain <a href> links to other sites are allowed, as are canonical and Open Graph URLs.
+input src or data attributes, SVG image and use href, <base href>, <meta http-equiv="refresh"> with a URL, link
+elements other than canonical and alternate (stylesheet, icon, preload, preconnect, manifest and so on), and url(...)
+and @import with an http(s) or protocol-relative address in <style> text and in style attributes. Plain <a href>
+links to other sites are allowed, as are canonical and Open Graph URLs. It looks for external asset references in
+those tags and in CSS only: it does not read inline scripts (fetch(), dynamic imports) or CSS image-set().
 Also checks the size budget (HTML, CSS and JS together; images are counted separately), and that 404.html,
 robots.txt and index.html exist (robots.txt is harmless and stays so a crawler never has to guess).
 
@@ -29,6 +31,9 @@ ASSET_SRC_TAGS = {"script", "img", "source", "iframe", "video", "audio", "track"
 # <link rel> values that name a document, not something the browser fetches while rendering.
 NON_ASSET_LINK_RELS = {"canonical", "alternate", "author", "license", "help", "next", "prev"}
 CSS_URL = re.compile(r"url\(\s*(?:\"([^\"]*)\"|'([^']*)'|([^)\"'\s]*))\s*\)|@import\s+(?:\"([^\"]*)\"|'([^']*)')", re.I)
+
+
+META_REFRESH_URL = re.compile(r"url\s*=\s*(.+)$", re.I)
 
 
 class PageParser(HTMLParser):
@@ -66,6 +71,14 @@ class PageParser(HTMLParser):
                 for part in (a.get(attr) or "").split(","):
                     if part.strip():
                         self.refs.append((tag, attr, part.strip().split()[0]))
+        if tag in ("image", "use", "base"):
+            for attr in ("href", "xlink:href"):
+                if a.get(attr):
+                    self.refs.append((tag, attr, a[attr]))
+        if tag == "meta" and (a.get("http-equiv") or "").lower() == "refresh":
+            match = META_REFRESH_URL.search(a.get("content") or "")
+            if match:
+                self.refs.append((tag, "content", match.group(1).strip("'\" ")))
         if tag == "object" and a.get("data"):
             self.refs.append((tag, "data", a["data"]))
         if tag == "link" and a.get("href"):
