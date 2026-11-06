@@ -1,0 +1,3 @@
+# Allows everything. Harmless without a sitemap; scripts/check-site.py requires the file to exist.
+User-agent: *
+Allow: /

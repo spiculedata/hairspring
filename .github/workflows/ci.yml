@@ -452,6 +452,11 @@ jobs:
         run: bash scripts/install.sh --dry-run
       - name: Docker test plan
         run: bash scripts/test-install-docker.sh --dry-run
+      # The static landing page in site/: links, images, titles, no external assets, size budget.
+      - name: Landing page check
+        run: python3 scripts/check-site.py site
+      - name: Landing page check tests
+        run: bash scripts/test-check-site.sh
 
   # The install path on clean Ubuntu images, including the slow Hermit build from source. Manual only. Hermit cannot run
   # in a container without performance counters, so the test also checks that `check` and `doctor --process-backend` say
