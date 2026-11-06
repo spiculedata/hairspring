@@ -157,10 +157,12 @@ sends no body and chooses nothing but the failure: the reruns and the wall-clock
 - **At most one at a time per failure, and at most N at once.** A second request for a failure that already has
   one running is `409`; a request when all N are running is `429` with `Retry-After`. Nothing is queued. A
   confirmation keeps its slot until it ends, even if the client goes away. Stopping `hairspring serve` with Ctrl-C
-  or SIGTERM (what systemd sends) ends a confirmation between checks. The run in progress finishes. If it matched, that
-  check is stored inconclusive (stopped: cancelled) with the runs that did match; if it did not (for example the stop
-  also killed the Hermit process, as systemd's default `KillMode=control-group` does), that check is stored skipped,
-  as `hairspring confirm` stores it on Ctrl-C. The rest are skipped, and the server exits. A confirmation with a
+  or SIGTERM (what systemd sends) ends a confirmation between checks. The run in progress finishes. If it was a rerun
+  that matched, that check is stored inconclusive (stopped: cancelled) with the runs that did match; if it was a replay
+  that reproduced, it is stored pass, and the confirmation counts as finished (that is correct evidence); if it did not
+  match or reproduce (for example the stop also killed the Hermit process, as systemd's default
+  `KillMode=control-group` does), that check is stored skipped, as `hairspring confirm` stores it on Ctrl-C. Checks
+  that did not run are skipped, and the server exits. A confirmation with a
   skipped check is unfinished, so the finding is still read from the newest confirmation that finished and a cut run
   does not change it. This holds when the server hears the stop within half a second of the Hermit process ending
   (it waits that long before treating a run killed by SIGTERM, or a replay that did not reproduce, as a miss); a stop

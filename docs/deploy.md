@@ -298,8 +298,8 @@ finding stays where the last finished confirmation left it. This depends on the 
 second of the Hermit process dying; with the default mode both signals are sent together, which is well inside that,
 but a stop that reaches the server later is not noticed and the killed run counts as a miss. The strict verify has no
 such handling. With `KillMode=mixed`, as in the unit above, SIGTERM goes to the server alone: the run in progress
-finishes (which takes up to the target's trial time), its check is stored with the checks that finished, the rest are
-skipped, and the server exits, with no window to depend on. Any processes still left after that
+finishes (which takes up to the target's trial time): a matched rerun is stored inconclusive, a replay that reproduced is
+stored pass, and checks that did not run are skipped; then the server exits, with no window to depend on. Any processes still left after that
 get SIGKILL, so keep `TimeoutStopSec` at its default or raise it above your targets' trial timeout, or systemd will
 send SIGKILL first and nothing is stored. The unit was edited for `KillMode=mixed` after `systemd-analyze verify` was
 run on it, and was not run through systemd again; the behaviour of both modes is from systemd's documentation, and was

@@ -15,7 +15,8 @@
   confirmation control, with a step that says what it costs, only when `can.confirm` is true. SECURITY.md states that
   with the setting on any `run` token can move a claim either way and keep the confirmation slots busy.
 - `hairspring serve` now stops on SIGTERM as it does on Ctrl-C, ending a running confirmation between checks (the run
-  in progress finishes, its check is stored inconclusive and the rest skipped). A run cut short by the stop itself (for
+  in progress finishes: a matched rerun is stored inconclusive, a replay that reproduced is stored pass, and checks that
+  did not run are skipped). A run cut short by the stop itself (for
   example when systemd also signals the Hermit process) is not judged: its check is stored skipped, as Ctrl-C does for
   `hairspring confirm`, so the confirmation stays unfinished and the finding does not change. The server waits up to
   half a second for the stop to be heard before it treats a run killed by SIGTERM, or a replay that did not reproduce,

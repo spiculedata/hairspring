@@ -123,6 +123,7 @@ fn process_target() -> TargetSpec {
             trial_timeout_secs: None,
             scheduler: SchedulerSpec::default(),
             hang_is_violation: false,
+            pass_env: false,
             parallelism: 1,
         },
         budget: Budget {
