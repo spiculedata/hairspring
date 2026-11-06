@@ -69,7 +69,7 @@ project) is production-hardened. See [Limitations](#limitations).
 
 ## Getting started and getting help
 
-New to Hairspring? Start with the [wiki](https://github.com/spiculedata/hairspring/wiki): Installation, Your first run,
+New to Hairspring? Read the [project page](https://spiculedata.github.io/hairspring/), then the [wiki](https://github.com/spiculedata/hairspring/wiki): Installation, Your first run,
 then Running your own software. Pre-release binaries are on the
 [releases page](https://github.com/spiculedata/hairspring/releases). This README and `docs/` describe the `main` branch,
 which can be ahead of the pre-release (currently v0.1-RC2): [docs/upgrading.md](docs/upgrading.md) says how to tell
