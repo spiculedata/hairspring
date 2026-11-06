@@ -41,6 +41,53 @@ jobs:
       # System-level (Hermit) tests need performance counters and are run separately on bare metal:
       #   HAIRSPRING_HERMIT_REAL=1 cargo test -p hairspring-hermit --test real_hermit
 
+  # The release workflow's Linux job runs the CLI tests inside `ubuntu:22.04` with no init process (pid 1 is
+  # `tail -f /dev/null`) and sh as the default shell. Problems that only show there (zombie processes from killed guests,
+  # sh against bash, a missing tool) surfaced at release time. This job repeats that environment on every pull request.
+  # Keep it in step with the `linux-x86_64` job of release.yml: the container, shell, apt packages, toolchain pin and
+  # the test and smoke commands.
+  rust-ubuntu-container:
+    name: Rust (ubuntu 22.04 container)
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    timeout-minutes: 45
+    # Container jobs run `run:` steps with `sh -e`; select bash as release.yml does.
+    # scripts/check-workflow-shells.sh fails CI if a container job loses this.
+    defaults:
+      run:
+        shell: bash -e {0}
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends build-essential ca-certificates curl git pkg-config
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # The same Rust version as release.yml and the SDK artifacts below; a `uses:` ref cannot read a variable.
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: Swatinem/rust-cache@v2
+      - name: Record the build commit
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          echo "HAIRSPRING_BUILD_COMMIT=$GITHUB_SHA" >> "$GITHUB_ENV"
+          # On its own line so a failing git stops the step; inside echo's argument the failure would be ignored.
+          date="$(git show -s --format=%cs "$GITHUB_SHA")"
+          echo "HAIRSPRING_BUILD_DATE=$date" >> "$GITHUB_ENV"
+      - name: Test
+        run: cargo test --locked -p hairspring-cli
+      - name: Build
+        run: cargo build --release --locked -p hairspring-cli
+      - name: Smoke test
+        run: |
+          expected="hairspring $(cargo pkgid -p hairspring-cli | sed 's/.*[#@]//') (${GITHUB_SHA:0:7} $HAIRSPRING_BUILD_DATE)"
+          actual="$(target/release/hairspring --version)"
+          echo "$actual"
+          [ "$actual" = "$expected" ] || { echo "expected '$expected'" >&2; exit 1; }
+          mkdir -p "$RUNNER_TEMP/doctor"
+          cd "$RUNNER_TEMP/doctor"
+          "$GITHUB_WORKSPACE/target/release/hairspring" doctor
+
   c-sdk:
     name: C SDK (${{ matrix.cc }})
     runs-on: ubuntu-24.04
