@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, failureChecksUrl, getTokenVersion, isCoverage, isPropertyPage, onTokenChange, parseRetryAfter, propertiesUrl, setToken } from './api';
+import { api, failureChecksUrl, failureConfirmUrl, getTokenVersion, isCoverage, isPropertyPage, onTokenChange, parseRetryAfter, propertiesUrl, setToken } from './api';
 import { page } from './explorer/fixtures';
 import type { FailureChecks, FindingStatus } from './types';
 
@@ -62,6 +62,28 @@ describe('failureChecksUrl', () => {
   });
   it('encodes an id that is not shaped like one, so it cannot change the path', () => {
     expect(failureChecksUrl('../runs?x=1')).toBe('/api/failures/..%2Fruns%3Fx%3D1/checks');
+  });
+});
+
+describe('confirming from the browser', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('builds the route from an encoded id, so an id cannot add a path or a query', () => {
+    expect(failureConfirmUrl('fail_0123456789abcdef')).toBe('/api/failures/fail_0123456789abcdef/confirm');
+    expect(failureConfirmUrl('../runs?x=1')).toBe('/api/failures/..%2Fruns%3Fx%3D1/confirm');
+  });
+
+  it('starts with a POST that has no body and no caller-chosen budget, and reads the status with a GET', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ accepted: true }), { status: 202 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await api.startConfirmation('fail_0123456789abcdef');
+    await api.confirmStatus('fail_0123456789abcdef');
+    const [[startUrl, start], [statusUrl, status]] = fetchMock.mock.calls;
+    expect(startUrl).toBe('/api/failures/fail_0123456789abcdef/confirm');
+    expect(start?.method).toBe('POST');
+    expect(start?.body).toBeUndefined();
+    expect(statusUrl).toBe('/api/failures/fail_0123456789abcdef/confirm');
+    expect(status?.method).toBeUndefined();
   });
 });
 

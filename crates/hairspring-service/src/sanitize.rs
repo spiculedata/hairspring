@@ -127,7 +127,15 @@ fn clean_failure(f: &FailureReport, run_target: &str) -> Result<FailureReport, S
     if f.bundle.len() > MAX_BUNDLE_BYTES {
         return Err(invalid("bundle is too large"));
     }
-    Bundle::decode(&f.bundle).map_err(|e| invalid(&format!("bundle is not valid: {e}")))?;
+    let bundle =
+        Bundle::decode(&f.bundle).map_err(|e| invalid(&format!("bundle is not valid: {e}")))?;
+    // A confirmation reruns the bundle's own target, so a failure stored under one target with another's bundle would
+    // have its checks recorded against a target they never ran.
+    if bundle.target != f.target {
+        return Err(invalid(
+            "failure bundle's target does not match the failure's target",
+        ));
+    }
     bounded(&f.message, MAX_MESSAGE_CHARS, "failure message")?;
     bounded(&f.backend, MAX_ACTION_ID_CHARS, "backend name")?;
     let steps = f

@@ -4,7 +4,9 @@ use crate::ctx::{CmdResult, Ctx};
 use hairspring_core::bundle::Bundle;
 use hairspring_engine::confirm::{environment_pinned, finding_status, CheckResult, ConfirmRequest};
 use hairspring_hermit::interrupt;
-use hairspring_service::{CheckView, FailureChecks, RunDetail, Service, MAX_BUNDLE_BYTES};
+use hairspring_service::{
+    CheckView, FailureChecks, RunDetail, Service, ServiceError, MAX_BUNDLE_BYTES,
+};
 use std::io::{Read, Write};
 use std::path::Path;
 
@@ -76,22 +78,58 @@ fn confirm_stored(
     })?)
 }
 
-/// Confirms every stored failure of a run in turn, and returns what each one's checks now say. `None` when Ctrl-C
-/// ended it: the checks that finished are stored and the rest are recorded as skipped.
+/// What confirming a run's failures came to: the ones confirmed, and the ones the service refused, each with its words.
+pub(super) struct RunConfirmations {
+    pub done: Vec<FailureChecks>,
+    pub refused: Vec<(String, String)>,
+}
+
+/// Confirms every stored failure of a run in turn. A failure the service refuses (its bundle is for another target or
+/// cannot be read) is recorded and the run's other failures go on; any other error ends it. `None` when Ctrl-C ended
+/// it: the checks that finished are stored and the rest are recorded as skipped.
+pub(super) fn confirm_stored_run_partial(
+    ctx: &Ctx,
+    svc: &Service,
+    detail: &RunDetail,
+    req: &ConfirmRequest,
+) -> CmdResult<Option<RunConfirmations>> {
+    let mut all = RunConfirmations {
+        done: Vec::with_capacity(detail.failures.len()),
+        refused: Vec::new(),
+    };
+    for failure in &detail.failures {
+        match confirm_stored(ctx, svc, &failure.id, req) {
+            Ok(checks) => all.done.push(checks),
+            Err(e) => match e.downcast::<ServiceError>().map(|b| *b) {
+                Ok(ServiceError::InvalidRequest(words)) => {
+                    all.refused.push((failure.id.clone(), words));
+                }
+                Ok(other) => return Err(Box::new(other)),
+                Err(e) => return Err(e),
+            },
+        }
+        if interrupt::requested() {
+            return Ok(None);
+        }
+    }
+    Ok(Some(all))
+}
+
+/// Confirms every stored failure of a run in turn, and returns what each one's checks now say, or the first refusal as
+/// an error. `None` when Ctrl-C ended it.
 pub(super) fn confirm_stored_run(
     ctx: &Ctx,
     svc: &Service,
     detail: &RunDetail,
     req: &ConfirmRequest,
 ) -> CmdResult<Option<Vec<FailureChecks>>> {
-    let mut all = Vec::with_capacity(detail.failures.len());
-    for failure in &detail.failures {
-        all.push(confirm_stored(ctx, svc, &failure.id, req)?);
-        if interrupt::requested() {
-            return Ok(None);
-        }
+    let Some(all) = confirm_stored_run_partial(ctx, svc, detail, req)? else {
+        return Ok(None);
+    };
+    match all.refused.into_iter().next() {
+        Some((_, words)) => Err(words.into()),
+        None => Ok(Some(all.done)),
     }
-    Ok(Some(all))
 }
 
 pub(super) fn write_stored(out: &mut dyn Write, checks: &FailureChecks) -> CmdResult<i32> {
@@ -215,18 +253,40 @@ pub fn run(
         if detail.failures.is_empty() {
             return Err(format!("run `{input}` has no failure to confirm").into());
         }
-        let Some(all) = confirm_stored_run(ctx, &svc, &detail, &req)? else {
+        let Some(RunConfirmations { done: all, refused }) =
+            confirm_stored_run_partial(ctx, &svc, &detail, &req)?
+        else {
             return write_interrupted(err, true);
         };
+        // A refused failure is said on stderr, in the service's fixed words, and makes the exit status an error even
+        // though the run's other failures were confirmed.
+        for (id, words) in &refused {
+            writeln!(err, "failure {id}: not confirmed: {words}")?;
+        }
+        let refused_code = if refused.is_empty() {
+            crate::EXIT_OK
+        } else {
+            crate::EXIT_ERROR
+        };
         if args.json {
-            // One document however many failures the run has: an array with an entry per failure.
-            writeln!(out, "{}", serde_json::to_string(&all)?)?;
+            // One document however many failures the run has: an array with an entry per failure. A failure the service
+            // refused has `{"failure_id": ..., "refused": "<its words>"}` in place of its checks.
+            let mut entries = all
+                .iter()
+                .map(serde_json::to_value)
+                .collect::<Result<Vec<_>, _>>()?;
+            entries.extend(
+                refused
+                    .iter()
+                    .map(|(id, words)| serde_json::json!({ "failure_id": id, "refused": words })),
+            );
+            writeln!(out, "{}", serde_json::to_string(&entries)?)?;
             return Ok(all
                 .iter()
                 .map(|c| exit_code(&c.finding))
-                .fold(crate::EXIT_OK, i32::max));
+                .fold(refused_code, i32::max));
         }
-        let mut code = crate::EXIT_OK;
+        let mut code = refused_code;
         for checks in &all {
             code = code.max(write_stored(out, checks)?);
         }

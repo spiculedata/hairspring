@@ -10,7 +10,10 @@
 //! is trusted to be the same program in the same setting, with the fix as the only change.
 use super::attempt;
 use super::context::{now_ms, Ctx};
-use super::{command, pace::Pace};
+use super::{
+    command,
+    pace::{Pace, CUT_BY_STOP},
+};
 use crate::backend::HermitBackend;
 use crate::exec::scheduler_flags;
 use crate::exec::ProcessSpec;
@@ -60,7 +63,12 @@ pub(super) fn check(
     let own_limit = ctx.backend.trial_timeout(control);
     let a = attempt::run(ctx.backend, control, ctx.seed, own_limit, pace);
     let clipped = a.clipped_by_budget(own_limit);
+    let killed = a
+        .trial
+        .as_ref()
+        .is_ok_and(|t| t.exit_code.is_none() && matches!(t.signal, Some(1 | 2 | 15)));
     pace.ran("control".to_string());
+    let cut = pace.stop_arrived(killed);
     let result = ctx
         .result(kind, CheckStatus::Inconclusive, started)
         .with_environment_fields(
@@ -85,6 +93,13 @@ pub(super) fn check(
     } else {
         result
     };
+    if cut && killed {
+        pace.mark_cut();
+        return result
+            .with_counts(0, 0, 1)
+            .with_detail("inconclusive", CUT_BY_STOP)
+            .with_detail("stopped", "cancelled");
+    }
     if clipped {
         return result.with_counts(0, 0, 1).with_detail(
             "inconclusive",

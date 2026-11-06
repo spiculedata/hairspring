@@ -5,7 +5,7 @@
 //! failure of the check.
 use super::command;
 use super::context::{now_ms, Ctx, EnvState};
-use super::pace::Pace;
+use super::pace::{Pace, CUT_BY_STOP};
 use crate::backend::REPLAY_CLIPPED;
 use hairspring_engine::backend::ReplayOptions;
 use hairspring_engine::confirm::{CheckKind, CheckResult, CheckStatus, ENVIRONMENT_CHANGED_KEY};
@@ -34,7 +34,19 @@ pub(super) fn check(ctx: &Ctx, pace: &mut Pace) -> CheckResult {
     let outcome = ctx
         .backend
         .replay_capped(ctx.spec, ctx.bundle, options, Some(cap));
+    // A replay that did not reproduce may have been cut by the stop (the process killed with the server): wait a moment
+    // for the stop to be heard before calling it a miss.
+    let may_be_cut = matches!(&outcome, Ok(r) if !r.reproduced && !r.environment_changed);
     pace.ran("replay".to_string());
+    if pace.stop_arrived(may_be_cut) && may_be_cut {
+        pace.mark_cut();
+        return ctx
+            .result(kind, CheckStatus::Inconclusive, started)
+            .with_command(command)
+            .with_counts(0, 0, 1)
+            .with_detail("inconclusive", CUT_BY_STOP)
+            .with_detail("stopped", "cancelled");
+    }
     let result = |status| {
         ctx.result(kind, status, started)
             .with_command(command.clone())

@@ -65,7 +65,7 @@ fn expected(role: &str, open: bool, read: bool, run: bool, admin: bool) -> Value
     json!({
         "role": role,
         "open_mode": open,
-        "can": { "read": read, "run": run, "admin": admin },
+        "can": { "read": read, "run": run, "admin": admin, "confirm": false },
         "roles": ["read", "run", "admin"],
     })
 }

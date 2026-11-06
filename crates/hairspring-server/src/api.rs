@@ -115,9 +115,11 @@ fn may_see_organisation(
 
 /// Who the caller is and what they may do, so a client can hide or explain actions instead of guessing from a 403.
 /// It carries the role name and what that role allows, whether the server is in open mode, the operator's label for
-/// the caller's own token when it has one, and nothing that identifies or could stand in for the token.
+/// the caller's own token when it has one, whether the caller may start a confirmation (`can.confirm`, with what one
+/// costs under `confirm`), and nothing that identifies or could stand in for the token.
 pub async fn me(State(s): State<AppState>, caller: Caller) -> Json<Value> {
     let can = |needed: Role| caller.role.allows(needed);
+    let can_confirm = s.confirms.enabled() && can(Role::Run);
     let mut body = json!({
         "role": caller.role.as_str(),
         "open_mode": s.auth.is_open(),
@@ -125,9 +127,13 @@ pub async fn me(State(s): State<AppState>, caller: Caller) -> Json<Value> {
             "read": can(Role::Read),
             "run": can(Role::Run),
             "admin": can(Role::Admin),
+            "confirm": can_confirm,
         },
         "roles": [Role::Read.as_str(), Role::Run.as_str(), Role::Admin.as_str()],
     });
+    if can_confirm {
+        body["confirm"] = crate::confirm_api::limits_for_me(&s.confirms);
+    }
     if let Some(label) = &caller.label {
         body["label"] = json!(label);
     }

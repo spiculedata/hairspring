@@ -2,6 +2,16 @@
 use hairspring_engine::backend::Progress;
 use std::time::{Duration, Instant};
 
+/// How long a run that may have been cut short is given for the caller's stop to be heard, and how often it is asked.
+/// A service manager signals the server and its Hermit processes together, so the run can end a moment before the
+/// stop reaches the caller.
+const STOP_GRACE: Duration = Duration::from_millis(500);
+const STOP_POLL: Duration = Duration::from_millis(50);
+
+/// The text a run cut short by the caller's stop is recorded with.
+pub(super) const CUT_BY_STOP: &str =
+    "stopped: cancelled while this run was in progress, so it says nothing";
+
 /// A run is never given less than this, so a budget nearly used up cannot kill a trial before it starts.
 const MIN_RUN: Duration = Duration::from_secs(1);
 
@@ -27,6 +37,7 @@ pub(super) struct Pace<'a> {
     progress: &'a mut dyn FnMut(Progress) -> bool,
     runs: u64,
     cancelled: bool,
+    cut: bool,
 }
 
 impl<'a> Pace<'a> {
@@ -37,6 +48,7 @@ impl<'a> Pace<'a> {
             progress,
             runs: 0,
             cancelled: false,
+            cut: false,
         }
     }
 
@@ -55,6 +67,49 @@ impl<'a> Pace<'a> {
     pub(super) fn run_timeout(&self, own_limit: Duration) -> Duration {
         let left = self.wall.saturating_sub(self.started.elapsed());
         own_limit.min(left.max(MIN_RUN))
+    }
+
+    /// Whether the caller asked to stop by the time the run that has just ended was over, as [`Pace::ran`] heard it
+    /// (call this after `ran`, as every caller does). A run that ended with the stop is not a result about the program (its process may have
+    /// been killed by the same stop), so the caller records it inconclusive, never as a miss. `may_be_cut` is true when
+    /// the run's end looks like a kill or a miss, and then the stop is waited for a moment, because it can arrive just
+    /// after the run does; a run that ended well gets no wait and costs the caller no extra call. A run that finished
+    /// well, and matched, is still evidence and is kept by the callers whatever this says.
+    pub(super) fn stop_arrived(&mut self, may_be_cut: bool) -> bool {
+        if self.cancelled {
+            return true;
+        }
+        if may_be_cut {
+            let until = Instant::now() + STOP_GRACE;
+            while Instant::now() < until {
+                std::thread::sleep(STOP_POLL);
+                if self.asked_to_stop() {
+                    self.cancelled = true;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Records that the run that has just ended was cut by the stop, so the check it belonged to did not finish and says
+    /// nothing. [`super::step`] then stores that check as skipped, as it does for Ctrl-C at a terminal, which keeps the
+    /// confirmation unfinished: the finding is read from an earlier one and a cut run can neither lift nor withdraw it.
+    pub(super) fn mark_cut(&mut self) {
+        self.cut = true;
+    }
+
+    /// Whether a run of the check just finished was cut by the stop (see [`Pace::mark_cut`]).
+    pub(super) fn was_cut(&self) -> bool {
+        self.cut
+    }
+
+    fn asked_to_stop(&mut self) -> bool {
+        !(self.progress)(Progress {
+            steps: self.runs,
+            trials: self.runs,
+            message: "checking whether to stop".to_string(),
+        })
     }
 
     /// Reports that one more run finished. A caller that asks to stop is heard at the next [`Pace::stop`].

@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { App } from './App';
 import { ActivityLog } from './components/ActivityLog';
+import { FailureConfirmation } from './components/FailureConfirmation';
+import { resetMeForTests } from './meStore';
 import { page } from './explorer/fixtures';
 import { Term } from './glossary/Term';
 import { navigate } from './router';
@@ -261,6 +263,64 @@ describe('axe-core over parts of pages that need data a route does not give here
       />,
     );
     document.body.innerHTML = `<main><h1>Seeds</h1>${html}</main>`;
+    expect(await violations()).toEqual([]);
+  });
+});
+
+describe('the failure page with the run-confirmation control', () => {
+  const ID = 'fail_0123456789abcdef';
+  const me = {
+    role: 'run',
+    open_mode: false,
+    can: { read: true, run: true, admin: false, confirm: true },
+    confirm: { wall_secs: 120, max_running: 2 },
+    roles: ['read', 'run', 'admin'],
+  };
+
+  function serveConfirm(state: string) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (url === '/api/me') return json(me);
+        if (url === `/api/failures/${ID}/confirm`) return json({ enabled: true, state });
+        return json({ failure_id: ID, finding: 'candidate', confirmation_id: null, environment_pinned: false, checks: [] });
+      }),
+    );
+  }
+
+  beforeEach(() => {
+    // An earlier test in this file may leave a bare element on the body; this page is checked alone.
+    document.body.innerHTML = '';
+    resetMeForTests();
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    resetMeForTests();
+  });
+
+  const page = () =>
+    render(
+      <main>
+        <h1>Failure</h1>
+        <FailureConfirmation failureId={ID} />
+      </main>,
+    );
+
+  it('has no markup violations with the control, with the question open, and while it runs', async () => {
+    serveConfirm('idle');
+    page();
+    fireEvent.click(await screen.findByRole('button', { name: 'Run confirmation' }));
+    expect(await violations()).toEqual([]);
+    expect(screen.getByRole('group', { name: 'Run a confirmation on the server?' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+    expect(await violations()).toEqual([]);
+  });
+
+  it('has no markup violations while a confirmation is running', async () => {
+    serveConfirm('running');
+    page();
+    await screen.findByText(/Running on the server, for up to 120 seconds/);
     expect(await violations()).toEqual([]);
   });
 });

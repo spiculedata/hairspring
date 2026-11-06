@@ -503,7 +503,7 @@ fn complete_on_a_cancelled_run_changes_nothing_and_closes_the_job() {
         &failed_outcome(
             "lock-lease",
             vec![step(0, "Tick", "S")],
-            "hairspring-bundle v2\nseed=1\nbuild=x\npath=\n",
+            "hairspring-bundle v2\nseed=1\nbuild=x\ntarget=lock-lease\npath=\n",
         ),
     )
     .unwrap();
@@ -536,7 +536,7 @@ fn a_second_complete_or_a_stale_fail_does_not_duplicate_anything() {
     let o = failed_outcome(
         "lock-lease",
         vec![step(0, "Tick", "S")],
-        "hairspring-bundle v2\nseed=1\nbuild=x\npath=\n",
+        "hairspring-bundle v2\nseed=1\nbuild=x\ntarget=lock-lease\npath=\n",
     );
     svc.complete(&job.job_id, "w1", &o).unwrap();
     assert!(matches!(
@@ -558,7 +558,7 @@ fn a_second_complete_or_a_stale_fail_does_not_duplicate_anything() {
 #[test]
 fn worker_supplied_results_are_bounded_checked_and_sanitised() {
     let (svc, _, engine) = service();
-    let bundle = "hairspring-bundle v2\nseed=1\nbuild=x\npath=\n";
+    let bundle = "hairspring-bundle v2\nseed=1\nbuild=x\ntarget=lock-lease\npath=\n";
     let job = leased(&svc, &engine, "lock-lease", "w1");
     let too_many: Vec<Step> = (0..1001).map(|i| step(i, "Tick", "S")).collect();
     assert!(matches!(

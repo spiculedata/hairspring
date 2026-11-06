@@ -335,3 +335,153 @@ fn a_strict_verify_that_cannot_run_here_is_recorded_not_assumed() {
     );
     assert!(!out.contains("finding: verified"), "{out}");
 }
+
+/// Plants a failure and a run that holds it straight in the project's store, as older or forged data could: both are
+/// recorded under target `good`, but the bundle is the one for the failing target `svc`.
+fn plant_forged_failure(p: &Project) -> (String, String) {
+    use hairspring_store::{NewFailure, NewRun, SqliteStore, Store};
+    let store =
+        SqliteStore::open(&p.dir.join(".hairspring/hairspring.db")).expect("the store opens");
+    let bundle = std::fs::read(&p.bundle_file).expect("the bundle file");
+    let hash = store.put_blob(&bundle).unwrap();
+    let run = store
+        .create_run(
+            &NewRun {
+                target: "good".into(),
+                backend: "hermit".into(),
+                seed: 1,
+                config_json: "{}".into(),
+            },
+            1,
+        )
+        .unwrap();
+    let failure = store
+        .add_failure(
+            &NewFailure {
+                run_id: run.id.clone(),
+                target: "good".into(),
+                message: "m".into(),
+                original_len: 1,
+                shrunk_len: 1,
+                bundle_hash: hash,
+                steps_json: "[]".into(),
+            },
+            2,
+        )
+        .unwrap();
+    (run.id, failure.id)
+}
+
+#[test]
+fn a_stored_failure_whose_bundle_is_for_another_target_is_refused_by_failure_id_and_by_run_id() {
+    // Arrange: a real failure of `svc`, and a planted one under `good` that carries its bundle.
+    let p = project("forged");
+    let (forged_run, forged_failure) = plant_forged_failure(&p);
+    let words = "the failure's bundle is for a different target, so it cannot be confirmed";
+
+    for id in [forged_failure.as_str(), forged_run.as_str()] {
+        // Act
+        let o = p.run(&["confirm", id]);
+
+        // Assert: an error, in fixed words, and nothing was run or stored against the planted failure.
+        let out = text(&o);
+        assert_eq!(o.status.code(), Some(2), "{out}");
+        assert!(out.contains(words), "{out}");
+        assert!(!out.contains("finding"), "{out}");
+    }
+    use hairspring_store::{SqliteStore, Store};
+    let store = SqliteStore::open(&p.dir.join(".hairspring/hairspring.db")).unwrap();
+    assert!(store
+        .list_failure_checks(&forged_failure)
+        .unwrap()
+        .is_empty());
+    // The real failure still confirms.
+    let ok = p.run(&["confirm", &p.run_id]);
+    assert_eq!(ok.status.code(), Some(1), "{}", text(&ok));
+}
+
+#[test]
+fn confirming_a_run_goes_on_past_a_refused_failure_and_exits_with_an_error_at_the_end() {
+    use hairspring_store::{NewFailure, SqliteStore, Store};
+    // Arrange: the run's real failure, plus a forged one added to the same run that is listed before it.
+    const FAR_FUTURE_MS: i64 = 9_999_999_999_999;
+    let p = project("run-refusal");
+    let store =
+        SqliteStore::open(&p.dir.join(".hairspring/hairspring.db")).expect("the store opens");
+    let bundle = std::fs::read(&p.bundle_file).expect("the bundle file");
+    let hash = store.put_blob(&bundle).unwrap();
+    let forged = store
+        .add_failure(
+            &NewFailure {
+                run_id: p.run_id.clone(),
+                target: "good".into(),
+                message: "m".into(),
+                original_len: 1,
+                shrunk_len: 1,
+                bundle_hash: hash,
+                steps_json: "[]".into(),
+            },
+            FAR_FUTURE_MS,
+        )
+        .unwrap();
+    drop(store);
+
+    // Act
+    let o = p.run(&["confirm", &p.run_id]);
+
+    // Assert: the forged one is reported as refused in fixed words, the real one was confirmed after it, and the
+    // exit status is an error (2) or worse, not the 1 that "the failure repeats" would give.
+    let out = text(&o);
+    assert!(
+        out.contains(&format!(
+            "failure {}: not confirmed: the failure's bundle is for a different target, so it cannot be confirmed",
+            forged.id
+        )),
+        "{out}"
+    );
+    assert!(out.contains("finding: confirmed"), "{out}");
+    assert!(o.status.code().is_some_and(|c| c >= 2), "{out}");
+}
+
+#[test]
+fn confirming_a_run_with_json_reports_a_refused_failure_in_the_document_too() {
+    use hairspring_store::{NewFailure, SqliteStore, Store};
+    let p = project("run-refusal-json");
+    let store =
+        SqliteStore::open(&p.dir.join(".hairspring/hairspring.db")).expect("the store opens");
+    let hash = store
+        .put_blob(&std::fs::read(&p.bundle_file).expect("the bundle file"))
+        .unwrap();
+    let forged = store
+        .add_failure(
+            &NewFailure {
+                run_id: p.run_id.clone(),
+                target: "good".into(),
+                message: "m".into(),
+                original_len: 1,
+                shrunk_len: 1,
+                bundle_hash: hash,
+                steps_json: "[]".into(),
+            },
+            2,
+        )
+        .unwrap();
+    drop(store);
+
+    let o = p.run(&["confirm", &p.run_id, "--json"]);
+
+    assert!(o.status.code().is_some_and(|c| c >= 2), "{}", text(&o));
+    let doc: Value = serde_json::from_slice(&o.stdout).expect("one JSON document");
+    let entries = doc.as_array().expect("an array");
+    assert!(entries.iter().any(|e| e["finding"] == "confirmed"), "{doc}");
+    let refused: Vec<&Value> = entries
+        .iter()
+        .filter(|e| e.get("refused").is_some())
+        .collect();
+    assert_eq!(refused.len(), 1, "{doc}");
+    assert_eq!(refused[0]["failure_id"], forged.id.as_str());
+    assert_eq!(
+        refused[0]["refused"],
+        "the failure's bundle is for a different target, so it cannot be confirmed"
+    );
+}

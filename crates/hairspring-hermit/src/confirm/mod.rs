@@ -121,7 +121,8 @@ pub(crate) fn run(
 
 /// Runs one check, or records it as skipped when the confirmation was cancelled or ran out of time.
 ///
-/// An interrupt (Ctrl-C) kills the run in progress, so a check that was running when it came did not finish and says
+/// An interrupt (Ctrl-C) kills the run in progress, and the server's stop can too (a service manager signals the Hermit
+/// process with the server), so a check that was running when either came did not finish and says
 /// nothing about the program: it is recorded as skipped for cancellation, whatever it made of the killed run, so that
 /// the newest confirmation never lifts or withdraws what an earlier one found.
 fn step(
@@ -137,7 +138,9 @@ fn step(
         Some(stop) => ctx.skipped(kind, stop.text()),
         None => {
             let result = check(pace);
-            if interrupt::requested() {
+            // The same for a check whose run the server's own stop cut short (see `Pace::mark_cut`): whatever it made
+            // of the killed run, the check did not finish.
+            if interrupt::requested() || pace.was_cut() {
                 return ctx.skipped(kind, Stop::Cancelled.text());
             }
             result

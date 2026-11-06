@@ -6,7 +6,10 @@
 //! and the detail says so. A rerun that cannot be judged is counted apart, and never as a match or a miss.
 use super::attempt::{self, Attempt};
 use super::context::{now_ms, Ctx, EnvState};
-use super::{command, pace::Pace};
+use super::{
+    command,
+    pace::{Pace, CUT_BY_STOP},
+};
 use crate::backend::{failure_kind_matches, output_matches, property_matches};
 use crate::exec::{SpawnError, Trial};
 use crate::trace::{behaviour_hash, Verdict};
@@ -26,6 +29,11 @@ enum Rerun {
 struct First {
     hash: String,
     fingerprint: Option<String>,
+}
+
+/// Whether the run ended by SIGHUP, SIGINT or SIGTERM: the signals a stop sends, which a program rarely dies of on its own.
+fn died_of_stop_signal(t: &Trial) -> bool {
+    t.exit_code.is_none() && matches!(t.signal, Some(1 | 2 | 15))
 }
 
 fn skid_text(a: &Attempt) -> Option<&'static str> {
@@ -162,7 +170,16 @@ pub(super) fn check(ctx: &Ctx, pace: &mut Pace) -> CheckResult {
             break;
         }
         let a = attempt::run(ctx.backend, ctx.p, ctx.seed, own_limit, pace);
+        // A run that ends by a stop signal (what a service manager's stop does to it) may have been cut by the stop
+        // being asked of this server too: it is then not a verdict about the program.
+        pace.ran(format!("rerun {}/{}", i + 1, ctx.req.reruns));
+        let killed = a.trial.as_ref().is_ok_and(died_of_stop_signal);
+        let cut = pace.stop_arrived(killed);
         let outcome = match (&a.trial, skid_text(&a)) {
+            (Ok(t), _) if cut && matches!(judge(ctx, t, &first), Rerun::Mismatch(_)) => {
+                pace.mark_cut();
+                Rerun::Inconclusive(CUT_BY_STOP)
+            }
             (Err(SpawnError::Interrupted), _) => Rerun::Inconclusive("interrupted"),
             (Err(_), _) => Rerun::Inconclusive("Hermit could not be started (host fault)"),
             (Ok(_), _) if a.clipped_by_budget(own_limit) => {
@@ -171,7 +188,7 @@ pub(super) fn check(ctx: &Ctx, pace: &mut Pace) -> CheckResult {
             (Ok(_), Some(why)) => Rerun::Inconclusive(why),
             (Ok(t), None) => judge(ctx, t, &first),
         };
-        if let Ok(t) = &a.trial {
+        if let Some(t) = a.trial.as_ref().ok().filter(|_| !(cut && killed)) {
             tally.add_artefact(behaviour_hash(t));
             if let Some(s) = &t.schedule {
                 tally.add_artefact(s.fingerprint.clone());
@@ -187,7 +204,6 @@ pub(super) fn check(ctx: &Ctx, pace: &mut Pace) -> CheckResult {
             }
         }
         tally.record(&outcome, &a);
-        pace.ran(format!("rerun {}/{}", i + 1, ctx.req.reruns));
     }
     finish(ctx, &tally, stopped.map(|s| s.text()), started, command)
 }

@@ -40,7 +40,9 @@ fn failure() -> FailureReport {
         original_len: 1,
         shrunk_len: 1,
         steps: vec![],
-        bundle: hairspring_core::bundle::Bundle::new(1, "t", vec![]).encode(),
+        bundle: hairspring_core::bundle::Bundle::new(1, "t", vec![])
+            .with_target("lock-lease")
+            .encode(),
     }
 }
 

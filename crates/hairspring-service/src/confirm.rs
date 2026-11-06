@@ -9,6 +9,7 @@ use crate::confirm_view::{failure_checks, summary, FailureChecks, FindingSummary
 use crate::{Result, Service, ServiceError, MAX_BUNDLE_BYTES, MAX_REPLAY_STEPS};
 use hairspring_core::bundle::Bundle;
 use hairspring_engine::backend::Progress;
+use hairspring_engine::config::TargetKind;
 use hairspring_engine::confirm::{CheckResult, ConfirmRequest};
 use hairspring_engine::engine::Engine;
 use hairspring_store::{
@@ -16,6 +17,14 @@ use hairspring_store::{
     MAX_CHECK_TAG_BYTES,
 };
 
+const NO_TARGET_REFUSAL: &str =
+    "this server has no configuration for the failure's target, so it cannot confirm it";
+const NOT_PROCESS_REFUSAL: &str =
+    "only a failure of a process target can be confirmed, and this one is not";
+const BUNDLE_TARGET_REFUSAL: &str =
+    "the failure's bundle is for a different target, so it cannot be confirmed";
+const BUNDLE_UNREADABLE_REFUSAL: &str =
+    "the failure's bundle cannot be read, so it cannot be confirmed";
 const FAILURE_ID_PREFIX: &str = "fail_";
 const FAILURE_ID_HEX: usize = 16;
 
@@ -40,6 +49,19 @@ fn checked_failure_id(id: &str) -> Result<()> {
             "the failure id is not valid".to_string(),
         ))
     }
+}
+
+/// Refuses bundle text that cannot be read, or that is for a target other than `failure_target`. The refusals are fixed
+/// words that repeat neither target.
+fn require_own_target(failure_target: &str, bundle_text: &str) -> Result<()> {
+    let bundle = Bundle::decode(bundle_text)
+        .map_err(|_| ServiceError::InvalidRequest(BUNDLE_UNREADABLE_REFUSAL.to_string()))?;
+    if bundle.target != failure_target {
+        return Err(ServiceError::InvalidRequest(
+            BUNDLE_TARGET_REFUSAL.to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn json<T: serde::Serialize>(value: &T) -> Result<String> {
@@ -95,13 +117,54 @@ impl Service {
         progress: &mut dyn FnMut(Progress) -> bool,
     ) -> Result<FailureChecks> {
         checked_failure_id(failure_id)?;
-        let detail = self
+        let record = self
+            .store
             .get_failure(failure_id)?
             .ok_or_else(|| ServiceError::NotFound(format!("failure {failure_id}")))?;
-        let checks = self.confirm_bundle(engine, &detail.bundle, req, progress)?;
+        // A bundle that is not stored is not "internal": say so in the fixed words the server uses for it.
+        let bundle = self
+            .get_bundle(&record.bundle_hash)?
+            .ok_or_else(|| ServiceError::InvalidRequest(BUNDLE_UNREADABLE_REFUSAL.to_string()))?;
+        // Every way to confirm a stored failure comes through here, so this is where the bundle must be shown to be
+        // for the failure's own target: the engine reruns the bundle's target, and the result is stored against the
+        // failure. Data stored before the server checked this on ingest can hold a mismatch.
+        require_own_target(&record.target, &bundle)?;
+        let checks = self.confirm_bundle(engine, &bundle, req, progress)?;
         self.record_confirmation(failure_id, &Service::local_worker_id(), true, &checks)?;
         self.failure_checks(failure_id)?
             .ok_or_else(|| ServiceError::NotFound(format!("failure {failure_id}")))
+    }
+
+    /// Whether a failure with this id is stored. A malformed id is a refusal, as everywhere else.
+    pub fn failure_exists(&self, failure_id: &str) -> Result<bool> {
+        checked_failure_id(failure_id)?;
+        Ok(self.store.get_failure(failure_id)?.is_some())
+    }
+
+    /// Whether this engine could confirm the stored failure `failure_id`: the id is well formed, the failure exists and
+    /// its target is a configured `process` target. Nothing runs. The refusals are fixed words that do not repeat the
+    /// target's name, so a caller can be answered with them as they are.
+    pub fn check_confirmable(&self, engine: &Engine, failure_id: &str) -> Result<()> {
+        checked_failure_id(failure_id)?;
+        let failure = self
+            .store
+            .get_failure(failure_id)?
+            .ok_or_else(|| ServiceError::NotFound(format!("failure {failure_id}")))?;
+        let Some(spec) = engine.config().targets.get(&failure.target) else {
+            return Err(ServiceError::InvalidRequest(NO_TARGET_REFUSAL.to_string()));
+        };
+        if !matches!(spec.kind, TargetKind::Process { .. }) {
+            return Err(ServiceError::InvalidRequest(
+                NOT_PROCESS_REFUSAL.to_string(),
+            ));
+        }
+        // `confirm_failure` reruns the bundle's own target, not the failure's, so the two must be the same one: a
+        // failure stored under a passing target with another target's bundle would have its checks recorded against
+        // a target they never ran. The bundle text is stored data, so it is read, not trusted.
+        let text = self
+            .get_bundle(&failure.bundle_hash)?
+            .ok_or_else(|| ServiceError::InvalidRequest(BUNDLE_UNREADABLE_REFUSAL.to_string()))?;
+        require_own_target(&failure.target, &text)
     }
 
     /// Runs the pipeline on bundle text without storing anything: for a bundle that is not a stored failure.

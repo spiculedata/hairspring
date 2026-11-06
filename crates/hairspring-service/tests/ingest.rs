@@ -289,7 +289,9 @@ fn a_run_that_stopped_at_its_first_failure_makes_no_unmet_claim() {
                 original_len: 1,
                 shrunk_len: 1,
                 steps: vec![],
-                bundle: hairspring_core::bundle::Bundle::new(1, "t", vec![]).encode(),
+                bundle: hairspring_core::bundle::Bundle::new(1, "t", vec![])
+                    .with_target("lock-lease")
+                    .encode(),
             },
         )
     };

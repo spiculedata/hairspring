@@ -2,8 +2,35 @@
 
 ## Unreleased
 
+### Added
+
+- Confirming a failure from the web UI or the API, off by default. `hairspring serve --max-confirmations N` (0 to 4,
+  default 0) turns on `POST /api/failures/{id}/confirm` for the `run` role. It runs the confirmation pipeline on the
+  server's own engine with the defaults of `hairspring confirm` (3 reruns, 120 seconds) and stores the checks the same
+  way, as a trusted runner; nothing is queued to a remote worker. A failure has at most one confirmation running, at
+  most N run at once, and a request beyond either is refused with `409` or `429` and `Retry-After`. With the default
+  of 0 the route answers `403` with `confirmation from the browser is not enabled on this server`. `GET
+  /api/failures/{id}/confirm` says whether one is running. `GET /api/me` adds `can.confirm`, true only when the
+  setting is on and the role allows it, and `confirm` with the budget and the cap; the failure page shows a Run
+  confirmation control, with a step that says what it costs, only when `can.confirm` is true. SECURITY.md states that
+  with the setting on any `run` token can move a claim either way and keep the confirmation slots busy.
+- `hairspring serve` now stops on SIGTERM as it does on Ctrl-C, ending a running confirmation between checks (the run
+  in progress finishes: a matched rerun is stored inconclusive, a replay that reproduced is stored pass, and checks that
+  did not run are skipped). A run cut short by the stop itself (for
+  example when systemd also signals the Hermit process) is not judged: its check is stored skipped, as Ctrl-C does for
+  `hairspring confirm`, so the confirmation stays unfinished and the finding does not change. The server waits up to
+  half a second for the stop to be heard before it treats a run killed by SIGTERM, or a replay that did not reproduce,
+  as a miss, so a stop that reaches it later than that is not noticed; the strict verify has no such handling. The
+  systemd unit in docs/deploy.md now sets `KillMode=mixed`, which avoids the window.
+
 ### Changed
 
+- A worker's failure report is now refused when the bundle it carries names a different target from the failure's, and
+  every way of confirming a stored failure (the API, `hairspring confirm` by failure id or run id, `hairspring test
+  --confirm`) refuses a stored failure whose bundle is for another target, before anything runs. `hairspring confirm
+  <run id>` goes on past a failure the service refuses, names it, and exits with an error at the end; a failure whose
+  bundle is missing is refused in the same words as the server's. A confirmation whose every check is inconclusive
+  still counts as finished and can move a confirmed failure back to candidate; that rule is unchanged.
 - Programs run with `--base-env=minimal` or `--base-env=empty` now receive the target's `env`, `HAIRSPRING_SEED`,
   `HAIRSPRING_PROC`, the events-file path (when the events file is on) and the pinned `PATH`, `LANG`, `LC_ALL` and
   `TZ`. Before, Hermit dropped them under those modes, so `env` entries and the events file silently did nothing there.

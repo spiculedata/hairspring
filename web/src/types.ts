@@ -85,6 +85,14 @@ export interface FailureChecks {
   checks: CheckView[];
 }
 
+/** `GET /api/failures/{id}/confirm`: whether a confirmation started from the API is running, as this server knows it. */
+export interface ConfirmStatus {
+  enabled: boolean;
+  state: 'idle' | 'running' | 'failed';
+  /** The server's own words for why an attempt failed; present only when `state` is `failed`. */
+  reason?: string;
+}
+
 export interface Step {
   index: number;
   action_id: string;

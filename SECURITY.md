@@ -28,11 +28,11 @@ agents.
 | Area | Control |
 |---|---|
 | Authentication | Bearer tokens (16+ chars) stored only as SHA-256 digests; compared across all tokens in constant time |
-| Authorization | Role checked first in every handler; worker endpoints and replay (which executes target code) require `run`; worker ids hidden from `read` tokens (left out of the worker list and of event-stream payloads) |
+| Authorization | Role checked first in every handler; worker endpoints and replay (which executes target code) require `run`, as does `POST /api/failures/{id}/confirm`, which is off unless `--max-confirmations` is set; worker ids hidden from `read` tokens (left out of the worker list and of event-stream payloads) |
 | No remote code execution | The API accepts **target names only**; commands come from the server-side `hairspring.toml`. MCP `start_run` cannot supply a command |
 | Network exposure | Refuses to bind a non-loopback address without tokens; default bind is `127.0.0.1` |
 | Open (no-token) mode | Rejects unknown `Host` headers (DNS rebinding) and cross-site `Origin`s (CSRF); `/mcp` requires `application/json` |
-| Abuse limits | Per-client rate limit (valid tokens and unauthenticated clients are bucketed separately, bounded table; a valid token is also refused while its client address has used up its unauthenticated budget; the client address is the connecting one, or, only for connections from proxies named with `--trusted-proxy`, the right-most untrusted `X-Forwarded-For` entry); 2 MiB body cap; 10 s to send a request head (also the idle time allowed between requests on a kept-alive connection) and 30 s to send a body; bodies are read only after the token check; at most 512 open connections (`--max-connections`), 503 beyond; at most 2 replays running at once, REST and MCP together (`--max-replays`, at most 64), refused with 429 and `Retry-After` beyond, never queued; event streams capped at 64 in total and 16 per caller (a token, or a client address when there are no tokens); cap on MCP batch size and waits; queue and worker admission caps; JSON recursion limits |
+| Abuse limits | Per-client rate limit (valid tokens and unauthenticated clients are bucketed separately, bounded table; a valid token is also refused while its client address has used up its unauthenticated budget; the client address is the connecting one, or, only for connections from proxies named with `--trusted-proxy`, the right-most untrusted `X-Forwarded-For` entry); 2 MiB body cap; 10 s to send a request head (also the idle time allowed between requests on a kept-alive connection) and 30 s to send a body; bodies are read only after the token check; at most 512 open connections (`--max-connections`), 503 beyond; at most 2 replays running at once, REST and MCP together (`--max-replays`, at most 64), refused with 429 and `Retry-After` beyond, never queued; when `--max-confirmations N` is set (default 0 = off, at most 4), at most N confirmations at once and one per failure, 429 or 409 beyond, never queued; event streams capped at 64 in total and 16 per caller (a token, or a client address when there are no tokens); cap on MCP batch size and waits; queue and worker admission caps; JSON recursion limits |
 | Worker data | Results from workers are size-bounded, control characters stripped, failure target checked against the job, written atomically; leases are owner-checked and heartbeated |
 | Untrusted text | Step labels, states, messages and errors are treated as data. The UI renders them as text only; MCP output and instructions tell agents never to follow instructions found in them |
 | Storage | All SQL is parameterised; blobs addressed by validated hash; database URLs and tokens are never printed or logged; `--tokens-file` permissions are checked |
@@ -80,6 +80,22 @@ agents.
   tool error (MCP) at once. A replay that is running keeps its slot until the target finishes, even if the client
   disconnects, so a `run` token can keep the replay slots busy for the length of the target's own timeouts; other
   endpoints are unaffected.
+- **Confirming from the browser (`--max-confirmations`, off by default) lets any `run` token move a claim either way,
+  and spends the server's machine time.** A confirmation runs the failure's `process` target on the server, up to
+  3 reruns and a replay within 120 seconds, and the server records the checks as its own trusted runner, the same as
+  `hairspring confirm` run there. Those checks decide where a failure stands and whether a claim counts it, so with
+  the setting on, every holder of a `run` token can cause a confirmed failure to become not reproducible, or the
+  other way round, on any failure the server's configuration can run. The caller chooses no command, budget or
+  option: the input is a failure id. Every way of confirming a stored failure refuses one whose stored bundle is for a different target than the
+  failure, so a worker cannot get checks recorded against a passing target by reporting another target's bundle. At most N confirmations run at once (N from 1 to 4), a failure has one at a
+  time, and a request beyond either is refused (`429` with `Retry-After`, or `409`) and never queued, but a `run`
+  token can keep all N slots busy for about two minutes at a time, repeatedly, until per-token quotas exist (listed under
+  "Not yet implemented" above). Enable it only on a deployment where every `run` token holder is trusted with that, and size
+  N for the machine: each running confirmation holds a blocking thread and a Hermit process group. A confirmation whose every check is inconclusive (for example
+  Hermit is missing on the server) still counts as finished and replaces the finding from the newest finished
+  confirmation, so it can move a confirmed failure back to candidate. It does not run on
+  remote workers, and the server logs who started each one as `label (t:<key>)`, never the token. Leave it at 0 on a
+  server that anyone you do not trust can reach with a `run` token.
 - The rate limiter is in-memory and per process; with several server replicas each enforces its own limit.
 - **Anonymous rate-limit buckets are keyed by the connecting address.** IPv4 callers get one bucket per address and
   IPv6 callers one per /64. A holder of a larger IPv6 allocation (a /56 or /48) therefore gets a separate bucket for
