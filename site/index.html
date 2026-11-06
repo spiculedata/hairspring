@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hairspring: find concurrency bugs and replay them exactly</title>
+<meta name="description" content="Hairspring finds concurrency bugs in your own program and replays them exactly, using deterministic simulation. Open source, experimental, Apache-2.0.">
+<meta name="color-scheme" content="light dark">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Hairspring: find concurrency bugs and replay them exactly">
+<meta property="og:description" content="Deterministic simulation testing you can run on your laptop and your own servers. Open source, experimental.">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Hairspring: find concurrency bugs and replay them exactly">
+<meta name="twitter:description" content="Deterministic simulation testing you can run on your laptop and your own servers. Open source, experimental.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%233333cc'/%3E%3Cpath d='M16 16m-2 0a2 2 0 1 0 4 0a2 2 0 1 0-4 0M16 14c0-6 8-6 8 0s-10 4-10-2 12-8 12 2' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #fbfaf7;
+  --bg-alt: #f1efe9;
+  --surface: #ffffff;
+  --text: #1b1b1f;
+  --muted: #54545e;
+  --border: #d3d0c7;
+  --link: #2a2ab8;
+  --accent: #3333cc;
+  --accent-text: #ffffff;
+  --code-bg: #efede6;
+  --focus: #b45309;
+  --pre-bg: #1d1d24;
+  --pre-text: #ececf2;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131318;
+    --bg-alt: #1a1a21;
+    --surface: #1c1c24;
+    --text: #ececf1;
+    --muted: #adadb8;
+    --border: #3a3a46;
+    --link: #a5aeff;
+    --accent: #8a93ff;
+    --accent-text: #101018;
+    --code-bg: #24242e;
+    --focus: #fbbf24;
+    --pre-bg: #0c0c10;
+    --pre-text: #ececf2;
+    color-scheme: dark;
+  }
+}
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 1rem/1.6 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+.wrap { max-width: 62rem; margin: 0 auto; padding: 0 16px; }
+a { color: var(--link); text-underline-offset: 0.15em; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+.skip {
+  position: absolute; left: 16px; top: -4rem; z-index: 10;
+  background: var(--accent); color: var(--accent-text);
+  padding: 0.5rem 1rem; border-radius: 6px; font-weight: 600;
+}
+.skip:focus { top: 8px; }
+header.site { border-bottom: 1px solid var(--border); background: var(--bg); }
+header.site .wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px; padding-top: 12px; padding-bottom: 12px; }
+.brand { font-weight: 700; font-size: 1.15rem; color: var(--text); text-decoration: none; letter-spacing: 0.01em; }
+nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 18px; }
+nav a { color: var(--text); text-decoration: none; padding: 4px 0; display: inline-block; }
+nav a:hover { color: var(--link); text-decoration: underline; }
+section { padding: 48px 0; }
+section.alt { background: var(--bg-alt); }
+h1 { font-size: clamp(1.9rem, 5.5vw, 3rem); line-height: 1.15; margin: 0 0 16px; letter-spacing: -0.01em; }
+h2 { font-size: clamp(1.4rem, 3.6vw, 1.85rem); line-height: 1.25; margin: 0 0 16px; }
+h3 { font-size: 1.1rem; margin: 0 0 8px; }
+p { margin: 0 0 14px; }
+.lede { font-size: 1.15rem; max-width: 42rem; }
+.status { color: var(--muted); max-width: 42rem; }
+.hero { padding: 56px 0 40px; }
+.buttons { display: flex; flex-wrap: wrap; gap: 12px; margin: 24px 0 16px; }
+.btn {
+  display: inline-block; padding: 10px 18px; border-radius: 8px; font-weight: 600; text-decoration: none;
+  border: 2px solid var(--accent); background: var(--accent); color: var(--accent-text);
+}
+.btn.secondary { background: transparent; color: var(--text); border-color: var(--border); }
+.btn:hover { filter: brightness(1.08); text-decoration: none; }
+.grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
+@media (min-width: 46rem) { .grid.two { grid-template-columns: 1fr 1fr; } .grid.three { grid-template-columns: repeat(3, 1fr); } }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+.grid + p { margin-top: 20px; }
+.card p:last-child, .card ul:last-child { margin-bottom: 0; }
+ul.plain { margin: 0 0 14px; padding-left: 1.2em; }
+ul.plain li { margin-bottom: 6px; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 0.9em; background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 4px; overflow-wrap: anywhere; }
+.codeblock { position: relative; margin: 0 0 16px; }
+pre {
+  margin: 0; padding: 14px 16px; background: var(--pre-bg); color: var(--pre-text);
+  border-radius: 8px; overflow-x: auto; font: 0.85rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  tab-size: 4;
+}
+pre code { background: none; padding: 0; font-size: inherit; overflow-wrap: normal; }
+pre:focus-visible { outline-offset: 0; }
+.copy {
+  position: absolute; top: 8px; right: 8px; font: inherit; font-size: 0.8rem; font-weight: 600;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; cursor: pointer;
+}
+.copy:hover { border-color: var(--accent); }
+.step-note { color: var(--muted); font-size: 0.95rem; margin-top: -6px; }
+figure { margin: 0 0 32px; }
+figure img { display: block; width: 100%; max-width: 40rem; height: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+figcaption { color: var(--muted); font-size: 0.95rem; max-width: 40rem; margin-top: 8px; }
+.shots { display: grid; gap: 8px 32px; grid-template-columns: 1fr; }
+@media (min-width: 62rem) { .shots { grid-template-columns: 1fr 1fr; } .shots figure img { max-width: 100%; } }
+dl.links { margin: 0; display: grid; gap: 4px 24px; grid-template-columns: 1fr; }
+@media (min-width: 46rem) { dl.links { grid-template-columns: 12rem 1fr; } }
+dl.links dt { font-weight: 600; margin-top: 12px; }
+dl.links dd { margin: 0; }
+@media (min-width: 46rem) { dl.links dt { margin-top: 0; } }
+footer.site { border-top: 1px solid var(--border); padding: 32px 0 48px; color: var(--muted); }
+footer.site p { max-width: 42rem; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to main content</a>
+<header class="site">
+  <div class="wrap">
+    <a class="brand" href="./">Hairspring</a>
+    <nav aria-label="Page sections">
+      <ul>
+        <li><a href="#how">How it runs</a></li>
+        <li><a href="#features">What you get</a></li>
+        <li><a href="#try">Try it</a></li>
+        <li><a href="#ui">Web UI</a></li>
+        <li><a href="#limits">Limits</a></li>
+        <li><a href="#links">Links</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+<section class="hero">
+  <div class="wrap">
+    <h1>Find concurrency bugs in your own program, then replay them exactly.</h1>
+    <p class="lede">Hairspring uses deterministic simulation. It explores many executions of a system, finds the rare interleaving that breaks a property, shrinks it to a short trace, and gives you a bundle that replays the failure.</p>
+    <p class="status">Experimental, open source (Apache-2.0), and it runs on your laptop or your own servers.</p>
+    <div class="buttons">
+      <a class="btn" href="#try">Try it in two minutes</a>
+      <a class="btn secondary" href="https://github.com/spiculedata/hairspring">View on GitHub</a>
+    </div>
+  </div>
+</section>
+
+<section id="how" class="alt" aria-labelledby="how-h">
+  <div class="wrap">
+    <h2 id="how-h">Two ways to run it</h2>
+    <p>Determinism depends on how a system is run, so Hairspring has a backend for each case and says plainly what each one needs.</p>
+    <div class="grid two">
+      <div class="card">
+        <h3>Simulated and WebAssembly models</h3>
+        <p>You describe the system as a state machine (Rust) or a WebAssembly module. The state is plain data, so runs are deterministic by construction.</p>
+        <ul class="plain">
+          <li>Works on macOS and Linux.</li>
+          <li>No special hardware.</li>
+          <li>You test a model of your system, not the program itself.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Real Linux programs, under Hermit</h3>
+        <p>Point Hairspring at an unmodified Linux program. It runs the program under <a href="https://github.com/rrnewton/hermit">Hermit</a> with a different scheduler seed for each trial.</p>
+        <ul class="plain">
+          <li>Needs Linux on x86-64: bare metal, or a VM that passes hardware performance counters through.</li>
+          <li>Does not run on macOS or Apple silicon.</li>
+          <li>Hermit is a young third-party project, built from a pinned source revision by the installer.</li>
+          <li>Experimental. Runs are roughly an order of magnitude slower than native.</li>
+        </ul>
+      </div>
+    </div>
+    <p>Which languages have passed the acceptance test under Hermit, and on exactly what configuration, is in the <a href="https://github.com/spiculedata/hairspring/blob/main/docs/support-matrix.md">support matrix</a>. That page is the source of truth.</p>
+  </div>
+</section>
+
+<section id="features" aria-labelledby="features-h">
+  <div class="wrap">
+    <h2 id="features-h">What you get</h2>
+    <div class="grid three">
+      <div class="card">
+        <h3>Replayable bundles</h3>
+        <p>A failure is saved as a one-file text bundle. Replaying it is checked against the program version it was recorded with.</p>
+      </div>
+      <div class="card">
+        <h3>Shrinking</h3>
+        <p>Delta-debugging reduces a failing run to a 1-minimal trace that keeps the same failure.</p>
+      </div>
+      <div class="card">
+        <h3>Same-seed replay and a determinism check</h3>
+        <p>Every run is driven by a seed. <code>hairspring doctor</code> runs the same seed twice and reports the first divergence.</p>
+      </div>
+      <div class="card">
+        <h3>Sweeps with intervals</h3>
+        <p>A sweep runs the whole trial budget and reports violations out of rated trials with a Wilson 95% interval. Timeouts are reported as inconclusive and are never counted as passes.</p>
+      </div>
+      <div class="card">
+        <h3>A confirmation ladder</h3>
+        <p>A failure moves from candidate to rerun repeated, confirmed and verified as checks are recorded. Confirming needs the process backend. None of the steps says a failure is fixed.</p>
+      </div>
+      <div class="card">
+        <h3>Web UI</h3>
+        <p>Runs, failures, targets and workers in a browser, served by <code>hairspring serve</code>, with light and dark themes.</p>
+      </div>
+      <div class="card">
+        <h3>REST and live events</h3>
+        <p>The same service the CLI and UI use is available over HTTP, with server-sent events for live runs.</p>
+      </div>
+      <div class="card">
+        <h3>MCP server</h3>
+        <p>An MCP server for AI agents. Text that comes from the system under test is sanitised and framed as untrusted data.</p>
+      </div>
+      <div class="card">
+        <h3>GitHub Action</h3>
+        <p>Run simulation and WebAssembly targets in CI, with SARIF findings and the bundles kept as an artifact.</p>
+      </div>
+    </div>
+    <p>A few options (for example <code>hairspring gc</code> and <code>hairspring test --sweep --confirm</code>) are only in builds newer than the v0.1-RC1 pre-release. <a href="https://github.com/spiculedata/hairspring/blob/main/docs/upgrading.md">Upgrading</a> lists the differences.</p>
+  </div>
+</section>
+
+<section id="try" class="alt" aria-labelledby="try-h">
+  <div class="wrap">
+    <h2 id="try-h">Try it in two minutes</h2>
+    <p>This uses the built-in simulation targets, so it works on macOS (Apple silicon) and Linux x86-64 with no other setup. The installer downloads the pre-release binary and checks its sha256 against the release&rsquo;s <code>SHA256SUMS</code> before installing it.</p>
+
+    <h3>1. Install</h3>
+    <div class="codeblock copyable">
+<pre tabindex="0"><code>git clone https://github.com/spiculedata/hairspring &amp;&amp; cd hairspring
+bash scripts/install.sh --version v0.1-RC1
+export PATH="$HOME/.local/bin:$PATH"</code></pre>
+    </div>
+    <p>The installer ends by running <code>hairspring doctor</code>. Part of what it prints (abridged: the download and install-path lines are left out):</p>
+    <div class="codeblock">
+<pre tabindex="0"><code>sha256 verified: 1b1dcc8fd0ec37ca1922fcf12a22fff7ad32cdb26b0f7ccacfd63a12d7dc4204
+version: hairspring 0.1.0
+running: hairspring doctor
+lock-lease: deterministic over 8 seeds x 200 steps
+pubsub-atomic: deterministic over 8 seeds x 200 steps
+pubsub-buggy: deterministic over 8 seeds x 200 steps</code></pre>
+    </div>
+    <p class="step-note">That hash is the macOS arm64 binary. To build from source instead, use <code>bash scripts/install.sh</code> with no <code>--version</code>; it needs a Rust toolchain.</p>
+
+    <h3>2. Find a bug and shrink it</h3>
+    <p><code>pubsub-buggy</code> is a built-in model of an at-least-once consumer that can apply a message twice.</p>
+    <div class="codeblock">
+<pre tabindex="0"><code>$ hairspring test pubsub-buggy --seed 5
+hairspring: exploring pubsub-buggy (seed 5)
+FAILED  pubsub-buggy (sim)
+  invariant violated; shrunk from 23 to 8 steps
+  steps (8):
+      1. Deliver(1, 0)
+      2. Tick
+      3. Tick
+      4. Deliver(0, 0)
+      5. Step(1)
+      6. Step(0)
+      7. Step(1)
+      8. Step(0)
+  bundle:
+    hairspring-bundle v2
+    seed=5
+    build=0.1.0
+    target=pubsub-buggy
+    backend=sim
+    path=aa28ac6355e750e5,81d23fd7003c2305,81d23fd7003c2305,5b2a969b42d238a4,80237c8667fadf86,cf21924e7b0ff7c7,80237c8667fadf86,cf21924e7b0ff7c7
+  bundle written: .hairspring/bundles/pubsub-buggy-3893b41f.hairspring  (replay with `hairspring replay .hairspring/bundles/pubsub-buggy-3893b41f.hairspring`)</code></pre>
+    </div>
+    <p>The command exits 1 because a property was violated. The bundle file name includes a hash, so yours may differ from this one.</p>
+
+    <h3>3. Replay it</h3>
+    <div class="codeblock">
+<pre tabindex="0"><code>$ hairspring replay .hairspring/bundles/pubsub-buggy-3893b41f.hairspring
+replaying 8 steps on target `pubsub-buggy` (backend sim)
+    1. Deliver(1, 0)
+    2. Tick
+    3. Tick
+    4. Deliver(0, 0)
+    5. Step(1)
+    6. Step(0)
+    7. Step(1)
+    8. Step(0)
+reproduced: the property is still violated</code></pre>
+    </div>
+    <p>It exits 1 while the bug exists. Run <code>hairspring serve</code> and open <a href="http://127.0.0.1:7878">http://127.0.0.1:7878</a> to see the web UI. It listens on loopback only unless you configure tokens.</p>
+    <p>That output came from the v0.1-RC1 macOS binary. To run your own software, see the <a href="https://github.com/spiculedata/hairspring/wiki">wiki</a> (Installation, Your first run, Running your own software) and the <a href="https://github.com/spiculedata/hairspring/blob/main/docs/quickstart.md">quickstart</a>, which covers the Hermit steps for Linux.</p>
+  </div>
+</section>
+
+<section id="ui" aria-labelledby="ui-h">
+  <div class="wrap">
+    <h2 id="ui-h">The web UI</h2>
+    <p>Screenshots taken against a scratch server holding runs of the built-in simulation targets. They follow your light or dark setting.</p>
+    <div class="shots">
+      <figure>
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="img/failure-confirmation-dark.webp">
+          <img src="img/failure-confirmation-light.webp" width="960" height="1014" loading="lazy" decoding="async" alt="The failure page for pubsub-buggy: the shortest failing steps (8 steps), Replay and Download bundle buttons, and a Confirmation section that reads Candidate, no checks recorded.">
+        </picture>
+        <figcaption>A failure page: the shrunk 8-step trace, the bundle, and a Confirmation section. This one is a candidate because no check has repeated it; simulation targets cannot be confirmed.</figcaption>
+      </figure>
+      <figure>
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="img/runs-start-form-dark.webp">
+          <img src="img/runs-start-form-light.webp" width="960" height="969" loading="lazy" decoding="async" alt="The Runs page with the Start run form set to a sweep of pubsub-atomic with 5 trials, the budget the server will enforce, and the filter bar above the list of runs.">
+        </picture>
+        <figcaption>The Runs page. The start form shows the budget the server will enforce before you start a search or a sweep.</figcaption>
+      </figure>
+      <figure>
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="img/run-properties-dark.webp">
+          <img src="img/run-properties-light.webp" width="960" height="889" loading="lazy" decoding="async" alt="A run page for pubsub-buggy, Failed, with a panel listing what the run shows and does not show, four tabs, an empty property table and a coverage section saying every count stayed at zero.">
+        </picture>
+        <figcaption>A run page. Simulation targets declare no named properties, so the property table is empty; a process target using the guest SDK fills it.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="limits" class="alt" aria-labelledby="limits-h">
+  <div class="wrap">
+    <h2 id="limits-h">Honest limits</h2>
+    <ul class="plain">
+      <li><strong>Experimental.</strong> APIs and the bundle format will change.</li>
+      <li><strong>Not a multi-machine simulator.</strong> It does not simulate several machines or a network between them.</li>
+      <li><strong>Real-program runs need hardware performance counters</strong> and Linux on x86-64. macOS has no system-level determinism and Apple silicon cannot run Hermit.</li>
+      <li><strong>Hermit is a third-party project</strong> we do not control. Review it before running it on anything important.</li>
+      <li><strong>The host is part of the program.</strong> Under Hermit, host files and environment can act as hidden inputs; <code>hairspring doctor</code> helps detect this, and it is probabilistic for in-process leaks, so check several seeds.</li>
+      <li><strong>A pass is not a proof.</strong> It says only that the seeds you ran did not fail. Rates are reported with intervals, and inconclusive trials are never counted as passes.</li>
+      <li><strong>Languages:</strong> the <a href="https://github.com/spiculedata/hairspring/blob/main/docs/support-matrix.md">support matrix</a> says what has been tested and on what. We make no claim beyond it.</li>
+      <li><strong>Security:</strong> if you run a server, read the <a href="https://github.com/spiculedata/hairspring/blob/main/SECURITY.md">security policy</a> first. The remote worker protocol and the database speak plain TCP and HTTP, so use a private network or a TLS proxy.</li>
+    </ul>
+    <p>The measurements behind these statements are in <a href="https://github.com/spiculedata/hairspring/blob/main/docs/determinism.md">docs/determinism.md</a>.</p>
+  </div>
+</section>
+
+<section id="links" aria-labelledby="links-h">
+  <div class="wrap">
+    <h2 id="links-h">Links</h2>
+    <dl class="links">
+      <dt>Wiki</dt>
+      <dd><a href="https://github.com/spiculedata/hairspring/wiki">A beginner&rsquo;s guide</a>: install, first run, running your own software, troubleshooting.</dd>
+      <dt>Documentation</dt>
+      <dd>
+        <a href="https://github.com/spiculedata/hairspring/blob/main/docs/quickstart.md">Quickstart</a>,
+        <a href="https://github.com/spiculedata/hairspring/blob/main/docs/determinism.md">determinism</a>,
+        <a href="https://github.com/spiculedata/hairspring/blob/main/docs/support-matrix.md">support matrix</a>,
+        <a href="https://github.com/spiculedata/hairspring/blob/main/docs/ci.md">CI</a>,
+        <a href="https://github.com/spiculedata/hairspring/blob/main/docs/api.md">HTTP API</a>,
+        <a href="https://github.com/spiculedata/hairspring/blob/main/docs/deploy.md">deploying a server</a>,
+        <a href="https://github.com/spiculedata/hairspring/blob/main/docs/upgrading.md">upgrading</a>
+      </dd>
+      <dt>Releases</dt>
+      <dd><a href="https://github.com/spiculedata/hairspring/releases">Pre-release binaries</a> with checksums.</dd>
+      <dt>Questions and bugs</dt>
+      <dd><a href="https://github.com/spiculedata/hairspring/issues/new/choose">Open an issue</a>. Include the output of <code>hairspring --version</code> and <code>uname -a</code>.</dd>
+      <dt>Security</dt>
+      <dd><a href="https://github.com/spiculedata/hairspring/blob/main/SECURITY.md">Security policy</a>. Report vulnerabilities privately, not in a public issue.</dd>
+      <dt>Contributing</dt>
+      <dd><a href="https://github.com/spiculedata/hairspring/blob/main/CONTRIBUTING.md">Contributing guide</a>. Contributions use a Developer Certificate of Origin sign-off.</dd>
+      <dt>Licence</dt>
+      <dd><a href="https://github.com/spiculedata/hairspring/blob/main/LICENSE">Apache-2.0</a></dd>
+      <dt>Source</dt>
+      <dd><a href="https://github.com/spiculedata/hairspring">github.com/spiculedata/hairspring</a></dd>
+    </dl>
+  </div>
+</section>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <p>Hairspring is open source software, released under the Apache-2.0 licence. It is experimental.</p>
+    <p>This page sets no cookies, loads nothing from other sites and runs no analytics.</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  if (!navigator.clipboard) { return; }
+  var blocks = document.querySelectorAll(".codeblock.copyable");
+  Array.prototype.forEach.call(blocks, function (block) {
+    var pre = block.querySelector("pre");
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "copy";
+    btn.textContent = "Copy";
+    btn.setAttribute("aria-label", "Copy this code block");
+    btn.addEventListener("click", function () {
+      navigator.clipboard.writeText(pre.innerText).then(function () {
+        btn.textContent = "Copied";
+      }, function () {
+        btn.textContent = "Copy failed";
+      }).then(function () {
+        setTimeout(function () { btn.textContent = "Copy"; }, 1800);
+      });
+    });
+    block.appendChild(btn);
+  });
+})();
+</script>
+</body>
+</html>
