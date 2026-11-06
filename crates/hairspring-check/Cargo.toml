@@ -1,0 +1,9 @@
+[package]
+name = "hairspring-check"
+version = "0.1.0"
+edition = "2021"
+description = "Pure history checkers over recorded operations: set, queue, write-ahead-log prefix and single-register linearizability"
+license = "Apache-2.0"
+
+# No dependencies on purpose: a checker is a pure function from a history (and a final state) to a verdict.
+[dependencies]
