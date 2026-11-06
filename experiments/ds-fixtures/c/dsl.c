@@ -9,7 +9,9 @@
  *       [--helper] [--threads=2] [--pause] [--raw-write-kill] [--pace-ms=N]
  * Plan only:
  *   dsl --print-plan --seed=S --kills=K
- * Test hook: --server-arg=<n1|n2|n3>:<arg> passes one extra argument to one loopback experiment server (repeatable, at most 4).
+ * Test hooks (native tests only): --server-arg=<node>:<arg> passes one extra argument to one loopback-experiment server
+ * or client, for example n3:--test-ignore-quit or c1:--test-skip-seq (repeatable, at most 4); --test-leak-child leaves
+ * an untracked child alive for a moment.
  *
  * The crash plan is a pure function of the seed (splitmix64 finaliser keyed by salt and kill index). The seed comes
  * from --seed or from the HAIRSPRING_SEED environment variable. Nothing here has been run under Hermit.
@@ -35,6 +37,8 @@
 #define HIST_BUF_BYTES (64 * 1024)
 #define MAX_RECORDS 512
 #define DEFAULT_PACE_MS 10
+#define ARG_BYTES 512
+#define LEAK_CHILD_MS 1500
 #define PRE_KILL_LINE "DSC0 v1 role=sup pre-kill\n"
 
 typedef struct {
@@ -43,11 +47,12 @@ typedef struct {
     int alive;
     int exited; /* a status was collected */
     int status;
+    int group; /* kill the whole process group, not only the pid */
 } proc_t;
 
 typedef struct {
     char *v[24];
-    char store[24][128];
+    char store[24][ARG_BYTES];
     int n;
 } argv_t;
 
@@ -60,14 +65,16 @@ static const char *g_bin_dir;
 static const char *g_tmp;
 static extra_t g_extra[MAX_EXTRA];
 static int g_extra_count;
+static int g_leak_child;
 
 /* ---- small helpers ---- */
 
 static void av_add(argv_t *a, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(a->store[a->n], sizeof a->store[a->n], fmt, ap);
+    int len = vsnprintf(a->store[a->n], sizeof a->store[a->n], fmt, ap);
     va_end(ap);
+    if (len < 0 || len >= ARG_BYTES || a->n >= 22) ds_die("a path or argument is too long");
     a->v[a->n] = a->store[a->n];
     a->n++;
     a->v[a->n] = NULL;
@@ -90,6 +97,7 @@ static pid_t spawn(proc_t *p, const char *name, argv_t *a, const char *tag) {
         execv(a->v[0], a->v);
         _exit(127);
     }
+    setpgid(pid, pid); /* race-free: the child does the same; whichever runs first wins */
     memset(p, 0, sizeof *p);
     p->pid = pid;
     p->alive = 1;
@@ -132,7 +140,7 @@ static unsigned kill_stragglers(proc_t *ps, int n) {
     for (int i = 0; i < n; i++) {
         if (!ps[i].alive) continue;
         count++;
-        kill(ps[i].pid, SIGKILL);
+        kill(ps[i].group ? -ps[i].pid : ps[i].pid, SIGKILL);
     }
     if (count > 0) wait_all(ps, n, STRAGGLER_REAP_POLLS, 1);
     return count;
@@ -146,13 +154,23 @@ static void send_quit(int port) {
     close(fd);
 }
 
+/* Test hook: a child the launcher does not track, to prove that the live-child check can fail. It exits by itself. */
+static void maybe_leak_child(void) {
+    if (!g_leak_child) return;
+    pid_t pid = fork();
+    if (pid == 0) {
+        ds_sleep_ms(LEAK_CHILD_MS);
+        _exit(0);
+    }
+}
+
 static int has_live_child(void) {
     int st;
     pid_t r = waitpid(-1, &st, WNOHANG);
     return !(r < 0 && errno == ECHILD);
 }
 
-static void path_in_tmp(char *buf, size_t cap, const char *rel) { snprintf(buf, cap, "%s/%s", g_tmp, rel); }
+static void path_in_tmp(char *buf, size_t cap, const char *rel) { ds_fmt_or_die(buf, cap, "%s/%s", g_tmp, rel); }
 
 static void make_dir(const char *rel) {
     char path[512];
@@ -253,6 +271,7 @@ static int run_n0(const char *topo_name, int port_base) {
         if (strcmp(TOPOS[i].name, topo_name) == 0) topo = &TOPOS[i];
     if (topo == NULL) ds_die("unknown topology");
     setup_trial_files(0);
+    maybe_leak_child();
 
     proc_t ps[5];
     const char *server_names[3] = {"n1", "n2", "n3"};
@@ -277,6 +296,8 @@ static int run_n0(const char *topo_name, int port_base) {
         av_add(&a, "--servers=%d,%d,%d", port_base, port_base + 1, port_base + 2);
         av_add(&a, "--tmp=%s", g_tmp);
         if (topo->per_op_conn) av_add(&a, "--per-op-conn");
+        for (int e = 0; e < g_extra_count; e++)
+            if (strcmp(g_extra[e].node, client_names[c]) == 0) av_add(&a, "%s", g_extra[e].arg);
         spawn(&ps[3 + c], client_names[c], &a, NULL);
     }
 
@@ -358,9 +379,10 @@ static void spawn_node(proc_t *p, const crash_cfg_t *cfg, int incarnation) {
     if (cfg->two_threads) av_add(&a, "--threads=2");
     if (cfg->pause) av_add(&a, "--pause");
     spawn(p, "n1", &a, tag);
+    p->group = cfg->use_group;
 }
 
-/* Kill one incarnation, reap it, report it. Returns the number of stragglers (0 or 1). */
+/* Kill one incarnation, reap it, report it. Returns a bit set: 1 = not reaped in time, 2 = group not gone. */
 static unsigned kill_and_report(proc_t *victim, const crash_cfg_t *cfg, int j, unsigned planned_ms, int incarnation) {
     if (cfg->raw) {
         /* Exactly these two system calls, back to back: a write immediately followed by the kill. */
@@ -370,7 +392,12 @@ static unsigned kill_and_report(proc_t *victim, const crash_cfg_t *cfg, int j, u
         (void)kr;
     } else {
         sched_yield();
+#ifdef DS_MUTANT_PID_KILL
+        /* Regression mutant (built only by the native tests): a group-kill trial that kills the pid alone. */
+        kill(victim->pid, SIGKILL);
+#else
         kill(cfg->use_group ? -victim->pid : victim->pid, SIGKILL);
+#endif
     }
     unsigned polls = 0;
     while (polls < KILL_REAP_POLLS) {
@@ -396,11 +423,17 @@ static unsigned kill_and_report(proc_t *victim, const crash_cfg_t *cfg, int j, u
             incarnation, j, planned_ms);
     ds_emit("DSC0 v1 role=sup kill=%d victim=n1.i%d wifsig=%d termsig=%d reap_polls=%u grp_gone=%s planned_ms=%u\n", j,
             incarnation, wifsig, termsig, polls, grp, planned_ms);
-    return victim->alive ? 1 : 0;
+    unsigned bad = victim->alive ? 1u : 0u;
+    if (cfg->use_group && grp[0] == '0') {
+        bad |= 2u;
+        kill(-victim->pid, SIGKILL); /* clean up whatever the group kill missed */
+    }
+    return bad;
 }
 
 static int run_c0(const crash_cfg_t *cfg) {
     setup_trial_files(1);
+    maybe_leak_child();
     plan_t plan = crash_plan(cfg->seed, cfg->kills);
     proc_t node, client;
     memset(&client, 0, sizeof client);
@@ -421,11 +454,21 @@ static int run_c0(const crash_cfg_t *cfg) {
     }
 
     unsigned wait_ms = cfg->raw ? KW_WAIT_MS : plan.d[0];
-    int kills_done = 0;
+    int kills_done = 0, node_started = 1, group_bad = 0;
     for (int j = 1; j <= cfg->kills; j++) {
         ds_sleep_ms(wait_ms);
-        stragglers += kill_and_report(&node, cfg, j, plan.d[j - 1], incarnation);
+        if (cfg->raw) {
+            /* The node's region file exists once it has recovered and started: evidence that it came up. */
+            char rel[64], path[512];
+            struct stat st;
+            snprintf(rel, sizeof rel, "hairspring-region/n1.i%d", incarnation);
+            path_in_tmp(path, sizeof path, rel);
+            node_started = stat(path, &st) == 0;
+        }
+        unsigned bad = kill_and_report(&node, cfg, j, plan.d[j - 1], incarnation);
         kills_done++;
+        if (bad & 2u) group_bad = 1;
+        if (bad & 1u) break; /* the victim is still alive: never start the next incarnation over it */
         if (cfg->raw) break;
         ds_sleep_ms(plan.r[j - 1]);
         incarnation++;
@@ -450,7 +493,7 @@ static int run_c0(const crash_cfg_t *cfg) {
     int seq_ok = check_history(clients, 1, client_started ? 2 * C0_OPS : 0, &digest, &count);
     int live_after = has_live_child();
     int exits_ok = (!client_started || exited_zero(&client)) && (cfg->raw || exited_zero(&node));
-    int ok = exits_ok && stragglers == 0 && !live_after && seq_ok;
+    int ok = exits_ok && stragglers == 0 && !live_after && seq_ok && node_started && !group_bad;
     ds_emit("DSC0 v1 role=launch kills=%d restarts=%u stragglers=%u live_after=%d seq_ok=%d hist=%016llx ok=%d\n",
             kills_done, restarts, stragglers, live_after, seq_ok, (unsigned long long)digest, ok);
     return ok ? 0 : 3;
@@ -491,6 +534,7 @@ int main(int argc, char **argv) {
     g_tmp = ds_opt(argc, argv, "--tmp=");
     if (g_bin_dir == NULL || g_tmp == NULL) ds_die("usage: dsl (--topo=T | --crash=pid,K) --bin-dir=DIR --tmp=DIR ...");
     parse_extras(argc, argv);
+    g_leak_child = ds_flag(argc, argv, "--test-leak-child");
 
     const char *topo = ds_opt(argc, argv, "--topo=");
     if (topo != NULL) {

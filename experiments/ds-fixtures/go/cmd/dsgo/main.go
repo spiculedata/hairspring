@@ -25,6 +25,7 @@ import (
 const (
 	connectTries = 200
 	retrySleep   = 5 * time.Millisecond
+	idleLimit    = 120 * time.Second // orphan guard: no request for this long
 )
 
 func fatal(msg string) {
@@ -61,6 +62,9 @@ func main() {
 		fatal("usage: dsgo --node=n1 --port=P --peer-port=Q")
 	}
 
+	if !ds.ValidName(*node) {
+		fatal("bad --node")
+	}
 	srv := &ds.Server{Node: *node}
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", *port))
 	if err != nil {
@@ -76,6 +80,7 @@ func main() {
 	var sendMu sync.Mutex
 	quit := make(chan struct{})
 	var once sync.Once
+	activity := make(chan struct{}, 1)
 
 	handle := func(c net.Conn) {
 		defer c.Close()
@@ -84,6 +89,10 @@ func main() {
 			line, err := r.ReadString('\n')
 			if err != nil {
 				return
+			}
+			select {
+			case activity <- struct{}{}:
+			default:
 			}
 			act := srv.Handle(strings.TrimRight(line, "\r\n"), true)
 			if act.Replicate != "" {
@@ -109,9 +118,17 @@ func main() {
 		}
 	}()
 
-	<-quit
-	ds.Emit(srv.ResultLine())
-	os.Exit(0)
+	for {
+		select {
+		case <-quit:
+			ds.Emit(srv.ResultLine())
+			os.Exit(0)
+		case <-activity:
+		case <-time.After(idleLimit):
+			ds.Emit(srv.ResultLine())
+			os.Exit(4)
+		}
+	}
 }
 
 type discard struct{}

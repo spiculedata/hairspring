@@ -8,6 +8,7 @@ strace) the syscall adjacency the kill supervisor promises.
 import os
 import re
 import shutil
+import signal
 import socket
 import struct
 import subprocess
@@ -21,6 +22,7 @@ from dstest import (
     CRASH_PORT,
     HERE,
     PORT_BASE,
+    ROOT,
     RUNS,
     Trial,
     check,
@@ -334,13 +336,17 @@ def _topology_test(topo, mode, conserve):
 
 
 def test_topologies_produce_different_application_results_across_runs():
-    # Both clients write the same keys, so the final state can differ across host schedules; this is a native check
-    # that the workload exposes interleavings, not a claim about any other environment.
+    # Both clients write the same keys, so the final state can differ across host schedules. This is a native check
+    # that the workload exposes interleavings (it can fail: one state in 60 runs fails it), not a claim about any
+    # other environment.
     states = set()
-    for r in _repeat("c3e", max(RUNS, 20)):
+    for _ in range(60):
+        r = run_n0("c3e")
         states.add(tuple(kv(l)["state"] for l in sorted(r.stdout.splitlines()) if " role=srv " in l))
-    check(len(states) >= 1, "no state seen")
-    print("INFO distinct native final states in c3e: %d" % len(states))
+        if len(states) >= 2:
+            break
+    check(len(states) >= 2, "60 native runs of c3e all ended in the same state: the workload hides interleavings")
+    check_no_leftovers([PORT_BASE, PORT_BASE + 1, PORT_BASE + 2])
 
 
 def test_early_exit_of_a_server_gives_ok0_and_rc3():
@@ -408,24 +414,33 @@ def test_crash_write_then_kill_diagnostic_trial():
 
 
 STRACE = shutil.which("strace")
+KILL_CALL = re.compile(r"kill\(\d+, SIGKILL")  # the call may print as "kill(N, SIGKILL <unfinished ...>"
 
 
 def _strace_run(flags):
+    """Trace with -ff (one file per process) so that the launcher's calls never interleave with another process's.
+    Returns the launcher's calls in order, signal and exit notes removed."""
     with Trial() as tmp:
-        out = os.path.join(tmp, "trace.txt")
-        args = [STRACE, "-f", "-o", out, exe("dsl"), "--crash=pid,1", "--bin-dir=" + BIN, "--port=%d" % CRASH_PORT, "--seed=620001", "--tmp=" + os.path.join(tmp, "t")] + flags
-        os.mkdir(os.path.join(tmp, "t"))
+        prefix = os.path.join(tmp, "trace")
+        trial = os.path.join(tmp, "t")
+        os.mkdir(trial)
+        args = [STRACE, "-ff", "-o", prefix, exe("dsl"), "--crash=pid,1", "--bin-dir=" + BIN, "--port=%d" % CRASH_PORT, "--seed=620001", "--tmp=" + trial] + flags
         r = run(args)
         check(r.returncode == 0, "strace run rc %d: %r" % (r.returncode, r.stderr[-300:]))
-        with open(out, errors="replace") as f:
-            return f.read().splitlines()
+        launcher = [n for n in os.listdir(tmp) if n.startswith("trace.")]
+        found = []
+        for name in launcher:
+            with open(os.path.join(tmp, name), errors="replace") as f:
+                lines = f.read().splitlines()
+            if lines and lines[0].startswith("execve(") and "/dsl\"" in lines[0]:
+                found.append(lines)
+        check(len(found) == 1, "expected exactly one launcher trace, found %d of %d files" % (len(found), len(launcher)))
+        return _launcher_calls(found[0])
 
 
-def _launcher_calls(trace):
-    """The syscall lines of the launcher (the first pid in the trace), in order."""
-    pid = trace[0].split()[0]
-    calls = [l.split(None, 1)[1] for l in trace if l.split()[0] == pid and len(l.split()) > 1]
-    return [c for c in calls if not c.startswith(("---", "+++"))]
+def _launcher_calls(lines):
+    """The launcher's own calls from one per-process strace file."""
+    return [c for c in lines if not c.startswith(("---", "+++", "<..."))]
 
 
 def test_strace_raw_write_is_immediately_followed_by_kill():
@@ -433,20 +448,17 @@ def test_strace_raw_write_is_immediately_followed_by_kill():
         check(os.environ.get("DS_REQUIRE_STRACE") != "1", "strace is required but missing")
         print("SKIP strace not available")
         return
-    check_write_then_kill(_launcher_calls(_strace_run(["--pause", "--raw-write-kill"])))
+    check_write_then_kill(_strace_run(["--pause", "--raw-write-kill"]))
 
 
 def check_write_then_kill(calls):
     idx = [i for i, c in enumerate(calls) if c.startswith('write(1, "DSC0 v1 role=sup pre-kill\\n", 26)')]
     check(len(idx) == 1, "expected exactly one pre-kill write in the launcher's calls")
-    check(
-        idx[0] + 1 < len(calls) and re.match(r"kill\(\d+, SIGKILL\)", calls[idx[0] + 1]),
-        "the call after the write is not the kill",
-    )
+    check(idx[0] + 1 < len(calls) and KILL_CALL.match(calls[idx[0] + 1]), "the call after the write is not the kill")
 
 
 def check_yield_then_kill(calls):
-    idx = [i for i, c in enumerate(calls) if re.match(r"kill\(\d+, SIGKILL\)", c)]
+    idx = [i for i, c in enumerate(calls) if KILL_CALL.match(c)]
     check(len(idx) == 1, "expected one kill in the launcher's calls, got %d" % len(idx))
     check(idx[0] > 0 and calls[idx[0] - 1].startswith("sched_yield()"), "the call before the kill is not sched_yield")
 
@@ -456,7 +468,7 @@ def test_strace_default_path_yields_before_the_kill():
         check(os.environ.get("DS_REQUIRE_STRACE") != "1", "strace is required but missing")
         print("SKIP strace not available")
         return
-    check_yield_then_kill(_launcher_calls(_strace_run([])))
+    check_yield_then_kill(_strace_run([]))
 
 
 def _expect_failure(fn, calls):
@@ -468,25 +480,122 @@ def _expect_failure(fn, calls):
 
 
 def test_strace_checks_on_sample_traces():
-    """The trace checks run everywhere, on sample strace -f output, so a Mac run still exercises their logic."""
+    """The trace checks run everywhere, on sample strace -ff output of the launcher, so a Mac run exercises them."""
     trace = [
-        '100 execve("dsl", ["dsl"], 0x7ffd) = 0',
-        '101 execve("dsnode", ["dsnode"], 0x7ffd) = 0',
-        "100 nanosleep({tv_sec=0, tv_nsec=168000000}, NULL) = 0",
-        "100 sched_yield() = 0",
-        '100 write(1, "DSC0 v1 role=sup pre-kill\\n", 26) = 26',
-        "101 pause() = ? ERESTARTNOHAND (To be restarted if no handler)",
-        "100 kill(101, SIGKILL) = 0",
-        "100 --- SIGCHLD {si_signo=SIGCHLD} ---",
-        "101 +++ killed by SIGKILL +++",
+        'execve("/x/build/dsl", ["dsl"], 0x7ffd) = 0',
+        "nanosleep({tv_sec=0, tv_nsec=168000000}, NULL) = 0",
+        "sched_yield() = 0",
+        'write(1, "DSC0 v1 role=sup pre-kill\\n", 26) = 26',
+        "kill(101, SIGKILL <unfinished ...>",
+        "--- SIGCHLD {si_signo=SIGCHLD} ---",
+        "<... kill resumed>) = 0",
+        "+++ exited with 0 +++",
     ]
     calls = _launcher_calls(trace)
     check_write_then_kill(calls)
     check_yield_then_kill([c for c in calls if not c.startswith("write")])
     _expect_failure(check_yield_then_kill, calls)  # a write sits between the yield and the kill
     bad = list(calls)
-    bad.insert(calls.index("kill(101, SIGKILL) = 0"), "getpid() = 100")
+    bad.insert(len(bad) - 1, "getpid() = 100")
     _expect_failure(check_write_then_kill, bad)
+
+
+def _launch_fields(r):
+    return kv([l for l in r.stdout.splitlines() if " role=launch " in l][0])
+
+
+def test_a_gap_in_the_sequence_numbers_makes_seq_ok_zero():
+    r = run_n0("c3e", extra=["--server-arg=c1:--test-skip-seq"])
+    f = _launch_fields(r)
+    check(r.returncode == 3 and f["seq_ok"] == "0" and f["ok"] == "0", "a seq gap was not caught: %r" % f)
+    check_no_leftovers([PORT_BASE, PORT_BASE + 1, PORT_BASE + 2])
+
+
+def test_a_child_left_alive_makes_live_after_one():
+    r = run_n0("c3e", extra=["--test-leak-child"])
+    f = _launch_fields(r)
+    check(r.returncode == 3 and f["live_after"] == "1" and f["ok"] == "0", "a live child was not caught: %r" % f)
+    time.sleep(2)  # the untracked child ends by itself
+    check_no_leftovers([PORT_BASE, PORT_BASE + 1, PORT_BASE + 2])
+
+
+def test_dskv_drains_what_is_already_delivered_before_it_quits():
+    port, peer_port = PORT_BASE + 28, PORT_BASE + 29
+    peer = _listener(peer_port)
+    server = subprocess.Popen(
+        [exe("dskv"), "--mode=epoll", "--node=n1", "--port=%d" % port, "--peer-port=%d" % peer_port],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        succ, _ = peer.accept()
+        _read_lines(succ, 1)
+        quitter = socket.create_connection(("127.0.0.1", port), timeout=10)  # the QUIT arrives in the same wake-up as the writes
+        writer = socket.create_connection(("127.0.0.1", port), timeout=10)
+        time.sleep(0.3)  # both accepted
+        os.kill(server.pid, signal.SIGSTOP)
+        quitter.sendall(b"QUIT\n")
+        writer.sendall(b"REPL k5 9\n" * 100)  # more than one 512-byte read of the connection buffer
+        time.sleep(0.2)
+        os.kill(server.pid, signal.SIGCONT)
+        out, _ = server.communicate(timeout=20)
+    finally:
+        if server.poll() is None:
+            server.kill()
+            server.wait()
+        peer.close()
+    f = kv(out.strip())
+    check(f["repl_in"] == "100" and f["state"] == "%016x" % oracle.state_digest({5: 9}), "REPL sent before QUIT was lost: %r" % out)
+
+
+def test_long_paths_are_refused_or_work_never_truncated():
+    with Trial() as base:
+        long_dir = os.path.join(base, "d" * 150)
+        os.mkdir(long_dir)
+        for name in ("dsl", "dskv", "dscli"):
+            os.symlink(exe(name), os.path.join(long_dir, name))
+        r = run([exe("dsl"), "--topo=c3e", "--bin-dir=" + long_dir, "--tmp=" + os.path.join(base, "t"), "--port-base=%d" % PORT_BASE])
+        check(r.returncode == 0 and " ok=1" in r.stdout, "a 150-character bin-dir should work: rc %d %r" % (r.returncode, r.stdout[-200:]))
+        too_long = os.path.join(base, "x" * 600)
+        r = run([exe("dsl"), "--topo=c3e", "--bin-dir=" + too_long, "--tmp=" + os.path.join(base, "t2"), "--port-base=%d" % PORT_BASE])
+        check(r.returncode == 2 and r.stdout == "" and "too long" in r.stderr, "a 600-character path should be refused: rc %d %r" % (r.returncode, r.stderr))
+        r = run([exe("dsl"), "--topo=c3e", "--bin-dir=" + BIN, "--tmp=" + too_long, "--port-base=%d" % PORT_BASE])
+        check(r.returncode == 2 and r.stdout == "", "a 600-character --tmp should be refused: rc %d" % r.returncode)
+    check_no_leftovers([PORT_BASE, PORT_BASE + 1, PORT_BASE + 2])
+
+
+def test_bad_node_and_tag_names_are_refused_before_any_path_is_built():
+    with Trial() as tmp:
+        for d in ("ds-data", "hairspring-region"):
+            os.mkdir(os.path.join(tmp, d))
+        cases = [("n1", "n2.i0"), ("n1", "n1.i"), ("../x", "../x.i0"), ("n1", "n1.i0/../../y"), ("n/1", "n/1.i0")]
+        for node, tag in cases:
+            r = run([exe("dsnode"), "--node=" + node, "--tmp=" + tmp, "--recover-only"], env={"HAIRSPRING_PROC": tag})
+            check(r.returncode == 2 and r.stdout == "", "node %r tag %r should be refused: rc %d" % (node, tag, r.returncode))
+        check(os.listdir(os.path.join(tmp, "ds-data")) == [], "a refused name still created a file")
+    r = run([exe("dskv"), "--mode=block", "--node=../x", "--port=%d" % (PORT_BASE + 30)])
+    check(r.returncode == 2, "dskv should refuse a bad node name")
+
+
+def test_a_group_kill_that_only_killed_the_pid_is_caught():
+    """Regression mutant: dsl built so that a group-kill trial kills the pid alone must fail the group checks."""
+    with Trial() as tmp:
+        mutant = os.path.join(tmp, "dsl-mutant")
+        cc = os.environ.get("CC", "cc")
+        build = subprocess.run([cc, "-std=gnu11", "-O1", "-DDS_MUTANT_PID_KILL", "-pthread", "-o", mutant, os.path.join(ROOT, "c", "dsl.c")], capture_output=True, text=True)
+        check(build.returncode == 0, "mutant build failed: %s" % build.stderr[-300:])
+        trial = os.path.join(tmp, "t")
+        r = run_c0(620001, 1, kind="pgid", flags=["--helper"], tmp=trial, dsl=mutant)
+        sup = kv([l for l in r.stdout.splitlines() if " role=sup " in l][0])
+        check(sup["grp_gone"] == "0", "the helper survived a pid-only kill, so grp_gone must be 0: %r" % sup)
+        check(r.returncode == 3 and " ok=0" in r.stdout, "the launcher must report ok=0: rc %d" % r.returncode)
+        try:
+            check_c0_trial(r, trial, 620001, 1, group=True)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("check_c0_trial accepted the pid-kill mutant")
+    check_no_leftovers([CRASH_PORT])
 
 
 def test_no_process_left_behind():
@@ -510,6 +619,12 @@ TESTS = [
     _topology_test("c3b", "block", False),
     test_topologies_produce_different_application_results_across_runs,
     test_early_exit_of_a_server_gives_ok0_and_rc3,
+    test_a_gap_in_the_sequence_numbers_makes_seq_ok_zero,
+    test_a_child_left_alive_makes_live_after_one,
+    test_dskv_drains_what_is_already_delivered_before_it_quits,
+    test_long_paths_are_refused_or_work_never_truncated,
+    test_bad_node_and_tag_names_are_refused_before_any_path_is_built,
+    test_a_group_kill_that_only_killed_the_pid_is_caught,
     test_a_server_that_ignores_quit_is_killed_and_counted,
     _crash_test("k1", 1),
     _crash_test("kp", 1, kind="pgid", flags=["--helper"]),

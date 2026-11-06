@@ -13,6 +13,7 @@ use std::mem::ManuallyDrop;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::unix::io::FromRawFd;
 use std::process::exit;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
@@ -21,6 +22,9 @@ use dsrs::Server;
 
 const CONNECT_TRIES: u32 = 200;
 const RETRY_SLEEP: Duration = Duration::from_millis(5);
+/// Orphan guard: exit after this many one-second ticks with no request.
+const IDLE_TICKS: u32 = 120;
+static ACTIVITY: AtomicU64 = AtomicU64::new(0);
 
 fn fatal(msg: &str) -> ! {
     eprintln!("error: {msg}");
@@ -85,6 +89,7 @@ fn serve(stream: TcpStream, server: Arc<Mutex<Server>>, succ: Arc<Mutex<TcpStrea
             Ok(0) | Err(_) => return,
             Ok(_) => {}
         }
+        ACTIVITY.fetch_add(1, Ordering::Relaxed);
         let act = lock(&server).handle(line.trim_end(), true);
         if let Some(r) = act.replicate {
             let _ = lock(&succ).write_all(r.as_bytes());
@@ -101,8 +106,9 @@ fn serve(stream: TcpStream, server: Arc<Mutex<Server>>, succ: Arc<Mutex<TcpStrea
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let node =
-        opt(&args, "node").unwrap_or_else(|| fatal("usage: dsrs --node=n1 --port=P --peer-port=Q"));
+    let node = opt(&args, "node")
+        .filter(|n| dsrs::valid_name(n))
+        .unwrap_or_else(|| fatal("usage: dsrs --node=n1 --port=P --peer-port=Q (a node name is 1 to 16 letters and digits)"));
     let port = port_of(&args, "port");
     let peer_port = port_of(&args, "peer-port");
 
@@ -126,6 +132,21 @@ fn main() {
         });
     }
     let succ = Arc::new(Mutex::new(link));
+
+    let watched = Arc::clone(&server);
+    thread::spawn(move || {
+        let (mut last, mut idle) = (ACTIVITY.load(Ordering::Relaxed), 0);
+        loop {
+            thread::sleep(Duration::from_secs(1));
+            let now = ACTIVITY.load(Ordering::Relaxed);
+            idle = if now == last { idle + 1 } else { 0 };
+            last = now;
+            if idle >= IDLE_TICKS {
+                emit(&lock(&watched).result_line());
+                exit(4);
+            }
+        }
+    });
 
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };

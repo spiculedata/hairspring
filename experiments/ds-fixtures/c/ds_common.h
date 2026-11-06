@@ -73,6 +73,36 @@ static inline void ds_die(const char *msg) {
     _exit(2);
 }
 
+/* Format into buf; a result that does not fit is an error (rc 2), never a silently shortened path or argument. */
+static inline void ds_fmt_or_die(char *buf, size_t cap, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, cap, fmt, ap);
+    va_end(ap);
+    if (n < 0 || (size_t)n >= cap) ds_die("a path or argument is too long");
+}
+
+/* A node, client or tag name used in paths: 1 to 16 letters and digits. */
+static inline int ds_valid_name(const char *s) {
+    size_t n = strlen(s);
+    if (n == 0 || n > 16) return 0;
+    for (size_t i = 0; i < n; i++)
+        if (!((s[i] >= 'a' && s[i] <= 'z') || (s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= '0' && s[i] <= '9'))) return 0;
+    return 1;
+}
+
+/* HAIRSPRING_PROC must be exactly "<node>.i<digits>" for the given node name. */
+static inline int ds_valid_tag(const char *tag, const char *node) {
+    size_t n = strlen(node);
+    if (!ds_valid_name(node) || strncmp(tag, node, n) != 0 || tag[n] != '.' || tag[n + 1] != 'i') return 0;
+    const char *d = tag + n + 2;
+    size_t len = strlen(d);
+    if (len == 0 || len > 9) return 0;
+    for (size_t i = 0; i < len; i++)
+        if (d[i] < '0' || d[i] > '9') return 0;
+    return 1;
+}
+
 /* ---- digests and the splitmix finaliser ---- */
 
 static inline uint64_t ds_fnv(uint64_t h, const void *data, size_t len) {

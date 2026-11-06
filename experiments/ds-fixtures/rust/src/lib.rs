@@ -17,6 +17,11 @@ pub fn fnv(mut h: u64, data: &[u8]) -> u64 {
     h
 }
 
+/// A node name that is safe to use in a path: 1 to 16 ASCII letters and digits.
+pub fn valid_name(s: &str) -> bool {
+    (1..=16).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
 /// `k<d>` with d in 0..7.
 pub fn key_index(s: &str) -> Option<usize> {
     let b = s.as_bytes();
@@ -165,6 +170,16 @@ mod tests {
             format!("{:016x}", fnv(FNV_OFFSET, b"a")),
             "af63dc4c8601ec8c"
         );
+    }
+
+    #[test]
+    fn node_names_are_validated_before_they_reach_a_path() {
+        for ok in ["n1", "N2", "abc123"] {
+            assert!(valid_name(ok), "{ok}");
+        }
+        for bad in ["", "../x", "n1/", "a.b", "n 1", "abcdefghijklmnopq"] {
+            assert!(!valid_name(bad), "{bad}");
+        }
     }
 
     #[test]

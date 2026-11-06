@@ -101,7 +101,7 @@ static int parse_ports(const char *list, int *ports) {
 
 static uint64_t *map_sequence(const char *tmp) {
     char path[512];
-    snprintf(path, sizeof path, "%s/ds-seq", tmp);
+    ds_fmt_or_die(path, sizeof path, "%s/ds-seq", tmp);
     int fd = open(path, O_RDWR);
     if (fd < 0) ds_die("cannot open the sequence file");
     void *m = mmap(NULL, DS_SEQ_FILE_BYTES, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
@@ -144,6 +144,8 @@ int main(int argc, char **argv) {
 
     int op_count = reconnect ? C0_OPS : N0_OPS;
     uint64_t *seq = map_sequence(tmp);
+    /* Test hook: take one sequence number that no record carries, so that the launcher's numbering check can fail. */
+    if (ds_flag(argc, argv, "--test-skip-seq")) __atomic_add_fetch(seq, 1, __ATOMIC_SEQ_CST);
     int fds[MAX_SERVERS];
     unsigned refused = 0, eof = 0, reset = 0, resent = 0, ok = 0, fail = 0;
     for (int s = 0; s < nservers; s++) {
@@ -201,7 +203,7 @@ int main(int argc, char **argv) {
         if (fds[s] >= 0) close(fds[s]);
 
     char path[512];
-    snprintf(path, sizeof path, "%s/ds-hist/%s", tmp, node);
+    ds_fmt_or_die(path, sizeof path, "%s/ds-hist/%s", tmp, node);
     int hfd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (hfd < 0) ds_die("cannot write the history file");
     uint64_t digest = DS_FNV_OFFSET;

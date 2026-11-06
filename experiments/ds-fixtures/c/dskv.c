@@ -28,7 +28,7 @@
 #define SUSPECT_MS 60
 #define IDLE_WAIT_MS 50
 #define MAX_IDLE_WAITS 2400 /* orphan guard: about 120 s of silence in epoll mode */
-#define MAX_HEARTBEATS 6000 /* orphan guard in timeout mode: about 120 s of heartbeats */
+#define IDLE_LIMIT_MS 120000 /* orphan guard in timeout mode: no request for this long (heartbeats do not count) */
 
 typedef enum { MODE_EPOLL, MODE_TIMEOUT, MODE_BLOCK } ds_mode;
 
@@ -50,6 +50,7 @@ typedef struct {
     int stop_thread; /* atomic */
     uint64_t thread_clock;
     uint64_t last_hb_succ, last_hb_pred;
+    uint64_t last_activity; /* timeout mode: last PUT, GET, REPL or QUIT */
     int suspect_succ, suspect_pred;
     ds_conn conns[MAX_CONNS];
 } server_t;
@@ -126,6 +127,7 @@ static void handle_line(ds_conn *c, const char *line) {
     int n = sscanf(line, "%7s %15s %31s", cmd, a, b);
     if (n < 1) return;
     uint64_t now = S.mode == MODE_TIMEOUT ? ds_mono_ms() : 0;
+    if (strcmp(cmd, "HB") != 0 && strcmp(cmd, "HELLO") != 0) S.last_activity = now;
     if (strcmp(cmd, "PUT") == 0 || strcmp(cmd, "REPL") == 0) {
         int is_put = cmd[0] == 'P';
         int k = n == 3 ? ds_key_index(a) : -1;
@@ -296,6 +298,7 @@ static int run_event_loop(void) {
         thread_started = 1;
     }
 
+    S.last_activity = S.mode == MODE_TIMEOUT ? ds_mono_ms() : 0;
     uint64_t clock = DS_FNV_OFFSET;
     uint64_t next_hb = S.mode == MODE_TIMEOUT ? ds_mono_ms() + HB_INTERVAL_MS : 0;
     unsigned idle_waits = 0;
@@ -310,7 +313,7 @@ static int run_event_loop(void) {
                 next_hb = now + HB_INTERVAL_MS;
             }
             check_suspects(now);
-            if (__atomic_load_n(&S.hb, __ATOMIC_RELAXED) >= MAX_HEARTBEATS) {
+            if (now - S.last_activity > IDLE_LIMIT_MS) {
                 exit_code = 4;
                 break;
             }
@@ -366,6 +369,7 @@ int main(int argc, char **argv) {
     else if (strcmp(mode, "timeout") == 0) S.mode = MODE_TIMEOUT;
     else if (strcmp(mode, "block") == 0) S.mode = MODE_BLOCK;
     else ds_die("unknown mode");
+    if (!ds_valid_name(node)) ds_die("bad --node");
     S.node = node;
     S.port = ds_parse_port(port);
     if (S.mode != MODE_BLOCK) {

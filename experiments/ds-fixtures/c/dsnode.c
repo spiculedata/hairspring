@@ -113,7 +113,7 @@ static void recover(const char *path) {
 
 static void create_region(const char *dir) {
     char path[512];
-    snprintf(path, sizeof path, "%s/hairspring-region/%s", dir, g_tag);
+    ds_fmt_or_die(path, sizeof path, "%s/hairspring-region/%s", dir, g_tag);
     int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (fd < 0 || ftruncate(fd, REGION_BYTES) < 0) ds_die("cannot create the region");
     unsigned char *m = mmap(NULL, REGION_BYTES, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
@@ -169,11 +169,10 @@ static void handle_line(ds_conn *c, const char *line, int *quit) {
     }
 }
 
-static void run_helper(pid_t parent) {
-    for (int i = 0; i < HELPER_MAX_LOOPS; i++) {
-        ds_sleep_ms(5);
-        if (getppid() != parent) break;
-    }
+/* The helper only loops on a 5 ms sleep, bounded at about 120 s. It does NOT watch its parent: a process-group kill
+ * must be what removes it, so a kill that missed the group is visible. */
+static void run_helper(void) {
+    for (int i = 0; i < HELPER_MAX_LOOPS; i++) ds_sleep_ms(5);
     _exit(0);
 }
 
@@ -256,23 +255,23 @@ int main(int argc, char **argv) {
     int recover_only = ds_flag(argc, argv, "--recover-only");
     if (g_tag == NULL || node == NULL || tmp == NULL || (port == NULL && !recover_only))
         ds_die("usage: HAIRSPRING_PROC=n1.i0 dsnode --node=n1 --port=P --tmp=DIR");
+    if (!ds_valid_name(node) || !ds_valid_tag(g_tag, node)) ds_die("HAIRSPRING_PROC must be <node>.i<digits> for --node");
     g_incarnation = parse_incarnation(g_tag);
     const char *threads = ds_opt(argc, argv, "--threads=");
     int use_thread = threads != NULL && ds_parse_u64(threads, "bad --threads") == 2;
     if (threads != NULL && !use_thread) ds_die("--threads must be 2");
 
     char path[512];
-    snprintf(path, sizeof path, "%s/ds-data/%s.log", tmp, node);
+    ds_fmt_or_die(path, sizeof path, "%s/ds-data/%s.log", tmp, node);
     recover(path);
     if (recover_only) return 0;
     create_region(tmp);
 
     pid_t helper = -1;
     if (ds_flag(argc, argv, "--helper")) {
-        pid_t parent = getpid();
         helper = fork();
         if (helper < 0) ds_die("cannot fork the helper");
-        if (helper == 0) run_helper(parent);
+        if (helper == 0) run_helper();
     }
     if (ds_flag(argc, argv, "--pause")) {
         int lfd = ds_listen(ds_parse_port(port), 1);

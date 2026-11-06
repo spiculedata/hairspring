@@ -140,9 +140,9 @@ LAUNCH_C0 = re.compile(
 )
 
 
-def run_c0(seed, kills, kind="pid", node_bin="dsnode", flags=None, port=None, tmp=None, timeout=120):
+def run_c0(seed, kills, kind="pid", node_bin="dsnode", flags=None, port=None, tmp=None, timeout=120, dsl=None):
     args = [
-        exe("dsl"),
+        dsl or exe("dsl"),
         "--crash=%s,%d" % (kind, kills),
         "--bin-dir=" + BIN,
         "--port=%d" % (CRASH_PORT if port is None else port),

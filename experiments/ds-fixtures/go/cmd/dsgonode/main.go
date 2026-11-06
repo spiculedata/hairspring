@@ -17,9 +17,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/spiculedata/hairspring/experiments/ds-fixtures/go/internal/ds"
 )
+
+const idleLimit = 120 * time.Second // orphan guard: no request for this long
 
 func fatal(msg string) {
 	fmt.Fprintln(os.Stderr, "error: "+msg)
@@ -68,6 +71,9 @@ func main() {
 	if tag == "" || *name == "" || *tmp == "" || (*port == 0 && !*recoverOnly) {
 		fatal("usage: HAIRSPRING_PROC=n1.i0 dsgonode --node=n1 --port=P --tmp=DIR")
 	}
+	if !ds.ValidName(*name) || !ds.ValidTag(tag, *name) {
+		fatal("HAIRSPRING_PROC must be <node>.i<digits> for --node")
+	}
 	inc, err := ds.IncarnationOf(tag)
 	if err != nil {
 		fatal(err.Error())
@@ -93,6 +99,7 @@ func main() {
 	}
 	quit := make(chan struct{})
 	var once sync.Once
+	activity := make(chan struct{}, 1)
 	handle := func(c net.Conn) {
 		defer c.Close()
 		r := bufio.NewReader(c)
@@ -100,6 +107,10 @@ func main() {
 			line, err := r.ReadString('\n')
 			if err != nil {
 				return
+			}
+			select {
+			case activity <- struct{}{}:
+			default:
 			}
 			f := strings.Fields(line)
 			switch {
@@ -135,7 +146,15 @@ func main() {
 		}
 	}()
 
-	<-quit
-	ds.Emit(fmt.Sprintf("DSC0 v1 role=node tag=%s exit=quit done=%d\n", tag, region.Done()))
-	os.Exit(0)
+	for {
+		select {
+		case <-quit:
+			ds.Emit(fmt.Sprintf("DSC0 v1 role=node tag=%s exit=quit done=%d\n", tag, region.Done()))
+			os.Exit(0)
+		case <-activity:
+		case <-time.After(idleLimit):
+			ds.Emit(fmt.Sprintf("DSC0 v1 role=node tag=%s exit=idle done=%d\n", tag, region.Done()))
+			os.Exit(4)
+		}
+	}
 }

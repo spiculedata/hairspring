@@ -121,6 +121,33 @@ func (r *Region) AddStarted() { atomic.AddUint64(r.counter(0), 1) }
 func (r *Region) AddDone()    { atomic.AddUint64(r.counter(1), 1) }
 func (r *Region) AddAcked()   { atomic.AddUint64(r.counter(2), 1) }
 
+// ValidName reports whether s is 1 to 16 letters and digits, safe to use in a path.
+func ValidName(s string) bool {
+	if len(s) == 0 || len(s) > 16 {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidTag reports whether tag is exactly "<node>.i<digits>" for the given node name.
+func ValidTag(tag, node string) bool {
+	prefix := node + ".i"
+	if !ValidName(node) || len(tag) <= len(prefix) || len(tag) > len(prefix)+9 || tag[:len(prefix)] != prefix {
+		return false
+	}
+	for _, c := range tag[len(prefix):] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // IncarnationOf parses the incarnation number from a tag like "n1.i3".
 func IncarnationOf(tag string) (uint32, error) {
 	var node string

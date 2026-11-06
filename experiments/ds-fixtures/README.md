@@ -38,8 +38,8 @@ built with `CGO_ENABLED=0`, so they are static.
 Run a ring trial by hand (ports and directories are arguments; nothing is a fixed global):
 
 ```
-mkdir -p /tmp/ds-trial
-build/dsl --topo=c3e --bin-dir=build --tmp=/tmp/ds-trial --port-base=7101
+TRIAL=$(mktemp -d)
+build/dsl --topo=c3e --bin-dir=build --tmp="$TRIAL" --port-base=7101
 ```
 
 Topologies: `c3e` (C servers, epoll), `c3t` (timeout), `c3t2` (timeout with a heartbeat thread), `c3b` (blocking
@@ -49,8 +49,8 @@ sockets, one connection per operation), `g3` (Go servers), `r3` (Rust servers). 
 Run a crash trial by hand:
 
 ```
-mkdir -p /tmp/ds-crash
-build/dsl --crash=pid,2 --bin-dir=build --tmp=/tmp/ds-crash --port=7201 --seed=620001
+TRIAL=$(mktemp -d)
+build/dsl --crash=pid,2 --bin-dir=build --tmp="$TRIAL" --port=7201 --seed=620001
 ```
 
 `--crash=pid,K` or `--crash=pgid,K` with K of 1 or 2; `--node-bin=dsgonode` for the Go node; `--helper`, `--threads=2`
@@ -108,9 +108,11 @@ the exit code, or `sig<N>` if the process was killed by a signal.
 Checked by `tests/check_rules.py` (a grep over the sources, which first proves each rule fires on a bad sample) and by
 the native tests:
 
-- finite timeouts only: no `-1` to `epoll_wait` or `poll`, no `SO_RCVTIMEO`. The two deliberate exceptions are blocking
-  `accept` and `recv` in `dskv --mode=block`, in `dsrs` and in the blocking reads of the Go programs, which the launcher
-  bounds by `QUIT` and then by SIGKILL;
+- finite timeouts only: no `-1` to `epoll_wait` or `poll`, no `SO_RCVTIMEO`. The deliberate exceptions, where a call
+  has no bound of its own, are: blocking `accept` and `recv` in `dskv --mode=block`; `pause()` in `dsnode --pause`;
+  `TcpListener::incoming()` and the blocking reads in `dsrs`; and the blocking reads and accepts of the Go programs.
+  The launcher bounds all of them by `QUIT` and then by SIGKILL, and every long-running program except `--pause` and
+  `--mode=block` also ends itself after about 120 s without a request (`exit=idle`, status 4);
 - numeric `127.0.0.1` only, no name lookups;
 - no randomness (tables are arrays, never hash maps);
 - every output line is one `write(2)`;
@@ -145,4 +147,10 @@ Not run here: anything under Hermit, anything needing Linux x86-64 and Hermit.
 - The `killed` line goes to stdout, with the other result lines.
 - The history of a client that did not get a valid reply records `FAIL` as the result; the client still exits 0 and the
   launcher still prints `ok=1` if the numbering is intact. Read the `fail=` field of the client line as well.
-- The test hooks `--test-exit-early` and `--test-ignore-quit` on `dskv` exist only for the native tests.
+- The test hooks `--test-exit-early`, `--test-ignore-quit` (`dskv`), `--test-skip-seq` (`dscli`) and `--test-leak-child`
+  (`dsl`), passed with `--server-arg=<node>:<arg>`, exist only so that the native tests can show a check failing.
+- A name that reaches a path (`--node`, `HAIRSPRING_PROC`) must be letters and digits (the tag exactly `<node>.i<digits>`),
+  and a path or argument too long for the launcher's buffers is refused with status 2 rather than shortened.
+- In a process-group trial the helper child does not watch its parent: only the group kill removes it, so a kill that
+  missed the group shows as `grp_gone=0`. The launcher then also reports `ok=0` and removes the survivor.
+- In the raw write-then-kill trial the launcher reports `ok=0` unless the node's region file existed at the kill.

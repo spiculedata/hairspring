@@ -176,6 +176,27 @@ func TestRegionHeaderAndCounters(t *testing.T) {
 	}
 }
 
+func TestNamesAndTagsAreValidatedBeforeTheyReachAPath(t *testing.T) {
+	for _, ok := range []string{"n1", "N2", "abc123"} {
+		if !ValidName(ok) {
+			t.Errorf("%q should be accepted", ok)
+		}
+	}
+	for _, bad := range []string{"", "../x", "n1/", "a.b", "n 1", "abcdefghijklmnopq"} {
+		if ValidName(bad) {
+			t.Errorf("%q should be rejected", bad)
+		}
+	}
+	if !ValidTag("n1.i0", "n1") || !ValidTag("n1.i123", "n1") {
+		t.Error("good tags rejected")
+	}
+	for _, bad := range []string{"n1.i", "n2.i0", "n1.i0/x", "n1.i-1", "../n1.i0", "n1.i1234567890"} {
+		if ValidTag(bad, "n1") {
+			t.Errorf("tag %q should be rejected", bad)
+		}
+	}
+}
+
 func TestIncarnationOf(t *testing.T) {
 	if n, err := IncarnationOf("n1.i12"); err != nil || n != 12 {
 		t.Fatalf("got %d %v", n, err)
