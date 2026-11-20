@@ -10,7 +10,13 @@ web/dist/*
 .env.*
 !.env.example
 .playwright-mcp/
-.claude/
+# Agent state (not source). Only the shared, reviewed pieces of .claude/ are committed:
+# settings.json, skills (a symlink to .agents/skills), memory/ and session-summary.md.
+.claude/*
+!.claude/settings.json
+!.claude/skills
+!.claude/memory/
+!.claude/session-summary.md
 __pycache__/
 *.pyc
 *.egg-info/

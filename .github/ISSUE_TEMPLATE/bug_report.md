@@ -18,6 +18,13 @@ Steps or command (with the seed, if there is one):
 
 Does `hairspring replay <bundle>` reproduce it?  yes / no / no bundle
 
+## Acceptance criteria
+
+How we will know it is fixed, as a checklist. A maintainer adds `issue-approved` (the only label that admits an
+issue to the agents) only once this section is filled in.
+
+- [ ] 
+
 ## Environment
 
 - Output of `hairspring --version` (the whole line; v0.1-RC2 prints `hairspring 0.1.0 (c2687b8 2026-11-05)`, and a bare `hairspring 0.1.0` with no commit is v0.1-RC1):

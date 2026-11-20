@@ -186,6 +186,34 @@ documentation and cite it when you update guidance.
 - `docs/architecture.md`, `docs/determinism.md`, `docs/testing.md`: how it fits and what was measured.
 - `SECURITY.md`: the threat model and what is implemented.
 
+## Safety layers and where the agent's knowledge lives
+
+`.claude/settings.json` enforces the core of the rules above for Claude Code in three layers,
+evaluated deny, then ask, then allow: force-pushes, history rewrites and reading env, key and token
+files are denied; merging, tagging, publishing, running an installer or a release and editing the
+settings, workflows, `AGENTS.md`, `SECURITY.md` or the AI policy ask a human; the repository's own
+check commands and read-only `git` and `gh` are allowed. The policy for AI, including what leaves
+the machine, is [`docs/security/SECURITY-AI.md`](docs/security/SECURITY-AI.md).
+
+How work lands here, read the relevant one before starting:
+
+- `corrections.jsonl`: append-only corrections (`.claude/memory/README.md` has the schema). When a
+  lesson recurs, promote it: write the timeless rule here or in a skill, then append a new entry with
+  `"status":"promoted"`, `"supersedes"` and `"promoted_to"`. Never edit or delete existing lines.
+- `.claude/memory/decisions.md`: why the automation is shaped this way.
+- `.claude/session-summary.md`: where the work stands now (goes stale by design; rewrite it, do not append).
+- `.agents/skills/`: project skills (routing table below).
+
+## Skills
+
+Skills live in `.agents/skills/<name>/SKILL.md` (frontmatter with `name` matching the directory, plus
+a `description`), which `pi` and GitHub Copilot discover. `.claude/skills` is a symlink to
+`../.agents/skills` so Claude Code still finds them. Load only the skill that matches the task.
+
+| Task | Skill |
+| --- | --- |
+| About to open or update a pull request; "is it done?"; reporting what was verified | `hairspring-check` |
+
 Copies of these instructions for other tools: `CLAUDE.md` (Claude Code),
 `.github/copilot-instructions.md` (GitHub Copilot), `.cursor/rules/hairspring.mdc` (Cursor). If you
 change a rule here, change it there too.

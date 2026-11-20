@@ -3,6 +3,19 @@
 `AGENTS.md` is the source of truth for this repository: shape, commands, rules, hard stops and the
 issue-queue labels. Read it first. This file only adds what is specific to Claude Code.
 
+## Claude Code specifics
+
+- `.claude/settings.json` is shared and reviewed. It denies force-pushes, history rewrites and reading
+  env, key and token files, asks before merges, tags, releases, publishing, installers and edits to
+  workflows, the settings, `AGENTS.md`, `SECURITY.md` and `docs/security/SECURITY-AI.md`, and allows the
+  check commands. Do not widen it to get past a prompt; ask a human instead.
+- Project skills live in `.agents/skills/`; `.claude/skills` is a symlink to it. Use `hairspring-check`
+  before every pull request. Load only the skill that matches the task (routing table in `AGENTS.md`).
+- Other `.claude/*` files (local settings, scratch state) are git-ignored on purpose. Only
+  `settings.json`, the `skills` symlink, `memory/` and `session-summary.md` are committed.
+- At the end of a session, rewrite `.claude/session-summary.md` so it is true, and append to
+  `corrections.jsonl` only when a human or CI corrected you in a way the next session should know.
+
 ## Working on a branch
 
 You work on a branch and open a pull request. **Never push `main`.** Every task ends in a pull
