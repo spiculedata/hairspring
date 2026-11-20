@@ -1,0 +1,44 @@
+name: auto-review
+
+# Automated review application: when a maintainer adds the `apply-review` label to a pull request, an
+# AI agent would read the review comments left on it, apply the changes the reviewers asked for, and push
+# them as a new commit to the PR's own branch.
+#
+# DISABLED, and deliberately a stub. The design in the sibling repositories checks out the pull request's
+# branch with persisted write credentials and then installs dependencies from it, so PR-controlled
+# lifecycle scripts, build scripts (`build.rs`) and build hooks would execute before the agent starts, on a
+# runner that holds a write token and the AI credential. A maintainer's label authorises a review attempt,
+# not the code on the branch, and this repository is public. (The same finding made kinetic disable its copy.)
+# This file therefore contains no checkout, no install, no agent step and no write permission. The label is
+# `apply-review`; the workflow name is kept so the AGENTS.md and docs/ai-workflows.md references stay true.
+#
+# To enable it, replace this stub with a separately reviewed design that isolates pull request code from
+# write and AI credentials (for example: persist-credentials: false, no install scripts, and splitting the
+# job so the code that runs never shares a runner with the token), and extend scripts/tests/workflows.test.mjs
+# to assert it. Never pull_request_target.
+# See docs/ai-workflows.md and docs/security/SECURITY-AI.md.
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions: {}
+
+concurrency:
+  group: auto-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: Apply review comments (disabled)
+    # Never true: a pull request number is never 0. (A literal `if: false` is flagged by actionlint as a
+    # constant condition.) Do not "fix" this by removing the condition: that would start the stub job on
+    # every labelled pull request.
+    if: github.event.pull_request.number == 0
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Disabled
+        run: echo "auto-review is disabled; see the header of this file."

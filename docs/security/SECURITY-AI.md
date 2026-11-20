@@ -79,6 +79,20 @@ table for Claude Code in three layers, evaluated deny, then ask, then allow.
 | Merge or close a pull request, tag, publish, run a release or an installer | Ask a human |
 | Change workflows, the settings file, `AGENTS.md`, `SECURITY.md`, `scripts/hermit.pin` or this policy | Escalate first |
 | Add a dependency, an outbound network destination, or change authentication, limits or process execution | Escalate first |
+| AI agent in CI (`ai-fix.yml`) | Allowed only as in `docs/ai-workflows.md`: started by a maintainer's label, secret-gated, pull request only, never merges |
+
+### AI agents in CI
+
+`.github/workflows/ai-fix.yml` runs an AI agent with `contents: write`. The rules, all in
+`docs/ai-workflows.md`: it does nothing until a repository secret exists; only a user with write access can
+start it (a bot only if listed in `AI_FIX_ALLOWED_BOTS`); its tools are an allowlist with force-pushes, merges
+and network tools denied, and edits to workflows, agent settings, the security documents, the installers and the
+critical-tier Rust files denied; it opens pull requests and never pushes to `main`; it runs from the default
+branch on `issues` events and never checks out pull request code; a human reviews and merges. The repository is
+public, so it also sends its source and the issue text to Anthropic when it runs. That is a new outbound
+destination for repository content, active only once the secret is configured; the repository owner should
+confirm it before the secret is added. `.github/workflows/auto-review.yml` is a disabled stub for the reason in
+`docs/ai-workflows.md`.
 
 Uncommitted changes found in a shared checkout belong to someone else: set them aside and say so;
 never discard them and never commit them.

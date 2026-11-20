@@ -186,6 +186,8 @@ documentation and cite it when you update guidance.
 - `SPEC.md` and `PLAN.md`: what and why, then how.
 - `CHANGELOG.md`: what changed, per release and under `Unreleased`.
 - `docs/architecture.md`, `docs/determinism.md`, `docs/testing.md`: how it fits and what was measured.
+- `docs/ai-workflows.md`, `docs/risk-tiers.md`, `docs/quality.md`: the automation around pull requests.
+- `.github/prompts/review.md`: the review rubric.
 - `SECURITY.md`: the threat model and what is implemented.
 
 ## Safety layers and where the agent's knowledge lives
@@ -239,6 +241,15 @@ pinned to a full commit SHA and none uses `pull_request_target`:
   merge rate and time to merge) published as a job summary and an artifact. Nothing is committed.
 - `auto-qa.yml`: weekly retune of the advisory thresholds in `.github/auto-qa-tuning.json` from recent `ci`
   runs; it opens a pull request on the branch `auto-qa/retune` and never pushes `main`. A human merges it.
+- `ai-fix.yml`: when a user with write access adds `ai-fix-requested` to an issue, an agent attempts the fix on
+  an `ai-fix/` branch and opens a pull request. Inert until a repository secret exists, bounded (30 turns, 30
+  minutes), tool allowlist, edits to gates and critical-tier files denied, never merges. `auto-review.yml` is
+  a disabled stub (a design that checks out pull request code with write credentials is not safe on a public
+  repository). Details: `docs/ai-workflows.md`.
+- `thin-caller-gate.yml` and `acceptance-pin-health.yml`: report-only guards for the shared
+  `spiculedata/acceptance-spec` pin. The acceptance specs themselves are **not** part of `ci` here;
+  `acceptance/README.md` says what is and is not wired. `acceptance-waived` and `spec-already-green` are
+  human-applied only: an agent never applies either.
 - `ci-feedback.yml`: when `CI` or `Coverage gate` goes red on a pull request, comments once with each
   failing job and the first error lines ("CI failed on `<sha>`"). It runs from the default branch and never
   checks out pull request code.

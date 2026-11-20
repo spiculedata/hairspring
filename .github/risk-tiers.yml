@@ -177,6 +177,8 @@ tiers:
       says what was looked at in a browser, including a narrow viewport and dark
       mode if colours changed.
     paths:
+      - match: acceptance/**
+        why: Acceptance specs and their convention notes. They are run by hand until the shared workflows are wired into ci.yml.
       - match: web/**
         why: The web UI. It renders untrusted text, so it must keep rendering it as text, but the type checker, the tests and the build catch most regressions.
       - match: examples/**
@@ -208,6 +210,8 @@ tiers:
         why: Issue forms, not code.
       - match: .github/pull_request_template.md
         why: Pull request prompt text.
+      - match: .github/prompts/**
+        why: The review rubric an agent reads; it changes what a reviewer looks for, not what runs.
       - match: .github/labeler.yml
         why: Path-to-label rules for pull requests. A wrong label is cosmetic.
       - match: .gitignore
