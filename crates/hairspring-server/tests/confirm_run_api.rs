@@ -592,3 +592,32 @@ fn stopping_the_server_mid_confirmation_stores_what_ran_and_marks_the_rest_skipp
         stored.checks.iter().map(|c| &c.status).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn confirming_a_bundle_from_another_backend_runs_nothing_and_leaves_the_finding_where_it_was() {
+    use hairspring_engine::confirm::{CheckKind, CheckResult, CheckStatus};
+    let bundle = hairspring_core::bundle::Bundle::new(1, "t", vec![])
+        .with_target("svc")
+        .with_backend("wasm")
+        .encode();
+    let (rig, id) = failure_with_bundle("svc", bundle.as_bytes());
+    let pass = |kind| CheckResult::new(kind, CheckStatus::Pass).with_counts(1, 0, 0);
+    let earlier = [
+        pass(CheckKind::SameSeedRerun),
+        pass(CheckKind::BundleReplay).with_detail("environment_changed", "false"),
+    ];
+    rig.svc
+        .record_confirmation(&id, "local", true, &earlier)
+        .unwrap();
+    assert_eq!(rig.checks(&id)["finding"], "confirmed");
+
+    let r = post(rig.addr(), Some(RUN), &id);
+
+    assert_eq!(r.status, 202, "{}", r.body);
+    assert_eq!(rig.wait_idle(&id)["state"], "idle");
+    let checks = rig.checks(&id);
+    assert_eq!(checks["finding"], "confirmed", "{checks}");
+    let last = checks["checks"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!(last["guest"]["detail"]["ran"], "false");
+    assert_eq!(last["status"], "inconclusive");
+}

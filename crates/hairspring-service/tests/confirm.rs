@@ -826,3 +826,82 @@ fn a_stored_bundle_that_does_not_decode_is_not_confirmable() {
         "{err}"
     );
 }
+
+/// The same engine with the `svc` target moved to a backend named `other`, which panics if anything reaches it: a
+/// stored bundle recorded on Hermit then counts as recorded on another backend.
+fn engine_on_another_backend(engine: &Engine) -> Engine {
+    use hairspring_engine::backend::{Backend, Progress, RunRequest};
+    use hairspring_engine::report::{ReplayOutcome, RunOutcome};
+    use hairspring_engine::EngineError;
+    struct Other;
+    impl Backend for Other {
+        fn id(&self) -> &'static str {
+            "other"
+        }
+        fn supports(&self, kind: &TargetKind) -> bool {
+            matches!(kind, TargetKind::Process { .. })
+        }
+        fn run(
+            &self,
+            _: &TargetSpec,
+            _: &RunRequest,
+            _: Budget,
+            _: &mut dyn FnMut(Progress) -> bool,
+        ) -> Result<RunOutcome, EngineError> {
+            panic!("nothing runs")
+        }
+        fn replay(
+            &self,
+            _: &TargetSpec,
+            _: &hairspring_core::bundle::Bundle,
+        ) -> Result<ReplayOutcome, EngineError> {
+            panic!("nothing runs")
+        }
+    }
+    let mut config = engine.config().clone();
+    for spec in config.targets.values_mut() {
+        if let TargetKind::Process { backend, .. } = &mut spec.kind {
+            *backend = Some("other".to_string());
+        }
+    }
+    Engine::new(Arc::new(Registry::new()), config).with_backend(Arc::new(Other))
+}
+
+#[test]
+fn confirming_again_with_a_bundle_from_another_backend_leaves_a_confirmed_finding_confirmed() {
+    let (svc, engine, _, failure) = failed_run();
+    assert_eq!(confirm(&svc, &engine, &failure).finding, "confirmed");
+    let other = engine_on_another_backend(&engine);
+
+    let after = confirm(&svc, &other, &failure);
+
+    assert_eq!(after.finding, "confirmed", "{:?}", after.checks);
+    assert_eq!(
+        svc.failure_checks(&failure).unwrap().unwrap().finding,
+        "confirmed"
+    );
+    let newest = after.checks.last().unwrap();
+    assert_eq!(
+        newest.guest.detail.get("ran").map(String::as_str),
+        Some("false")
+    );
+}
+
+#[test]
+fn confirming_again_with_a_bundle_from_another_backend_leaves_a_not_reproducible_finding_alone() {
+    use hairspring_engine::confirm::{CheckKind, CheckResult, CheckStatus};
+    let (svc, engine, _, failure) = failed_run();
+    let missed =
+        [CheckResult::new(CheckKind::SameSeedRerun, CheckStatus::Fail).with_counts(0, 3, 0)];
+    svc.record_confirmation(&failure, "local", true, &missed)
+        .unwrap();
+    assert_eq!(
+        svc.failure_checks(&failure).unwrap().unwrap().finding,
+        "not_reproducible"
+    );
+    let other = engine_on_another_backend(&engine);
+
+    let after = confirm(&svc, &other, &failure);
+
+    assert_eq!(after.finding, "not_reproducible", "{:?}", after.checks);
+}

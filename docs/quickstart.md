@@ -541,7 +541,11 @@ CPU flags, loader files, Hermit executable hash, the target program's hash). The
 | 0 | not reproduced, on the environment it was recorded in |
 | 1 | reproduced: the property is still violated |
 | 2 | error, including a replay refused because the dynamic loader changed (`--allow-environment-change` overrides the refusal and still prints the differences) |
-| 3 | not reproduced on a changed environment: inconclusive, not evidence the bug is fixed |
+| 3 | not reproduced on a changed environment, or not run because the bundle was recorded on another backend: inconclusive, not evidence the bug is fixed |
+
+A bundle records the backend that produced it. Replaying one against a target that runs on a different backend (for
+example a bundle from a `wasm` target against a `process` target) runs nothing, prints which backends are involved
+and exits 3. `hairspring confirm` does the same: it stores one inconclusive bundle replay check and exits 3.
 
 See [Recorded environment](determinism.md#recorded-environment) for the fields and what they mean.
 

@@ -343,3 +343,36 @@ fn a_hostile_unknown_name_is_never_echoed() {
     assert_eq!(o.status.code(), Some(3), "{}", text(&o));
     assert!(!text(&o).contains("forged line"), "{}", text(&o));
 }
+
+/// The recorded bundle with the backend that produced it changed, as a wasm bundle shown to a process target.
+fn from_wasm(bundle: &str) -> String {
+    assert!(bundle.contains("\nbackend=hermit\n"), "{bundle}");
+    bundle.replace("\nbackend=hermit\n", "\nbackend=wasm\n")
+}
+
+#[test]
+fn replaying_a_bundle_from_another_backend_runs_nothing_and_exits_3() {
+    let (d, hermit, body) = recorded("other-backend");
+    let file = write_bundle(&d, "b.hairspring", &from_wasm(&body));
+    let o = run(&d, &hermit, &["replay", &file]);
+    assert_eq!(o.status.code(), Some(3), "{}", text(&o));
+    let said = text(&o);
+    assert!(said.contains("nothing was run"), "{said}");
+    assert!(
+        said.contains("`wasm`") && said.contains("`hermit`"),
+        "{said}"
+    );
+    assert!(said.contains("does not show the bug is fixed"), "{said}");
+    assert!(!said.contains("replaying"), "{said}");
+}
+
+#[test]
+fn confirming_a_bundle_from_another_backend_runs_nothing_and_exits_3() {
+    let (d, hermit, body) = recorded("other-backend-confirm");
+    let file = write_bundle(&d, "b.hairspring", &from_wasm(&body));
+    let o = run(&d, &hermit, &["confirm", &file]);
+    assert_eq!(o.status.code(), Some(3), "{}", text(&o));
+    let said = text(&o);
+    assert!(said.contains("nothing was run"), "{said}");
+    assert!(said.contains("environment_changed: true"), "{said}");
+}

@@ -29,7 +29,8 @@ export function FailurePage({ id }: { id: string }) {
   if (detail.error) return <LoadFailed what="this failure" message={detail.error} network={detail.networkError} retries={false} />;
   if (!detail.data) return <Loading what="failure" />;
   const { record, steps, bundle } = detail.data;
-  const stepsToShow = replay?.steps ?? steps;
+  const ranNothing = replay?.ran === false;
+  const stepsToShow = ranNothing ? steps : (replay?.steps ?? steps);
 
   return (
     <>
@@ -55,7 +56,12 @@ export function FailurePage({ id }: { id: string }) {
         <button onClick={() => download(`${record.target}-${record.bundle_hash.slice(0, 8)}.hairspring`, bundle)}>Download bundle</button>
       </div>
       {replayError && <p className="error" role="alert">{replayError}</p>}
-      {replay && <ReplayVerdict failedAgain={replay.reproduced} />}
+      {replay && ranNothing && (
+        <p role="status">
+          Nothing was run: the bundle was recorded on another backend than this target's. This does not show the bug is fixed.
+        </p>
+      )}
+      {replay && !ranNothing && <ReplayVerdict failedAgain={replay.reproduced} />}
       <FailureConfirmation failureId={id} />
       <ol className="timeline">
         {stepsToShow.map((s) => (

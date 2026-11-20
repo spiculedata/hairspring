@@ -652,3 +652,38 @@ fn replays_beyond_the_shared_limit_are_refused_at_once_and_not_queued() {
         "the replay gave its slot back"
     );
 }
+
+#[test]
+fn replaying_a_bundle_from_another_backend_runs_nothing_and_says_the_environment_changed() {
+    // Arrange: a sim bundle relabelled as one a wasm backend recorded
+    let s = server();
+    let run = tool(
+        &s,
+        Role::Run,
+        "start_run",
+        json!({"target": "lock-lease", "seed": 7, "wait": true}),
+    );
+    let failure_id = structured(&run)["failures"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let f = tool(
+        &s,
+        Role::Read,
+        "get_failure",
+        json!({"failure_id": failure_id}),
+    );
+    let bundle = structured(&f)["bundle"].as_str().unwrap().to_string();
+    assert!(bundle.contains("\nbackend=sim\n"), "{bundle}");
+    let other = bundle.replace("\nbackend=sim\n", "\nbackend=wasm\n");
+    // Act
+    let same = tool(&s, Role::Run, "replay_bundle", json!({"bundle": bundle}));
+    let replay = tool(&s, Role::Run, "replay_bundle", json!({"bundle": other}));
+    // Assert
+    assert!(structured(&same).get("ran").is_none());
+    let replay = structured(&replay);
+    assert_eq!(replay["ran"], json!(false));
+    assert_eq!(replay["environment_changed"], json!(true));
+    assert_eq!(replay["reproduced"], json!(false));
+    assert_eq!(replay["steps"], json!([]));
+}

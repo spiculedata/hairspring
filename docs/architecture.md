@@ -96,7 +96,8 @@ Each backend states, through the `Backend` trait, who it is and what it has:
 
 `GET /api/targets` and the MCP `list_targets` tool add each target's `backend` and `capabilities` (see
 [api.md](api.md#get-apitargets)). Bundles, stored runs and run identities are unchanged: a bundle still records the
-backend id it was produced on, and replay still refuses a bundle from another backend than the target's.
+backend id it was produced on, and a replay or confirmation of a bundle from another backend than the target's runs
+nothing and reports a changed environment (exit `3`).
 
 ## Job lifecycle
 

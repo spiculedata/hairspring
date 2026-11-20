@@ -316,3 +316,25 @@ fn an_untrusted_newer_confirmation_cannot_withdraw_a_trusted_claim() {
     assert!(p.claim.allowed, "{:?}", p.claim.withheld);
     assert!(p.claim.text.is_some());
 }
+
+#[test]
+fn a_confirmation_that_ran_nothing_leaves_a_verified_claim_open() {
+    let rig = rig();
+    record(
+        &rig,
+        true,
+        &[rerun(true), replay(true), pass(CheckKind::StrictVerify)],
+    );
+    let before = page(&rig).claim.text.expect("a sentence");
+    assert!(before.starts_with("Reproduced (verified):"), "{before}");
+    let not_run = CheckResult::new(CheckKind::BundleReplay, CheckStatus::Inconclusive)
+        .with_detail("ran", "false")
+        .with_detail("environment_changed", "true")
+        .with_times(8, 8);
+
+    record(&rig, true, &[not_run]);
+
+    let p = page(&rig);
+    assert!(p.claim.allowed, "{:?}", p.claim.withheld);
+    assert_eq!(p.claim.text.as_deref(), Some(before.as_str()));
+}

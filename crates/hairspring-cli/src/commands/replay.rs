@@ -43,6 +43,13 @@ pub fn run(ctx: &Ctx, args: &ReplayArgs, out: &mut dyn Write) -> CmdResult<i32> 
     for warning in &replay.warnings {
         writeln!(out, "warning: {warning}")?;
     }
+    if !replay.ran {
+        writeln!(
+            out,
+            "inconclusive: nothing was run, so this does not show the bug is fixed"
+        )?;
+        return Ok(crate::EXIT_INCONCLUSIVE);
+    }
     writeln!(
         out,
         "replaying {} steps on target `{}` (backend {})",

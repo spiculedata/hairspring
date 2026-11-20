@@ -425,3 +425,49 @@ fn a_newer_confirmation_with_only_skipped_checks_still_reverts_nothing() {
     assert_eq!(s.status, FindingStatus::Confirmed);
     assert_eq!(s.confirmation, Some(0));
 }
+
+fn not_run() -> Vec<CheckResult> {
+    vec![check(CheckKind::BundleReplay, CheckStatus::Inconclusive)
+        .with_detail("ran", "false")
+        .with_detail("environment_changed", "true")]
+}
+
+fn confirmed_set() -> Vec<CheckResult> {
+    vec![
+        check(CheckKind::SameSeedRerun, CheckStatus::Pass),
+        replay(CheckStatus::Pass, false),
+    ]
+}
+
+#[test]
+fn a_confirmation_that_ran_nothing_does_not_replace_a_confirmed_finding() {
+    let s = standing(&[confirmed_set(), not_run()]);
+    assert_eq!(s.status, FindingStatus::Confirmed);
+    assert_eq!(s.confirmation, Some(0));
+}
+
+#[test]
+fn a_confirmation_that_ran_nothing_does_not_lift_a_not_reproducible_finding() {
+    let missed = vec![check(CheckKind::SameSeedRerun, CheckStatus::Fail)];
+    let s = standing(&[missed, not_run()]);
+    assert_eq!(s.status, FindingStatus::NotReproducible);
+    assert_eq!(s.confirmation, Some(0));
+}
+
+#[test]
+fn a_failure_whose_only_confirmation_ran_nothing_is_a_candidate() {
+    let s = standing(&[not_run()]);
+    assert_eq!(s.status, FindingStatus::Candidate);
+    assert_eq!(s.confirmation, None, "no confirmation counts towards it");
+}
+
+#[test]
+fn checks_that_ran_nothing_never_read_as_passes_whatever_their_status_says() {
+    let forged: Vec<CheckResult> = confirmed_set()
+        .into_iter()
+        .map(|c| c.with_detail("ran", "false"))
+        .collect();
+    let s = standing(&[forged]);
+    assert_eq!(s.status, FindingStatus::Candidate);
+    assert_eq!(s.confirmation, None);
+}

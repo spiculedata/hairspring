@@ -165,14 +165,6 @@ fn a_request_over_the_limits_is_refused_before_anything_runs() {
 }
 
 #[test]
-fn a_bundle_from_another_backend_is_refused() {
-    let (engine, _) = engine(true);
-    let wrong = bundle("svc").with_backend("sim");
-    let err = go(&engine, &wrong, ConfirmRequest::default()).unwrap_err();
-    assert!(matches!(err, EngineError::InvalidBundle(_)), "{err}");
-}
-
-#[test]
 fn a_backend_that_cannot_confirm_says_so() {
     let (engine, _) = engine(false);
     let err = go(&engine, &bundle("svc"), ConfirmRequest::default()).unwrap_err();

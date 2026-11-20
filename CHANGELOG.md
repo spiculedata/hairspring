@@ -36,6 +36,12 @@
 
 ### Changed
 
+- Replaying or confirming a bundle recorded on a different backend than the target's now runs nothing and reports a
+  changed environment, instead of failing with an `invalid bundle` error. `hairspring replay` and `hairspring confirm`
+  exit `3` (they exited `2`). `POST /api/replay` and the MCP `replay_bundle` tool answer with `ran` false,
+  `environment_changed` true, `reproduced` false and no steps; the `ran` field is new and is left out when the replay
+  ran, so existing replies are unchanged. A confirmation stores one inconclusive `bundle_replay` check with the detail
+  `ran: false`. The message names the two backends only when this build knows them.
 - Replaying a bundle that records an environment field this build does not know no longer ends in `NOT reproduced`.
   Bundles now carry `param.env.fields`, the list of the environment fields they recorded; a build that finds a name it
   does not know (in that list, or as a `host.`, `hermit.`, `env.` or `target.` param) warns that the bundle may have been

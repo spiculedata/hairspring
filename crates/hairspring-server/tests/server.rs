@@ -830,3 +830,35 @@ fn whitespace_variants_of_one_token_share_one_request_allowance() {
     .collect();
     assert_eq!(statuses, vec![200, 200, 200, 429]);
 }
+
+#[test]
+fn replaying_a_bundle_from_another_backend_runs_nothing_and_says_the_environment_changed() {
+    // Arrange: a stored sim bundle, relabelled as one a wasm backend recorded
+    let (srv, _e) = boot(tokens(), 1, 0);
+    let c = client(srv.addr(), Some(ADMIN));
+    let created = c.post("/api/runs", &json!({"target": "lock-lease", "seed": 7}));
+    let id = created.json()["run"]["id"].as_str().unwrap().to_string();
+    let done = wait_for_state(&c, &id, "failed");
+    let fid = done["failures"][0]["id"].as_str().unwrap();
+    let hash = c.get(&format!("/api/failures/{fid}")).json()["record"]["bundle_hash"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let bundle = c.get(&format!("/api/bundles/{hash}")).body;
+    assert!(bundle.contains("\nbackend=sim\n"), "{bundle}");
+    let other = bundle.replace("\nbackend=sim\n", "\nbackend=wasm\n");
+    // Act
+    let same = c.post("/api/replay", &json!({"bundle": bundle})).json();
+    let replay = c.post("/api/replay", &json!({"bundle": other}));
+    // Assert
+    assert!(
+        same.get("ran").is_none(),
+        "a replay that ran adds no field: {same}"
+    );
+    assert_eq!(replay.status, 200, "{}", replay.body);
+    let replay = replay.json();
+    assert_eq!(replay["ran"], false);
+    assert_eq!(replay["environment_changed"], true);
+    assert_eq!(replay["reproduced"], false);
+    assert_eq!(replay["steps"], json!([]));
+}

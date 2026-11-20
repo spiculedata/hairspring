@@ -141,6 +141,10 @@ export interface FailureDetail {
 export interface ReplayResult {
   reproduced: boolean;
   steps: Step[];
+  /** False when nothing was run (the bundle was recorded on another backend). Absent when the replay ran. */
+  ran?: boolean;
+  environment_changed?: boolean;
+  warnings?: string[];
 }
 
 // ---- Results explorer (GET /api/runs/{id}/properties and /properties/{idx}) ----

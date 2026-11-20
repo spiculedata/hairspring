@@ -3,6 +3,9 @@ use hairspring_core::bundle::Bundle;
 use hairspring_engine::backend::{Backend, Progress, RunRequest};
 use hairspring_engine::backend_info::{BackendLimits, BackendVersion, Capabilities};
 use hairspring_engine::config::{Budget, Config, ConfigError, TargetKind, TargetSpec};
+use hairspring_engine::confirm::{
+    finding_status, CheckKind, CheckResult, CheckStatus, ConfirmRequest, FindingStatus,
+};
 use hairspring_engine::engine::Engine;
 use hairspring_engine::erased::Registry;
 use hairspring_engine::report::{ReplayOutcome, RunOutcome};
@@ -285,4 +288,139 @@ fn the_built_in_sim_backend_declares_what_it_has() {
     assert!(!info.capabilities.confirm && !info.capabilities.strict_verify);
     assert!(!info.capabilities.snapshot_branch && !info.capabilities.fault_injection);
     assert!(!info.capabilities.multi_process);
+}
+
+/// Fails the test if a run, replay or confirm reaches it.
+struct MustNotRun;
+
+impl Backend for MustNotRun {
+    fn id(&self) -> &'static str {
+        "hermit"
+    }
+    fn supports(&self, kind: &TargetKind) -> bool {
+        matches!(kind, TargetKind::Process { .. })
+    }
+    fn run(
+        &self,
+        _: &TargetSpec,
+        _: &RunRequest,
+        _: Budget,
+        _: &mut dyn FnMut(Progress) -> bool,
+    ) -> Result<RunOutcome, EngineError> {
+        unreachable!("nothing runs")
+    }
+    fn replay(&self, _: &TargetSpec, _: &Bundle) -> Result<ReplayOutcome, EngineError> {
+        panic!("a bundle from another backend must not be replayed")
+    }
+    fn confirm(
+        &self,
+        _: &TargetSpec,
+        _: Option<&TargetSpec>,
+        _: &Bundle,
+        _: &ConfirmRequest,
+        _: &mut dyn FnMut(Progress) -> bool,
+    ) -> Result<Vec<CheckResult>, EngineError> {
+        panic!("a bundle from another backend must not be confirmed")
+    }
+}
+
+fn must_not_run_engine() -> Engine {
+    Engine::new(Arc::new(Registry::new()), Config::parse(PROCESS).unwrap())
+        .with_backend(Arc::new(MustNotRun))
+}
+
+fn bundle_from(backend: &str) -> Bundle {
+    Bundle::new(1, "b", vec![])
+        .with_target("p")
+        .with_backend(backend)
+}
+
+#[test]
+fn replaying_a_bundle_from_another_backend_runs_nothing_and_reports_a_changed_environment() {
+    // Arrange: a wasm bundle against a process target
+    let e = must_not_run_engine();
+    // Act
+    let out = e
+        .replay(&bundle_from("wasm"))
+        .expect("an outcome, not an error");
+    // Assert
+    assert!(!out.ran);
+    assert!(out.environment_changed);
+    assert!(!out.reproduced);
+    assert!(out.steps.is_empty());
+    let said = out.warnings.join(" ");
+    assert!(
+        said.contains("`wasm`") && said.contains("`hermit`"),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_replay_that_ran_says_so() {
+    let out = ReplayOutcome::new(true, vec![]);
+    assert!(out.ran);
+    assert!(!out.environment_changed);
+}
+
+#[test]
+fn a_backend_id_this_build_does_not_know_is_not_repeated_in_the_outcome() {
+    let e = must_not_run_engine();
+    let out = e
+        .replay(&bundle_from("zz-secret-marker\nline two"))
+        .expect("an outcome, not an error");
+    assert!(!out.ran && out.environment_changed);
+    let said = out.warnings.join(" ");
+    assert!(!said.contains("zz-secret-marker"), "{said}");
+    assert!(!said.contains('\n'), "{said}");
+    assert!(said.contains("`hermit`"), "{said}");
+}
+
+#[test]
+fn confirming_a_bundle_from_another_backend_runs_nothing_and_says_the_environment_changed() {
+    let e = must_not_run_engine();
+    let checks = e
+        .confirm(
+            &bundle_from("wasm"),
+            &ConfirmRequest::default(),
+            &mut |_| true,
+        )
+        .expect("a result, not an error");
+    assert_eq!(checks.len(), 1);
+    let c = &checks[0];
+    assert_eq!(c.kind, CheckKind::BundleReplay);
+    assert_eq!(c.status, CheckStatus::Inconclusive);
+    assert_eq!(c.detail.get("ran").map(String::as_str), Some("false"));
+    assert_eq!(
+        c.detail.get("environment_changed").map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(c.counts.total(), 0);
+    assert_eq!(finding_status(&checks), FindingStatus::Candidate);
+}
+
+#[test]
+fn a_misspelt_control_target_is_refused_even_for_a_bundle_from_another_backend() {
+    let e = must_not_run_engine();
+    let req = ConfirmRequest {
+        control: Some("nosuch".into()),
+        ..ConfirmRequest::default()
+    };
+    let err = e
+        .confirm(&bundle_from("wasm"), &req, &mut |_| true)
+        .unwrap_err();
+    assert!(
+        matches!(&err, EngineError::UnknownTarget(t) if t == "nosuch"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_bundle_that_names_no_backend_is_said_to_be_possibly_older() {
+    let e = must_not_run_engine();
+    let text = "hairspring-bundle v2\nseed=1\nbuild=b\ntarget=p\npath=\n";
+    let bundle = Bundle::decode(text).expect("an older bundle decodes");
+    let out = e.replay(&bundle).expect("an outcome, not an error");
+    let said = out.warnings.join(" ");
+    assert!(!out.ran, "{said}");
+    assert!(said.contains("records no backend"), "{said}");
 }

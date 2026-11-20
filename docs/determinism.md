@@ -414,6 +414,13 @@ loader field differs and `--allow-environment-change` is not given, nothing runs
 `inconclusive: environment differs`. If another field differs, the checks run, and a miss is `inconclusive: environment
 differs`, never a failure and never "nondeterministic". `hairspring confirm` exits 3 for it.
 
+**Another backend.** A bundle records the backend that produced it. Confirming one against a target that runs on a
+different backend runs nothing: the confirmation stores one inconclusive `bundle_replay` check whose detail says
+`ran: false` and `environment_changed: true`, and `hairspring confirm` exits 3. `hairspring replay` does the same. A
+confirmation that ran nothing is stored, but it is not read when the failure's finding is derived: it cannot confirm,
+withdraw or lift a finding, and the finding stays as the earlier confirmations left it. A bundle written before bundles
+named their backend reads as `sim`, so the message for a bundle from `sim` says it may be one that records no backend.
+
 **Skid overshoot.** With `skid_margin` set, Hermit panics when a preemption lands late. That run is infrastructure, not a
 verdict. A confirmation retries it once at the same flags, then once at double the margin (up to Hermit's limit). A run at
 a higher margin is a different schedule: it cannot count toward the reruns (the check is then `inconclusive`, with a

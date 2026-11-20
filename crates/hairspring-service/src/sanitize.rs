@@ -100,6 +100,7 @@ pub fn replay_steps(out: ReplayOutcome) -> ReplayOutcome {
         steps,
         warnings,
         environment_changed: out.environment_changed,
+        ran: out.ran,
     }
 }
 

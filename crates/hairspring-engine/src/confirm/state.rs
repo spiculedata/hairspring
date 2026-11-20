@@ -146,7 +146,43 @@ fn missed(checks: &[CheckResult]) -> bool {
 /// checks counting for nothing. A confirmation that was cancelled therefore cannot revert an earlier finished one,
 /// with one exception: a newer unfinished confirmation holding a check that ran and failed (a real miss, whatever was
 /// skipped after it) withdraws the finding, and the newest such confirmation is the one read.
+///
+/// A confirmation that ran nothing (a bundle from another backend: its checks say `ran` is `false`) is not read at all:
+/// it cannot replace an earlier confirmation, lift it or withdraw it. When it is all there is, the finding is a candidate and no confirmation counts towards it.
 pub fn standing(confirmations: &[Vec<CheckResult>]) -> Standing {
+    let counted: Vec<usize> = (0..confirmations.len())
+        .filter(|&i| !ran_nothing(&confirmations[i]))
+        .collect();
+    if counted.is_empty() && !confirmations.is_empty() {
+        return Standing {
+            status: FindingStatus::Candidate,
+            pinned: false,
+            confirmation: None,
+        };
+    }
+    if counted.len() == confirmations.len() {
+        return standing_of_all(confirmations);
+    }
+    let kept: Vec<Vec<CheckResult>> = counted.iter().map(|&i| confirmations[i].clone()).collect();
+    let found = standing_of_all(&kept);
+    Standing {
+        confirmation: found.confirmation.map(|i| counted[i]),
+        ..found
+    }
+}
+
+/// The detail key of a check that ran nothing, and its value.
+pub const RAN_KEY: &str = "ran";
+
+/// A confirmation made only of checks that did not run.
+fn ran_nothing(checks: &[CheckResult]) -> bool {
+    !checks.is_empty()
+        && checks
+            .iter()
+            .all(|c| c.detail.get(RAN_KEY).is_some_and(|v| v == "false"))
+}
+
+fn standing_of_all(confirmations: &[Vec<CheckResult>]) -> Standing {
     let finished_at = confirmations.iter().rposition(|c| finished(c));
     let newer = finished_at.map_or(0, |i| i + 1);
     let withdrawn = confirmations[newer..]

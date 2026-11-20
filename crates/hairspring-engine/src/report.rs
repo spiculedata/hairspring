@@ -265,6 +265,18 @@ pub struct ReplayOutcome {
     /// on such a host is inconclusive: it does not show the bug is fixed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub environment_changed: bool,
+    /// False when nothing was run because the bundle cannot be replayed here (it was recorded on another backend).
+    /// Always true for a replay that executed the target; absent in older stored replays, which all ran.
+    #[serde(default = "ran_by_default", skip_serializing_if = "is_true")]
+    pub ran: bool,
+}
+
+fn ran_by_default() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 impl ReplayOutcome {
@@ -274,6 +286,19 @@ impl ReplayOutcome {
             steps,
             warnings: Vec::new(),
             environment_changed: false,
+            ran: true,
+        }
+    }
+
+    /// A replay that was not run: no steps, not reproduced, and the environment counts as changed, so the miss shows
+    /// nothing about the bug. `warning` says why.
+    pub fn not_run(warning: impl Into<String>) -> Self {
+        ReplayOutcome {
+            reproduced: false,
+            steps: Vec::new(),
+            warnings: vec![warning.into()],
+            environment_changed: true,
+            ran: false,
         }
     }
 

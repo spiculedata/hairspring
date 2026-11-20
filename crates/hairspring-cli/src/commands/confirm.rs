@@ -2,7 +2,9 @@ use super::confirm_text::{exit_code, write_confirmation, CheckLine};
 use crate::cli::ConfirmArgs;
 use crate::ctx::{CmdResult, Ctx};
 use hairspring_core::bundle::Bundle;
-use hairspring_engine::confirm::{environment_pinned, finding_status, CheckResult, ConfirmRequest};
+use hairspring_engine::confirm::{
+    environment_pinned, finding_status, CheckResult, ConfirmRequest, RAN_KEY,
+};
 use hairspring_hermit::interrupt;
 use hairspring_service::{
     CheckView, FailureChecks, RunDetail, Service, ServiceError, MAX_BUNDLE_BYTES,
@@ -63,6 +65,28 @@ fn newest_is_set_aside(checks: &FailureChecks) -> bool {
     match (checks.checks.last(), &checks.confirmation_id) {
         (Some(last), Some(source)) => &last.confirmation_id != source,
         _ => false,
+    }
+}
+
+/// Whether the newest stored confirmation ran nothing (its bundle was recorded on another backend). The finding is then
+/// left as the earlier confirmations had it, and this command still says nothing was shown.
+fn newest_ran_nothing(checks: &FailureChecks) -> bool {
+    let Some(last) = checks.checks.last() else {
+        return false;
+    };
+    checks
+        .checks
+        .iter()
+        .filter(|c| c.confirmation_id == last.confirmation_id)
+        .all(|c| c.guest.detail.get(RAN_KEY).is_some_and(|v| v == "false"))
+}
+
+/// The exit code for a stored failure's checks: 3 when the newest confirmation ran nothing, else the finding's.
+fn stored_exit(checks: &FailureChecks) -> i32 {
+    if newest_ran_nothing(checks) {
+        crate::EXIT_INCONCLUSIVE
+    } else {
+        exit_code(&checks.finding)
     }
 }
 
@@ -134,7 +158,17 @@ pub(super) fn confirm_stored_run(
 
 pub(super) fn write_stored(out: &mut dyn Write, checks: &FailureChecks) -> CmdResult<i32> {
     writeln!(out, "failure {}", checks.failure_id)?;
-    if newest_is_set_aside(checks) {
+    if newest_ran_nothing(checks) {
+        let tail = if checks.confirmation_id.is_some() {
+            "the finding below is from the earlier checks"
+        } else {
+            "no earlier confirmation ran, so the finding is candidate"
+        };
+        writeln!(
+            out,
+            "nothing was run: the bundle was recorded on another backend than the target's, so this confirmation shows nothing about the bug; {tail}"
+        )?;
+    } else if newest_is_set_aside(checks) {
         writeln!(
             out,
             "this confirmation did not finish (cancelled, or out of time), so the finding comes from the last one that did; its checks are shown"
@@ -146,7 +180,7 @@ pub(super) fn write_stored(out: &mut dyn Write, checks: &FailureChecks) -> CmdRe
         &checks.finding,
         checks.environment_pinned,
     )?;
-    Ok(exit_code(&checks.finding))
+    Ok(stored_exit(checks))
 }
 
 fn bundle_text(ctx: &Ctx, input: &str) -> CmdResult<String> {
@@ -242,7 +276,7 @@ pub fn run(
         }
         if args.json {
             writeln!(out, "{}", serde_json::to_string(&checks)?)?;
-            return Ok(exit_code(&checks.finding));
+            return Ok(stored_exit(&checks));
         }
         return write_stored(out, &checks);
     }
@@ -281,10 +315,7 @@ pub fn run(
                     .map(|(id, words)| serde_json::json!({ "failure_id": id, "refused": words })),
             );
             writeln!(out, "{}", serde_json::to_string(&entries)?)?;
-            return Ok(all
-                .iter()
-                .map(|c| exit_code(&c.finding))
-                .fold(refused_code, i32::max));
+            return Ok(all.iter().map(stored_exit).fold(refused_code, i32::max));
         }
         let mut code = refused_code;
         for checks in &all {
@@ -293,4 +324,88 @@ pub fn run(
         return Ok(code);
     }
     confirm_bundle(ctx, &svc, input, &req, args.json, (out, err))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hairspring_service::CheckGuest;
+    use std::collections::BTreeMap;
+
+    fn view(confirmation: &str, kind: &str, status: &str, ran: bool) -> CheckView {
+        let detail = if ran {
+            BTreeMap::new()
+        } else {
+            BTreeMap::from([("ran".to_string(), "false".to_string())])
+        };
+        CheckView {
+            id: format!("{confirmation}-{kind}"),
+            confirmation_id: confirmation.into(),
+            ordinal: 0,
+            kind: kind.into(),
+            status: status.into(),
+            counts: Default::default(),
+            artefacts: vec![],
+            environment: BTreeMap::new(),
+            started_at: 0,
+            finished_at: 0,
+            runner_trusted: true,
+            created_at: 0,
+            guest: CheckGuest {
+                command: String::new(),
+                detail,
+            },
+        }
+    }
+
+    fn after_a_confirmed_finding(second: CheckView) -> FailureChecks {
+        FailureChecks {
+            failure_id: "fail_1".into(),
+            finding: "confirmed".into(),
+            confirmation_id: Some("c1".into()),
+            environment_pinned: false,
+            checks: vec![
+                view("c1", "same_seed_rerun", "pass", true),
+                view("c1", "bundle_replay", "pass", true),
+                second,
+            ],
+        }
+    }
+
+    #[test]
+    fn a_confirmation_that_ran_nothing_exits_3_whatever_the_finding_stays_at() {
+        let checks = after_a_confirmed_finding(view("c2", "bundle_replay", "inconclusive", false));
+        assert_eq!(stored_exit(&checks), crate::EXIT_INCONCLUSIVE);
+    }
+
+    #[test]
+    fn a_confirmation_that_ran_keeps_the_exit_code_of_its_finding() {
+        let checks = after_a_confirmed_finding(view("c2", "bundle_replay", "pass", true));
+        assert_eq!(stored_exit(&checks), crate::EXIT_VIOLATION);
+    }
+
+    #[test]
+    fn with_no_earlier_confirmation_it_says_so_and_does_not_point_at_earlier_checks() {
+        let mut checks =
+            after_a_confirmed_finding(view("c2", "bundle_replay", "inconclusive", false));
+        checks.checks.drain(..2);
+        checks.finding = "candidate".into();
+        checks.confirmation_id = None;
+        let mut out = Vec::new();
+        write_stored(&mut out, &checks).unwrap();
+        let said = String::from_utf8(out).unwrap();
+        assert!(said.contains("no earlier confirmation ran"), "{said}");
+        assert!(!said.contains("from the earlier checks"), "{said}");
+    }
+
+    #[test]
+    fn a_confirmation_that_ran_nothing_is_said_so_and_not_called_unfinished() {
+        let checks = after_a_confirmed_finding(view("c2", "bundle_replay", "inconclusive", false));
+        let mut out = Vec::new();
+        let code = write_stored(&mut out, &checks).unwrap();
+        let said = String::from_utf8(out).unwrap();
+        assert_eq!(code, crate::EXIT_INCONCLUSIVE);
+        assert!(said.contains("nothing was run"), "{said}");
+        assert!(!said.contains("did not finish"), "{said}");
+    }
 }
