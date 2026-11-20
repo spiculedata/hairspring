@@ -285,8 +285,8 @@ pub struct CteAnswer {
 pub fn model_subtree(spec: &TreeSpec, a: usize) -> BTreeSet<usize> {
     let mut found = BTreeSet::from([a]);
     // Parents have smaller numbers, so one ascending pass reaches every descendant.
-    for i in a + 1..spec.parents.len() {
-        if spec.parents[i].is_some_and(|p| found.contains(&p)) {
+    for (i, parent) in spec.parents.iter().enumerate().skip(a + 1) {
+        if parent.is_some_and(|p| found.contains(&p)) {
             found.insert(i);
         }
     }
