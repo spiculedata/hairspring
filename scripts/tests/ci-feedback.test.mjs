@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 // @ts-expect-error -- a plain .mjs module, so it has no type declarations to import.
-import { MARKER, buildComment, buildResolved, cleanLine, collect, excerpt, fence, findComment, run, upsert } from "../ci-feedback.mjs";
+import { MARKER, buildComment, buildResolved, cleanLine, collect, excerpt, fetchLog, fence, findComment, run, upsert } from "../ci-feedback.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const SHA = "0123456789abcdef0123456789abcdef01234567";
@@ -318,5 +318,20 @@ describe("the workflow stays safe", () => {
   it("does not use the bot's own comment trigger phrase", () => {
     const script = readFileSync(path.join(root, "scripts/ci-feedback.mjs"), "utf8");
     assert.doesNotMatch(script, /\/ai-fix/);
+  });
+});
+
+describe("fetching a job log", () => {
+  it("asks gh to print colour codes, and retries without the flag on an older gh", () => {
+    const seen = [];
+    const gh = (args) => {
+      seen.push(args);
+      if (args.includes("--allow-escape-sequences")) throw new Error("unknown flag: --allow-escape-sequences");
+      return "error: boom";
+    };
+    assert.equal(fetchLog({ gh, repo: "o/r", jobId: 7 }), "error: boom");
+    assert.equal(seen.length, 2);
+    assert.ok(seen[0].includes("--allow-escape-sequences"));
+    assert.ok(!seen[1].includes("--allow-escape-sequences"));
   });
 });

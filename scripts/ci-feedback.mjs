@@ -122,6 +122,20 @@ export function buildResolved({ sha }) {
 }
 
 /**
+ * One job's log. `gh api` refuses to print a response that carries terminal escape
+ * sequences, and Actions logs are full of colour codes, so the flag is required; an
+ * older `gh` without it falls back to the plain call.
+ */
+export function fetchLog({ gh, repo, jobId }) {
+  const path = `repos/${repo}/actions/jobs/${jobId}/logs`;
+  try {
+    return gh(["api", "--allow-escape-sequences", path]);
+  } catch {
+    return gh(["api", path]);
+  }
+}
+
+/**
  * What failed for this commit. Only the newest run of each workflow counts, so a
  * failure that a later run already replaced does not keep the comment red.
  * `pending` is true while any of those runs is still going.
@@ -145,7 +159,7 @@ export function collect({ gh, repo, sha }) {
       .map((job) => {
         let log = "";
         try {
-          log = gh(["api", `repos/${repo}/actions/jobs/${job.id}/logs`]);
+          log = fetchLog({ gh, repo, jobId: job.id });
         } catch {
           // Logs expire or are not ready yet; the job link still works.
         }
