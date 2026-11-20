@@ -110,7 +110,8 @@ Run what your change touches, and report each result:
 - Rust: `cargo fmt --all -- --check`, `make lint`, and `cargo test -p <crate>` for every crate you
   touched (`make test` when you changed `hairspring-core`, the engine, the store or the service).
 - `web/`: `npm ci && npm run typecheck && npm test && npm run build` inside `web/`.
-- `scripts/`: `make test-scripts`.
+- `scripts/`: `make test-scripts` for the shell scripts, and `node --test "scripts/tests/*.test.mjs"` for
+  the `.mjs` helpers and the workflow guards.
 - An SDK: its own tests and the matching `cargo test -p hairspring-props --test <sdk>_sdk`.
 
 Branch from `main`, name the branch `type/short-description`, and open a pull request against `main`.
@@ -164,7 +165,8 @@ or merge of a pull request.
 
 - `issue-approved`: the **only** agent-admission label. A maintainer adds it after the issue states
   acceptance criteria (an "Acceptance criteria" section or a task-list checklist saying how done is
-  verified).
+  verified). `.github/workflows/issue-gate.yml` removes the label and comments if the criteria are
+  missing.
 - `human-queue`: work reserved for humans (design-heavy, ambiguous, risky). Never admitted to agents,
   even if `issue-approved` is also present.
 - Skipped by agents: `hold`, `do-not-merge`, `needs-human`, `human-queue`, `blocked`, `wontfix`,
@@ -217,6 +219,23 @@ a `description`), which `pi` and GitHub Copilot discover. `.claude/skills` is a 
 Copies of these instructions for other tools: `CLAUDE.md` (Claude Code),
 `.github/copilot-instructions.md` (GitHub Copilot), `.cursor/rules/hairspring.mdc` (Cursor). If you
 change a rule here, change it there too.
+
+## Workflows that act on pull requests and issues
+
+All of these are advisory, none is a required check, and none depends on `ci`; every action in them is
+pinned to a full commit SHA and none uses `pull_request_target`:
+
+- `tier-classifier.yml`: labels each pull request `risk/<tier>` from the changed *paths* in
+  `.github/risk-tiers.yml` and keeps one comment current (`docs/risk-tiers.md`).
+- `labeler.yml`: path-based labels from `.github/labeler.yml`.
+- `issue-gate.yml`: enforces the acceptance-criteria rule above.
+- `main-guard.yml`: opens an issue when a commit reaches `main` without a pull request.
+- `nightly-compliance.yml`: a daily run of the Rust and web gates and the audits on `main`; it files a
+  tracking issue when `main` is red.
+
+The helper scripts behind them are in `scripts/` (`.mjs`, no dependencies) and their tests are in
+`scripts/tests/`; run them with `node --test "scripts/tests/*.test.mjs"`. CI runs that command in the
+`Web UI` job, so a broken helper makes `ci` red.
 
 ## The `ci` check and bot PRs
 

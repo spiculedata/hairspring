@@ -1,0 +1,36 @@
+name: labeler
+
+# Path-based PR labels from .github/labeler.yml. Security notes, because this
+# workflow holds a write scope:
+#
+#   - it only runs on pull_request (never pull_request_target), so it never
+#     evaluates fork code in a privileged context;
+#   - the action is pinned to a commit SHA, not a mutable tag;
+#   - the token gets contents:read and pull-requests:write, on the job only, and nothing else.
+#
+# Advisory: continue-on-error means a missing label or a read-only fork token
+# never turns a good PR red. Nothing requires this check.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    # Write scope is held by this job only.
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13 # v7.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          configuration-path: .github/labeler.yml
+          # Keep the author's own labels when the config changes: removing one
+          # should be a human decision, not a side effect of a push.
+          sync-labels: false

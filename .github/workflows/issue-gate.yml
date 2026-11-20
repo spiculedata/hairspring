@@ -1,0 +1,53 @@
+name: issue-gate
+
+# `issue-approved` is the only label that admits an issue to an agent, and it requires acceptance
+# criteria. When it is added to an issue whose body has neither an "Acceptance criteria" heading
+# nor a markdown task-list item, this removes the label and says why. Detection and correction
+# only: it does not close, edit or assign anything.
+#
+# The issue body is untrusted input. It reaches the script through an environment variable and
+# is never interpolated into shell. There is no checkout, so the two patterns below are inlined;
+# scripts/tests/issue-gate.test.mjs fails if they differ from scripts/issue-gate.mjs.
+
+on:
+  issues:
+    types: [labeled]
+
+permissions: {}
+
+concurrency:
+  group: issue-gate-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Acceptance criteria check
+    if: github.event.label.name == 'issue-approved'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Check the issue body
+        id: check
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          node --input-type=module <<'JS'
+          import { appendFileSync } from "node:fs";
+          const HEADING = /^#{1,6}[ \t]+acceptance criteria\b/im;
+          const TASK = /^[ \t]*[-*][ \t]+\[[ xX]\]/m;
+          const body = process.env.ISSUE_BODY ?? "";
+          const ok = HEADING.test(body) || TASK.test(body);
+          appendFileSync(process.env.GITHUB_OUTPUT, `ok=${ok}\n`);
+          JS
+
+      - name: Remove the label and explain
+        if: steps.check.outputs.ok == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          gh issue edit "$ISSUE_NUMBER" --remove-label issue-approved
+          gh issue comment "$ISSUE_NUMBER" --body "I removed \`issue-approved\`: this issue has no acceptance criteria, so an agent could not tell when it is done. Add an \"Acceptance criteria\" section, or a checklist (\`- [ ] ...\`) saying how the result is verified, then re-apply the label."

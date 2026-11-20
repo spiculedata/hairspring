@@ -1,0 +1,68 @@
+name: main-guard
+
+# Detector for direct pushes to `main`. Changes are meant to reach `main` only through a pull request whose `ci`
+# check is green. When a commit lands on `main` that did not come through a pull request (a ruleset was not in place,
+# was disabled in repo settings or was weakened, or someone with the right to bypass it pushed), this workflow opens
+# an issue naming the commit and who pushed it, so the exception is seen the same day instead of never. It cannot
+# block or revert anything and nothing depends on it. Which rules actually protect `main` is a repository setting:
+# check `gh api repos/spiculedata/hairspring/rules/branches/main` rather than assuming.
+#
+# How it decides: GitHub links a commit to the pull request that merged it (merge, squash and
+# rebase merges all do). A push whose head commit has no linked pull request is a direct push.
+# The link can lag a few seconds behind a merge, so it retries before it reports.
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: main-guard-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Direct push check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+    steps:
+      - name: Look for a pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          prs=0
+          for _ in 1 2 3 4 5 6; do
+            prs=$(gh api "repos/$REPO/commits/$SHA/pulls" --jq 'length')
+            [ "$prs" -gt 0 ] && break
+            sleep 10
+          done
+          if [ "$prs" -gt 0 ]; then
+            echo "Commit $SHA is linked to $prs pull request(s); nothing to report."
+            exit 0
+          fi
+
+          short="${SHA:0:7}"
+          title="[main-guard] Direct push to main: $short by $ACTOR"
+          existing=$(gh issue list --repo "$REPO" --state open --search "\"$title\" in:title" --json number --jq 'length')
+          if [ "$existing" -gt 0 ]; then
+            echo "An issue for $short is already open."
+            exit 0
+          fi
+          printf '%s\n' \
+            "Commit [$short](https://github.com/$REPO/commit/$SHA) reached \`main\` without a pull request." \
+            "" \
+            "- Pushed by: @$ACTOR" \
+            "- Workflow run: $RUN_URL" \
+            "" \
+            "With a ruleset requiring a pull request and a green \`ci\` this normally cannot happen: it means the ruleset is missing, was disabled or weakened in repo settings, or the pusher can bypass it. This is a detective control only. Check that the change is intended and that \`ci\` passes on it. If it came from an agent, see AGENTS.md and docs/security/SECURITY-AI.md. Close this issue once reviewed." \
+            > body.md
+          gh issue create --repo "$REPO" --title "$title" --body-file body.md

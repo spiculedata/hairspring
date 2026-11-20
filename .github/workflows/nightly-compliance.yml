@@ -1,0 +1,173 @@
+name: nightly-compliance
+
+# The daily loop. ci.yml answers "is this change safe to merge"; this answers
+# "is main still true this morning".
+#
+# It catches what PR CI structurally cannot: breakage that arrives after the
+# merge (a new toolchain release, a runner image change), dependency drift, and
+# advisories published since the last PR (RustSec and npm).
+#
+# It runs, on main, the Rust gate of ci.yml (fmt, clippy, workspace tests) on one
+# Linux runner, the web UI checks, the Node script tests, and the same blocking
+# dependency audits (`cargo audit`, `npm audit --omit=dev`). It does NOT repeat the
+# per-SDK jobs, the Linux container job, the PostgreSQL job or anything that needs
+# a language toolchain beyond the runner's: ci.yml owns those, so a green nightly
+# says "the Rust workspace and the web UI on main are still sound", not "every CI
+# job would pass". The conformance tests for SDKs whose toolchain is missing skip
+# with a notice, as they do locally. A full `npm audit` that includes dev
+# dependencies is informational only: it never fails the job, is uploaded as an
+# artifact and summarised in the job summary.
+#
+# On failure it opens (or comments on) a single tracking issue. On success it
+# closes that issue. The issue-writing token is scoped to the report job only.
+# Nothing here is a required check and ci.yml does not depend on it.
+
+on:
+  schedule:
+    # 04:17 UTC. Off the hour: GitHub's scheduler is oversubscribed at :00.
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-compliance
+  # A nightly that cancels itself halfway through reports nothing.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gate:
+    name: Nightly gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # The runner image ships rustup; ask it for the current stable toolchain with the two components the gate needs.
+      - name: Rust toolchain (stable, with clippy and rustfmt)
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+          rustup default stable
+          cargo --version
+
+      - name: Node script tests
+        run: node --test "scripts/tests/*.test.mjs"
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --no-fail-fast
+
+      - name: Web UI (typecheck, test, build)
+        working-directory: web
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Full npm audit report (all dependencies, informational)
+        # Never blocks: the blocking policy is the production-only audit below. This is the
+        # wider picture, including dev tooling and moderate advisories.
+        continue-on-error: true
+        working-directory: web
+        run: |
+          npm audit > ../audit-full.txt 2>&1 || true
+          npm audit --json > ../audit-full.json 2>&1 || true
+          {
+            echo "## npm audit (web, all dependencies, informational)"
+            echo
+            echo '```'
+            tail -n 60 ../audit-full.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-audit-full
+          path: |
+            audit-full.txt
+            audit-full.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Security audit, npm (production dependencies)
+        # Same blocking policy as the `audit` job of ci.yml, so a red nightly means main is red.
+        working-directory: web
+        run: npm audit --omit=dev
+
+      - name: Security audit, RustSec
+        # Same blocking policy as the `audit` job of ci.yml. This is the step that catches an
+        # advisory published after the last pull request.
+        run: |
+          cargo install --locked cargo-audit
+          cargo audit
+
+  report:
+    name: Nightly report
+    needs: gate
+    # `always()` because this job is about the failure case, which by definition
+    # means an upstream job that did not succeed.
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # issues:write is granted here and only here.
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GATE_RESULT: ${{ needs.gate.result }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      COMMIT: ${{ github.sha }}
+    steps:
+      - name: File or update the tracking issue
+        if: needs.gate.result != 'success'
+        run: |
+          marker='[nightly-compliance]'
+          body=$(printf '%s\n' \
+            "$marker main failed the nightly gate (result: $GATE_RESULT)." \
+            "" \
+            "Run: $RUN_URL" \
+            "Commit: $COMMIT" \
+            "" \
+            "The gate is the Rust fmt, clippy and workspace test run, the web UI checks, the Node script tests and the blocking cargo and npm audits, so a red nightly means main is red or a new advisory applies to a locked dependency." \
+            "The full \`npm audit\` report (dev dependencies included) is attached to the run as the \`npm-audit-full\` artifact." \
+            "Fix it on a branch. The next green nightly closes this issue.")
+          existing=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "$marker in:title" \
+            --json number,title --jq "[.[] | select(.title | contains(\"$marker\"))][0].number // empty")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" -R "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create -R "$GITHUB_REPOSITORY" \
+              --title "$marker Nightly gate failed on main" --body "$body"
+          fi
+
+      - name: Close the tracking issue when main is green
+        if: needs.gate.result == 'success'
+        run: |
+          marker='[nightly-compliance]'
+          for n in $(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "$marker in:title" \
+            --json number,title --jq ".[] | select(.title | contains(\"$marker\")) | .number"); do
+            gh issue close "$n" -R "$GITHUB_REPOSITORY" --comment "Nightly gate is green again: $RUN_URL"
+          done

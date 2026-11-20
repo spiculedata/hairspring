@@ -1,0 +1,220 @@
+# Risk tiers: what each change to this repository demands.
+#
+# Read by scripts/classify-change.mjs, which .github/workflows/tier-classifier.yml
+# runs on every pull request. The classifier labels the pull request and posts
+# one comment (updated in place) naming the tier and its review requirement. It
+# never blocks a merge and it is not a required check: the judgement stays with
+# the reviewer.
+#
+# How a change is classified
+# --------------------------
+# Every changed path is tested against every pattern in every tier. The pull
+# request takes the highest rank any one path matched, so one file in the server's
+# auth module makes the whole pull request critical however many docs it also
+# touches. Ranks are explicit rather than ordered by position in this file, so
+# reordering the file cannot quietly re-tier anything.
+#
+#   critical  what decides who may call the server and what it may run: auth, rate
+#             limits and connection handling, the config that names the commands
+#             a process target executes, the Hermit backend that executes them, the
+#             store schema, the bundle format, the installers and the GitHub Action
+#             that download and run binaries, container and release plumbing, the
+#             security documents, and the gates that decide what a merge may skip.
+#   high      the rest of the shipped Rust code and the SDKs, dependency manifests
+#             and lockfiles, and the repository scripts.
+#   standard  the web UI, examples, experiments, the Claude Code plugin, the static
+#             site and the Makefile, where the type checker, the linters and the
+#             tests are a real safety net.
+#   low       documentation and process: wrong is cheap and visible.
+#
+# Changing a tier
+# ---------------
+# Edit this file and run `node --test "scripts/tests/*.test.mjs"`. The tests fail if
+# a tier loses its summary or review text, reuses a label, or lists a pattern that no
+# longer matches any file in the repository (a renamed file would otherwise be quietly
+# downgraded to the default tier).
+#
+# `pending: true` marks a pattern for a file that does not exist on this branch yet
+# (it arrives in a later pull request of the series that added this file). The
+# dead-pattern test skips it. Remove the flag once the file exists.
+#
+# Scope: this classifies repository risk from file PATHS. It does not read the
+# pull request title, body, branch or comments, and it never calls a model.
+
+version: 1
+
+# The tier for a pull request whose files match nothing below. It is a real tier
+# with its own review requirement, not a fallback that says nothing.
+default_tier: standard
+
+tiers:
+  - id: critical
+    label: risk/critical
+    rank: 4
+    summary: >-
+      Who may call the server and what it may run, data that cannot be repaired
+      by re-running, code that downloads and executes binaries, or a gate that
+      decides what a merge may skip. A weakened auth or limit check is silent, a
+      changed schema step or bundle format breaks data people already have, and
+      a changed workflow lets the next bad change through unseen.
+    review: >-
+      A named human reviews this before merge, and the PR body says what was
+      checked and how: the role and limit paths exercised with tokens of each
+      role, a schema change applied to a copy of a real database on both SQLite
+      and PostgreSQL, an installer or action change run in a clean environment,
+      and what was not run (the real Hermit, a platform). Run the checks for
+      every crate you touched.
+    paths:
+      - match: crates/hairspring-server/src/auth.rs
+        why: Bearer-token authentication and the role (read, run, admin) every handler checks first. A mistake here is an unauthenticated call or a role escalation.
+      - match: crates/hairspring-server/src/ratelimit.rs
+        why: The per-client rate limiter and its bounded table. It is a defence against floods and a regression is silent.
+      - match: crates/hairspring-server/src/limits.rs
+        why: The deadline for reading a request body and the cap on event streams per caller. Loosening either removes a denial-of-service bound.
+      - match: crates/hairspring-server/src/client_addr.rs
+        why: Decides which client address a request is billed to, including the trusted-proxy rule for X-Forwarded-For. A wrong answer lets a caller pick its own bucket.
+      - match: crates/hairspring-server/src/conn.rs
+        why: "The accept loop: the cap on open connections and the deadline for each request head. Loosening either removes a denial-of-service bound."
+      - match: crates/hairspring-server/src/token_label.rs
+        why: Token labels written into log lines. They must never carry or reveal a token.
+      - match: crates/hairspring-server/src/worker_api.rs
+        why: The endpoints remote workers call. They require the run role, and every job-scoped call is checked against the lease owner; what a worker reports is untrusted and must stay bounded and checked against the job.
+      - match: crates/hairspring-server/src/confirm_api.rs
+        why: Confirming a failure runs a process target on the server with its privileges. The caps and the role check keep it from being a free-run endpoint.
+      - match: crates/hairspring-engine/src/config.rs
+        why: Reads hairspring.toml, which names the commands process targets execute. What this accepts decides what the server can be made to run.
+      - match: crates/hairspring-hermit/src/**
+        why: "The Hermit backend: runs an unmodified program under ptrace and namespaces, with a pinned environment and bounded output. A mistake here is code execution or a leaked host environment."
+      - match: crates/hairspring-store/src/sqlite_schema.rs
+        why: The SQLite schema and its upgrades. They run against every user's database and a half-applied step is not repairable by re-running it.
+      - match: crates/hairspring-store/src/pg_schema.rs
+        why: The PostgreSQL schema and its upgrades, run against shared team databases.
+      - match: crates/hairspring-core/src/bundle.rs
+        why: The replay bundle format. Changing it breaks replay of every bundle already written, and a bundle is checked against the program version.
+      - match: scripts/install.sh
+        why: Downloads a release binary, checks its sha256 and installs it. A mistake runs the wrong code on a user's machine.
+      - match: scripts/install-hermit.sh
+        why: Builds the pinned Hermit from source, verifying the replay patch by sha256 first.
+      - match: scripts/hermit.pin
+        why: The pinned Hermit commit, patch hash and toolchain. Every determinism claim in the docs was measured with this build.
+      - match: integrations/github-action/action.yml
+        why: "The composite action other repositories run in their CI: it downloads a release binary and runs it with their checkout."
+      - match: Dockerfile
+        why: The server image. It decides what ships in the container and which user it runs as.
+      - match: docker-compose.yml
+        why: "The documented deployment: ports, secrets by name and the database wiring."
+      - match: .env.example
+        why: Names every secret the deployment expects. A real value pasted here is a leaked credential.
+      - match: SECURITY.md
+        why: The threat model and the reporting address. It states what is enforced; it must stay true.
+      - match: docs/security/**
+        why: "The AI security policy: what agents and automation may do here."
+      - match: DCO
+        why: The sign-off text every contributor certifies.
+      - match: LICENSE
+        why: The licence the whole repository is distributed under.
+      - match: .github/workflows/**
+        why: CI defines what a merge is allowed to skip, and release.yml builds and drafts the release. A workflow change is a gate change.
+      - match: .github/risk-tiers.yml
+        why: This file. Editing it changes what every future change is held to.
+      - match: AGENTS.md
+        why: The rules coding agents follow in this repository. Prose does not stop anything, but changing it changes what agents are told.
+      - match: CLAUDE.md
+        why: The same instructions for Claude Code.
+      - match: .claude/settings.json
+        why: "The permission layers for Claude Code: what is denied, what asks a human and what is allowed."
+
+  - id: high
+    label: risk/high
+    rank: 3
+    summary: >-
+      The rest of the shipped Rust code and the SDKs, dependency manifests and
+      lockfiles, and the repository scripts. A regression is a wrong verdict or
+      a broken install for real users, and the tests cover behaviour rather than
+      every path.
+    review: >-
+      A human reads the diff. The PR body names the tests added, the crates and
+      SDKs run, and anything that could not be run on this machine (PostgreSQL,
+      a language toolchain, Linux x86-64). A dependency change says why it is
+      needed and shows the cargo audit or npm audit result.
+    paths:
+      - match: crates/**
+        why: The Rust workspace. Anything not already critical is still server, engine, store and CLI logic that users depend on, and the tests cover behaviour rather than every path.
+      - match: sdks/**
+        why: The language SDKs that guest programs link or import. A regression changes what a program under test reports.
+      - match: Cargo.toml
+        why: "The workspace manifest: members, profiles and shared settings."
+      - match: Cargo.lock
+        why: The resolved Rust dependency tree. Read the lockfile diff, not just the version bump.
+      - match: web/package.json
+        why: Scripts and dependencies of the web UI in one file. A dependency can add a network path or an install script.
+      - match: web/package-lock.json
+        why: The resolved npm dependency tree for the UI that ships inside the server binary.
+      - match: global.json
+        why: Pins the .NET SDK used to build and test the .NET SDK and its fixtures.
+      - match: NOTICE
+        why: The hand-maintained list of third-party dependencies and licences.
+      - match: scripts/**
+        why: "Repository scripts: installers, checks, the classifier and the CI helpers. They run on contributors' machines and in CI."
+      - match: .github/auto-qa-tuning.json
+        why: Bounds and current values for the self-tuning gates. A bot proposes changes to it, so a human has to read what moved and whether it loosened anything.
+        pending: true
+      - match: .coverage-thresholds.json
+        why: The coverage ratchet. Lowering a number is a deleted gate.
+        pending: true
+      - match: .github/copilot-instructions.md
+        why: Instructions for GitHub Copilot; they must keep saying what AGENTS.md says.
+      - match: .cursor/rules/**
+        why: Instructions for Cursor; they must keep saying what AGENTS.md says.
+
+  - id: standard
+    label: risk/standard
+    rank: 2
+    summary: >-
+      The web UI, examples, experiments, the Claude Code plugin and the static
+      site. The type checker, the tests and the build catch most regressions,
+      and what they miss is visible.
+    review: >-
+      Normal review. The checks for what changed must be green, and a UI change
+      says what was looked at in a browser, including a narrow viewport and dark
+      mode if colours changed.
+    paths:
+      - match: web/**
+        why: The web UI. It renders untrusted text, so it must keep rendering it as text, but the type checker, the tests and the build catch most regressions.
+      - match: examples/**
+        why: Fixtures and demonstration programs. Most are built by CI.
+      - match: experiments/**
+        why: The experiments behind SPEC.md and the native self-tests of the fixtures.
+      - match: integrations/**
+        why: The Claude Code plugin and its MCP configuration, and the GitHub Action's documentation.
+      - match: site/**
+        why: The static landing page published to GitHub Pages; scripts/check-site.py checks its links, size and assets.
+      - match: Makefile
+        why: Shortcuts for the build, test and lint commands.
+
+  - id: low
+    label: risk/low
+    rank: 1
+    summary: >-
+      Documentation, process files and repository metadata. Wrong here is cheap,
+      visible, and fixable in the next pull request.
+    review: >-
+      A skim is enough. The only question worth asking is whether the prose is
+      still true.
+    paths:
+      - match: docs/**
+        why: Reference, guides and write-ups. Not shipped as code; wrong is cheap.
+      - match: "**/*.md"
+        why: Any other markdown in the repository.
+      - match: .github/ISSUE_TEMPLATE/**
+        why: Issue forms, not code.
+      - match: .github/pull_request_template.md
+        why: Pull request prompt text.
+      - match: .github/labeler.yml
+        why: Path-to-label rules for pull requests. A wrong label is cosmetic.
+      - match: .gitignore
+        why: What stays out of the repository.
+      - match: .dockerignore
+        why: What stays out of the image build context.
+      - match: corrections.jsonl
+        why: The append-only log of corrections for agents.

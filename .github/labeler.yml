@@ -1,0 +1,61 @@
+# Pull request labels, applied by .github/workflows/labeler.yml (actions/labeler
+# v7). Each key is a label; a PR gets it when any changed file matches any glob.
+#
+# Every label below already exists in the repository: documentation, dependencies,
+# github_actions, tests, database, hermit, experiments and javascript. If a label is
+# ever removed, the labeler step may fail or skip it; the workflow is
+# continue-on-error, so that never turns a pull request red.
+#
+# Risk labels (risk/critical ... risk/low) are applied separately by
+# tier-classifier.yml and are intentionally not listed here.
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/**"
+          - "**/*.md"
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Cargo.lock"
+          - "web/package.json"
+          - "web/package-lock.json"
+
+github_actions:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/workflows/**"
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/*/tests/**"
+          - "scripts/tests/**"
+          - "scripts/test-*.sh"
+          - "sdks/*/tests/**"
+          - "web/src/**/*.test.ts"
+          - "web/src/**/*.test.tsx"
+
+database:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/hairspring-store/**"
+
+hermit:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/hairspring-hermit/**"
+          - "scripts/hermit.pin"
+          - "scripts/install-hermit.sh"
+          - "scripts/hermit-upstream-report.sh"
+
+experiments:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "experiments/**"
+
+javascript:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "web/**"

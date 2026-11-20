@@ -596,6 +596,11 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      # The repository's own CI helper scripts (risk-tier classifier, issue gate, workflow guards): node:test, no
+      # dependencies. Run from the repository root, not from web/.
+      - name: Repository script tests
+        working-directory: .
+        run: node --test "scripts/tests/*.test.mjs"
 
   audit:
     name: Dependency audit

@@ -1,0 +1,112 @@
+name: tier-classifier
+
+# Change classification. On every pull request, work out which risk tier the
+# change falls into (.github/risk-tiers.yml), label the PR with it, and keep one
+# comment up to date saying what set the tier and what review that tier needs.
+#
+# Advisory only. It is not a required check and nothing depends on it: the
+# `ci` job in ci.yml is the only required status. The label and comment steps
+# are continue-on-error so a permissions problem (a fork PR gets a read-only
+# token) or a missing label reports itself without holding a good PR hostage.
+# The classify step is NOT continue-on-error: a config that cannot be parsed is
+# a real failure and should be visible.
+#
+# Input is the list of changed PATHS from the API. The PR title, body, branch
+# name and comments are never read, so there is nothing to prompt-inject and no
+# PR text is ever interpolated into a shell command.
+#
+# Labels risk/critical, risk/high, risk/standard and risk/low should exist in the
+# repository. The workflow tries to create them (idempotent) and carries on if
+# it is not allowed to.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+# One comment per pull request, updated in place rather than appended to.
+concurrency:
+  group: tier-classifier-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  classify:
+    name: Change classification
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      # The pull_request payload carries no file list and `gh pr diff` truncates
+      # a large one. The API paginates, so ask the API.
+      - name: Changed files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$NUMBER/files?per_page=100" \
+            --paginate --jq '.[].filename' > changed-files.txt
+          wc -l < changed-files.txt
+
+      - name: Classify
+        id: tier
+        run: |
+          node scripts/classify-change.mjs \
+            --config .github/risk-tiers.yml \
+            --files changed-files.txt --markdown > classification.md
+          node scripts/classify-change.mjs \
+            --config .github/risk-tiers.yml \
+            --files changed-files.txt > classification.json
+          cat classification.json
+          {
+            echo "tier=$(jq -r .tier classification.json)"
+            echo "label=$(jq -r .label classification.json)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Apply the label
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          LABEL: ${{ steps.tier.outputs.label }}
+          TIER: ${{ steps.tier.outputs.tier }}
+        run: |
+          # Create the label if missing (--force keeps the description current).
+          # Failure to create is tolerated; the add below then reports it.
+          gh label create "$LABEL" --force \
+            --description "Change classification: $TIER (see docs/risk-tiers.md)" || true
+          # Remove the other tier labels one at a time: a label that has never
+          # been applied does not exist, and one --remove-label listing all of
+          # them would fail on the ones that do not.
+          for other in risk/critical risk/high risk/standard risk/low; do
+            [ "$other" = "$LABEL" ] && continue
+            gh pr edit "$NUMBER" --remove-label "$other" || true
+          done
+          gh pr edit "$NUMBER" --add-label "$LABEL"
+
+      - name: Comment
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # classification.md begins with the marker comment the classifier
+          # writes, which is what makes the upsert findable.
+          jq -n --rawfile body classification.md '{body: $body}' > comment.json
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$NUMBER/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- change-classification -->")) | .id' | head -n 1)
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" \
+              --input comment.json >/dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$NUMBER/comments" \
+              --input comment.json >/dev/null
+          fi

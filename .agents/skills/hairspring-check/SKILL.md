@@ -29,7 +29,9 @@ not run, and say which you could not run and why. These are the same commands CI
    `cargo test -p hairspring-props --test <go|java|python|dotnet|rust|c>_sdk`.
 6. **Dependencies changed**: `make audit` (`cargo audit`, and `npm audit --omit=dev` in `web/`), and
    update the dependency list in `NOTICE`. Do not exclude an advisory to make it pass.
-7. **Workflows changed**: `actionlint` if installed, and `bash scripts/check-workflow-shells.sh`.
+7. **Workflows, `.github/risk-tiers.yml` or the `.mjs` helpers changed**: `actionlint` if installed,
+   `bash scripts/check-workflow-shells.sh`, and `node --test "scripts/tests/*.test.mjs"` (the workflow
+   guards and the classifier tests; CI runs them in the `Web UI` job).
 8. Docs and changelog: a behaviour change updates `docs/` and the `Unreleased` section of `CHANGELOG.md`.
 9. Commits: every commit is signed off (`git log --format='%h %s%n%b' main..HEAD | grep -c Signed-off-by`
    should equal the number of commits) and is titled `type: description`.
