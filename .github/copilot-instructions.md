@@ -49,6 +49,5 @@ an evidenced finding, never silence. Every commit is signed off (`git commit -s`
 ## Before you call a change done
 
 Run what you touched: `cargo fmt --all -- --check`, `make lint`, `cargo test -p <crate>`; in `web/`,
-`npm ci && npm run typecheck && npm test && npm run build`; for `scripts/`, `make test-scripts`. The
-required check on a pull request is `ci`. A bare `needs-rework` means make `ci` green and resolve open
-review comments.
+`npm ci && npm run typecheck && npm test && npm run build`; for `scripts/`, `make test-scripts` and `node --test "scripts/tests/*.test.mjs"`. The
+required check on a pull request is `ci`. A bare `needs-rework` means make `ci` green and resolve open review comments. When `ci` is red, the `ci-feedback` comment on the pull request ("CI failed on `<sha>`") lists each failing job and its first error lines; read it instead of asking what to change.

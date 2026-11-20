@@ -15,6 +15,10 @@ const code = (text) => text.split("\n").filter((l) => !l.trim().startsWith("#"))
 // job. Changing these is a separate, reviewed change.
 const LEGACY = new Set(["ci.yml", "hermit-upstream.yml", "java-native-k.yml", "pages.yml", "release.yml"]);
 
+// Single-job workflows whose one job needs the write scope, asserted exactly by their own test:
+// ci-feedback.yml (actions: read, contents: read, pull-requests: write; see ci-feedback.test.mjs).
+const TOP_LEVEL_WRITE_OK = new Set(["ci-feedback.yml"]);
+
 const jobIds = (text) => {
   const body = text.split(/^jobs:\n/m)[1] ?? "";
   return [...body.matchAll(/^ {2}([A-Za-z0-9_-]+):\s*$/gm)].map((m) => m[1]);
@@ -56,7 +60,7 @@ describe("every workflow", () => {
 
   it("never grants write access at the top level", () => {
     for (const file of files) {
-      if (LEGACY.has(file)) continue;
+      if (LEGACY.has(file) || TOP_LEVEL_WRITE_OK.has(file)) continue;
       const top = read(file).split(/^jobs:/m)[0];
       assert.doesNotMatch(code(top), /^\s{2}[a-z-]+: write\b/m, `${file} grants write permissions at the top level`);
     }
@@ -117,5 +121,46 @@ describe("nightly-compliance.yml", () => {
 
   it("checks out without persisting credentials", () => {
     assert.match(text, /persist-credentials: false/);
+  });
+});
+
+describe("auto-qa.yml", () => {
+  const text = read("auto-qa.yml");
+
+  it("holds contents: write only on the tune job, which never runs on pull_request", () => {
+    const top = text.split(/^jobs:/m)[0];
+    assert.doesNotMatch(code(top), /: write/);
+    assert.match(text, /tune:\n[\s\S]*?if: github\.event_name != 'pull_request'/);
+  });
+
+  it("mints the Hive App token only when BOT_APP_ID is set, and falls back to the default token", () => {
+    assert.match(text, /if: vars\.BOT_APP_ID != ''/);
+    assert.match(text, /app-id: \$\{\{ vars\.BOT_APP_ID \}\}/);
+    assert.match(text, /private-key: \$\{\{ secrets\.BOT_APP_PRIVATE_KEY \}\}/);
+    assert.match(text, /steps\.bot\.outputs\.token \|\| github\.token/);
+  });
+
+  it("pushes only its own bot branch, never main, and signs its commit off for the DCO", () => {
+    assert.match(text, /git push --force origin auto-qa\/retune/);
+    assert.doesNotMatch(code(text), /git push[^\n]*\bmain\b/);
+    assert.match(text, /git commit -s /);
+  });
+});
+
+describe("pr-metrics.yml, quality-report.yml and coverage-gate.yml", () => {
+  it("only read: no write scope anywhere", () => {
+    for (const file of ["pr-metrics.yml", "quality-report.yml", "coverage-gate.yml"]) {
+      assert.doesNotMatch(code(read(file)), /: write\b/, file);
+    }
+  });
+
+  it("coverage-gate keeps the workflow name ci-feedback watches, and ci-feedback watches the names that make a PR red", () => {
+    assert.match(read("coverage-gate.yml"), /^name: Coverage gate$/m);
+    assert.match(read("ci.yml"), /^name: CI$/m);
+    assert.match(read("ci-feedback.yml"), /workflows: \[CI, Coverage gate\]/);
+  });
+
+  it("the Rust coverage job runs only when started by hand", () => {
+    assert.match(read("coverage-gate.yml"), /rust:\n[\s\S]*?if: github\.event_name == 'workflow_dispatch'/);
   });
 });

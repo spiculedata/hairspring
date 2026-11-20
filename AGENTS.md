@@ -232,6 +232,16 @@ pinned to a full commit SHA and none uses `pull_request_target`:
 - `main-guard.yml`: opens an issue when a commit reaches `main` without a pull request.
 - `nightly-compliance.yml`: a daily run of the Rust and web gates and the audits on `main`; it files a
   tracking issue when `main` is red.
+- `coverage-gate.yml` (workflow name `Coverage gate`): fails a pull request when web UI coverage drops
+  below `.coverage-thresholds.json`, a ratchet set a few points under what was measured; raise it, never
+  lower it. Rust coverage is not measured and not gated (`docs/quality.md`).
+- `quality-report.yml` and `pr-metrics.yml`: weekly reports (tests, lint, audits, coverage; pull request
+  merge rate and time to merge) published as a job summary and an artifact. Nothing is committed.
+- `auto-qa.yml`: weekly retune of the advisory thresholds in `.github/auto-qa-tuning.json` from recent `ci`
+  runs; it opens a pull request on the branch `auto-qa/retune` and never pushes `main`. A human merges it.
+- `ci-feedback.yml`: when `CI` or `Coverage gate` goes red on a pull request, comments once with each
+  failing job and the first error lines ("CI failed on `<sha>`"). It runs from the default branch and never
+  checks out pull request code.
 
 The helper scripts behind them are in `scripts/` (`.mjs`, no dependencies) and their tests are in
 `scripts/tests/`; run them with `node --test "scripts/tests/*.test.mjs"`. CI runs that command in the
@@ -241,7 +251,12 @@ The helper scripts behind them are in `scripts/` (`.mjs`, no dependencies) and t
 
 - `ci` is the single required status. Its job id and name are both exactly `ci`; do not rename or
   split it, because a ruleset and the Hive's automation match that name.
-- A pull request opened with the default `GITHUB_TOKEN` does not start its `pull_request` workflows
-  by itself (GitHub creates the runs but holds them as `action_required`). If a bot PR shows no `ci`,
-  look for runs awaiting approval on its head commit. Nothing in this repository approves runs; a
-  maintainer does.
+- A pull request opened with the default `GITHUB_TOKEN` does not start its `pull_request` workflows by
+  itself (GitHub creates the runs but holds them as `action_required`). With the repository variable
+  `BOT_APP_ID` and secret `BOT_APP_PRIVATE_KEY` configured, `auto-qa.yml` pushes the retune branch and
+  opens its pull request with a short-lived Hive GitHub App token, so the PR is App-authored and `ci` runs
+  immediately. Without them it falls back to `GITHUB_TOKEN` and the retune PR's runs are held until a
+  maintainer approves them in the Actions tab. No workflow approves runs. If a bot PR shows no `ci`, look
+  for runs awaiting approval on its head commit.
+- When `ci` is red, `ci-feedback.yml` has already commented on the pull request; read that comment (an
+  agent token may not be allowed to read check runs or logs) before asking what to change.

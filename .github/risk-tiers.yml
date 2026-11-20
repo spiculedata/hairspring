@@ -34,9 +34,9 @@
 # longer matches any file in the repository (a renamed file would otherwise be quietly
 # downgraded to the default tier).
 #
-# `pending: true` marks a pattern for a file that does not exist on this branch yet
-# (it arrives in a later pull request of the series that added this file). The
-# dead-pattern test skips it. Remove the flag once the file exists.
+# `pending: true` marks a pattern for a file that does not exist on this branch yet (for example
+# one that another open pull request adds). The dead-pattern test skips it. Remove the flag once
+# the file exists.
 #
 # Scope: this classifies repository risk from file PATHS. It does not read the
 # pull request title, body, branch or comments, and it never calls a model.
@@ -158,10 +158,8 @@ tiers:
         why: "Repository scripts: installers, checks, the classifier and the CI helpers. They run on contributors' machines and in CI."
       - match: .github/auto-qa-tuning.json
         why: Bounds and current values for the self-tuning gates. A bot proposes changes to it, so a human has to read what moved and whether it loosened anything.
-        pending: true
       - match: .coverage-thresholds.json
         why: The coverage ratchet. Lowering a number is a deleted gate.
-        pending: true
       - match: .github/copilot-instructions.md
         why: Instructions for GitHub Copilot; they must keep saying what AGENTS.md says.
       - match: .cursor/rules/**

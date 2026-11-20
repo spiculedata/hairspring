@@ -1,0 +1,128 @@
+name: auto-qa
+
+# Self-tuning quality thresholds.
+#
+#   verify  Offline. Confirms .github/auto-qa-tuning.json is inside its bounds.
+#           Runs on pull requests that touch the tuner or its config. No
+#           network, read-only token.
+#   tune    Weekly (and on demand). Reads the outcome and duration of recent
+#           `ci` runs on main, asks scripts/auto-qa-tuner.mjs what the thresholds
+#           should be, and opens a pull request with the result. A human merges
+#           it. It NEVER pushes to main: it pushes the bot branch auto-qa/retune
+#           and opens a PR from it.
+#
+# The tuner can only move a value by maxStep per run and never past the min/max
+# documented in the JSON, so it cannot loosen a gate beyond a bound a human set.
+# Nothing here is a required check and ci.yml does not depend on it.
+#
+# CI on the retune PR. With vars.BOT_APP_ID configured, the `bot` step mints a Hive GitHub
+# App installation token (contents: write, pull-requests: write) and the branch push and the
+# PR use it: the PR is App-authored and its `pull_request` workflows run immediately. Without
+# it the token falls back to GITHUB_TOKEN, and a PR opened with that does not start its
+# `pull_request` workflows by itself: GitHub creates the runs but holds them as
+# `action_required` until a maintainer approves them in the Actions tab. Nothing in this
+# workflow approves them. The repository setting "Allow GitHub Actions to create and approve
+# pull requests" must be on for the PR step to work in the fallback; if it is off, the step
+# fails visibly and the tuned file is still available in the job log.
+
+on:
+  schedule:
+    # Mondays 05:31 UTC, off the hour.
+    - cron: "31 5 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/auto-qa-tuning.json"
+      - ".github/workflows/auto-qa.yml"
+      - "scripts/auto-qa-tuner.mjs"
+
+concurrency:
+  group: auto-qa-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify tuning config
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Config is inside its bounds
+        run: node scripts/auto-qa-tuner.mjs --check
+
+  tune:
+    name: retune from recent CI
+    if: github.event_name != 'pull_request'
+    needs: verify
+    runs-on: ubuntu-latest
+    # contents:write is for pushing the bot branch only; pull-requests:write for
+    # opening the PR; actions:read for listing workflow runs and jobs.
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+    steps:
+      - name: Mint a Hive App token for the PR
+        # Skipped until the App is configured; push and PR then fall back to GITHUB_TOKEN.
+        id: bot
+        if: vars.BOT_APP_ID != ''
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          # The checkout credential is what `git push` uses below.
+          token: ${{ steps.bot.outputs.token || github.token }}
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Retune from recent CI outcomes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/auto-qa-tuner.mjs --from-ci --write --out tuned.json
+
+      - name: Open or update the retune pull request
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token || github.token }}
+        run: |
+          if cmp -s tuned.json .github/auto-qa-tuning.json; then
+            echo "Thresholds are already where the observations put them; nothing to propose."
+            exit 0
+          fi
+          cp tuned.json .github/auto-qa-tuning.json
+          rm tuned.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B auto-qa/retune
+          git add .github/auto-qa-tuning.json
+          # -s: this repository requires a DCO sign-off on every commit (CONTRIBUTING.md).
+          git commit -s -m "ci: retune auto-QA thresholds from recent CI outcomes"
+          git push --force origin auto-qa/retune
+          existing=$(gh pr list --head auto-qa/retune --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "PR #$existing already open; branch updated."
+            exit 0
+          fi
+          gh pr create --base main --head auto-qa/retune \
+            --title "ci: retune auto-QA thresholds" \
+            --body "Automated retune from .github/workflows/auto-qa.yml.
+
+          scripts/auto-qa-tuner.mjs read the outcome and duration of recent ci runs on main and moved each advisory threshold toward its target by at most maxStep, inside the min and max in .github/auto-qa-tuning.json. It cannot move a value past the documented loosen-side bound, and it never edits baselines or bounds.
+
+          **This needs a human.** Read the history entry at the bottom of the JSON, and be sceptical of any change that loosens a threshold: a retune that lowers a bar to paper over a real regression is worse than none. Close this PR if the numbers look wrong. Nothing in CI reads these values until a person wires them in."

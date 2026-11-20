@@ -1,0 +1,56 @@
+name: pr-metrics
+
+# PR acceptance metric: merge rate and time to merge over the last 90 days,
+# computed from the GitHub API by scripts/pr-metrics.mjs.
+#
+# Reporting only. It writes docs/metrics.md inside the runner and publishes it as
+# a workflow artifact and in the job summary. It does not commit or push, so the
+# token is read-only; to keep a copy in the repository, download the artifact and
+# commit it in a normal PR. Nothing gates on it and ci.yml does not depend on it.
+
+on:
+  schedule:
+    # Mondays 06:23 UTC, off the hour.
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      window-days:
+        description: How many days back to measure
+        required: false
+        default: "90"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-metrics
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    name: Measure pull request acceptance
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Compute metrics
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WINDOW_DAYS: ${{ inputs.window-days || '90' }}
+        run: |
+          node scripts/pr-metrics.mjs --window-days "$WINDOW_DAYS" --out docs/metrics.md
+          cat docs/metrics.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload metrics
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pr-metrics
+          path: docs/metrics.md
+          retention-days: 90

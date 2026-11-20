@@ -1,0 +1,63 @@
+name: ci-feedback
+
+# When a pull request's checks go red, leave one comment saying which jobs failed
+# and the first error lines of each. The rework loop depends on it: a bot PR goes
+# red, `needs-rework` is added, and the quality agent has to know WHY. `ci` only
+# says "e2e finished as failure", and the agent's token cannot read check runs or
+# Actions logs, so before this it saw a red PR with no reason and asked a human.
+#
+# Why `workflow_run` and why that is safe here:
+#
+#   - It runs the copy of this workflow on the DEFAULT branch, never the pull
+#     request's. A change to this file in a PR does nothing until it merges.
+#   - It does not check out the pull request. The checkout below is the default
+#     branch, only to get scripts/ci-feedback.mjs. No PR code runs.
+#   - Fork pull requests are skipped (head repository must be this one). A fork's
+#     run has no write token and its logs are not ours to quote.
+#   - The token gets `actions: read` (runs, jobs, logs) and `pull-requests: write`
+#     (the one comment). Nothing else. It cannot approve a run or a review.
+#   - Log text is quoted inside a code fence the script sizes to the text, so a log
+#     line cannot become markdown, and it is only ever posted back to the pull
+#     request the run belongs to.
+#
+# It is advisory: it blocks nothing and is not a required check. It covers the
+# two workflows that make a pull request red, `CI` and `Coverage gate`. The logic
+# is in scripts/ci-feedback.mjs and tested offline in scripts/tests/ci-feedback.test.mjs.
+
+on:
+  workflow_run:
+    workflows: [CI, Coverage gate]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+# Two workflows finish within seconds of each other. Each recomputes the whole
+# picture for the commit, so the later one wins and the earlier one can stop.
+concurrency:
+  group: ci-feedback-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: true
+
+jobs:
+  feedback:
+    name: CI feedback comment
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      join(github.event.workflow_run.pull_requests.*.number, '') != ''
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      # The default branch, for the script only. Not the pull request's code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Post or update the comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+        run: node scripts/ci-feedback.mjs

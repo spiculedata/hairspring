@@ -38,3 +38,5 @@ silence. The policy and the issue-queue labels are in `AGENTS.md`.
 Branch, open a pull request, and wait for `ci` to be green. Sign off every commit (`git commit -s`).
 Run what you touched (`cargo fmt --all -- --check`, `make lint`, `cargo test -p <crate>`, and in
 `web/` `npm ci && npm run typecheck && npm test && npm run build`) and report what it printed.
+
+A bare `needs-rework` means make `ci` green and resolve open review comments. When `ci` is red, the `ci-feedback` comment on the pull request ("CI failed on `<sha>`") lists each failing job and its first error lines; read it instead of asking what to change.

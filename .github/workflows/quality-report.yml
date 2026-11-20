@@ -1,0 +1,98 @@
+name: quality-report
+
+# Quality dashboard: tests, lint, audit and coverage on one page, for what can be measured on a
+# Linux runner. Runs the real tools, saves their output, and renders it with
+# scripts/quality-report.mjs. Reporting only: it publishes the page as a job summary and a workflow
+# artifact, never commits, and nothing gates on it (ci.yml does not depend on it).
+#
+# What runs where:
+#   - Every trigger: the web UI tests, the npm audits and the web coverage summary.
+#   - Schedule and manual runs only: the Rust workspace tools (cargo test, clippy, cargo audit). They take
+#     as long as the Rust job of ci.yml, so a pull request that only touches the report does not pay for
+#     them; on such a pull request the report shows them as "not available", which is the intended output.
+# Rust coverage is not measured (no coverage tool is wired for the Rust workspace). A pull request that
+# changes the report itself runs it too, so a broken report shows up in review.
+
+on:
+  schedule:
+    # Mondays 07:11 UTC, off the hour.
+    - cron: "11 7 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "scripts/quality-report.mjs"
+      - "scripts/tests/quality-report.test.mjs"
+      - ".github/workflows/quality-report.yml"
+      - "docs/quality.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-report-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  report:
+    name: Quality report
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install the web dependencies
+        working-directory: web
+        run: npm ci
+
+      # Each tool is allowed to fail: the report must show a red number, not vanish.
+      - name: Run the web tools
+        working-directory: web
+        run: |
+          mkdir -p ../quality
+          npx vitest run --reporter=json --outputFile=../quality/web-vitest.json || true
+          npm audit --omit=dev --json > ../quality/web-audit-prod.json || true
+          npm audit --json > ../quality/web-audit-all.json || true
+          # The coverage provider is installed without touching package.json or the lockfile, at the exact
+          # version of the installed vitest.
+          npm install --no-save "@vitest/coverage-v8@$(node -p "require('vitest/package.json').version")"
+          npx vitest run --coverage --coverage.provider=v8 --coverage.reporter=json-summary \
+            --coverage.include='src/**' --coverage.exclude='src/**/*.test.ts' --coverage.exclude='src/**/*.test.tsx' \
+            >/dev/null 2>&1 || true
+          cp coverage/coverage-summary.json ../quality/web-coverage-summary.json || true
+
+      - name: Rust toolchain (stable, with clippy)
+        if: github.event_name != 'pull_request'
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+
+      - name: Run the Rust tools
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p quality
+          cargo test --workspace --no-fail-fast > quality/rust-test.txt 2>&1 || true
+          cargo clippy --workspace --all-targets --message-format=short > quality/rust-clippy.txt 2>&1 || true
+          cargo install --locked cargo-audit
+          cargo audit --json > quality/rust-audit.json || true
+
+      - name: Render the report
+        run: |
+          node scripts/quality-report.mjs --in quality --out quality/quality-report.md
+          cat quality/quality-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: quality-report
+          path: quality/quality-report.md
+          retention-days: 90
