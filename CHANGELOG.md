@@ -56,6 +56,10 @@
 
 ### Fixed
 
+- Opening a file the guest controls now sets `O_NOFOLLOW | O_NONBLOCK` on FreeBSD, OpenBSD, NetBSD and DragonFly BSD as it
+  already did on Linux and macOS, so a symlink or a FIFO left at the path is refused there too. A platform with no known
+  flag values (including Linux architectures other than x86, x86-64, riscv64, arm and aarch64) is now refused with an
+  error instead of being opened with no flags. Linux and macOS behave as before.
 - The web coverage gate (`scripts/check-coverage.mjs`) now validates every configured web threshold before comparing
   it with a report: each must be a finite number greater than 0 and at most 100. A malformed value (`null`, a numeric
   string, zero, a negative number or a number above 100) used to be coerced in the comparison and silently disabled
