@@ -36,8 +36,9 @@ fn the_driver_prepares_runs_both_groups_and_prints_one_json_summary() {
     assert_eq!(
         out.status.code(),
         Some(0),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
+        "{} {}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
     );
     let s = summary(&out);
     assert_eq!(s["prepare"]["ok"], true);
@@ -119,4 +120,28 @@ fn a_bad_command_line_or_a_missing_setting_exits_2_and_starts_nothing() {
     assert_eq!(no_settings.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&no_settings.stderr).contains(ENV_BHYVE));
     assert!(rig.calls().is_empty());
+}
+
+#[test]
+fn the_session_logic_counts_in_process_and_labels_differences_among_the_control_restores() {
+    use hairspring_dhyve::driver::{run_session, Plan};
+    let rig = Rig::new("d-lib");
+    rig.modes(&["", "", ""]);
+    rig.events(&["line {seed}"]);
+    let plan = Plan {
+        seed: 5,
+        control_restores: 2,
+        other_seed_restores: 1,
+    };
+    let summary = run_session(&rig.session(), &plan);
+    assert!(summary.clean(), "{}", summary.to_json());
+    assert_eq!(summary.control.resume_seen, 2);
+    assert_eq!(summary.other_seed.exit_reported, 1);
+    let json: Value = serde_json::from_str(&summary.to_json()).unwrap();
+    assert_eq!(json["control"]["serial"], "equal");
+    let failing = Rig::new("d-lib-bad");
+    failing.modes(&["no_connect"]);
+    let bad = run_session(&failing.session(), &plan);
+    assert!(!bad.clean() && bad.prepare.is_err());
+    assert_eq!(bad.control.count, 0);
 }

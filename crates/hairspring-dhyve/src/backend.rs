@@ -95,7 +95,7 @@ impl Backend for DhyveBackend {
     fn limits(&self) -> BackendLimits {
         BackendLimits {
             max_parallelism: Some(MAX_PARALLELISM),
-            max_trial_seconds: None,
+            max_trial_seconds: Some(crate::run::MAX_TRIAL_SECS),
         }
     }
 
@@ -155,6 +155,7 @@ mod tests {
         assert_eq!(info.display_name, "dhyve (experimental)");
         assert_eq!(info.capabilities, Capabilities::default());
         assert_eq!(info.limits.max_parallelism, Some(1));
+        assert_eq!(info.limits.max_trial_seconds, Some(100));
         assert_eq!(info.version.binary_sha256, None);
         assert_eq!(DETERMINISM_CLASS, "unproven");
     }

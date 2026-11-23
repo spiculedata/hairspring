@@ -24,3 +24,4 @@ __pycache__/
 /sdks/python/dist/
 /coverage/
 web/coverage/
+*.profraw

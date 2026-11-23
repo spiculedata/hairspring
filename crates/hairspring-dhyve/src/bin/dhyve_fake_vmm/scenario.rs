@@ -115,11 +115,20 @@ impl Fake {
 
 /// Whether the environment is exactly the one variable the root commands are given.
 pub fn environment_ok(fake: &Fake) -> Result<(), String> {
-    let vars: Vec<(String, String)> = std::env::vars().collect();
+    // A build instrumented for coverage adds one variable of its own at start-up; it is not the caller's.
+    let vars: Vec<(String, String)> = std::env::vars()
+        .filter(|(k, _)| !k.starts_with("__LLVM_PROFILE"))
+        .collect();
     let want = fake.expected_lib();
     match (vars.as_slice(), want) {
         ([(k, v)], Some(want)) if k == "LD_LIBRARY_PATH" && *v == want => Ok(()),
         (_, None) if vars.is_empty() => Ok(()),
-        _ => Err(format!("unexpected environment: {} variables", vars.len())),
+        _ => Err(format!(
+            "unexpected environment: {}",
+            vars.iter()
+                .map(|(k, _)| k.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        )),
     }
 }
