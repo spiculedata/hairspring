@@ -188,12 +188,15 @@ fn an_unreadable_hash_is_said_not_hidden() {
 #[test]
 fn a_leftover_vm_blocks_and_names_the_destroy_command() {
     let report = assess(&DhyveFacts {
-        leftover_vms: Some(vec!["hs_1_2_3".into()]),
+        leftover_vms: Some(vec!["vmvx_20261123T1530Z_XB_r03".into()]),
         ..good()
     });
     assert!(!report.is_ready());
     let m = &report.missing[0];
-    assert!(m.contains("bhyvectl --destroy --vm=hs_1_2_3"), "{m}");
+    assert!(
+        m.contains("bhyvectl --destroy --vm=vmvx_20261123T1530Z_XB_r03"),
+        "{m}"
+    );
 }
 
 #[test]
@@ -244,7 +247,7 @@ fn every_text() -> String {
         text(&assess(&DhyveFacts {
             module: ModuleFact::NotLoaded,
             cpu: CpuFact::NoEpt,
-            leftover_vms: Some(vec!["hs_1".into()]),
+            leftover_vms: Some(vec!["vmvx_20261123T1530Z_XB_r01".into()]),
             panic_on_nmi: Some(255),
             os_release: None,
             ..good()

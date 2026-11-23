@@ -13,6 +13,8 @@ mod facts;
 mod gather;
 #[cfg(any(target_os = "freebsd", test))]
 mod read;
+#[cfg(any(target_os = "freebsd", test))]
+mod vmname;
 
 pub use assess::assess;
 pub use backend::{DhyveBackend, BACKEND_ID, DETERMINISM_CLASS};

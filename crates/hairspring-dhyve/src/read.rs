@@ -4,11 +4,6 @@ use crate::facts::{BinaryFact, CpuFact};
 use std::ffi::OsString;
 use std::path::Path;
 
-/// The prefix of the names of virtual machines this backend will create. Only such names are reported as leftovers.
-pub const VM_NAME_PREFIX: &str = "hs_";
-/// The longest VM name reported; anything longer is not one of ours.
-const MAX_VM_NAME: usize = 64;
-
 /// Whether the boot messages' VT-x feature line names EPT. The line is `VT-x:` followed by comma-separated features.
 pub fn cpu_from_boot_messages(text: &str) -> CpuFact {
     let Some(line) = text.lines().find(|l| l.trim_start().starts_with("VT-x:")) else {
@@ -21,13 +16,13 @@ pub fn cpu_from_boot_messages(text: &str) -> CpuFact {
     }
 }
 
-/// The names among `entries` that look like this backend's own VMs: the prefix, then letters, digits and `_` only (the
-/// names come from a directory anyone with access may write to, and are printed). Sorted.
+/// The names among `entries` that are of the module's selector grammar (see `vmname`), the form of every VM this backend
+/// creates. Nothing else is kept, because the names come from a directory anyone with access may write to and are
+/// printed. Sorted.
 pub fn leftover_names<I: IntoIterator<Item = String>>(entries: I) -> Vec<String> {
     let mut names: Vec<String> = entries
         .into_iter()
-        .filter(|n| n.starts_with(VM_NAME_PREFIX) && n.len() <= MAX_VM_NAME)
-        .filter(|n| n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|n| crate::vmname::is_selector_name(n))
         .collect();
     names.sort();
     names
@@ -94,19 +89,23 @@ mod tests {
     }
 
     #[test]
-    fn only_names_with_the_prefix_and_plain_characters_are_leftovers() {
+    fn only_names_of_the_selector_grammar_are_leftovers() {
         let entries = [
-            "hs_2_1_0",
+            "vmvx_20261123T1530Z_XB_r02",
             "other",
-            "hs_bad name",
-            "hs_\u{1b}[31m",
-            "hs_1_1_1",
-            &format!("hs_{}", "a".repeat(80)),
+            "hs_2_1_0",
+            "vmvx_20261123T1530Z_XB_r2",
+            "vmvx_\u{1b}[31m",
+            "vmvx_20261123T1530Z_XB_r01",
+            &format!("vmvx_{}", "a".repeat(80)),
         ]
         .map(String::from);
         assert_eq!(
             leftover_names(entries),
-            vec!["hs_1_1_1".to_string(), "hs_2_1_0".to_string()]
+            vec![
+                "vmvx_20261123T1530Z_XB_r01".to_string(),
+                "vmvx_20261123T1530Z_XB_r02".to_string()
+            ]
         );
     }
 
