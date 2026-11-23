@@ -22,6 +22,9 @@ pub enum BoundedError {
     TimedOut,
     /// It was started but waiting for it failed.
     Wait(String),
+    /// It is not one of the commands this crate runs, so it was not started.
+    #[cfg_attr(not(target_os = "freebsd"), allow(dead_code))]
+    Refused(crate::commands::Refusal),
 }
 
 impl std::fmt::Display for BoundedError {
@@ -30,6 +33,7 @@ impl std::fmt::Display for BoundedError {
             BoundedError::Start(why) => write!(f, "it could not be started ({why})"),
             BoundedError::TimedOut => write!(f, "it did not answer in time"),
             BoundedError::Wait(why) => write!(f, "waiting for it failed ({why})"),
+            BoundedError::Refused(why) => write!(f, "{why}"),
         }
     }
 }
@@ -38,7 +42,20 @@ impl std::fmt::Display for BoundedError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Answer {
     pub success: bool,
+    /// The exit status; `None` when the command was ended by a signal.
+    pub code: Option<i32>,
     pub stdout: String,
+}
+
+/// Runs `argv` for at most `deadline` if it is one of the read-only questions the machine check asks.
+#[cfg_attr(not(target_os = "freebsd"), allow(dead_code))]
+pub fn run_read_only(argv: &[String], deadline: Duration) -> Result<Answer, BoundedError> {
+    crate::commands::check_read_only(argv).map_err(BoundedError::Refused)?;
+    let (program, args) = argv
+        .split_first()
+        .ok_or(BoundedError::Start("empty".into()))?;
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_bounded(program, &args, deadline)
 }
 
 /// Runs `program` (an absolute path) with `args` for at most `deadline`.
@@ -83,6 +100,7 @@ pub fn run_bounded(
     let stdout = reader.and_then(|h| h.join().ok()).unwrap_or_default();
     Ok(Answer {
         success: status.success(),
+        code: status.code(),
         stdout,
     })
 }
@@ -143,6 +161,31 @@ mod tests {
     }
 
     #[test]
+    fn a_read_only_run_refuses_anything_that_is_not_a_machine_check_question() {
+        let r = run_read_only(&["/bin/sh".into(), "-c".into(), "echo hi".into()], SECOND);
+        assert!(matches!(r, Err(BoundedError::Refused(_))), "{r:?}");
+        let r = run_read_only(&["/sbin/kldload".into(), "vmm".into()], SECOND);
+        assert_eq!(
+            r,
+            Err(BoundedError::Refused(
+                crate::commands::Refusal::KernelModule
+            ))
+        );
+        let r = run_read_only(&[], SECOND);
+        assert!(matches!(r, Err(BoundedError::Refused(_))));
+    }
+
+    #[test]
+    fn the_exit_status_is_kept() {
+        assert_eq!(
+            run_bounded("/bin/sh", &["-c", "exit 3"], SECOND)
+                .unwrap()
+                .code,
+            Some(3)
+        );
+    }
+
+    #[test]
     fn errors_say_what_happened() {
         assert!(BoundedError::TimedOut.to_string().contains("in time"));
         assert!(BoundedError::Start("x".into())
@@ -151,5 +194,8 @@ mod tests {
         assert!(BoundedError::Wait("x".into())
             .to_string()
             .contains("waiting"));
+        assert!(BoundedError::Refused(crate::commands::Refusal::NotAllowed)
+            .to_string()
+            .contains("refused"));
     }
 }

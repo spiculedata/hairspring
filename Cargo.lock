@@ -794,7 +794,10 @@ name = "hairspring-dhyve"
 version = "0.1.0"
 dependencies = [
  "hairspring-core",
+ "hairspring-dhyve",
  "hairspring-engine",
+ "hairspring-props",
+ "serde_json",
 ]
 
 [[package]]
