@@ -174,6 +174,53 @@ mod tests {
         }
     }
 
+    const GOLDEN_OK: &str = include_str!("../../tests/golden/doctor_process_backend_ok.txt");
+    const GOLDEN_BLOCKED: &str =
+        include_str!("../../tests/golden/doctor_process_backend_blocked.txt");
+
+    fn blocked_facts() -> ProcessBackendFacts {
+        ProcessBackendFacts {
+            os: "macos".into(),
+            arch: "aarch64".into(),
+            kernel_release: Some("6.17.0-42-generic".into()),
+            hermit: HermitFact::Missing { installed_at: None },
+            libc: Some("ldd (Ubuntu GLIBC 2.39-0ubuntu8.3) 2.39".into()),
+            loader: LoaderHashes {
+                cache: Some("c0ffee".into()),
+                libc: Some("1bc".into()),
+                ld_so: Some("d1d".into()),
+            },
+            ..backend_facts("macos")
+        }
+    }
+
+    fn ready_facts() -> ProcessBackendFacts {
+        ProcessBackendFacts {
+            os: "linux".into(),
+            arch: "x86_64".into(),
+            hermit: HermitFact::Found {
+                path: "/opt/hermit/bin/hermit".into(),
+                version: "hermit 0.4.1 (2026-10-15)".into(),
+                sha256: Some(
+                    "666a8713d510bcd57cf2ea4c419c23368f8e7f5fb6c279a7b4766a142e62674a".into(),
+                ),
+            },
+            ..blocked_facts()
+        }
+    }
+
+    #[test]
+    fn the_process_backend_report_is_byte_identical_to_the_recorded_output() {
+        let mut out = Vec::new();
+        let code = run_process_backend(&mut out, &ready_facts()).unwrap();
+        assert_eq!(code, crate::EXIT_OK);
+        assert_eq!(String::from_utf8(out).unwrap(), GOLDEN_OK);
+        let mut out = Vec::new();
+        let code = run_process_backend(&mut out, &blocked_facts()).unwrap();
+        assert_eq!(code, crate::EXIT_UNSUPPORTED_HOST);
+        assert_eq!(String::from_utf8(out).unwrap(), GOLDEN_BLOCKED);
+    }
+
     #[test]
     fn the_deterministic_line_names_steps_only_when_there_are_some() {
         assert_eq!(

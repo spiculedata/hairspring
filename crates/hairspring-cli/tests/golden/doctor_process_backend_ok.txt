@@ -1,0 +1,8 @@
+process backend: prerequisites on this machine
+  platform       ok    linux x86_64
+  kernel         ok    6.17.0-42-generic
+  hermit         ok    /opt/hermit/bin/hermit: hermit 0.4.1 (2026-10-15), sha256 666a8713d510bcd57cf2ea4c419c23368f8e7f5fb6c279a7b4766a142e62674a
+  perf counters  ok    a hardware branch counter opened (perf_event_paranoid 2)
+  ptrace         ok    kernel.yama.ptrace_scope = 1
+  loader / libc  ok    ldd (Ubuntu GLIBC 2.39-0ubuntu8.3) 2.39; ld.so.cache sha256 c0ffee, libc sha256 1bc, ld.so sha256 d1d
+result: ok: a generic hardware branch counter was opened and Hermit answered --version; no program has been run under Hermit, so this does not show that Hermit works here
