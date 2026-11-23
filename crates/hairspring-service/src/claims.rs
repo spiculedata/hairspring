@@ -4,7 +4,12 @@
 //! per-trial results that pass every size and consistency check. So a figure may back a headline or a generated claim
 //! only if every trial behind it came from a trusted worker and every failure it rests on was reproduced by a trusted
 //! confirmation replay. Anything else is still shown, labelled "unverified worker data", and never claimed.
+use hairspring_engine::claim_standing::backend_may_back_claims;
 use hairspring_store::Contributor;
+
+/// Why a run of an experimental backend is never claimed.
+pub const EXPERIMENTAL_BACKEND: &str =
+    "this backend is experimental, and no claim may rest on its runs";
 
 /// One replay of a reported failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,5 +63,68 @@ pub fn claim_gate(
     ClaimGate {
         allowed: reasons.is_empty(),
         reasons,
+    }
+}
+
+/// [`claim_gate`], and refused outright for a backend whose runs may not back a claim, whatever its trials found and
+/// whoever reported them.
+pub fn claim_gate_for(
+    backend_id: &str,
+    contributors: &[Contributor],
+    failures: &[FailureEvidence],
+    trusted_workers: usize,
+) -> ClaimGate {
+    let gate = claim_gate(contributors, failures, trusted_workers);
+    if backend_may_back_claims(backend_id) {
+        return gate;
+    }
+    let mut reasons = gate.reasons;
+    reasons.push(EXPERIMENTAL_BACKEND);
+    ClaimGate {
+        allowed: false,
+        reasons,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn trusted() -> Vec<Contributor> {
+        vec![Contributor {
+            worker_id: "w1".into(),
+            trusted: true,
+            trials: 10,
+        }]
+    }
+
+    #[test]
+    fn a_run_with_no_failures_from_trusted_workers_is_allowed_for_a_shipped_backend() {
+        for backend in ["sim", "wasm", "hermit"] {
+            let gate = claim_gate_for(backend, &trusted(), &[], 1);
+            assert!(gate.allowed, "{backend}: {:?}", gate.reasons);
+            assert_eq!(gate, claim_gate(&trusted(), &[], 1));
+        }
+    }
+
+    #[test]
+    fn the_same_run_is_refused_for_the_experimental_backend() {
+        let gate = claim_gate_for("dhyve", &trusted(), &[], 1);
+        assert!(!gate.allowed);
+        assert_eq!(gate.reasons, vec![EXPERIMENTAL_BACKEND]);
+    }
+
+    #[test]
+    fn the_refusal_is_added_to_the_reasons_the_gate_already_has() {
+        let untrusted = vec![Contributor {
+            trusted: false,
+            ..trusted().remove(0)
+        }];
+        let gate = claim_gate_for("dhyve", &untrusted, &[], 1);
+        assert_eq!(gate.reasons.len(), 2);
+        assert!(gate.reasons.contains(&EXPERIMENTAL_BACKEND));
+        assert!(!claim_gate_for("hermit", &untrusted, &[], 1)
+            .reasons
+            .contains(&EXPERIMENTAL_BACKEND));
     }
 }

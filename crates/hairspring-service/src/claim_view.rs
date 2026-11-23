@@ -3,7 +3,7 @@
 //! A sentence is generated only when every condition holds: the label is declared, every trial came from a trusted
 //! worker, every failure it rests on was reproduced on a trusted worker, and the run finished in a state that can back
 //! it. Whatever fails is listed in `withheld`; the figures themselves are still shown, labelled.
-use crate::claims::{claim_gate, Confirmation, FailureEvidence};
+use crate::claims::{claim_gate_for, Confirmation, FailureEvidence};
 use crate::confirm_claims::CheckedFailure;
 use crate::{Result, RunCompletion, Service};
 use hairspring_props::claim_text::{generate, FindingState, Label, Subject};
@@ -93,7 +93,7 @@ impl Service {
         let checked = self.checked_failures(&run.id)?;
         let evidence = self.failure_evidence(&run.id, stats, &checked)?;
         let trusted_workers = self.list_workers()?.iter().filter(|w| w.trusted).count();
-        let gate = claim_gate(&trust.workers, &evidence, trusted_workers);
+        let gate = claim_gate_for(&run.backend, &trust.workers, &evidence, trusted_workers);
 
         let fallback = Label::undeclared();
         let label = label.unwrap_or(&fallback);
