@@ -38,6 +38,9 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace --no-fail-fast
+      # A default workspace build must not turn the experimental dhyve feature on in a shared crate.
+      - name: Default features guard
+        run: bash scripts/check-default-features.sh
       # System-level (Hermit) tests need performance counters and are run separately on bare metal:
       #   HAIRSPRING_HERMIT_REAL=1 cargo test -p hairspring-hermit --test real_hermit
 
@@ -511,6 +514,8 @@ jobs:
           bash scripts/check-workflow-shells.sh
       - name: Embedded-UI check script tests
         run: bash scripts/test-check-embedded-ui.sh
+      - name: Default features guard script tests
+        run: bash scripts/test-check-default-features.sh
       # Offline: builds a fixture repository in a temporary directory and checks the report's parsing against it.
       - name: Hermit upstream report self-test
         run: bash scripts/hermit-upstream-report.sh --self-test
