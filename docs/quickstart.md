@@ -90,6 +90,14 @@ last line is either `result: ok: ...` or `result: CANNOT RUN the process backend
 reasons, and the exit code is 0 or 4 respectively (4 is distinct from 1, which means a property was violated). `ok`
 means the prerequisites are met; it does not mean a program has been run under Hermit here.
 
+`hairspring doctor --backend NAME` runs the machine check of the backend with that id, with no target involved, and
+prints what it found in the same shape: one line per prerequisite, then the result, and for each prerequisite that is
+not met, which one and how to fix it. The exit code is 0 when nothing is missing and 4 when something is. The ids are
+`sim`, `hermit` and `wasm`; any other name is an error that lists them. `--backend hermit` prints exactly what
+`--process-backend` prints, and the two flags cannot be given together. Only `hermit` checks anything today: `sim` and
+`wasm` report that no prerequisites of theirs are checked on this machine, which says nothing about whether a target
+will run. This check supports no language and no backend beyond the ones in [the support matrix](support-matrix.md).
+
 Hermit's replay behaviour depends on the machine it runs on (CPU, kernel, loader). If you move from one machine to
 another, expect to record again.
 

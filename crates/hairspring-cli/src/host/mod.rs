@@ -2,15 +2,12 @@
 //! depend on them, so they never fail a command.
 mod apt_conf;
 mod autoupdate;
-mod kernel;
-mod loader;
-pub mod process_backend;
-pub mod process_probe;
 
 pub use autoupdate::AutoUpdates;
-pub use loader::LoaderHashes;
+pub use hairspring_hermit::host::LoaderHashes;
 
 use hairspring_engine::config::{Config, TargetKind};
+use hairspring_hermit::host::{kernel, read_trimmed};
 use std::io::Write;
 use std::path::Path;
 
@@ -41,12 +38,6 @@ impl HostFacts {
             loader: LoaderHashes::probe(),
         }
     }
-}
-
-fn read_trimmed(path: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let text = text.trim();
-    (!text.is_empty()).then(|| text.to_string())
 }
 
 /// Every warning the facts call for, in a fixed order.

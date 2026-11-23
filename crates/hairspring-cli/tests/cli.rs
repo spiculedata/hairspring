@@ -262,6 +262,61 @@ fn doctor_process_backend_reports_a_missing_hermit_and_exits_4() {
     assert!(s.contains("platform"), "{s}");
 }
 
+fn doctor_with_missing_hermit(d: &std::path::Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_hairspring"))
+        .arg("doctor")
+        .args(args)
+        .current_dir(d)
+        .env("HAIRSPRING_HERMIT", d.join("no-such-dir").join("hermit"))
+        .output()
+        .expect("binary runs")
+}
+
+#[test]
+fn doctor_backend_hermit_is_byte_identical_to_the_process_backend_flag() {
+    let d = scratch("doctor-backend-hermit");
+    let flag = doctor_with_missing_hermit(&d, &["--process-backend"]);
+    let named = doctor_with_missing_hermit(&d, &["--backend", "hermit"]);
+    assert_eq!(
+        named.status.code(),
+        Some(4),
+        "{}{}",
+        out(&named),
+        err(&named)
+    );
+    assert_eq!(named.status.code(), flag.status.code());
+    assert_eq!(named.stdout, flag.stdout);
+    assert_eq!(named.stderr, flag.stderr);
+}
+
+#[test]
+fn doctor_backend_sim_is_ready_and_exits_0() {
+    let d = scratch("doctor-backend-sim");
+    let o = doctor_with_missing_hermit(&d, &["--backend", "sim"]);
+    assert_eq!(o.status.code(), Some(0), "{}{}", out(&o), err(&o));
+    assert!(out(&o).contains("result: ok:"), "{}", out(&o));
+}
+
+#[test]
+fn doctor_backend_unknown_lists_the_available_names_and_exits_2() {
+    let d = scratch("doctor-backend-unknown");
+    let o = doctor_with_missing_hermit(&d, &["--backend", "qemu"]);
+    assert_eq!(o.status.code(), Some(2), "{}{}", out(&o), err(&o));
+    assert!(out(&o).is_empty(), "{}", out(&o));
+    assert!(
+        err(&o).contains("unknown backend `qemu`; available: sim, hermit, wasm"),
+        "{}",
+        err(&o)
+    );
+}
+
+#[test]
+fn doctor_refuses_both_backend_flags_together() {
+    let d = scratch("doctor-backend-both");
+    let o = doctor_with_missing_hermit(&d, &["--backend", "sim", "--process-backend"]);
+    assert_eq!(o.status.code(), Some(2), "{}{}", out(&o), err(&o));
+}
+
 #[test]
 fn init_writes_a_config_once() {
     let d = scratch("init");

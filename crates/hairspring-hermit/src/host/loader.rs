@@ -65,7 +65,7 @@ fn hash_file(path: &Path) -> Option<String> {
     }
     let mut bytes = Vec::new();
     file.take(MAX_HASHED_BYTES).read_to_end(&mut bytes).ok()?;
-    Some(hairspring_store::sha256_hex(&bytes))
+    Some(hairspring_core::point::encoding::sha256_hex(&bytes))
 }
 
 #[cfg(test)]
@@ -76,7 +76,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "hairspring-loader-{name}-{}-{}",
             std::process::id(),
-            hairspring_store::now_ms()
+            crate::host::unique_stamp()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir

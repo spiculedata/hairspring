@@ -5,6 +5,7 @@ use crate::confirm::{
     CheckKind, CheckResult, CheckStatus, ConfirmRequest, ENVIRONMENT_CHANGED_KEY, RAN_KEY,
 };
 use crate::erased::Registry;
+use crate::probe::ProbeReport;
 use crate::report::{DoctorReport, ReplayOutcome, RunOutcome};
 use crate::sim_backend::SimBackend;
 use crate::EngineError;
@@ -48,6 +49,31 @@ impl Engine {
     /// What the registered backends say about themselves, in registration order.
     pub fn backend_infos(&self) -> Vec<BackendInfo> {
         self.backends.iter().map(|b| b.info()).collect()
+    }
+
+    /// The ids of the registered backends, in registration order.
+    pub fn backend_ids(&self) -> Vec<&'static str> {
+        self.backends.iter().map(|b| b.id()).collect()
+    }
+
+    /// Runs the machine probe of the backend registered as `id`. A probe that panics comes back as a report that is not
+    /// ready, never as a panic here. An id nothing is registered as is an error that lists the ids there are.
+    pub fn probe_backend(&self, id: &str) -> Result<ProbeReport, EngineError> {
+        let mut named = self.backends.iter().filter(|b| b.id() == id);
+        let Some(backend) = named.next() else {
+            return Err(EngineError::InvalidRequest(format!(
+                "unknown backend `{}`; available: {}",
+                shown_name(id),
+                self.backend_ids().join(", ")
+            )));
+        };
+        if named.next().is_some() {
+            return Err(EngineError::BackendChoice(
+                "more than one backend is registered under that id".to_string(),
+            ));
+        }
+        let probe = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.probe()));
+        Ok(probe.unwrap_or_else(|_| ProbeReport::failed(backend.display_name())))
     }
 
     /// What the backend that runs `spec` says about itself, or `None` when this engine has no backend registered for it.
@@ -180,6 +206,19 @@ impl Engine {
             .ok_or_else(|| EngineError::UnknownTarget(target.to_string()))?;
         self.backend_for(spec)?
             .doctor(spec, seeds.min(1000), steps.min(100_000))
+    }
+}
+
+/// Longest part of a caller's backend name repeated in an error.
+const SHOWN_NAME_CHARS: usize = 40;
+
+/// A caller's text as one short, escaped line fit to repeat in an error.
+fn shown_name(text: &str) -> String {
+    let shown: String = text.chars().take(SHOWN_NAME_CHARS).collect();
+    let escaped = shown.escape_debug().to_string();
+    match text.chars().count() > SHOWN_NAME_CHARS {
+        true => format!("{escaped}..."),
+        false => escaped,
     }
 }
 

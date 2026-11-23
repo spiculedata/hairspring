@@ -2,6 +2,7 @@ use crate::backend_info::{BackendInfo, BackendLimits, BackendVersion, Capabiliti
 use crate::config::{Budget, TargetKind, TargetSpec};
 use crate::confirm::{CheckResult, ConfirmRequest};
 use crate::mode::RunMode;
+use crate::probe::ProbeReport;
 use crate::report::{DoctorReport, ReplayOutcome, RunOutcome};
 use crate::EngineError;
 use hairspring_core::bundle::Bundle;
@@ -125,6 +126,11 @@ pub trait Backend: Send + Sync {
     /// has no recorded inputs, which is different from inputs that were recorded and differ.
     fn run_inputs(&self, _spec: &TargetSpec) -> Option<IdentityDraft> {
         None
+    }
+    /// Whether this machine can run the backend, with no target involved: which prerequisite is missing and how to fix
+    /// it. Read-only. It must never panic and must return in bounded time. The default has nothing to check and says so.
+    fn probe(&self) -> ProbeReport {
+        ProbeReport::nothing_to_check(self.display_name())
     }
     /// Determinism self-check. Backends that cannot do this in-process say so.
     fn doctor(

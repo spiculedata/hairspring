@@ -1,0 +1,10 @@
+process backend: prerequisites on this machine
+  platform       FAIL  macos aarch64
+  kernel         ok    6.17.0-42-generic
+  hermit         FAIL  not found
+  perf counters  ok    a hardware branch counter opened (perf_event_paranoid 2)
+  ptrace         ok    kernel.yama.ptrace_scope = 1
+  loader / libc  ok    ldd (Ubuntu GLIBC 2.39-0ubuntu8.3) 2.39; ld.so.cache sha256 c0ffee, libc sha256 1bc, ld.so sha256 d1d
+result: CANNOT RUN the process backend on this machine:
+  - the process backend needs Linux: Hermit does not run on this operating system. The sim and wasm backends work here.
+  - Hermit was not found: HAIRSPRING_HERMIT is unset and `hermit` is not on PATH. Build it with scripts/install-hermit.sh and point HAIRSPRING_HERMIT at the result.

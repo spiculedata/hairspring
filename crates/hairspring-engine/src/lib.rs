@@ -14,6 +14,7 @@ mod format_rate;
 mod format_sweep;
 pub mod hermit_args;
 pub mod mode;
+pub mod probe;
 pub mod report;
 pub mod scheduler;
 pub mod sim_backend;

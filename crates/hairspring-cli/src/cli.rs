@@ -162,8 +162,13 @@ pub struct DoctorArgs {
     pub steps: usize,
     /// Report whether this machine meets the `process` backend's prerequisites (Hermit, perf counters, ptrace),
     /// instead of checking targets. Exits 4 when it cannot run here.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "backend")]
     pub process_backend: bool,
+    /// Report whether this machine meets the named backend's prerequisites and, when one is missing, how to fix it,
+    /// instead of checking targets. Exits 4 when it cannot run here. `--backend hermit` is the same report as
+    /// `--process-backend`.
+    #[arg(long, value_name = "NAME")]
+    pub backend: Option<String>,
 }
 
 #[derive(Args)]
