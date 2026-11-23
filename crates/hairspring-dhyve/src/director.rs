@@ -465,6 +465,7 @@ fn restore(
     if event.stop_seq != keys.stop_seq
         || event.branch_count != keys.branch_count
         || event.vtime_ns != keys.vtime_ns
+        || event.vcpu_id != keys.vcpu_id
     {
         report.resume = ResumeResult::Unseen(
             "the replayed stop differs from the checkpoint record".to_string(),

@@ -37,8 +37,9 @@ pub mod serial;
 pub mod session;
 pub mod signal;
 mod spawn;
+mod startcheck;
 pub mod trial;
-mod vmargs;
+pub mod vmargs;
 pub mod vmname;
 pub mod wire;
 

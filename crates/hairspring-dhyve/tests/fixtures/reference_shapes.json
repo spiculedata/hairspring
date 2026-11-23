@@ -10,7 +10,7 @@
   "-o",
   "dhyve.director.enabled=true",
   "-f",
-  "name=opt/hs/seed,file=/var/tmp/vmvx-20261201T0540Z/runs/x/fwcfg/seed",
+  "name=opt/hs/seed,file=/var/tmp/vmvx-20261201T0540Z/runs/20261201T0540Z/r02/fwcfg/seed",
   "vmvx_20261201T0540Z_XB_r02"
  ],
  "r4": [
@@ -28,7 +28,7 @@
   "-o",
   "dhyve.director.enabled=true",
   "-f",
-  "name=opt/hs/seed,file=/var/tmp/vmvx-20261201T0540Z/runs/x/fwcfg/seed",
+  "name=opt/hs/seed,file=/var/tmp/vmvx-20261201T0540Z/runs/20261201T0540Z/r02/fwcfg/seed",
   "vmvx_20261201T0540Z_XB_r02"
  ],
  "r5": [

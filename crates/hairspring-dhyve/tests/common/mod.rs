@@ -124,6 +124,15 @@ impl Rig {
         self.read_lines("calls.log")
     }
 
+    /// The arguments of each `bhyve` start, with this rig's directory masked.
+    pub fn start_args(&self) -> Vec<String> {
+        let root = self.root.display().to_string();
+        self.read_lines("args.log")
+            .into_iter()
+            .map(|l| l.replace(&root, "ROOT"))
+            .collect()
+    }
+
     pub fn trials(&self) -> Vec<String> {
         self.read_lines("trials.log")
     }

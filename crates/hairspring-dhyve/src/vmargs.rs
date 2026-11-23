@@ -7,12 +7,12 @@ use crate::layout::RunPaths;
 use crate::vmname::VmName;
 use crate::wire::RESUME_BRANCH_TARGET;
 
-const CPUS: &str = "1";
-const MEMORY: &str = "256M";
-const READY_PATTERN: &str = "HS_READY";
-const LOG_MASK: &str = "0xff7f";
-const GUEST_UUID: &str = "9a1983b1-8f4e-5c2a-9c43-8f7e12d4b6a1";
-const GUEST_CMDLINE: &str =
+pub(crate) const CPUS: &str = "1";
+pub(crate) const MEMORY: &str = "256M";
+pub(crate) const READY_PATTERN: &str = "HS_READY";
+pub(crate) const LOG_MASK: &str = "0xff7f";
+pub(crate) const UUID: &str = "9a1983b1-8f4e-5c2a-9c43-8f7e12d4b6a1";
+pub(crate) const CMDLINE: &str =
     "console=ttyS0 nokaslr norandmaps rdinit=/init quiet earlyprintk=serial tsc=reliable \
 lpj=8000000 noapictimer hpet=disable nopcid preempt=none nmi_watchdog=0";
 /// The seed the VM's own generator is held at on every run.
@@ -42,10 +42,10 @@ fn base(host: &HostConfig, run: &RunPaths, fwcfg: &Files, name: &VmName) -> Vec<
     }
     args.extend(pair("linux.kernel", host.kernel.display()));
     args.extend(pair("linux.initrd", host.initrd.display()));
-    args.extend(pair("linux.cmdline", GUEST_CMDLINE));
+    args.extend(pair("linux.cmdline", CMDLINE));
     args.extend(pair("deterministic.seed", VM_SEED));
     args.extend(pair("deterministic.max_branches", RESUME_BRANCH_TARGET));
-    args.extend(pair("uuid", GUEST_UUID));
+    args.extend(pair("uuid", UUID));
     args.extend(pair(
         "deterministic.state_manifest",
         run.state_manifest.display(),

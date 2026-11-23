@@ -163,7 +163,7 @@ impl Session {
             .write(&run.fwcfg_dir)
             .map_err(|e| InfraError::new(InfraKind::InputFiles, e.to_string()))?;
         spawner.destroy(&name)?;
-        // A start can load a module by itself when none is loaded, so it is checked each time, just before.
+        // A start may load a module by itself when none is loaded, so it is checked each time, just before.
         let vmm = spawner.vmm_identity()?;
         let done = self.boot_and_checkpoint(&Boot {
             stamp,

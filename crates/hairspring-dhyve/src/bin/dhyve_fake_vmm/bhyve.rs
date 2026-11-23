@@ -196,6 +196,7 @@ fn send(conn: &mut UnixStream, m: &Message) {
 /// Runs one start of the fake `bhyve`; returns its exit status.
 pub fn run(fake: &Fake, args: &[String]) -> i32 {
     fake.log_call(&format!("bhyve {}", args.last().map_or("", String::as_str)));
+    fake.append("args.log", &args.join(" "));
     if let Err(why) = environment_ok(fake) {
         eprintln!("{why}");
         return 70;

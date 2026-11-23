@@ -47,6 +47,7 @@ impl Env {
                 stop_seq: 3,
                 branch_count: 1000,
                 vtime_ns: 5,
+                vcpu_id: 2,
                 rip,
                 sock: self.sock().display().to_string(),
             }),
@@ -361,6 +362,10 @@ fn a_replayed_stop_that_differs_from_the_checkpoint_record_is_answered_with_noth
         },
         Message {
             vtime_ns: 6,
+            ..ready()
+        },
+        Message {
+            vcpu_id: 3,
             ..ready()
         },
     ] {

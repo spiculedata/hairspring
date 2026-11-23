@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 
 const FIXTURE: &str = include_str!("fixtures/reference_shapes.json");
-const FIXTURE_SHA256: &str = "d75cb83dbd98f770aadb634a4d7e2567d83a1b090826eae10550dcfb3181572f";
+const FIXTURE_SHA256: &str = "100631b39d3a15a6c5e18e3e21c001e3ef42b7fc3100a7a6a05b857a267e98d1";
 
 fn list(v: &Value) -> Vec<String> {
     v.as_array()

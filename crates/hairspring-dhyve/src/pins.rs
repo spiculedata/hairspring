@@ -48,13 +48,24 @@ fn regular(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
 }
 
-/// The manifest of the files directly in `dir`: one `<sha256>  <name>` line each, sorted by name.
+/// The manifest of the files directly in `dir`: one `<sha256>  <name>` line each, sorted by name. Anything that is not a
+/// regular file (a link, which the loader would follow, or a directory) is refused, not skipped.
 pub fn lib_manifest(dir: &Path) -> std::io::Result<String> {
-    let mut names: Vec<String> = std::fs::read_dir(dir)?
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
-        .filter_map(|e| e.file_name().into_string().ok())
-        .collect();
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "not a regular file",
+            ));
+        }
+        names.push(
+            entry.file_name().into_string().map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "not plain text")
+            })?,
+        );
+    }
     names.sort();
     let mut text = String::new();
     for name in names {
@@ -96,8 +107,13 @@ pub fn verify(host: &HostConfig) -> Result<(), InfraError> {
         }
     }
     if let Some(pin) = &host.pins.lib_manifest {
-        let found = lib_manifest_pin(&host.lib_dir)
-            .map_err(|e| InfraError::io("read the library directory", &e))?;
+        let found = lib_manifest_pin(&host.lib_dir).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::InvalidData {
+                mismatch("the library directory holds something that is not a regular file")
+            } else {
+                InfraError::io("read the library directory", &e)
+            }
+        })?;
         if found != *pin {
             return Err(mismatch("the library directory differs from its pin"));
         }
@@ -174,6 +190,21 @@ mod tests {
         std::fs::write(d.join("lib/libb.so"), b"b").unwrap();
         assert_eq!(verify(&h), Ok(()));
         std::fs::write(d.join("lib/libc.so"), b"extra").unwrap();
+        assert_eq!(verify(&h).unwrap_err().kind, InfraKind::PinMismatch);
+    }
+
+    #[test]
+    fn a_library_directory_holding_a_link_or_a_directory_is_refused() {
+        let d = scratch("libs-links");
+        let mut h = host(&d);
+        h.pins.lib_manifest = Some(lib_manifest_pin(&d.join("lib")).unwrap());
+        std::os::unix::fs::symlink("/bin/sh", d.join("lib/libc.so")).unwrap();
+        let err = verify(&h).unwrap_err();
+        assert_eq!(err.kind, InfraKind::PinMismatch);
+        assert!(err.detail.contains("not a regular file"), "{err}");
+        assert!(lib_manifest(&d.join("lib")).is_err());
+        std::fs::remove_file(d.join("lib/libc.so")).unwrap();
+        std::fs::create_dir(d.join("lib/sub")).unwrap();
         assert_eq!(verify(&h).unwrap_err().kind, InfraKind::PinMismatch);
     }
 

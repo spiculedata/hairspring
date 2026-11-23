@@ -67,7 +67,9 @@ pub fn stop_held_in<R: std::io::BufRead>(
     loop {
         line.clear();
         match reader.read_until(b'\n', &mut line) {
-            Ok(0) | Err(_) => return seen.then_some(true),
+            Ok(0) => return seen.then_some(true),
+            // A log that cannot be read is not shown to hold the stop: no shutdown is sent on it.
+            Err(_) => return None,
             Ok(_) => {}
         }
         let complete = line.last() == Some(&b'\n');
@@ -151,6 +153,7 @@ pub struct RestoreScanKeys {
     pub stop_seq: u64,
     pub branch_count: u64,
     pub vtime_ns: u64,
+    pub vcpu_id: u32,
     /// The restored instruction pointer; `None` when it could not be read from the checkpoint.
     pub rip: Option<u64>,
     /// The control socket path of this restore.
@@ -272,6 +275,7 @@ mod tests {
             stop_seq: 3,
             branch_count: 1000,
             vtime_ns: 5_000,
+            vcpu_id: 0,
             rip,
             sock: SOCK.to_string(),
         }
@@ -525,6 +529,31 @@ mod tests {
         assert!(out.bytes().all(|b| (0x20..0x7f).contains(&b)), "{out:?}");
         assert!(!out.contains('\u{1b}'));
         assert!(shown(&"a".repeat(500)).len() <= SHOWN_BYTES);
+    }
+
+    /// A reader that gives its bytes and then an error.
+    struct Failing<'a>(&'a [u8], bool);
+
+    impl std::io::Read for Failing<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.0.is_empty() {
+                self.1 = true;
+                return Err(std::io::Error::other("disk"));
+            }
+            let n = self.0.len().min(buf.len());
+            buf[..n].copy_from_slice(&self.0[..n]);
+            self.0 = &self.0[n..];
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn a_read_error_after_the_stop_line_is_not_a_held_stop() {
+        let log = stop();
+        let reader = std::io::BufReader::new(Failing(log.as_bytes(), false));
+        assert_eq!(stop_held_in(reader, 3, 1000), None);
+        let reader = std::io::BufReader::new(Failing(b"", false));
+        assert_eq!(stop_held_in(reader, 3, 1000), None);
     }
 
     #[test]

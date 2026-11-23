@@ -3,10 +3,13 @@
 //! root commands, and the two private records.
 mod common;
 use common::Rig;
+use hairspring_core::environment::sha256_file;
 use hairspring_dhyve::driver::{order, records_dir, run_session, steps_log, Plan};
 use hairspring_dhyve::host::{
-    ENV_BHYVE, ENV_BHYVECTL, ENV_INITRD, ENV_KERNEL, ENV_LIB, ENV_STAMP, ENV_STATE, ENV_SUDO,
+    ENV_BHYVE, ENV_BHYVECTL, ENV_INITRD, ENV_KERNEL, ENV_LIB, ENV_PIN_BHYVE, ENV_PIN_BHYVECTL,
+    ENV_PIN_LIB, ENV_STAMP, ENV_STATE, ENV_SUDO,
 };
+use hairspring_dhyve::pins::lib_manifest_pin;
 use serde_json::Value;
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};
@@ -15,21 +18,41 @@ const DRIVER: &str = env!("CARGO_BIN_EXE_dhyve-session-driver");
 const STAMP: &str = "20261201T0540Z";
 
 fn drive(rig: &Rig, args: &[&str]) -> Output {
-    Command::new(DRIVER)
-        .args(args)
-        .env_clear()
-        .env(ENV_SUDO, &rig.host.sudo)
-        .env("HAIRSPRING_DHYVE_KLDSTAT", &rig.host.kldstat)
-        .env("HAIRSPRING_DHYVE_CPUSET", &rig.host.cpuset)
-        .env(ENV_BHYVE, &rig.host.bhyve)
-        .env(ENV_BHYVECTL, &rig.host.bhyvectl)
-        .env(ENV_LIB, &rig.host.lib_dir)
-        .env(ENV_STATE, &rig.host.state_dir)
-        .env(ENV_KERNEL, &rig.host.kernel)
-        .env(ENV_INITRD, &rig.host.initrd)
-        .env(ENV_STAMP, STAMP)
-        .output()
-        .unwrap()
+    let mut with_flag = args.to_vec();
+    with_flag.push("--allow-fake");
+    drive_without(rig, &with_flag, &[])
+}
+
+/// The driver with every setting a session needs, minus the variables named in `omit`.
+fn drive_without(rig: &Rig, args: &[&str], omit: &[&str]) -> Output {
+    let pin = |p: &std::path::Path| sha256_file(p).unwrap();
+    let vars: Vec<(&str, String)> = vec![
+        (ENV_SUDO, rig.host.sudo.display().to_string()),
+        (
+            "HAIRSPRING_DHYVE_KLDSTAT",
+            rig.host.kldstat.display().to_string(),
+        ),
+        (
+            "HAIRSPRING_DHYVE_CPUSET",
+            rig.host.cpuset.display().to_string(),
+        ),
+        (ENV_BHYVE, rig.host.bhyve.display().to_string()),
+        (ENV_BHYVECTL, rig.host.bhyvectl.display().to_string()),
+        (ENV_LIB, rig.host.lib_dir.display().to_string()),
+        (ENV_STATE, rig.host.state_dir.display().to_string()),
+        (ENV_KERNEL, rig.host.kernel.display().to_string()),
+        (ENV_INITRD, rig.host.initrd.display().to_string()),
+        (ENV_STAMP, STAMP.to_string()),
+        (ENV_PIN_BHYVE, pin(&rig.host.bhyve)),
+        (ENV_PIN_BHYVECTL, pin(&rig.host.bhyvectl)),
+        (ENV_PIN_LIB, lib_manifest_pin(&rig.host.lib_dir).unwrap()),
+    ];
+    let mut command = Command::new(DRIVER);
+    command.args(args).env_clear();
+    for (name, value) in vars.iter().filter(|(n, _)| !omit.contains(n)) {
+        command.env(name, value);
+    }
+    command.output().unwrap()
 }
 
 fn summary(out: &Output) -> Value {
@@ -144,7 +167,7 @@ fn the_driver_binary_exits_1_after_an_error_and_2_for_a_bad_command_line() {
         assert_eq!(drive(&rig, &args).status.code(), Some(2), "{args:?}");
     }
     let none = Command::new(DRIVER)
-        .args(["--control", "1", "--other", "1"])
+        .args(["--control", "1", "--other", "1", "--allow-fake"])
         .env_clear()
         .output()
         .unwrap();
@@ -302,4 +325,74 @@ fn the_steps_log_and_a_record_for_each_run_are_written_and_the_prepares_log_is_k
         prepare_log.exists(),
         "the prepare's standard error is kept in full"
     );
+}
+
+#[test]
+fn the_driver_refuses_to_start_without_the_stamp_or_any_of_the_three_pins() {
+    let rig = Rig::new("d-required");
+    for missing in [ENV_STAMP, ENV_PIN_BHYVE, ENV_PIN_BHYVECTL, ENV_PIN_LIB] {
+        let out = drive_without(
+            &rig,
+            &["--control", "1", "--other", "0", "--allow-fake"],
+            &[missing],
+        );
+        assert_eq!(out.status.code(), Some(2), "{missing}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains(missing),
+            "{missing}"
+        );
+    }
+    assert!(
+        rig.calls().is_empty(),
+        "nothing was started: {:?}",
+        rig.calls()
+    );
+    let all = drive_without(
+        &rig,
+        &["--control", "1", "--other", "0", "--allow-fake"],
+        &[],
+    );
+    assert_eq!(
+        all.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&all.stderr)
+    );
+}
+
+#[test]
+fn a_build_with_the_stand_in_programs_needs_a_flag_and_says_so_in_its_summary() {
+    let rig = Rig::new("d-fake-flag");
+    let out = drive_without(&rig, &["--control", "1", "--other", "0"], &[]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("stand-in"));
+    assert!(rig.calls().is_empty());
+    let out = drive(&rig, &["--control", "1", "--other", "0"]);
+    assert_eq!(summary(&out)["fake_vmm"], true);
+}
+
+#[test]
+fn the_build_info_flag_says_whether_the_stand_in_programs_are_built_in_and_runs_nothing() {
+    let rig = Rig::new("d-info");
+    let out = drive_without(&rig, &["--build-info"], &[ENV_STAMP, ENV_PIN_BHYVE]);
+    assert_eq!(out.status.code(), Some(0));
+    let info: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(info["fake_vmm"], true, "this test build has the feature on");
+    assert!(rig.calls().is_empty());
+}
+
+#[test]
+fn the_deadline_is_seconds_from_the_drivers_own_start_so_the_executor_hands_in_what_is_left() {
+    let rig = Rig::new("d-deadline");
+    let out = drive(
+        &rig,
+        &["--control", "2", "--other", "1", "--deadline-secs", "5"],
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let s = summary(&out);
+    assert_eq!(
+        s["end"], "END:WCAP",
+        "five seconds is less than one run's worst case"
+    );
+    assert_eq!(s["control"]["count"], 0);
 }

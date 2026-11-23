@@ -8,6 +8,7 @@
 //! checkpoint directory, is refused.
 use crate::host::{HostConfig, ALLOWED_CORES};
 use crate::layout::StateLayout;
+use crate::startcheck::start_args_ok;
 use crate::vmname::{Stamp, VmName};
 use std::path::{Path, PathBuf};
 
@@ -19,29 +20,6 @@ pub const DF: &str = "/bin/df";
 pub const SYSCTL_NAMES: [&str; 2] = ["kern.osrelease", "machdep.panic_on_nmi"];
 /// The programs that are refused by name.
 const MODULE_PROGRAMS: [&str; 2] = ["kldload", "kldunload"];
-/// The options a VM start may be given with `-o`, by name (or by the prefix ending in a dot).
-const START_OPTIONS: [&str; 17] = [
-    "dhyve.director.enabled",
-    "dhyve.director.control",
-    "dhyve.director.heuristic_ready_pattern",
-    "dhyve.director.uart_log",
-    "dhyve.director.restore.",
-    "dhyve.log_mask",
-    "lpc.fwcfg",
-    "linux.kernel",
-    "linux.initrd",
-    "linux.cmdline",
-    "deterministic.seed",
-    "deterministic.max_branches",
-    "deterministic.state_manifest",
-    "deterministic.state_regs",
-    "deterministic.state_mem",
-    "deterministic.state_devices",
-    "uuid",
-];
-/// The flags of a VM start that take one value.
-const START_FLAGS: [&str; 5] = ["-c", "-m", "-s", "-l", "-r"];
-
 /// A command that may be run, by what it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Approved {
@@ -147,6 +125,15 @@ impl Commands {
             "-i".to_string(),
             format!("LD_LIBRARY_PATH={}", self.host.lib_dir.display()),
         ]
+    }
+
+    /// The same commands for a checkpoint that is kept in `dir`: a restore named under a stamp of its own still restores the
+    /// checkpoint of the prepare.
+    pub fn with_checkpoint_dir(self, dir: &Path) -> Commands {
+        Commands {
+            checkpoint_dir: dir.to_path_buf(),
+            ..self
+        }
     }
 
     /// Start a VM on the pinned core: the pinned `bhyve` with `args`, whose last element is the VM's name.
@@ -255,38 +242,12 @@ impl Commands {
         if flag != "-l" || !core_ok || *program != shown(&self.host.bhyve) {
             return Err(Refusal::NotAllowed);
         }
-        let Some((name, options)) = args.split_last() else {
-            return Err(Refusal::NotAllowed);
-        };
-        if !self.named(name) || !start_options_ok(options) {
+        let layout = StateLayout::new(&self.host.state_dir, self.host.session_stamp.is_some());
+        if !start_args_ok(&self.host, &layout, &self.stamp, &self.checkpoint_dir, args) {
             return Err(Refusal::NotAllowed);
         }
         Ok(Approved::Bhyve)
     }
-}
-
-fn start_options_ok(options: &[String]) -> bool {
-    let mut i = 0;
-    while i < options.len() {
-        let Some(value) = options.get(i + 1) else {
-            return false;
-        };
-        let ok = match options[i].as_str() {
-            flag if START_FLAGS.contains(&flag) => true,
-            "-o" => value.split_once('=').is_some_and(|(key, _)| {
-                START_OPTIONS
-                    .iter()
-                    .any(|k| key == *k || (k.ends_with('.') && key.starts_with(k)))
-            }),
-            "-f" => value.starts_with("name=opt/hs/"),
-            _ => false,
-        };
-        if !ok {
-            return false;
-        }
-        i += 2;
-    }
-    true
 }
 
 #[cfg(test)]
@@ -321,13 +282,18 @@ mod tests {
     }
 
     fn start_args(n: &VmName) -> Vec<String> {
+        let run = format!(
+            "/w/state/runs/{}/r{:02}",
+            n.stamp().as_str(),
+            n.run_number()
+        );
         strings(&[
             "-c",
             "1",
             "-o",
             "dhyve.director.enabled=true",
             "-f",
-            "name=opt/hs/seed,file=/w/state/x",
+            &format!("name=opt/hs/seed,file={run}/fwcfg/seed"),
             n.as_str(),
         ])
     }

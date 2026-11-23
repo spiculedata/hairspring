@@ -55,7 +55,7 @@ run on FreeBSD as part of this change.
   trial. A second run waits, and is then told that another run holds the host. Every VM name has the fixed form
   `vmvx_<stamp>_XB_rNN`. The stamp is the one in the settings, or else one taken from a counter file under the lock, so
   that no name is used twice. The prepare is `r01`, and the restores are `r02` and on.
-- **The module is checked before every start.** A VM start can load a kernel module by itself when none is loaded, so
+- **The module is checked before every start.** A VM start may load a kernel module by itself when none is loaded, so
   `kldstat` is asked, under the lock, just before each start. The start is refused unless the module is loaded and is the
   one seen at the prepare.
 - **Every wait has a deadline.** A VM that is still there after it is destroyed is asked to end through its process group,
@@ -73,9 +73,11 @@ need root (start a VM, destroy a VM, checkpoint a VM) run as `sudo -n env -i LD_
 pinned program and library directory, and the host's `sudoers` must allow exactly those. The only other programs it runs
 are the read-only questions of the machine check, `kldstat` and `df -Pk <state directory>`. A start runs under
 `cpuset -l <core>` (core 1 unless the settings say 2 or 3). Anything else is refused before it is started: a name of
-another stamp, a checkpoint anywhere but the session's checkpoint directory, an option the start does not use, and a
+another stamp, a checkpoint anywhere but the session's checkpoint directory, an option the start does not use, a value
+of any option other than the one the builder gives it (a network backend, a disk, a device or a path outside the run's own
+directory, for example), and a
 program called `kldload` or `kldunload` by name. The two VM programs must be regular files, not links, and may be pinned
-by SHA-256 together with the library directory.
+by SHA-256 together with the library directory, whose files must all be regular files (a link in it is refused).
 
 Every capability flag is `false`, including replay. Sweeps, replay, branching, bundles that can be replayed, workers and
 `hairspring gc` do not use this backend, and a config that names `backend = "dhyve"` is not accepted yet, so the run path
@@ -109,8 +111,11 @@ keeps every log and input file, and writes a steps log and a record for each run
 JSON summary: for each group, how many restores were resumed, how many reported an exit status, and each trial's outcome;
 for group C, whether the serial output and the event lines of the restores were `equal` or `differed`. Nothing is compared
 across seeds. It exits 0 when the prepare worked, no restore met a fault of the host or the tooling and the session ran to
-its end, 1 otherwise, and 2 for a bad command line or a missing setting. It is not built by a default `cargo build` or by
-any release: it needs the `driver` feature. It runs the backend's own prepare, restore and judging functions in its own loop
+its end, 1 otherwise, and 2 for a bad command line or a missing setting. It needs its stamp and all three pins
+set, and exits 2 without starting anything if one is not. `--deadline-secs` is seconds from its own start, so whoever starts
+it hands in what is left of the session's time. Every summary says whether the stand-in programs are built in
+(`fake_vmm`), a build that has them refuses to run without `--allow-fake`, and `--build-info` prints only that. It is not
+built by a default `cargo build` or by any release: it needs the `driver` feature. It runs the backend's own prepare, restore and judging functions in its own loop
 and not through the engine's `run`.
 
 ### Testing it on any machine

@@ -48,6 +48,14 @@ impl Spawner {
         }
     }
 
+    /// The same spawner for a checkpoint kept in `dir`, which a restore under another stamp still restores.
+    pub fn with_checkpoint_dir(self, dir: &Path) -> Spawner {
+        Spawner {
+            commands: self.commands.with_checkpoint_dir(dir),
+            ..self
+        }
+    }
+
     fn approve(&self, argv: &[String], expected: Approved) -> Result<(), InfraError> {
         match self.commands.check(argv) {
             Ok(got) if got == expected => Ok(()),
@@ -96,7 +104,7 @@ impl Spawner {
         }
     }
 
-    /// Whether the `vmm` module is loaded, and what it is: its line of the module list. A VM start can load a module on
+    /// Whether the `vmm` module is loaded, and what it is: its line of the module list. A VM start may load a module on
     /// its own when none is loaded, so this runs under the host lock before every start, and a start is refused unless
     /// the answer is loaded.
     pub fn vmm_identity(&self) -> Result<String, InfraError> {

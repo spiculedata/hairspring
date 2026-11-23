@@ -81,7 +81,9 @@ impl Session {
         };
         let name = VmName::new(&stamp, number)
             .map_err(|e| InfraError::new(InfraKind::Settings, e.to_string()))?;
-        let spawner = self.spawner(&stamp);
+        let spawner = self
+            .spawner(&stamp)
+            .with_checkpoint_dir(&prepared.record.dir);
         let run = self.layout.run_paths(&stamp, &name);
         self.make_dirs(&run)?;
         if !prepared.record.unchanged() {
@@ -95,7 +97,7 @@ impl Session {
             .write(&run.fwcfg_dir)
             .map_err(|e| InfraError::new(InfraKind::InputFiles, e.to_string()))?;
         spawner.destroy(&name)?;
-        // A start can load a module by itself when none is loaded, and the module must be the one the checkpoint came
+        // A start may load a module by itself when none is loaded, and the module must be the one the checkpoint came
         // from, so it is checked each time, just before.
         if spawner.vmm_identity()? != prepared.vmm {
             return Err(InfraError::bare(InfraKind::VmmChanged));
@@ -110,6 +112,7 @@ impl Session {
                     stop_seq: record.keys.stop_seq,
                     branch_count: record.keys.branch_count,
                     vtime_ns: record.keys.vtime_ns,
+                    vcpu_id: record.keys.vcpu_id,
                     rip: Some(record.rip),
                     sock: run.control_sock.display().to_string(),
                 }),
