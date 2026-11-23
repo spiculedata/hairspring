@@ -1,0 +1,10 @@
+[package]
+name = "hairspring-dhyve"
+version = "0.1.0"
+edition = "2021"
+description = "dhyve backend for Hairspring: experimental, default-off, machine check only so far"
+license = "Apache-2.0"
+
+[dependencies]
+hairspring-core = { path = "../hairspring-core" }
+hairspring-engine = { path = "../hairspring-engine" }

@@ -24,11 +24,14 @@ use std::sync::Arc;
 
 /// Builds the engine with every backend compiled into this binary.
 pub fn build_engine(registry: Arc<Registry>, config: Config) -> Engine {
-    Engine::new(registry, config)
+    let engine = Engine::new(registry, config)
         .with_backend(Arc::new(hairspring_hermit::HermitBackend::from_env()))
         .with_backend(Arc::new(hairspring_wasm::WasmBackend::new(
             hairspring_wasm::WasmSettings::default(),
-        )))
+        )));
+    #[cfg(feature = "dhyve")]
+    let engine = engine.with_backend(Arc::new(hairspring_dhyve::DhyveBackend::new()));
+    engine
 }
 
 pub fn dispatch(
