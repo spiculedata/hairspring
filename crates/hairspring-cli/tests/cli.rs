@@ -304,9 +304,56 @@ fn doctor_backend_unknown_lists_the_available_names_and_exits_2() {
     assert_eq!(o.status.code(), Some(2), "{}{}", out(&o), err(&o));
     assert!(out(&o).is_empty(), "{}", out(&o));
     assert!(
-        err(&o).contains("unknown backend `qemu`; available: sim, hermit, wasm"),
+        err(&o).contains(&format!(
+            "unknown backend `qemu`; available: sim, hermit, wasm{}",
+            if cfg!(feature = "dhyve") {
+                ", dhyve"
+            } else {
+                ""
+            }
+        )),
         "{}",
         err(&o)
+    );
+}
+
+#[cfg(not(feature = "dhyve"))]
+#[test]
+fn doctor_backend_dhyve_is_unknown_in_a_build_without_the_feature() {
+    // The default build names no dhyve backend anywhere: the id is as unknown as any other.
+    let d = scratch("doctor-backend-dhyve-absent");
+    let o = doctor_with_missing_hermit(&d, &["--backend", "dhyve"]);
+    assert_eq!(o.status.code(), Some(2), "{}{}", out(&o), err(&o));
+    assert!(out(&o).is_empty(), "{}", out(&o));
+    assert_eq!(
+        err(&o).trim_end(),
+        "error: invalid request: unknown backend `dhyve`; available: sim, hermit, wasm",
+        "{}",
+        err(&o)
+    );
+}
+
+#[cfg(all(feature = "dhyve", not(target_os = "freebsd")))]
+#[test]
+fn doctor_backend_dhyve_off_freebsd_says_not_supported_and_exits_4() {
+    let d = scratch("doctor-backend-dhyve-here");
+    let o = doctor_with_missing_hermit(&d, &["--backend", "dhyve"]);
+    let s = out(&o);
+    assert_eq!(o.status.code(), Some(4), "{s}{}", err(&o));
+    assert!(err(&o).is_empty(), "{}", err(&o));
+    assert!(s.contains("result: CANNOT RUN the dhyve backend"), "{s}");
+    assert!(s.contains("FreeBSD 15 on x86-64"), "{s}");
+    // The shared "deterministic over N seeds" line is never reached from here, and no count is called reproduced.
+    for word in ["deterministic", "reproduced"] {
+        assert!(!s.to_lowercase().contains(word), "{s}");
+    }
+    assert!(
+        s.contains(&format!(
+            "{}/{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        )),
+        "{s}"
     );
 }
 

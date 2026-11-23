@@ -23,8 +23,13 @@ hairspring-mcp = { path = "../hairspring-mcp" }
 hairspring-server = { path = "../hairspring-server" }
 hairspring-wasm = { path = "../hairspring-wasm" }
 hairspring-worker = { path = "../hairspring-worker" }
+hairspring-dhyve = { path = "../hairspring-dhyve", optional = true }
 clap = { version = "4.6.7", features = ["derive"] }
 serde_json = "1.0.154"
+
+[features]
+# Experimental and off by default: registers the dhyve backend, which can check this machine and nothing more yet.
+dhyve = ["dep:hairspring-dhyve"]
 
 [dev-dependencies]
 hairspring-props = { path = "../hairspring-props" }
