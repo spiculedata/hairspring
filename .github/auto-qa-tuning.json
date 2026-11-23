@@ -24,7 +24,7 @@
       "id": "ciTimeoutMinutes",
       "description": "Suggested timeout-minutes for the `PostgreSQL tests` job in ci.yml (today it is 60). Target is twice the observed p95 job duration (the six main runs sampled on 2026-11-20 took 6 to 12 minutes).",
       "unit": "minutes",
-      "value": 60,
+      "value": 50,
       "baseline": 60,
       "min": 20,
       "max": 60,
@@ -35,7 +35,7 @@
       "id": "testStepBudgetSeconds",
       "description": "Suggested wall-clock budget for the `Test against PostgreSQL` step. Target is three times the observed p95 duration of that step (331 to 709 seconds in the six main runs sampled on 2026-11-20).",
       "unit": "seconds",
-      "value": 2400,
+      "value": 2700,
       "baseline": 2400,
       "min": 900,
       "max": 3600,
@@ -57,7 +57,7 @@
       "id": "ciPassRateFloorPct",
       "description": "Suggested minimum pass rate for the ci workflow on main over the window, below which the nightly report should be treated as unhealthy. Target is the observed pass rate minus 5 points. Cannot fall below 80.",
       "unit": "percent",
-      "value": 85,
+      "value": 87,
       "baseline": 85,
       "min": 80,
       "max": 95,
@@ -65,5 +65,30 @@
       "loosen": "down"
     }
   ],
-  "history": []
+  "history": [
+    {
+      "at": "2026-11-23T05:37:15.607Z",
+      "runs": 30,
+      "changes": [
+        {
+          "id": "ciTimeoutMinutes",
+          "from": 60,
+          "to": 50,
+          "target": 33
+        },
+        {
+          "id": "testStepBudgetSeconds",
+          "from": 2400,
+          "to": 2700,
+          "target": 2823
+        },
+        {
+          "id": "ciPassRateFloorPct",
+          "from": 85,
+          "to": 87,
+          "target": 95
+        }
+      ]
+    }
+  ]
 }
