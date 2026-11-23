@@ -1,12 +1,15 @@
 //! The argument lists of every command this backend runs, and the allow-list that decides whether a list may be run.
 //!
 //! The backend itself runs unprivileged. The three commands that need root (start a VM, destroy a VM, checkpoint a VM)
-//! run as `sudo -n env -i LD_LIBRARY_PATH=<lib> <program> ...`, with the pinned program and its pinned library
-//! directory. The only other commands are read-only questions of the machine check and a free-space question. Nothing
-//! else is ever run: in particular a program that loads or unloads a kernel module is refused by name, whatever its path.
-use crate::host::HostConfig;
-use crate::vmname::VmName;
-use std::path::Path;
+//! run as `sudo -n env -i LD_LIBRARY_PATH=<lib> <program> ...` with the pinned programs and library directory; a start
+//! also runs under `cpuset -l <core>`. The only other commands are read-only questions: the machine check's, `kldstat`
+//! and a free-space question. Nothing else is ever run. A program that loads or unloads a kernel module is refused by
+//! name, and a command that names a VM of another stamp than this session's, or a checkpoint anywhere but this session's
+//! checkpoint directory, is refused.
+use crate::host::{HostConfig, ALLOWED_CORES};
+use crate::layout::StateLayout;
+use crate::vmname::{Stamp, VmName};
+use std::path::{Path, PathBuf};
 
 /// The read-only programs of the machine check, by pinned absolute path.
 pub const KLDSTAT: &str = "/sbin/kldstat";
@@ -16,6 +19,28 @@ pub const DF: &str = "/bin/df";
 pub const SYSCTL_NAMES: [&str; 2] = ["kern.osrelease", "machdep.panic_on_nmi"];
 /// The programs that are refused by name.
 const MODULE_PROGRAMS: [&str; 2] = ["kldload", "kldunload"];
+/// The options a VM start may be given with `-o`, by name (or by the prefix ending in a dot).
+const START_OPTIONS: [&str; 17] = [
+    "dhyve.director.enabled",
+    "dhyve.director.control",
+    "dhyve.director.heuristic_ready_pattern",
+    "dhyve.director.uart_log",
+    "dhyve.director.restore.",
+    "dhyve.log_mask",
+    "lpc.fwcfg",
+    "linux.kernel",
+    "linux.initrd",
+    "linux.cmdline",
+    "deterministic.seed",
+    "deterministic.max_branches",
+    "deterministic.state_manifest",
+    "deterministic.state_regs",
+    "deterministic.state_mem",
+    "deterministic.state_devices",
+    "uuid",
+];
+/// The flags of a VM start that take one value.
+const START_FLAGS: [&str; 5] = ["-c", "-m", "-s", "-l", "-r"];
 
 /// A command that may be run, by what it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +49,7 @@ pub enum Approved {
     Destroy,
     Checkpoint,
     Kldstat,
+    KldstatIdentity,
     Sysctl,
     FreeSpace,
 }
@@ -73,48 +99,65 @@ fn refuse_module_programs(argv: &[String]) -> Result<(), Refusal> {
     Ok(())
 }
 
-/// Whether `argv` is one of the read-only questions the machine check and the free-space check ask. These need no host
-/// settings, so the machine check can use this without any.
+/// Whether `argv` is one of the read-only questions the machine check and the free-space check ask, with `kldstat`
+/// taken to be the pinned one. These need no host settings, so the machine check can use this without any.
 pub fn check_read_only(argv: &[String]) -> Result<Approved, Refusal> {
+    check_read_only_with(KLDSTAT, argv)
+}
+
+fn check_read_only_with(kldstat: &str, argv: &[String]) -> Result<Approved, Refusal> {
     refuse_module_programs(argv)?;
     let as_strs: Vec<&str> = argv.iter().map(String::as_str).collect();
     match as_strs.as_slice() {
-        [KLDSTAT, "-q", "-n", "vmm"] => Ok(Approved::Kldstat),
+        [program, "-q", "-n", "vmm"] if *program == kldstat => Ok(Approved::Kldstat),
+        [program, "-n", "vmm"] if *program == kldstat => Ok(Approved::KldstatIdentity),
         [SYSCTL, "-n", name] if SYSCTL_NAMES.contains(name) => Ok(Approved::Sysctl),
         [DF, "-Pk", dir] if !dir.starts_with('-') && !dir.is_empty() => Ok(Approved::FreeSpace),
         _ => Err(Refusal::NotAllowed),
     }
 }
 
-/// Builds argument lists and checks them.
+/// Builds argument lists and checks them, for one session stamp.
 #[derive(Debug, Clone)]
 pub struct Commands {
     host: HostConfig,
+    stamp: Stamp,
+    checkpoint_dir: PathBuf,
+}
+
+fn shown(path: &Path) -> String {
+    path.display().to_string()
 }
 
 impl Commands {
-    pub fn new(host: &HostConfig) -> Commands {
-        Commands { host: host.clone() }
-    }
-
-    fn display(path: &Path) -> String {
-        path.display().to_string()
+    pub fn new(host: &HostConfig, stamp: &Stamp) -> Commands {
+        let layout = StateLayout::new(&host.state_dir, host.session_stamp.is_some());
+        Commands {
+            checkpoint_dir: layout.checkpoint_dir(stamp),
+            host: host.clone(),
+            stamp: stamp.clone(),
+        }
     }
 
     fn root_prefix(&self) -> Vec<String> {
         vec![
-            Self::display(&self.host.sudo),
+            shown(&self.host.sudo),
             "-n".to_string(),
-            Self::display(&self.host.env),
+            shown(&self.host.env),
             "-i".to_string(),
             format!("LD_LIBRARY_PATH={}", self.host.lib_dir.display()),
         ]
     }
 
-    /// Start a VM: the pinned `bhyve` with `args`, whose last element is the VM's name.
+    /// Start a VM on the pinned core: the pinned `bhyve` with `args`, whose last element is the VM's name.
     pub fn bhyve(&self, args: &[String]) -> Vec<String> {
         let mut argv = self.root_prefix();
-        argv.push(Self::display(&self.host.bhyve));
+        argv.extend([
+            shown(&self.host.cpuset),
+            "-l".to_string(),
+            self.host.core.to_string(),
+            shown(&self.host.bhyve),
+        ]);
         argv.extend_from_slice(args);
         argv
     }
@@ -122,26 +165,40 @@ impl Commands {
     pub fn destroy(&self, name: &VmName) -> Vec<String> {
         let mut argv = self.root_prefix();
         argv.extend([
-            Self::display(&self.host.bhyvectl),
+            shown(&self.host.bhyvectl),
             "--destroy".to_string(),
             format!("--vm={name}"),
         ]);
         argv
     }
 
-    /// Checkpoint a running VM into `<dir>/boot` (and its two companion files).
-    pub fn checkpoint(&self, dir: &Path, name: &VmName) -> Vec<String> {
+    /// Checkpoint a running VM into this session's checkpoint directory.
+    pub fn checkpoint(&self, name: &VmName) -> Vec<String> {
         let mut argv = self.root_prefix();
         argv.extend([
-            Self::display(&self.host.bhyvectl),
-            format!("--checkpoint={}", dir.join("boot").display()),
+            shown(&self.host.bhyvectl),
+            format!(
+                "--checkpoint={}",
+                self.checkpoint_dir.join("boot").display()
+            ),
             format!("--vm={name}"),
         ]);
         argv
     }
 
-    pub fn kldstat() -> Vec<String> {
-        [KLDSTAT, "-q", "-n", "vmm"].map(String::from).to_vec()
+    /// Whether the `vmm` module is loaded.
+    pub fn kldstat(&self) -> Vec<String> {
+        vec![
+            shown(&self.host.kldstat),
+            "-q".into(),
+            "-n".into(),
+            "vmm".into(),
+        ]
+    }
+
+    /// What the loaded `vmm` module is: its line of the module list.
+    pub fn kldstat_identity(&self) -> Vec<String> {
+        vec![shown(&self.host.kldstat), "-n".into(), "vmm".into()]
     }
 
     pub fn sysctl(name: &str) -> Vec<String> {
@@ -149,7 +206,7 @@ impl Commands {
     }
 
     pub fn free_space(dir: &Path) -> Vec<String> {
-        vec![DF.to_string(), "-Pk".to_string(), Self::display(dir)]
+        vec![DF.to_string(), "-Pk".to_string(), shown(dir)]
     }
 
     /// Whether `argv` is exactly one of the shapes this backend runs.
@@ -159,124 +216,170 @@ impl Commands {
         if let Some(rest) = argv.strip_prefix(prefix.as_slice()) {
             return self.check_root(rest);
         }
-        check_read_only(argv)
+        check_read_only_with(&shown(&self.host.kldstat), argv)
+    }
+
+    fn named(&self, text: &str) -> bool {
+        VmName::parse(text).is_some_and(|n| n.stamp() == self.stamp)
     }
 
     fn check_root(&self, rest: &[String]) -> Result<Approved, Refusal> {
         // The caller has already refused module programs and unprintable arguments.
-        let (program, args) = rest.split_first().ok_or(Refusal::NotAllowed)?;
-        if *program == Self::display(&self.host.bhyve) {
-            let named = args.last().is_some_and(|n| VmName::parse(n).is_some());
-            return if named {
-                Ok(Approved::Bhyve)
-            } else {
-                Err(Refusal::NotAllowed)
-            };
+        let cpuset = shown(&self.host.cpuset);
+        if rest.first() == Some(&cpuset) {
+            return self.check_start(&rest[1..]);
         }
-        if *program != Self::display(&self.host.bhyvectl) {
+        let (program, args) = rest.split_first().ok_or(Refusal::NotAllowed)?;
+        if *program != shown(&self.host.bhyvectl) {
             return Err(Refusal::NotAllowed);
         }
-        let named = |arg: &String| {
-            arg.strip_prefix("--vm=")
-                .is_some_and(|n| VmName::parse(n).is_some())
-        };
+        let vm = |arg: &String| arg.strip_prefix("--vm=").is_some_and(|n| self.named(n));
+        let target = format!(
+            "--checkpoint={}",
+            self.checkpoint_dir.join("boot").display()
+        );
         match args {
-            [flag, vm] if flag == "--destroy" && named(vm) => Ok(Approved::Destroy),
-            [target, vm] if named(vm) && is_checkpoint_target(target) => Ok(Approved::Checkpoint),
+            [flag, name] if flag == "--destroy" && vm(name) => Ok(Approved::Destroy),
+            [t, name] if *t == target && vm(name) => Ok(Approved::Checkpoint),
             _ => Err(Refusal::NotAllowed),
         }
     }
+
+    /// `-l <core> <bhyve> <args...>` after the `cpuset` program.
+    fn check_start(&self, rest: &[String]) -> Result<Approved, Refusal> {
+        let [flag, core, program, args @ ..] = rest else {
+            return Err(Refusal::NotAllowed);
+        };
+        let core_ok =
+            core == &self.host.core.to_string() && ALLOWED_CORES.contains(&self.host.core);
+        if flag != "-l" || !core_ok || *program != shown(&self.host.bhyve) {
+            return Err(Refusal::NotAllowed);
+        }
+        let Some((name, options)) = args.split_last() else {
+            return Err(Refusal::NotAllowed);
+        };
+        if !self.named(name) || !start_options_ok(options) {
+            return Err(Refusal::NotAllowed);
+        }
+        Ok(Approved::Bhyve)
+    }
 }
 
-fn is_checkpoint_target(arg: &str) -> bool {
-    arg.strip_prefix("--checkpoint=")
-        .is_some_and(|p| p.starts_with('/') && p.ends_with("/boot") && !p.contains("/../"))
+fn start_options_ok(options: &[String]) -> bool {
+    let mut i = 0;
+    while i < options.len() {
+        let Some(value) = options.get(i + 1) else {
+            return false;
+        };
+        let ok = match options[i].as_str() {
+            flag if START_FLAGS.contains(&flag) => true,
+            "-o" => value.split_once('=').is_some_and(|(key, _)| {
+                START_OPTIONS
+                    .iter()
+                    .any(|k| key == *k || (k.ends_with('.') && key.starts_with(k)))
+            }),
+            "-f" => value.starts_with("name=opt/hs/"),
+            _ => false,
+        };
+        if !ok {
+            return false;
+        }
+        i += 2;
+    }
+    true
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vmname::Stamp;
-    use std::path::PathBuf;
 
     fn host() -> HostConfig {
-        HostConfig {
-            sudo: "/usr/local/bin/sudo".into(),
-            env: "/usr/bin/env".into(),
-            bhyve: "/w/bin/bhyve".into(),
-            bhyvectl: "/w/bin/bhyvectl".into(),
-            lib_dir: "/w/lib".into(),
-            state_dir: "/w/state".into(),
-            kernel: "/w/img/kernel".into(),
-            initrd: "/w/img/initrd".into(),
-        }
+        HostConfig::new(
+            "/w/bin/bhyve".into(),
+            "/w/bin/bhyvectl".into(),
+            "/w/lib".into(),
+            "/w/state".into(),
+            "/w/img/kernel".into(),
+            "/w/img/initrd".into(),
+        )
     }
 
-    fn name() -> VmName {
-        VmName::new(&Stamp::parse("20261123T1530Z").unwrap(), 4).unwrap()
+    fn stamp() -> Stamp {
+        Stamp::parse("20261123T1530Z").unwrap()
+    }
+
+    fn commands() -> Commands {
+        Commands::new(&host(), &stamp())
+    }
+
+    fn name(run: u32) -> VmName {
+        VmName::new(&stamp(), run).unwrap()
     }
 
     fn strings(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|p| p.to_string()).collect()
     }
 
+    fn start_args(n: &VmName) -> Vec<String> {
+        strings(&[
+            "-c",
+            "1",
+            "-o",
+            "dhyve.director.enabled=true",
+            "-f",
+            "name=opt/hs/seed,file=/w/state/x",
+            n.as_str(),
+        ])
+    }
+
     #[test]
     fn the_root_commands_have_exactly_the_unprivileged_wrapper_shape() {
-        let c = Commands::new(&host());
-        assert_eq!(
-            c.destroy(&name()),
-            strings(&[
-                "/usr/local/bin/sudo",
-                "-n",
-                "/usr/bin/env",
-                "-i",
-                "LD_LIBRARY_PATH=/w/lib",
-                "/w/bin/bhyvectl",
-                "--destroy",
-                "--vm=vmvx_20261123T1530Z_XB_r04",
-            ])
-        );
-        assert_eq!(
-            c.checkpoint(&PathBuf::from("/w/state/ck"), &name()),
-            strings(&[
-                "/usr/local/bin/sudo",
-                "-n",
-                "/usr/bin/env",
-                "-i",
-                "LD_LIBRARY_PATH=/w/lib",
-                "/w/bin/bhyvectl",
-                "--checkpoint=/w/state/ck/boot",
-                "--vm=vmvx_20261123T1530Z_XB_r04",
-            ])
-        );
-        let start = c.bhyve(&strings(&["-c", "1", "vmvx_20261123T1530Z_XB_r04"]));
-        assert_eq!(
-            &start[..6],
-            &strings(&[
-                "/usr/local/bin/sudo",
-                "-n",
-                "/usr/bin/env",
-                "-i",
-                "LD_LIBRARY_PATH=/w/lib",
-                "/w/bin/bhyve",
-            ])[..]
-        );
+        let c = commands();
+        let wrapper = [
+            "/usr/local/bin/sudo",
+            "-n",
+            "/usr/bin/env",
+            "-i",
+            "LD_LIBRARY_PATH=/w/lib",
+        ];
+        let mut destroy = strings(&wrapper);
+        destroy.extend(strings(&[
+            "/w/bin/bhyvectl",
+            "--destroy",
+            "--vm=vmvx_20261123T1530Z_XB_r04",
+        ]));
+        assert_eq!(c.destroy(&name(4)), destroy);
+        let mut checkpoint = strings(&wrapper);
+        checkpoint.extend(strings(&[
+            "/w/bin/bhyvectl",
+            "--checkpoint=/w/state/ckpt/20261123T1530Z/boot",
+            "--vm=vmvx_20261123T1530Z_XB_r01",
+        ]));
+        assert_eq!(c.checkpoint(&name(1)), checkpoint);
+        let mut start = strings(&wrapper);
+        start.extend(strings(&[
+            "/usr/bin/cpuset",
+            "-l",
+            "1",
+            "/w/bin/bhyve",
+            "-c",
+            "1",
+        ]));
+        assert_eq!(c.bhyve(&strings(&["-c", "1"])), start);
     }
 
     #[test]
     fn every_command_it_builds_is_approved_as_what_it_is() {
-        let c = Commands::new(&host());
-        let n = name();
+        let c = commands();
+        let n = name(4);
         assert_eq!(c.check(&c.destroy(&n)), Ok(Approved::Destroy));
+        assert_eq!(c.check(&c.checkpoint(&name(1))), Ok(Approved::Checkpoint));
+        assert_eq!(c.check(&c.bhyve(&start_args(&n))), Ok(Approved::Bhyve));
+        assert_eq!(c.check(&c.kldstat()), Ok(Approved::Kldstat));
         assert_eq!(
-            c.check(&c.checkpoint(&PathBuf::from("/w/state/ck"), &n)),
-            Ok(Approved::Checkpoint)
+            c.check(&c.kldstat_identity()),
+            Ok(Approved::KldstatIdentity)
         );
-        assert_eq!(
-            c.check(&c.bhyve(&strings(&["-c", "1", n.as_str()]))),
-            Ok(Approved::Bhyve)
-        );
-        assert_eq!(c.check(&Commands::kldstat()), Ok(Approved::Kldstat));
         assert_eq!(
             c.check(&Commands::sysctl("kern.osrelease")),
             Ok(Approved::Sysctl)
@@ -292,8 +395,19 @@ mod tests {
     }
 
     #[test]
+    fn a_session_with_its_own_stamp_keeps_its_checkpoint_in_the_ckpt_directory() {
+        let mut h = host();
+        h.session_stamp = Some(stamp());
+        let c = Commands::new(&h, &stamp());
+        assert!(c
+            .checkpoint(&name(1))
+            .contains(&"--checkpoint=/w/state/ckpt/boot".to_string()));
+        assert_eq!(c.check(&c.checkpoint(&name(1))), Ok(Approved::Checkpoint));
+    }
+
+    #[test]
     fn module_programs_are_refused_by_name_whatever_the_path_or_wrapper() {
-        let c = Commands::new(&host());
+        let c = commands();
         for argv in [
             strings(&["/sbin/kldload", "/w/bin/vmm.ko"]),
             strings(&["/sbin/kldunload", "vmm"]),
@@ -320,19 +434,87 @@ mod tests {
         }
     }
 
+    /// No shape that is approved can start a program that loads a module, whatever is put in any place of an argument
+    /// list. Every combination of a prefix, a program and a tail is tried; an approved one must name only the pinned
+    /// programs, and none may carry a module program anywhere.
+    #[test]
+    fn no_argument_shape_can_cause_a_module_load() {
+        let c = commands();
+        let n = name(2);
+        let mut seeds: Vec<Vec<String>> = vec![
+            c.destroy(&n),
+            c.checkpoint(&name(1)),
+            c.bhyve(&start_args(&n)),
+            c.kldstat(),
+            c.kldstat_identity(),
+            Commands::sysctl("kern.osrelease"),
+            Commands::free_space(Path::new("/w/state")),
+        ];
+        let intruders = [
+            "/sbin/kldload",
+            "kldunload",
+            "/x/kldload",
+            "--vm=/sbin/kldload",
+            "-o=kldunload",
+        ];
+        let mut all = seeds.clone();
+        for seed in seeds.drain(..) {
+            for at in 0..=seed.len() {
+                for intruder in intruders {
+                    let mut inserted = seed.clone();
+                    inserted.insert(at, intruder.to_string());
+                    all.push(inserted);
+                    if at < seed.len() {
+                        let mut replaced = seed.clone();
+                        replaced[at] = intruder.to_string();
+                        all.push(replaced);
+                    }
+                }
+            }
+        }
+        let programs = [
+            "/usr/local/bin/sudo",
+            "/usr/bin/env",
+            "/usr/bin/cpuset",
+            "/w/bin/bhyve",
+            "/w/bin/bhyvectl",
+            "/sbin/kldstat",
+            "/sbin/sysctl",
+            "/bin/df",
+        ];
+        for argv in &all {
+            let verdict = c.check(argv);
+            let module = argv.iter().any(|a| names_module_program(a));
+            if module {
+                assert_eq!(verdict, Err(Refusal::KernelModule), "{argv:?}");
+            }
+            if verdict.is_ok() {
+                assert!(!module, "{argv:?}");
+                assert!(
+                    argv.iter().all(|a| programs.contains(&a.as_str())
+                        || !a.starts_with('/')
+                        || a.starts_with("/w/")
+                        || a.starts_with("--")),
+                    "{argv:?}"
+                );
+            }
+        }
+        assert!(all.len() > 100);
+    }
+
     #[test]
     fn a_command_that_is_not_one_of_the_shapes_is_refused() {
-        let c = Commands::new(&host());
-        let n = name();
+        let c = commands();
+        let n = name(4);
         let good = c.destroy(&n);
+        let edit = |at: usize, text: &str| {
+            let mut v = good.clone();
+            v[at] = text.to_string();
+            v
+        };
         let without_n = {
             let mut v = good.clone();
             v.remove(1);
-            v
-        };
-        let other_lib = {
-            let mut v = good.clone();
-            v[4] = "LD_LIBRARY_PATH=/usr/lib".into();
             v
         };
         let extra_env = {
@@ -340,44 +522,47 @@ mod tests {
             v.insert(5, "HOME=/root".into());
             v
         };
-        let other_flag = {
-            let mut v = good.clone();
-            v[6] = "--create".into();
+        let start = c.bhyve(&start_args(&n));
+        let start_without_cpuset = {
+            let mut v = start.clone();
+            v.drain(5..8);
             v
         };
-        let plain_name = {
-            let mut v = good.clone();
-            v[7] = "--vm=hs_1".into();
+        let start_other_core = {
+            let mut v = start.clone();
+            v[7] = "0".into();
             v
         };
-        let unwrapped_vm = strings(&["/w/bin/bhyve", "-c", "1", n.as_str()]);
-        let unnamed_start = c.bhyve(&strings(&["-c", "1"]));
-        let other_program = {
-            let mut v = good.clone();
-            v[5] = "/bin/sh".into();
-            v
+        let start_other_option = {
+            let mut args = start_args(&n);
+            args.insert(0, "-o".into());
+            args.insert(1, "evil.option=1".into());
+            c.bhyve(&args)
         };
-        let relative_checkpoint = {
-            let mut v = c.checkpoint(&PathBuf::from("/w/state/ck"), &n);
-            v[6] = "--checkpoint=rel/boot".into();
-            v
-        };
-        let traversing_checkpoint = {
-            let mut v = c.checkpoint(&PathBuf::from("/w/state/ck"), &n);
-            v[6] = "--checkpoint=/w/../etc/boot".into();
-            v
-        };
+        let start_other_flag = c.bhyve(&strings(&["-x", "1", n.as_str()]));
+        let start_other_stamp = c.bhyve(&start_args(
+            &VmName::new(&Stamp::parse("20261124T0000Z").unwrap(), 2).unwrap(),
+        ));
+        let other_stamp = VmName::new(&Stamp::parse("20261124T0000Z").unwrap(), 2).unwrap();
         for (what, argv) in [
             ("no -n", without_n),
-            ("other lib", other_lib),
+            ("other lib", edit(4, "LD_LIBRARY_PATH=/usr/lib")),
             ("extra env", extra_env),
-            ("other flag", other_flag),
-            ("plain name", plain_name),
-            ("no wrapper", unwrapped_vm),
-            ("no name", unnamed_start),
-            ("other program", other_program),
-            ("relative checkpoint", relative_checkpoint),
-            ("traversing checkpoint", traversing_checkpoint),
+            ("other flag", edit(6, "--create")),
+            ("plain name", edit(7, "--vm=hs_1")),
+            ("other stamp destroy", c.destroy(&other_stamp)),
+            ("other stamp checkpoint", c.checkpoint(&other_stamp)),
+            ("other program", edit(5, "/bin/sh")),
+            (
+                "no wrapper",
+                strings(&["/w/bin/bhyve", "-c", "1", n.as_str()]),
+            ),
+            ("no cpuset", start_without_cpuset),
+            ("other core", start_other_core),
+            ("other option", start_other_option),
+            ("other start flag", start_other_flag),
+            ("other stamp start", start_other_stamp),
+            ("no name", c.bhyve(&strings(&["-c", "1"]))),
             ("empty", Vec::new()),
             ("sysctl write", strings(&["/sbin/sysctl", "-w", "x=1"])),
             (
@@ -389,6 +574,19 @@ mod tests {
             ("newline", strings(&["/bin/df", "-Pk", "a\nb"])),
         ] {
             assert_eq!(c.check(&argv), Err(Refusal::NotAllowed), "{what}");
+        }
+        let elsewhere = {
+            let mut v = c.checkpoint(&name(1));
+            v[6] = "--checkpoint=/w/state/ckpt/other/boot".into();
+            v
+        };
+        let traversing = {
+            let mut v = c.checkpoint(&name(1));
+            v[6] = "--checkpoint=/w/state/ckpt/20261123T1530Z/../x/boot".into();
+            v
+        };
+        for argv in [elsewhere, traversing] {
+            assert_eq!(c.check(&argv), Err(Refusal::NotAllowed));
         }
     }
 

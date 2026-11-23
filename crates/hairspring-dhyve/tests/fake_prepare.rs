@@ -58,10 +58,16 @@ fn every_command_is_the_unprivileged_wrapper_shape_and_a_destroy_comes_before_an
         .iter()
         .filter(|c| **c == format!("sudo {env}"))
         .count();
+    let root_commands = calls.iter().filter(|c| c.starts_with("bhyve")).count();
     assert_eq!(
-        sudo_starts,
-        calls.len() / 2,
+        sudo_starts, root_commands,
         "every root command goes through sudo: {calls:?}"
+    );
+    let at = calls.iter().position(|c| c == "cpuset -l 1").unwrap();
+    assert_eq!(
+        calls[at + 1],
+        format!("bhyve {FIRST_NAME}"),
+        "a start is pinned to a core"
     );
     let ckpt = calls
         .iter()

@@ -184,14 +184,14 @@ fn a_restore_with_no_skipped_lines_is_still_taken() {
 }
 
 #[test]
-fn a_stopped_event_during_the_trial_is_the_branch_limit() {
+fn a_stopped_event_during_the_trial_is_a_stop_again() {
     let err = infra("t-limit-open", "limit_open");
-    assert_eq!(err.kind, InfraKind::BranchLimit);
-    assert_eq!(err.to_string(), "branch limit reached");
+    assert_eq!(err.kind, InfraKind::StoppedAgain);
+    assert_eq!(err.to_string(), "the VM stopped again after it was resumed");
 }
 
 #[test]
-fn a_stop_logged_after_the_connect_line_is_the_branch_limit_and_not_a_hang() {
+fn a_stop_logged_after_the_connect_line_is_a_stop_again_and_not_a_hang() {
     let rig = Rig::new("t-limit-log");
     let session = rig.session_with(Timings {
         trial_cap: Duration::from_millis(800),
@@ -202,7 +202,7 @@ fn a_stop_logged_after_the_connect_line_is_the_branch_limit_and_not_a_hang() {
     let run = session.restore_trial(&prepared, 0, INPUTS).unwrap();
     assert_eq!(
         judge_trial(&run, 1, false).unwrap_err().kind,
-        InfraKind::BranchLimit
+        InfraKind::StoppedAgain
     );
 }
 
@@ -243,7 +243,7 @@ fn a_vm_that_never_connects_in_a_restore_is_no_connect() {
 #[test]
 fn a_name_that_exists_is_destroyed_before_the_restore_starts() {
     let (rig, session, prepared) = ready("t-reuse", "");
-    rig.seed_vm("vmvx_00000000T0001Z_XB_r01");
+    rig.seed_vm("vmvx_00000000T0001Z_XB_r02");
     assert_eq!(
         trial(&session, &prepared, 0, 7).unwrap().verdict,
         Verdict::Pass

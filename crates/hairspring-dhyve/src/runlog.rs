@@ -34,24 +34,50 @@ pub fn parse_det(line: &str) -> Option<(u64, &str)> {
     Some((digits.parse().ok()?, text))
 }
 
-fn shown(text: &str) -> String {
-    let mut end = text.len().min(SHOWN_BYTES);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_string()
+/// The first bytes of a log line as printable ASCII only: a log line can carry the guest's serial text, control
+/// characters and escape sequences, so nothing else is ever kept or shown.
+pub fn shown(text: &str) -> String {
+    text.bytes()
+        .take(SHOWN_BYTES)
+        .map(|b| {
+            if (0x20..0x7f).contains(&b) {
+                b as char
+            } else {
+                '?'
+            }
+        })
+        .collect()
 }
 
 /// Whether the stop line is the last det line in `raw`: `Some(true)` when no det line follows it (a partial one counts),
 /// `Some(false)` when one does, `None` when the stop line is not there.
 pub fn stop_held(raw: &[u8], stop_seq: u64, branch_count: u64) -> Option<bool> {
-    let text = String::from_utf8_lossy(raw);
+    stop_held_in(raw, stop_seq, branch_count)
+}
+
+/// [`stop_held`] on a reader, a line at a time, so a large log is not held in memory.
+pub fn stop_held_in<R: std::io::BufRead>(
+    mut reader: R,
+    stop_seq: u64,
+    branch_count: u64,
+) -> Option<bool> {
     let stop = stop_text(stop_seq, branch_count);
-    let mut parts: Vec<&str> = text.split('\n').collect();
-    let tail = parts.pop().unwrap_or("");
     let mut seen = false;
-    for line in parts {
-        let Some((_, body)) = parse_det(line) else {
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => return seen.then_some(true),
+            Ok(_) => {}
+        }
+        let complete = line.last() == Some(&b'\n');
+        let text = String::from_utf8_lossy(&line);
+        let text = text.trim_end_matches('\n');
+        if !complete {
+            // A partial last line counts as a det line only when it has begun to be one.
+            return seen.then(|| !text.starts_with("[det_counter="));
+        }
+        let Some((_, body)) = parse_det(text) else {
             continue;
         };
         if seen {
@@ -59,28 +85,52 @@ pub fn stop_held(raw: &[u8], stop_seq: u64, branch_count: u64) -> Option<bool> {
         }
         seen = body == stop;
     }
-    seen.then(|| !tail.starts_with("[det_counter="))
 }
 
-/// Whether a control stop was logged after the connect line of `sock`: a VM that stops again after it was resumed has run
-/// into its branch limit. Reads the log a line at a time, so a large log is not held in memory.
-pub fn limit_stop_after_connect<R: std::io::BufRead>(reader: R, sock: &str) -> bool {
+/// A control stop the VM logged: `director stop kind=<k> stop_seq=<n> branch_count=<n> probe_id=<n>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StopLine {
+    pub kind: u64,
+}
+
+fn digits(text: &str) -> Option<u64> {
+    (!text.is_empty() && text.len() <= 19 && text.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| text.parse().ok())
+        .flatten()
+}
+
+/// The stop line form, with digits only in every number.
+pub fn parse_stop(text: &str) -> Option<StopLine> {
+    let rest = text.strip_prefix("director stop kind=")?;
+    let mut parts = rest.split(' ');
+    let kind = digits(parts.next()?)?;
+    for key in ["stop_seq=", "branch_count=", "probe_id="] {
+        digits(parts.next()?.strip_prefix(key)?)?;
+    }
+    parts.next().is_none().then_some(StopLine { kind })
+}
+
+/// The first control stop logged after the connect line of `sock`. A VM that stops again after it was resumed shows one;
+/// which kind it is says what stopped it, and is recorded, not guessed. Reads a line at a time.
+pub fn stop_after_connect<R: std::io::BufRead>(reader: R, sock: &str) -> Option<StopLine> {
     let connect = connect_text(sock);
     let mut after = false;
     for line in reader.split(b'\n') {
         let Ok(bytes) = line else {
-            return false;
+            return None;
         };
         let text = String::from_utf8_lossy(&bytes);
         let Some((_, body)) = parse_det(&text) else {
             continue;
         };
-        if after && body.starts_with("director stop kind=") {
-            return true;
+        if after {
+            if let Some(stop) = parse_stop(body) {
+                return Some(stop);
+            }
         }
         after = after || body == connect;
     }
-    false
+    None
 }
 
 /// What the scan has decided so far.
@@ -166,7 +216,8 @@ impl RestoreScan {
         let Some(branches) = tail.strip_suffix(" branches)") else {
             return false;
         };
-        vtime.parse() == Ok(self.keys.vtime_ns) && branches.parse() == Ok(self.keys.branch_count)
+        digits(vtime) == Some(self.keys.vtime_ns)
+            && digits(branches) == Some(self.keys.branch_count)
     }
 
     /// Takes the next bytes of the log and returns the state.
@@ -373,14 +424,17 @@ mod tests {
     }
 
     #[test]
-    fn a_shown_line_is_cut_on_a_character_boundary() {
+    fn a_shown_line_is_cut_to_printable_ascii_whatever_it_held() {
         let mut scan = RestoreScan::new(keys(None));
         let long = "\u{e9}".repeat(100);
         let log = [stop(), det(2, &long)].concat();
         let ScanState::Other(t) = feed_all(&mut scan, &log) else {
             panic!("not other");
         };
-        assert!(t.len() <= SHOWN_BYTES && t.chars().all(|c| c == '\u{e9}'));
+        assert!(
+            t.len() <= SHOWN_BYTES && t.bytes().all(|b| (0x20..0x7f).contains(&b)),
+            "{t:?}"
+        );
     }
 
     #[test]
@@ -398,23 +452,87 @@ mod tests {
     }
 
     #[test]
-    fn a_stop_after_the_connect_line_is_the_branch_limit_and_one_before_it_is_not() {
+    fn a_stop_after_the_connect_line_is_found_with_its_kind_and_one_before_it_is_not() {
         let after = [
             stop(),
             det(2, &connect_text(SOCK)),
-            det(3, "director stop kind=2 stop_seq=9"),
+            det(
+                3,
+                "director stop kind=2 stop_seq=9 branch_count=4000000000 probe_id=0",
+            ),
         ]
         .concat();
-        assert!(limit_stop_after_connect(after.as_bytes(), SOCK));
+        assert_eq!(
+            stop_after_connect(after.as_bytes(), SOCK),
+            Some(StopLine { kind: 2 })
+        );
+        let other_kind = [
+            det(1, &connect_text(SOCK)),
+            det(
+                2,
+                "director stop kind=1 stop_seq=9 branch_count=5 probe_id=0",
+            ),
+        ]
+        .concat();
+        assert_eq!(
+            stop_after_connect(other_kind.as_bytes(), SOCK),
+            Some(StopLine { kind: 1 })
+        );
         let before = [stop(), det(2, &connect_text(SOCK)), det(3, "VMEXIT x")].concat();
-        assert!(!limit_stop_after_connect(before.as_bytes(), SOCK));
-        assert!(!limit_stop_after_connect(stop().as_bytes(), SOCK));
+        assert_eq!(stop_after_connect(before.as_bytes(), SOCK), None);
+        assert_eq!(stop_after_connect(stop().as_bytes(), SOCK), None);
         let other_sock = [
             det(1, &connect_text("/other")),
-            det(2, "director stop kind=2"),
+            det(
+                2,
+                "director stop kind=2 stop_seq=1 branch_count=1 probe_id=0",
+            ),
         ]
         .concat();
-        assert!(!limit_stop_after_connect(other_sock.as_bytes(), SOCK));
-        assert!(!limit_stop_after_connect(&b"\xff\xfe"[..], SOCK));
+        assert_eq!(stop_after_connect(other_sock.as_bytes(), SOCK), None);
+        assert_eq!(stop_after_connect(&b"\xff\xfe"[..], SOCK), None);
+    }
+
+    #[test]
+    fn only_the_exact_stop_line_form_with_plain_digits_counts() {
+        assert_eq!(
+            parse_stop("director stop kind=1 stop_seq=2 branch_count=3 probe_id=4"),
+            Some(StopLine { kind: 1 })
+        );
+        for bad in [
+            "director stop kind=+1 stop_seq=2 branch_count=3 probe_id=4",
+            "director stop kind=1 stop_seq=2 branch_count=3",
+            "director stop kind=1 stop_seq=2 branch_count=3 probe_id=4 extra",
+            "director stop kind=x stop_seq=2 branch_count=3 probe_id=4",
+            "director stopped kind=1 stop_seq=2 branch_count=3 probe_id=4",
+            "director stop kind=1 stop_seq=2 probe_id=4 branch_count=3",
+        ] {
+            assert_eq!(parse_stop(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_signed_number_in_the_start_time_line_is_not_the_stops_own() {
+        let mut scan = RestoreScan::new(keys(None));
+        let log = [stop(), det(2, "VTIME 0 -> +5000 (+1000 branches)")].concat();
+        assert!(matches!(feed_all(&mut scan, &log), ScanState::Other(_)));
+    }
+
+    #[test]
+    fn shown_text_is_printable_ascii_and_short() {
+        let nasty = "deterministic \u{1b}[31m red \u{e9} \u{0}";
+        let out = shown(nasty);
+        assert!(out.bytes().all(|b| (0x20..0x7f).contains(&b)), "{out:?}");
+        assert!(!out.contains('\u{1b}'));
+        assert!(shown(&"a".repeat(500)).len() <= SHOWN_BYTES);
+    }
+
+    #[test]
+    fn the_held_check_reads_a_reader_too() {
+        let held = stop();
+        assert_eq!(stop_held_in(held.as_bytes(), 3, 1000), Some(true));
+        let moved = [stop(), det(2, "x")].concat();
+        assert_eq!(stop_held_in(moved.as_bytes(), 3, 1000), Some(false));
+        assert_eq!(stop_held_in(&b""[..], 3, 1000), None);
     }
 }

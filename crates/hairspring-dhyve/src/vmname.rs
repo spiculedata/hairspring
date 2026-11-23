@@ -24,7 +24,7 @@ impl std::fmt::Display for NameError {
         match self {
             NameError::BadStamp(s) => write!(f, "`{s}` is not a stamp of the form 12345678T1234Z"),
             NameError::RunOutOfRange(n) => {
-                write!(f, "run number {n} is not below {NAMES_PER_STAMP}")
+                write!(f, "run number {n} is not from 1 to {}", NAMES_PER_STAMP - 1)
             }
         }
     }
@@ -72,7 +72,7 @@ pub struct VmName(String);
 
 impl VmName {
     pub fn new(stamp: &Stamp, run: u32) -> Result<VmName, NameError> {
-        if run >= NAMES_PER_STAMP {
+        if run == 0 || run >= NAMES_PER_STAMP {
             return Err(NameError::RunOutOfRange(run));
         }
         Ok(VmName(format!(
@@ -93,6 +93,17 @@ impl VmName {
             return None;
         }
         VmName::new(&stamp, digits.parse().ok()?).ok()
+    }
+
+    /// The two run digits of the name.
+    pub fn run_number(&self) -> u32 {
+        self.0[self.0.len() - 2..].parse().unwrap_or(0)
+    }
+
+    /// The stamp in the name.
+    pub fn stamp(&self) -> Stamp {
+        let start = VM_NAME_PREFIX.len();
+        Stamp(self.0[start..start + STAMP_LEN].to_string())
     }
 
     pub fn as_str(&self) -> &str {
@@ -144,10 +155,14 @@ mod tests {
     }
 
     #[test]
-    fn a_run_number_of_100_or_more_is_refused() {
+    fn a_run_number_of_zero_or_of_100_or_more_is_refused() {
         let stamp = Stamp::from_counter(1);
+        assert!(VmName::new(&stamp, 1).is_ok());
         assert!(VmName::new(&stamp, 99).is_ok());
+        assert_eq!(VmName::new(&stamp, 0), Err(NameError::RunOutOfRange(0)));
         assert_eq!(VmName::new(&stamp, 100), Err(NameError::RunOutOfRange(100)));
+        let name = VmName::new(&stamp, 16).unwrap();
+        assert_eq!((name.run_number(), name.stamp()), (16, stamp));
     }
 
     #[test]

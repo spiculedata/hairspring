@@ -209,7 +209,7 @@ fn nothing_the_backend_says_carries_a_banned_word_or_an_option_name() {
         InfraKind::NoReady,
         InfraKind::ControlLost,
         InfraKind::ResumeNotTaken,
-        InfraKind::BranchLimit,
+        InfraKind::StoppedAgain,
         InfraKind::LogBound,
         InfraKind::LowSpace,
         InfraKind::SerialMissing,
@@ -245,4 +245,39 @@ fn nothing_the_backend_says_carries_a_banned_word_or_an_option_name() {
         let out = run(&rig, 1, quick());
         assert_plain(&out.error.unwrap_or_default());
     }
+}
+
+#[test]
+fn a_target_that_says_a_hang_is_the_bug_still_gets_an_inconclusive_trial() {
+    let rig = Rig::new("b-hang-bug");
+    rig.modes(&["", "hang"]);
+    let timings = Timings {
+        trial_cap: Duration::from_secs(1),
+        ..quick()
+    };
+    let mut target = spec(1);
+    if let TargetKind::Process {
+        hang_is_violation, ..
+    } = &mut target.kind
+    {
+        *hang_is_violation = true;
+    }
+    let out = backend(&rig, timings)
+        .run(&target, &RunRequest::new("demo", 5), budget(1), &mut |_| {
+            true
+        })
+        .unwrap();
+    assert_eq!(out.status, RunStatus::Passed);
+    assert!(out.failure.is_none());
+    assert_eq!((out.trials, out.inconclusive), (1, 1));
+}
+
+#[test]
+fn the_checkpoint_is_removed_when_the_run_ends() {
+    let rig = Rig::new("b-ckpt-gone");
+    rig.modes(&[""]);
+    let out = run(&rig, 1, quick());
+    assert_eq!(out.status, RunStatus::Passed);
+    assert!(rig.left("kern").is_empty(), "a checkpoint file is left");
+    assert!(!rig.host.state_dir.join("ckpt/00000000T0001Z").exists());
 }

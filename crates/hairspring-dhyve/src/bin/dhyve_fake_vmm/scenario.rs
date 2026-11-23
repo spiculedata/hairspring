@@ -8,7 +8,8 @@
 //! * `calls.log`  one line per program started, in order.
 //! * `trials.log` one line per guest run: the seed it read.
 //! * `events`     lines the guest prints before its exit report (`{seed}` is replaced).
-//! * `ctl`        `key=value` lines for the checkpoint and destroy commands.
+//! * `ctl`        `key=value` lines for the checkpoint, destroy and `kldstat` commands.
+//! * `sudo-mode`  `ignore_term`: the fake `sudo` ignores SIGTERM and runs the program as a child in a group of its own.
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -52,6 +53,14 @@ impl Fake {
         let lines: Vec<&str> = text.lines().collect();
         let line = lines.get(n).or(lines.last()).copied().unwrap_or("");
         line.split_whitespace().map(String::from).collect()
+    }
+
+    /// How the fake `sudo` behaves: the first word of the `sudo` file.
+    pub fn sudo_mode(&self) -> Option<String> {
+        self.read("sudo-mode")
+            .split_whitespace()
+            .next()
+            .map(String::from)
     }
 
     pub fn expected_lib(&self) -> Option<String> {

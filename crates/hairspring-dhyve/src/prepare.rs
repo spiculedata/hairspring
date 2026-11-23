@@ -3,13 +3,14 @@
 //!
 //! The host lock is held for the whole of it. Anything that goes wrong is an infrastructure error and no checkpoint
 //! record is returned.
-use crate::checkpoint::{CheckpointRecord, RestoreKeys};
+use crate::checkpoint::{CheckpointRecord, RecordError, RestoreKeys};
 use crate::director::{CloseWhy, ControlError, Director, DirectorSpec, Mode, Report};
 use crate::error::{InfraError, InfraKind};
 use crate::fwcfg::{Files, Inputs};
 use crate::host::Timings;
 use crate::layout::RunPaths;
 use crate::logs::{keep_tail, len_now};
+use crate::pins::verify;
 use crate::session::{Ended, Session, Watch};
 use crate::spawn::Spawner;
 use crate::vmargs::prepare_args;
@@ -29,7 +30,14 @@ pub struct Prepared {
     pub input_hashes: Vec<(String, String)>,
     pub name: VmName,
     pub elapsed: Duration,
+    /// The `vmm` module's line of the module list when the prepare started. Every restore must see the same line.
+    pub vmm: String,
+    /// The prepare's own files. They are kept (the VM's standard error in full among them) only in a session that keeps
+    /// everything; otherwise the directory is gone.
+    pub prepare_run: RunPaths,
 }
+
+const PREPARE_RUN: u32 = 1;
 
 struct Boot {
     stamp: Stamp,
@@ -39,6 +47,8 @@ struct Boot {
     fwcfg: Files,
     inputs: Inputs,
     started: Instant,
+    vmm: String,
+    spawner: Spawner,
 }
 
 /// Waits until the three files exist, are not empty, and keep their sizes across two looks at least `gap` apart.
@@ -67,13 +77,12 @@ fn wait_settled(files: &[PathBuf; 3], timings: &Timings) -> Result<(), String> {
 
 fn on_ready(
     spawner: Spawner,
-    dir: PathBuf,
     name: VmName,
     files: [PathBuf; 3],
     timings: Timings,
 ) -> crate::director::OnReady {
     Box::new(move |_event| {
-        spawner.checkpoint(&dir, &name).map_err(|e| e.to_string())?;
+        spawner.checkpoint(&name).map_err(|e| e.to_string())?;
         wait_settled(&files, &timings)
     })
 }
@@ -132,22 +141,30 @@ impl Session {
     /// Boots the guest to its ready stop, checkpoints it there and shuts it down.
     pub fn prepare(&self, inputs: Inputs) -> Result<Prepared, InfraError> {
         let started = Instant::now();
+        self.count_prepare()?;
+        verify(&self.host)?;
         let lock = self.lock()?;
-        let stamp = lock
-            .allocate_stamp()
-            .map_err(|e| InfraError::new(InfraKind::FileOperation, e.to_string()))?;
-        let name = VmName::new(&stamp, 0)
+        let stamp = match &self.host.session_stamp {
+            Some(stamp) => stamp.clone(),
+            None => lock
+                .allocate_stamp()
+                .map_err(|e| InfraError::new(InfraKind::FileOperation, e.to_string()))?,
+        };
+        let name = VmName::new(&stamp, PREPARE_RUN)
             .map_err(|e| InfraError::new(InfraKind::Settings, e.to_string()))?;
+        let spawner = self.spawner(&stamp);
         let run = self.layout.run_paths(&stamp, &name);
         let ckpt_dir = self.layout.checkpoint_dir(&stamp);
         self.make_dirs(&run)?;
         std::fs::create_dir_all(&ckpt_dir)
             .map_err(|e| InfraError::io("create the checkpoint directory", &e))?;
-        self.check_space(0)?;
+        self.check_space(&spawner, 0)?;
         let fwcfg = inputs
             .write(&run.fwcfg_dir)
             .map_err(|e| InfraError::new(InfraKind::InputFiles, e.to_string()))?;
-        self.spawner.destroy(&name)?;
+        spawner.destroy(&name)?;
+        // A start can load a module by itself when none is loaded, so it is checked each time, just before.
+        let vmm = spawner.vmm_identity()?;
         let done = self.boot_and_checkpoint(&Boot {
             stamp,
             name,
@@ -156,8 +173,10 @@ impl Session {
             fwcfg,
             inputs,
             started,
+            vmm,
+            spawner,
         });
-        if done.is_err() {
+        if done.is_err() && !self.keep_all {
             keep_tail(&run.run_log);
             keep_tail(&run.uart_log);
         }
@@ -173,6 +192,8 @@ impl Session {
             fwcfg,
             inputs,
             started,
+            vmm,
+            spawner,
         } = boot;
         let director = Director::start(
             DirectorSpec {
@@ -186,8 +207,7 @@ impl Session {
                 shutdown_delay: self.timings.shutdown_delay,
             },
             on_ready(
-                self.spawner.clone(),
-                ckpt_dir.clone(),
+                spawner.clone(),
                 name.clone(),
                 self.layout.checkpoint_files(stamp),
                 self.timings,
@@ -195,14 +215,7 @@ impl Session {
         )
         .map_err(|e| InfraError::io("listen on the control socket", &e))?;
         let args = prepare_args(&self.host, run, fwcfg, name);
-        let mut child = match self.spawner.start_vm(&args, &run.run_log) {
-            Ok(c) => c,
-            Err(e) => {
-                director.cancel();
-                director.finish(&run.control_sock);
-                return Err(e);
-            }
-        };
+        let mut guard = self.start_guarded(spawner.clone(), name.clone(), &args, run, director)?;
         let watch = Watch {
             cap: self.timings.prepare_cap,
             bounds: &self.bounds,
@@ -212,27 +225,20 @@ impl Session {
             stop_on_failure: true,
             grace_after_done: Some(self.timings.helper_cap),
         };
-        let ended = self.wait(&mut child, &director, &watch);
-        let exit = match self.end_vm(name, &mut child, &director) {
-            Ok(code) => code,
-            Err(e) => {
-                director.cancel();
-                director.finish(&run.control_sock);
-                return Err(e);
-            }
-        };
-        let finished_clean = director.is_finished();
-        if !finished_clean {
-            director.cancel();
-        }
-        let report = director.finish(&run.control_sock);
+        let ended = guard.wait(&watch);
+        let (exit, report) = guard.finish()?;
         self.check_prepare_end(ended, &report, exit)?;
         let ready = report
             .ready_event
             .ok_or_else(|| InfraError::bare(InfraKind::NoReady))?;
         let record = CheckpointRecord::read(stamp, ckpt_dir, RestoreKeys::from_event(&ready))
-            .map_err(|e| InfraError::new(InfraKind::Checkpoint, e.to_string()))?;
-        remove_run_files(&run.dir);
+            .map_err(|e| match e {
+                RecordError::Module(_) => InfraError::bare(InfraKind::ModuleMismatch),
+                other => InfraError::new(InfraKind::Checkpoint, other.to_string()),
+            })?;
+        if !self.keep_all {
+            remove_run_files(&run.dir);
+        }
         Ok(Prepared {
             stamp: stamp.clone(),
             record,
@@ -240,6 +246,8 @@ impl Session {
             input_hashes: fwcfg.hashes(),
             name: name.clone(),
             elapsed: started.elapsed(),
+            vmm: vmm.clone(),
+            prepare_run: run.clone(),
         })
     }
 

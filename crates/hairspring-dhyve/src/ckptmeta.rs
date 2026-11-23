@@ -12,8 +12,11 @@ pub const VM_ENTRY_SIZE: u64 = 344;
 const NEXTRIP_OFFSET: usize = 200;
 const NEXTRIP_BYTES: usize = 8;
 const VM_ENTRY: &str = "vm";
-/// How deep the document is searched for entries.
-const MAX_DEPTH: usize = 32;
+/// How deep the document is searched for entries. The JSON reader itself refuses a document nested deeper than 128, so this
+/// is never the limit that matters; the reference decoder has none.
+const MAX_DEPTH: usize = 128;
+/// The size of the `vmcx` entry the expected module writes. Another size is another module.
+pub const VMCX_ENTRY_SIZE: u64 = 1155;
 
 /// Why the pointer could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +28,10 @@ pub enum MetaError {
     VmEntryDuplicated,
     VmEntrySize(u64),
     OutsideKern,
+    /// An entry whose device is not text or whose size or offset is not a whole number.
+    BadEntry,
+    /// The `vmcx` entry is missing or not the size of the expected module's.
+    ModuleEntry(Option<u64>),
 }
 
 impl std::fmt::Display for MetaError {
@@ -40,6 +47,13 @@ impl std::fmt::Display for MetaError {
             ),
             MetaError::OutsideKern => {
                 write!(f, "the checkpoint's CPU entry lies outside its state file")
+            }
+            MetaError::BadEntry => write!(
+                f,
+                "the checkpoint's description has an entry that is not well formed"
+            ),
+            MetaError::ModuleEntry(_) => {
+                write!(f, "the checkpoint was not made by the expected module")
             }
         }
     }
@@ -57,23 +71,28 @@ fn number(value: &Value) -> Option<u64> {
     }
 }
 
-fn collect(node: &Value, depth: usize, out: &mut Vec<(String, u64, u64)>) {
+/// An object that holds all three keys is an entry, and then its values must be well formed: the reference decoder refuses the
+/// whole file for an entry with a device that is not text or a size or offset that is not a whole number.
+fn collect(node: &Value, depth: usize, out: &mut Vec<(String, u64, u64)>) -> Result<(), MetaError> {
     if depth > MAX_DEPTH {
-        return;
+        return Ok(());
     }
     match node {
         Value::Object(map) => {
-            if let (Some(Value::String(device)), Some(size), Some(offset)) = (
-                map.get("device"),
-                map.get("size").and_then(number),
-                map.get("file_offset").and_then(number),
-            ) {
+            if let (Some(device), Some(size), Some(offset)) =
+                (map.get("device"), map.get("size"), map.get("file_offset"))
+            {
+                let (Value::String(device), Some(size), Some(offset)) =
+                    (device, number(size), number(offset))
+                else {
+                    return Err(MetaError::BadEntry);
+                };
                 out.push((device.clone(), size, offset));
             }
-            map.values().for_each(|v| collect(v, depth + 1, out));
+            map.values().try_for_each(|v| collect(v, depth + 1, out))
         }
-        Value::Array(items) => items.iter().for_each(|v| collect(v, depth + 1, out)),
-        _ => {}
+        Value::Array(items) => items.iter().try_for_each(|v| collect(v, depth + 1, out)),
+        _ => Ok(()),
     }
 }
 
@@ -84,7 +103,7 @@ pub type Entries = (BTreeMap<String, (u64, u64)>, Vec<String>);
 pub fn entries(meta: &str) -> Result<Entries, MetaError> {
     let doc: Value = serde_json::from_str(meta).map_err(|_| MetaError::NotJson)?;
     let mut found = Vec::new();
-    collect(&doc, 0, &mut found);
+    collect(&doc, 0, &mut found)?;
     if found.is_empty() {
         return Err(MetaError::NoEntries);
     }
@@ -129,6 +148,19 @@ pub fn restored_rip(meta: &str, kern: &[u8]) -> Result<u64, MetaError> {
         .and_then(|b| b.try_into().ok())
         .ok_or(MetaError::OutsideKern)?;
     Ok(u64::from_le_bytes(raw))
+}
+
+/// Whether the checkpoint was made by the expected module: exactly one `vmcx` entry, of the expected size.
+pub fn check_module(meta: &str) -> Result<(), MetaError> {
+    let (map, duplicated) = entries(meta)?;
+    if duplicated.iter().any(|n| n == "vmcx") {
+        return Err(MetaError::ModuleEntry(None));
+    }
+    match map.get("vmcx") {
+        Some(&(VMCX_ENTRY_SIZE, _)) => Ok(()),
+        Some(&(size, _)) => Err(MetaError::ModuleEntry(Some(size))),
+        None => Err(MetaError::ModuleEntry(None)),
+    }
 }
 
 /// A `.meta` text and `.kern` bytes that decode to `rip`, for tests and the fake.
@@ -203,12 +235,45 @@ mod tests {
     }
 
     #[test]
-    fn a_very_deep_document_is_cut_off_not_followed() {
+    fn a_nested_entry_is_found_as_the_reference_finds_it_up_to_the_readers_own_limit() {
         let mut text = String::from(r#"{"device":"vm","size":344,"file_offset":0}"#);
-        for _ in 0..(MAX_DEPTH + 8) {
+        for _ in 0..40 {
+            text = format!(r#"{{"x":{text}}}"#);
+        }
+        assert_eq!(restored_rip(&text, &[0; 400]), Ok(0));
+        for _ in 0..200 {
             text = format!("[{text}]");
         }
-        assert_eq!(restored_rip(&text, &[0; 400]), Err(MetaError::NoEntries));
+        assert_eq!(restored_rip(&text, &[0; 400]), Err(MetaError::NotJson));
+    }
+
+    #[test]
+    fn an_entry_that_is_not_well_formed_refuses_the_whole_file() {
+        for bad in [
+            r#"{"e":[{"device":5,"size":344,"file_offset":0}]}"#,
+            r#"{"e":[{"device":"vm","size":-1,"file_offset":0}]}"#,
+            r#"{"e":[{"device":"vm","size":344.5,"file_offset":0}]}"#,
+            r#"{"e":[{"device":"vm","size":"+344","file_offset":0}]}"#,
+            r#"{"e":[{"device":"vm","size":true,"file_offset":0}]}"#,
+        ] {
+            assert_eq!(
+                restored_rip(bad, &[0; 400]),
+                Err(MetaError::BadEntry),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_module_check_wants_one_vmcx_entry_of_the_expected_size() {
+        let (meta, _) = synthetic(1);
+        assert_eq!(check_module(&meta), Ok(()));
+        let old = r#"{"e":[{"device":"vmcx","size":1139,"file_offset":0}]}"#;
+        assert_eq!(check_module(old), Err(MetaError::ModuleEntry(Some(1139))));
+        let none = r#"{"e":[{"device":"vm","size":344,"file_offset":0}]}"#;
+        assert_eq!(check_module(none), Err(MetaError::ModuleEntry(None)));
+        let twice = r#"{"e":[{"device":"vmcx","size":1155,"file_offset":0},{"device":"vmcx","size":1155,"file_offset":0}]}"#;
+        assert_eq!(check_module(twice), Err(MetaError::ModuleEntry(None)));
     }
 
     #[test]
@@ -220,6 +285,8 @@ mod tests {
             MetaError::VmEntryDuplicated,
             MetaError::VmEntrySize(3),
             MetaError::OutsideKern,
+            MetaError::BadEntry,
+            MetaError::ModuleEntry(None),
         ] {
             assert!(e.to_string().starts_with("the checkpoint"));
         }

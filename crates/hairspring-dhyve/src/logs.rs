@@ -72,7 +72,7 @@ pub const KEPT_TAIL_BYTES: u64 = 1024 * 1024;
 /// Cuts the file at `path` down to its last [`KEPT_TAIL_BYTES`]. A file that is not there is left alone.
 pub fn keep_tail(path: &Path) {
     use std::io::{Read, Seek, SeekFrom};
-    let Ok(mut file) = std::fs::File::open(path) else {
+    let Ok(mut file) = crate::safe_open::open_regular(path) else {
         return;
     };
     let Ok(len) = file.metadata().map(|m| m.len()) else {

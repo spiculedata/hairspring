@@ -26,13 +26,16 @@ pub mod hostlock;
 pub mod judge;
 pub mod layout;
 pub mod logs;
+pub mod pins;
 pub mod prepare;
 #[cfg(any(target_os = "freebsd", test))]
 mod read;
 mod run;
 pub mod runlog;
+mod safe_open;
 pub mod serial;
 pub mod session;
+pub mod signal;
 mod spawn;
 pub mod trial;
 mod vmargs;

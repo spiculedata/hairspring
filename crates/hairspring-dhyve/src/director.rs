@@ -8,9 +8,10 @@
 //!   the latest after a limit, or when the VM has exited. Closing sooner can lose the command.
 //!
 //! Any STOPPED event is answered with SHUTDOWN and counted: it is how a trial that ran into the branch limit looks.
-use crate::runlog::{stop_held, RestoreScan, RestoreScanKeys, ScanState};
+use crate::runlog::{stop_held_in, RestoreScan, RestoreScanKeys, ScanState};
+use crate::safe_open::open_regular;
 use crate::wire::{Kind, Message, WireError, SIZE};
-use std::io::{Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -91,6 +92,9 @@ pub struct Report {
     pub callback_failure: Option<String>,
     /// Lines of the skipped kinds that were passed while looking for the connect line.
     pub skipped: u32,
+    /// The first line that decided a resume was not taken, as printable ASCII. For the private record only; it is never
+    /// put in an error text.
+    pub first_line: Option<String>,
 }
 
 impl Report {
@@ -108,6 +112,7 @@ impl Report {
             error: None,
             callback_failure: None,
             skipped: 0,
+            first_line: None,
         }
     }
 }
@@ -416,9 +421,9 @@ fn shutdown_and_close(
     check_held: bool,
 ) -> Result<(), ControlError> {
     if check_held {
-        let held = std::fs::read(&ctx.spec.run_log)
+        let held = open_regular(&ctx.spec.run_log)
             .ok()
-            .and_then(|raw| stop_held(&raw, event.stop_seq, event.branch_count));
+            .and_then(|f| stop_held_in(BufReader::new(f), event.stop_seq, event.branch_count));
         report.held = Some(held == Some(true));
         if held != Some(true) {
             close(report, conn, CloseWhy::NotHeld);
@@ -433,7 +438,7 @@ fn shutdown_and_close(
 }
 
 fn read_new(path: &Path, offset: u64) -> (Vec<u8>, u64) {
-    let Ok(mut file) = std::fs::File::open(path) else {
+    let Ok(mut file) = open_regular(path) else {
         return (Vec::new(), offset);
     };
     let mut data = Vec::new();
@@ -451,13 +456,24 @@ fn restore(
     event: &Message,
     report: &mut Report,
 ) -> Result<(), ControlError> {
-    send(conn, &Message::answer(Kind::Resume, event))?;
-    report.resume_sent += 1;
     let Some(keys) = ctx.spec.restore.clone() else {
         report.resume = ResumeResult::Unseen("no restore keys".to_string());
         close(report, conn, CloseWhy::Other);
         return Ok(());
     };
+    // The replayed stop must be the one the checkpoint recorded; answering another would be answering the wrong stop.
+    if event.stop_seq != keys.stop_seq
+        || event.branch_count != keys.branch_count
+        || event.vtime_ns != keys.vtime_ns
+    {
+        report.resume = ResumeResult::Unseen(
+            "the replayed stop differs from the checkpoint record".to_string(),
+        );
+        close(report, conn, CloseWhy::Other);
+        return Ok(());
+    }
+    send(conn, &Message::answer(Kind::Resume, event))?;
+    report.resume_sent += 1;
     let mut scan = RestoreScan::new(keys);
     let started = Instant::now();
     let mut offset = 0u64;
@@ -489,12 +505,14 @@ fn restore(
                 return Ok(());
             }
             ScanState::Excluded(line) => {
-                report.resume = ResumeResult::Unseen(format!("refused: {line}"));
+                report.first_line = Some(line);
+                report.resume = ResumeResult::Unseen("the VM refused the command".to_string());
                 close(report, conn, CloseWhy::Excluded);
                 return Ok(());
             }
             ScanState::Other(line) => {
-                report.resume = ResumeResult::Unseen(format!("another line came first: {line}"));
+                report.first_line = Some(line);
+                report.resume = ResumeResult::Unseen("another line came first".to_string());
                 close(report, conn, CloseWhy::Other);
                 return Ok(());
             }

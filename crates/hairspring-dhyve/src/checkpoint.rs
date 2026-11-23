@@ -48,13 +48,15 @@ impl RestoreKeys {
 pub enum RecordError {
     Io(String),
     Rip(ckptmeta::MetaError),
+    /// The checkpoint was not made by the expected module.
+    Module(ckptmeta::MetaError),
 }
 
 impl std::fmt::Display for RecordError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RecordError::Io(m) => write!(f, "a checkpoint file could not be read: {m}"),
-            RecordError::Rip(e) => write!(f, "{e}"),
+            RecordError::Rip(e) | RecordError::Module(e) => write!(f, "{e}"),
         }
     }
 }
@@ -101,8 +103,9 @@ impl CheckpointRecord {
     ) -> Result<CheckpointRecord, RecordError> {
         let kern = read_small(&dir.join("boot.kern"))?;
         let meta = read_small(&dir.join("boot.meta"))?;
-        let rip = ckptmeta::restored_rip(&String::from_utf8_lossy(&meta), &kern)
-            .map_err(RecordError::Rip)?;
+        let meta = String::from_utf8_lossy(&meta);
+        let rip = ckptmeta::restored_rip(&meta, &kern).map_err(RecordError::Rip)?;
+        ckptmeta::check_module(&meta).map_err(RecordError::Module)?;
         Ok(CheckpointRecord {
             stamp: stamp.clone(),
             dir: dir.to_path_buf(),

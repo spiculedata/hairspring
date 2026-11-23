@@ -5,19 +5,20 @@ use crate::error::{InfraError, InfraKind};
 use crate::fwcfg::Inputs;
 use crate::layout::RunPaths;
 use crate::logs::{dir_bytes, keep_tail, len_now};
+use crate::pins::verify;
 use crate::prepare::Prepared;
-use crate::runlog::{limit_stop_after_connect, RestoreScanKeys};
+use crate::runlog::{stop_after_connect, RestoreScanKeys, StopLine};
+use crate::safe_open::open_regular;
 use crate::serial::{self, Serial};
 use crate::session::{Ended, Session, Watch};
 use crate::vmargs::restore_args;
 use crate::vmname::{Stamp, VmName, NAMES_PER_STAMP};
-use std::fs::File;
+use hairspring_core::point::encoding::sha256_hex;
 use std::io::BufReader;
 use std::time::{Duration, Instant};
 
-/// Trials with an ordinal at or past this get a stamp of their own, because a stamp has only 100 names and the first is
-/// the prepare's.
-const FIRST_OWN_STAMP_ORDINAL: u32 = NAMES_PER_STAMP - 1;
+/// The first restore is the second name of its stamp: the prepare is the first.
+const FIRST_RESTORE_RUN: u32 = 2;
 
 /// Everything seen of one restored run.
 #[derive(Debug, Clone)]
@@ -29,18 +30,32 @@ pub struct TrialRun {
     pub control: Report,
     pub ended: Ended,
     pub vm_exit: Option<i32>,
-    /// The serial log; `None` when the file was never there.
+    /// The serial log; `None` when the file was never there or was refused.
     pub serial: Option<Serial>,
-    /// A control stop was logged after the connect line: the VM ran into its branch limit.
-    pub stopped_at_limit_in_log: bool,
+    /// A control stop was logged after the connect line: the VM stopped again after it was resumed. The kind says which
+    /// stop it was.
+    pub stop_after_resume: Option<StopLine>,
     pub run_log_len: u64,
     pub uart_len: u64,
     pub elapsed: Duration,
     pub run: RunPaths,
+    /// SHA-256 of the VM program's arguments with the VM name and the run directory masked: the record that two trials
+    /// were started alike, without keeping the arguments.
+    pub argv_masked_sha256: String,
+}
+
+fn masked_hash(args: &[String], name: &VmName, run: &RunPaths) -> String {
+    let dir = run.dir.display().to_string();
+    let text: String = args
+        .iter()
+        .map(|a| a.replace(name.as_str(), "NAME").replace(&dir, "RUN"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    sha256_hex(text.as_bytes())
 }
 
 impl Session {
-    /// Restores the checkpoint in `prepared` as trial number `ordinal`, with `inputs` as its input files.
+    /// Restores the checkpoint in `prepared` as trial number `ordinal` (from 0), with `inputs` as its input files.
     pub fn restore_trial(
         &self,
         prepared: &Prepared,
@@ -48,9 +63,16 @@ impl Session {
         inputs: Inputs,
     ) -> Result<TrialRun, InfraError> {
         let started = Instant::now();
+        verify(&self.host)?;
         let lock = self.lock()?;
-        let (stamp, number) = if ordinal < FIRST_OWN_STAMP_ORDINAL {
-            (prepared.stamp.clone(), ordinal + 1)
+        let number = ordinal.saturating_add(FIRST_RESTORE_RUN);
+        let (stamp, number) = if number < NAMES_PER_STAMP {
+            (prepared.stamp.clone(), number)
+        } else if self.host.session_stamp.is_some() {
+            return Err(InfraError::new(
+                InfraKind::Settings,
+                "the session's stamp has no names left",
+            ));
         } else {
             let fresh = lock
                 .allocate_stamp()
@@ -59,6 +81,7 @@ impl Session {
         };
         let name = VmName::new(&stamp, number)
             .map_err(|e| InfraError::new(InfraKind::Settings, e.to_string()))?;
+        let spawner = self.spawner(&stamp);
         let run = self.layout.run_paths(&stamp, &name);
         self.make_dirs(&run)?;
         if !prepared.record.unchanged() {
@@ -67,11 +90,16 @@ impl Session {
                 "the checkpoint changed after it was taken",
             ));
         }
-        self.check_space(dir_bytes(&prepared.record.dir))?;
+        self.check_space(&spawner, dir_bytes(&prepared.record.dir))?;
         let fwcfg = inputs
             .write(&run.fwcfg_dir)
             .map_err(|e| InfraError::new(InfraKind::InputFiles, e.to_string()))?;
-        self.spawner.destroy(&name)?;
+        spawner.destroy(&name)?;
+        // A start can load a module by itself when none is loaded, and the module must be the one the checkpoint came
+        // from, so it is checked each time, just before.
+        if spawner.vmm_identity()? != prepared.vmm {
+            return Err(InfraError::bare(InfraKind::VmmChanged));
+        }
         let record = &prepared.record;
         let director = Director::start(
             DirectorSpec {
@@ -94,14 +122,8 @@ impl Session {
         )
         .map_err(|e| InfraError::io("listen on the control socket", &e))?;
         let args = restore_args(&self.host, &run, &fwcfg, record, &name);
-        let mut child = match self.spawner.start_vm(&args, &run.run_log) {
-            Ok(c) => c,
-            Err(e) => {
-                director.cancel();
-                director.finish(&run.control_sock);
-                return Err(e);
-            }
-        };
+        let argv_masked_sha256 = masked_hash(&args, &name, &run);
+        let mut guard = self.start_guarded(spawner, name.clone(), &args, &run, director)?;
         let watch = Watch {
             cap: self.timings.trial_cap,
             bounds: &self.bounds,
@@ -111,13 +133,8 @@ impl Session {
             stop_on_failure: true,
             grace_after_done: None,
         };
-        let ended = self.wait(&mut child, &director, &watch);
-        let ended_vm = self.end_vm(&name, &mut child, &director);
-        if !director.is_finished() {
-            director.cancel();
-        }
-        let control = director.finish(&run.control_sock);
-        let vm_exit = ended_vm?;
+        let ended = guard.wait(&watch);
+        let (vm_exit, control) = guard.finish()?;
         drop(lock);
         Ok(self.collect(Collected {
             name,
@@ -129,6 +146,7 @@ impl Session {
             vm_exit,
             run,
             started,
+            argv_masked_sha256,
         }))
     }
 
@@ -137,17 +155,20 @@ impl Session {
             .ok()
             .flatten();
         let reported_exit = serial.as_ref().is_some_and(|s| s.exit.is_some());
-        let stopped_at_limit_in_log = !reported_exit
-            && File::open(&c.run.run_log).is_ok_and(|f| {
-                limit_stop_after_connect(
-                    BufReader::new(f),
-                    &c.run.control_sock.display().to_string(),
-                )
-            });
+        let sock = c.run.control_sock.display().to_string();
+        let stop_after_resume = if reported_exit {
+            None
+        } else {
+            open_regular(&c.run.run_log)
+                .ok()
+                .and_then(|f| stop_after_connect(BufReader::new(f), &sock))
+        };
         let run_log_len = len_now(&c.run.run_log);
         let uart_len = len_now(&c.run.uart_log);
-        keep_tail(&c.run.run_log);
-        keep_tail(&c.run.uart_log);
+        if !self.keep_all {
+            keep_tail(&c.run.run_log);
+            keep_tail(&c.run.uart_log);
+        }
         TrialRun {
             name: c.name,
             stamp: c.stamp,
@@ -157,16 +178,21 @@ impl Session {
             ended: c.ended,
             vm_exit: c.vm_exit,
             serial,
-            stopped_at_limit_in_log,
+            stop_after_resume,
             run_log_len,
             uart_len,
             elapsed: c.started.elapsed(),
             run: c.run,
+            argv_masked_sha256: c.argv_masked_sha256,
         }
     }
 
-    /// Removes a trial's files, or leaves its kept tails for a finding or an error.
+    /// Removes a trial's files, or leaves its kept tails for a finding or an error. A session that keeps everything
+    /// removes nothing.
     pub fn clean_trial(&self, trial: &TrialRun, keep: bool) {
+        if self.keep_all {
+            return;
+        }
         if keep {
             let _ = std::fs::remove_dir_all(&trial.run.fwcfg_dir);
         } else {
@@ -185,4 +211,5 @@ struct Collected {
     vm_exit: Option<i32>,
     run: RunPaths,
     started: Instant,
+    argv_masked_sha256: String,
 }

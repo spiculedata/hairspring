@@ -1,0 +1,62 @@
+{
+ "source": "the argument lists of a reference harness for a start, a destroy and a checkpoint; sudo is named by its absolute path",
+ "root": "/var/tmp",
+ "stamp": "20261201T0540Z",
+ "other_stamp": "20261201T0600Z",
+ "session_dir": "/var/tmp/vmvx-20261201T0540Z",
+ "start_args": [
+  "-c",
+  "1",
+  "-o",
+  "dhyve.director.enabled=true",
+  "-f",
+  "name=opt/hs/seed,file=/var/tmp/vmvx-20261201T0540Z/runs/x/fwcfg/seed",
+  "vmvx_20261201T0540Z_XB_r02"
+ ],
+ "r4": [
+  "/usr/local/bin/sudo",
+  "-n",
+  "/usr/bin/env",
+  "-i",
+  "LD_LIBRARY_PATH=/var/tmp/vmvx-20261201T0540Z/lib",
+  "/usr/bin/cpuset",
+  "-l",
+  "1",
+  "/var/tmp/vmvx-20261201T0540Z/bin/bhyve",
+  "-c",
+  "1",
+  "-o",
+  "dhyve.director.enabled=true",
+  "-f",
+  "name=opt/hs/seed,file=/var/tmp/vmvx-20261201T0540Z/runs/x/fwcfg/seed",
+  "vmvx_20261201T0540Z_XB_r02"
+ ],
+ "r5": [
+  "/usr/local/bin/sudo",
+  "-n",
+  "/usr/bin/env",
+  "-i",
+  "LD_LIBRARY_PATH=/var/tmp/vmvx-20261201T0540Z/lib",
+  "/var/tmp/vmvx-20261201T0540Z/bin/bhyvectl",
+  "--destroy",
+  "--vm=vmvx_20261201T0540Z_XB_r02"
+ ],
+ "r6": [
+  "/usr/local/bin/sudo",
+  "-n",
+  "/usr/bin/env",
+  "-i",
+  "LD_LIBRARY_PATH=/var/tmp/vmvx-20261201T0540Z/lib",
+  "/var/tmp/vmvx-20261201T0540Z/bin/bhyvectl",
+  "--checkpoint=/var/tmp/vmvx-20261201T0540Z/ckpt/boot",
+  "--vm=vmvx_20261201T0540Z_XB_r01"
+ ],
+ "reference_accepted": {
+  "R4": "R4",
+  "R5": "R5"
+ },
+ "reference_refused": {
+  "R5_other_stamp": null,
+  "R4_core_0": null
+ }
+}

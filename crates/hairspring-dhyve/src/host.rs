@@ -1,4 +1,5 @@
 //! Where the pinned programs and the state directory are on this host, and the limits the run path works within.
+use crate::vmname::Stamp;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -10,9 +11,31 @@ pub const ENV_LIB: &str = "HAIRSPRING_DHYVE_LIB";
 pub const ENV_STATE: &str = "HAIRSPRING_DHYVE_STATE";
 pub const ENV_KERNEL: &str = "HAIRSPRING_DHYVE_KERNEL";
 pub const ENV_INITRD: &str = "HAIRSPRING_DHYVE_INITRD";
+pub const ENV_STAMP: &str = "HAIRSPRING_DHYVE_STAMP";
+pub const ENV_CORE: &str = "HAIRSPRING_DHYVE_CORE";
+pub const ENV_PIN_BHYVE: &str = "HAIRSPRING_DHYVE_PIN_BHYVE";
+pub const ENV_PIN_BHYVECTL: &str = "HAIRSPRING_DHYVE_PIN_BHYVECTL";
+pub const ENV_PIN_LIB: &str = "HAIRSPRING_DHYVE_PIN_LIB";
 
 /// The pinned absolute path of `env`, which clears the environment of the programs that run as root.
 pub const ENV_PROGRAM: &str = "/usr/bin/env";
+/// The pinned absolute paths of the other programs the backend itself names.
+pub const SUDO_PROGRAM: &str = "/usr/local/bin/sudo";
+pub const CPUSET_PROGRAM: &str = "/usr/bin/cpuset";
+pub const KLDSTAT_PROGRAM: &str = "/sbin/kldstat";
+/// The host cores a VM may be pinned to.
+pub const ALLOWED_CORES: [u32; 3] = [1, 2, 3];
+/// The core every VM is pinned to unless the settings say another.
+pub const DEFAULT_CORE: u32 = 1;
+
+/// SHA-256 pins for the programs and the library directory. A pin that is set is checked before the first spawn.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Pins {
+    pub bhyve: Option<String>,
+    pub bhyvectl: Option<String>,
+    /// SHA-256 of the manifest of the library directory: one `<sha256>  <name>` line per file, sorted by name.
+    pub lib_manifest: Option<String>,
+}
 
 /// Where everything this backend runs is.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +51,17 @@ pub struct HostConfig {
     pub state_dir: PathBuf,
     pub kernel: PathBuf,
     pub initrd: PathBuf,
+    /// `kldstat`, which says whether the `vmm` module is loaded.
+    pub kldstat: PathBuf,
+    pub cpuset: PathBuf,
+    /// The host core every VM is pinned to; one of [`ALLOWED_CORES`].
+    pub core: u32,
+    /// The stamp of the session, when the settings give one. Run numbers then come from `r01` under it; with none, a
+    /// stamp is taken from the counter for each prepare.
+    pub session_stamp: Option<Stamp>,
+    pub pins: Pins,
+    /// Refuse a `bhyve` or `bhyvectl` that is a symbolic link.
+    pub require_regular_files: bool,
 }
 
 /// A required setting that is missing.
@@ -36,13 +70,41 @@ pub struct MissingSetting(pub &'static str);
 
 impl std::fmt::Display for MissingSetting {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} is not set", self.0)
+        write!(f, "{} is not set or is not usable", self.0)
     }
 }
 
 impl std::error::Error for MissingSetting {}
 
 impl HostConfig {
+    /// Settings with every optional part at its default: the pinned programs, core 1, no stamp, no pins, and symbolic
+    /// links refused.
+    pub fn new(
+        bhyve: PathBuf,
+        bhyvectl: PathBuf,
+        lib_dir: PathBuf,
+        state_dir: PathBuf,
+        kernel: PathBuf,
+        initrd: PathBuf,
+    ) -> HostConfig {
+        HostConfig {
+            sudo: PathBuf::from(SUDO_PROGRAM),
+            env: PathBuf::from(ENV_PROGRAM),
+            bhyve,
+            bhyvectl,
+            lib_dir,
+            state_dir,
+            kernel,
+            initrd,
+            kldstat: PathBuf::from(KLDSTAT_PROGRAM),
+            cpuset: PathBuf::from(CPUSET_PROGRAM),
+            core: DEFAULT_CORE,
+            session_stamp: None,
+            pins: Pins::default(),
+            require_regular_files: true,
+        }
+    }
+
     /// Reads the settings from the environment. Every one but `sudo` has no default.
     pub fn from_env() -> Result<HostConfig, MissingSetting> {
         Self::from_lookup(|name| std::env::var_os(name).filter(|v| !v.is_empty()))
@@ -52,18 +114,44 @@ impl HostConfig {
         lookup: F,
     ) -> Result<HostConfig, MissingSetting> {
         let need = |name: &'static str| lookup(name).map(PathBuf::from).ok_or(MissingSetting(name));
-        Ok(HostConfig {
-            sudo: lookup(ENV_SUDO)
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("/usr/local/bin/sudo")),
-            env: PathBuf::from(ENV_PROGRAM),
-            bhyve: need(ENV_BHYVE)?,
-            bhyvectl: need(ENV_BHYVECTL)?,
-            lib_dir: need(ENV_LIB)?,
-            state_dir: need(ENV_STATE)?,
-            kernel: need(ENV_KERNEL)?,
-            initrd: need(ENV_INITRD)?,
-        })
+        let text = |name: &'static str| lookup(name).and_then(|v| v.into_string().ok());
+        let mut host = HostConfig::new(
+            need(ENV_BHYVE)?,
+            need(ENV_BHYVECTL)?,
+            need(ENV_LIB)?,
+            need(ENV_STATE)?,
+            need(ENV_KERNEL)?,
+            need(ENV_INITRD)?,
+        );
+        // The program that gives root is pinned. Only a build with the stand-in VM programs may be told another.
+        if cfg!(feature = "fake-vmm") {
+            if let Some(sudo) = lookup(ENV_SUDO) {
+                host.sudo = PathBuf::from(sudo);
+            }
+            if let Some(kldstat) = lookup("HAIRSPRING_DHYVE_KLDSTAT") {
+                host.kldstat = PathBuf::from(kldstat);
+            }
+            if let Some(cpuset) = lookup("HAIRSPRING_DHYVE_CPUSET") {
+                host.cpuset = PathBuf::from(cpuset);
+            }
+            host.require_regular_files = false;
+        }
+        host.session_stamp = text(ENV_STAMP)
+            .map(|t| Stamp::parse(&t).map_err(|_| MissingSetting(ENV_STAMP)))
+            .transpose()?;
+        if let Some(core) = text(ENV_CORE) {
+            host.core = core
+                .parse()
+                .ok()
+                .filter(|c| ALLOWED_CORES.contains(c))
+                .ok_or(MissingSetting(ENV_CORE))?;
+        }
+        host.pins = Pins {
+            bhyve: text(ENV_PIN_BHYVE),
+            bhyvectl: text(ENV_PIN_BHYVECTL),
+            lib_manifest: text(ENV_PIN_LIB),
+        };
+        Ok(host)
     }
 }
 
@@ -176,7 +264,36 @@ mod tests {
     }
 
     #[test]
-    fn sudo_can_be_set() {
+    fn the_optional_settings_are_read_and_checked() {
+        let mut pairs = ALL.to_vec();
+        pairs.extend([
+            (ENV_STAMP, "20261201T0540Z"),
+            (ENV_CORE, "2"),
+            (ENV_PIN_BHYVE, "aa"),
+            (ENV_PIN_LIB, "cc"),
+        ]);
+        let host = HostConfig::from_lookup(lookup_of(&pairs)).unwrap();
+        assert_eq!(host.session_stamp.unwrap().as_str(), "20261201T0540Z");
+        assert_eq!(host.core, 2);
+        assert_eq!(host.pins.bhyve.as_deref(), Some("aa"));
+        assert_eq!(host.pins.bhyvectl, None);
+        for (name, bad) in [(ENV_STAMP, "nope"), (ENV_CORE, "0"), (ENV_CORE, "x")] {
+            let mut pairs = ALL.to_vec();
+            pairs.push((name, bad));
+            assert_eq!(
+                HostConfig::from_lookup(lookup_of(&pairs)).unwrap_err(),
+                MissingSetting(name),
+                "{name}={bad}"
+            );
+        }
+        let defaults = HostConfig::from_lookup(lookup_of(&ALL)).unwrap();
+        assert_eq!((defaults.core, defaults.session_stamp), (1, None));
+        assert_eq!(defaults.cpuset, PathBuf::from("/usr/bin/cpuset"));
+    }
+
+    #[cfg(feature = "fake-vmm")]
+    #[test]
+    fn sudo_can_be_set_only_in_a_build_with_the_stand_in_programs() {
         let mut pairs = ALL.to_vec();
         pairs.push((ENV_SUDO, "/opt/sudo"));
         let host = HostConfig::from_lookup(lookup_of(&pairs)).unwrap();

@@ -18,7 +18,9 @@ pub struct Rig {
 }
 
 /// A name the first prepare of a fresh rig gets.
-pub const FIRST_NAME: &str = "vmvx_00000000T0001Z_XB_r00";
+pub const FIRST_NAME: &str = "vmvx_00000000T0001Z_XB_r01";
+/// The stamp the first prepare of a fresh rig gets.
+pub const FIRST_STAMP: &str = "00000000T0001Z";
 
 pub fn tiny_bounds() -> Bounds {
     Bounds {
@@ -47,7 +49,7 @@ impl Rig {
         for dir in [&fake, &lib, &root.join("img")] {
             std::fs::create_dir_all(dir).unwrap();
         }
-        for program in ["bhyve", "bhyvectl", "sudo"] {
+        for program in ["bhyve", "bhyvectl", "sudo", "kldstat", "cpuset"] {
             std::os::unix::fs::symlink(FAKE, fake.join(program)).unwrap();
         }
         std::fs::write(fake.join("lib"), lib.display().to_string()).unwrap();
@@ -55,13 +57,18 @@ impl Rig {
         std::fs::write(root.join("img/initrd"), b"initrd").unwrap();
         let host = HostConfig {
             sudo: fake.join("sudo"),
-            env: PathBuf::from(hairspring_dhyve::host::ENV_PROGRAM),
-            bhyve: fake.join("bhyve"),
-            bhyvectl: fake.join("bhyvectl"),
-            lib_dir: lib,
-            state_dir: root.join("st"),
-            kernel: root.join("img/kernel"),
-            initrd: root.join("img/initrd"),
+            kldstat: fake.join("kldstat"),
+            cpuset: fake.join("cpuset"),
+            // The stand-ins are links to one program.
+            require_regular_files: false,
+            ..HostConfig::new(
+                fake.join("bhyve"),
+                fake.join("bhyvectl"),
+                lib,
+                root.join("st"),
+                root.join("img/kernel"),
+                root.join("img/initrd"),
+            )
         };
         Rig { root, fake, host }
     }
@@ -95,6 +102,10 @@ impl Rig {
 
     pub fn expect_lib(&self, value: &str) {
         std::fs::write(self.fake.join("lib"), value).unwrap();
+    }
+
+    pub fn sudo_mode(&self, mode: &str) {
+        self.put("sudo-mode", &[mode]);
     }
 
     pub fn seed_vm(&self, name: &str) {

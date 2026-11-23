@@ -53,11 +53,11 @@ fn infra_of(run: &TrialRun) -> Option<InfraError> {
     if !c.connected {
         return Some(InfraError::bare(InfraKind::NoConnect));
     }
-    if c.stopped > 0 {
-        return Some(InfraError::bare(InfraKind::BranchLimit));
-    }
     if c.ready == 0 {
         return Some(InfraError::bare(InfraKind::NoReady));
+    }
+    if c.stopped > 0 {
+        return Some(InfraError::bare(InfraKind::StoppedAgain));
     }
     if let Some(ControlError::Lost(why)) = &c.error {
         return Some(InfraError::new(InfraKind::ControlLost, why.clone()));
@@ -75,8 +75,13 @@ fn infra_of(run: &TrialRun) -> Option<InfraError> {
     if matches!(run.ended, Ended::Breach(_)) {
         return Some(InfraError::bare(InfraKind::LogBound));
     }
-    if run.ended == Ended::Cap && run.stopped_at_limit_in_log {
-        return Some(InfraError::bare(InfraKind::BranchLimit));
+    // The VM ended without the guest's exit report and its log shows a control stop after the connect line: it stopped
+    // again after it was resumed. Whether that was the branch limit is the likely case and is not shown.
+    if let Some(stop) = run.stop_after_resume {
+        return Some(InfraError::new(
+            InfraKind::StoppedAgain,
+            format!("stop kind {}", stop.kind),
+        ));
     }
     match &run.serial {
         Some(s) if !s.lines.is_empty() => None,

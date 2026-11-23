@@ -207,14 +207,22 @@ fn a_stale_resume_line_is_not_a_resume_taken() {
         None,
         false,
     );
-    assert!(matches!(r.resume, ResumeResult::Unseen(ref t) if t.contains("stale")));
+    assert_eq!(
+        r.resume,
+        ResumeResult::Unseen("the VM refused the command".to_string())
+    );
+    assert!(r.first_line.as_deref().unwrap().contains("stale"));
     assert_eq!(r.close, Some(CloseWhy::Excluded));
 }
 
 #[test]
 fn another_line_first_is_not_a_resume_taken() {
     let r = restore_report(&[stop_line(), "VMEXIT reason=HLT".into()], None, false);
-    assert!(matches!(r.resume, ResumeResult::Unseen(ref t) if t.contains("HLT")));
+    assert_eq!(
+        r.resume,
+        ResumeResult::Unseen("another line came first".to_string())
+    );
+    assert!(r.first_line.as_deref().unwrap().contains("HLT"));
     assert_eq!(r.close, Some(CloseWhy::Other));
 }
 
@@ -338,4 +346,82 @@ fn a_socket_that_cannot_be_bound_is_an_error_at_start() {
     let mut spec = env.spec(Mode::Make, None);
     spec.sock_path = env.dir.join("missing").join("c.sock");
     assert!(Director::start(spec, no_callback()).is_err());
+}
+
+#[test]
+fn a_replayed_stop_that_differs_from_the_checkpoint_record_is_answered_with_nothing() {
+    for differing in [
+        Message {
+            stop_seq: 4,
+            ..ready()
+        },
+        Message {
+            branch_count: 1001,
+            ..ready()
+        },
+        Message {
+            vtime_ns: 6,
+            ..ready()
+        },
+    ] {
+        let env = Env::new();
+        env.write_log(&[stop_line()]);
+        let director = Director::start(env.spec(Mode::Restore, None), no_callback()).unwrap();
+        let mut peer = connect(&env);
+        send(&mut peer, &differing);
+        assert!(answer(&mut peer).is_none(), "no RESUME is sent");
+        let report = director.finish(&env.sock());
+        assert_eq!(report.resume_sent, 0);
+        assert!(
+            matches!(report.resume, ResumeResult::Unseen(ref t) if t.contains("differs from the checkpoint record"))
+        );
+    }
+}
+
+#[test]
+fn the_progress_is_pending_while_it_runs_then_done_or_failed() {
+    let env = Env::new();
+    env.write_log(&[stop_line()]);
+    let director = Director::start(env.spec(Mode::Make, None), no_callback()).unwrap();
+    assert_eq!(director.progress(), Progress::Pending);
+    let mut peer = connect(&env);
+    send(&mut peer, &ready());
+    let _ = answer(&mut peer);
+    while !director.is_finished() {
+        thread::sleep(Duration::from_millis(5));
+    }
+    thread::sleep(Duration::from_millis(20));
+    assert_eq!(director.progress(), Progress::Done);
+    director.finish(&env.sock());
+    let env = Env::new();
+    let director = Director::start(env.spec(Mode::Make, None), no_callback()).unwrap();
+    director.cancel();
+    while !director.is_finished() {
+        thread::sleep(Duration::from_millis(5));
+    }
+    thread::sleep(Duration::from_millis(20));
+    assert_eq!(director.progress(), Progress::Failed);
+    director.finish(&env.sock());
+}
+
+#[test]
+fn a_line_with_hostile_text_is_kept_as_printable_ascii_in_the_private_field_only() {
+    let env = Env::new();
+    let mut raw = format!("[det_counter=1] {}\n", stop_line()).into_bytes();
+    raw.extend_from_slice(b"[det_counter=2] deterministic \x1b[31m \xff\xfe\n");
+    std::fs::write(env.log(), raw).unwrap();
+    let director = Director::start(env.spec(Mode::Restore, None), no_callback()).unwrap();
+    let mut peer = connect(&env);
+    send(&mut peer, &ready());
+    let _ = answer(&mut peer);
+    let report = director.finish(&env.sock());
+    let line = report.first_line.unwrap();
+    assert!(line.bytes().all(|b| (0x20..0x7f).contains(&b)), "{line:?}");
+    let ResumeResult::Unseen(text) = report.resume else {
+        panic!("not unseen");
+    };
+    assert!(
+        !text.contains("deterministic") && !text.contains('\u{1b}'),
+        "{text}"
+    );
 }

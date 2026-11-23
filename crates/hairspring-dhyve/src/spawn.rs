@@ -7,7 +7,7 @@ use crate::commands::{Approved, Commands};
 use crate::error::{InfraError, InfraKind};
 use crate::host::{HostConfig, Timings};
 use crate::logs::parse_free_kib;
-use crate::vmname::VmName;
+use crate::vmname::{Stamp, VmName};
 use std::fs::File;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -20,7 +20,7 @@ pub struct Said {
     pub stdout: String,
 }
 
-/// Runs the allowed commands.
+/// Runs the allowed commands for one session stamp.
 #[derive(Debug, Clone)]
 pub struct Spawner {
     commands: Commands,
@@ -41,9 +41,9 @@ fn infra_of(e: BoundedError) -> InfraError {
 }
 
 impl Spawner {
-    pub fn new(host: &HostConfig, timings: Timings) -> Spawner {
+    pub fn new(host: &HostConfig, timings: Timings, stamp: &Stamp) -> Spawner {
         Spawner {
-            commands: Commands::new(host),
+            commands: Commands::new(host, stamp),
             timings,
         }
     }
@@ -72,16 +72,16 @@ impl Spawner {
         })
     }
 
-    /// Destroys the VM named `name`. Its exit status is returned and not judged: destroying a VM that is not there fails,
-    /// which is the usual case before a start.
+    /// Destroys the VM named `name`. Its exit status is returned: destroying a VM that is not there fails, which is the
+    /// usual case before a start, and a failure while the VM is alive is judged by the caller.
     pub fn destroy(&self, name: &VmName) -> Result<Option<i32>, InfraError> {
         let argv = self.commands.destroy(name);
         Ok(self.run_helper(&argv, Approved::Destroy)?.code)
     }
 
-    /// Checkpoints the running VM `name` into `dir`.
-    pub fn checkpoint(&self, dir: &Path, name: &VmName) -> Result<(), InfraError> {
-        let argv = self.commands.checkpoint(dir, name);
+    /// Checkpoints the running VM `name` into this session's checkpoint directory.
+    pub fn checkpoint(&self, name: &VmName) -> Result<(), InfraError> {
+        let argv = self.commands.checkpoint(name);
         let said = self.run_helper(&argv, Approved::Checkpoint)?;
         match said.code {
             Some(0) => Ok(()),
@@ -94,6 +94,27 @@ impl Spawner {
                 "the checkpoint command was ended by a signal",
             )),
         }
+    }
+
+    /// Whether the `vmm` module is loaded, and what it is: its line of the module list. A VM start can load a module on
+    /// its own when none is loaded, so this runs under the host lock before every start, and a start is refused unless
+    /// the answer is loaded.
+    pub fn vmm_identity(&self) -> Result<String, InfraError> {
+        let loaded = self.run_helper(&self.commands.kldstat(), Approved::Kldstat)?;
+        if loaded.code != Some(0) {
+            return Err(InfraError::new(
+                InfraKind::VmmNotLoaded,
+                format!("the module list answered with status {:?}", loaded.code),
+            ));
+        }
+        let said = self.run_helper(&self.commands.kldstat_identity(), Approved::KldstatIdentity)?;
+        said.stdout
+            .lines()
+            .rev()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+            .ok_or_else(|| InfraError::new(InfraKind::VmmNotLoaded, "the module list was empty"))
     }
 
     /// The free space under `dir`, in KiB.
@@ -128,23 +149,28 @@ impl Spawner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vmname::Stamp;
 
     fn host() -> HostConfig {
         HostConfig {
             sudo: "/nonexistent/sudo".into(),
-            env: "/usr/bin/env".into(),
-            bhyve: "/nonexistent/bhyve".into(),
-            bhyvectl: "/nonexistent/bhyvectl".into(),
-            lib_dir: "/nonexistent/lib".into(),
-            state_dir: std::env::temp_dir(),
-            kernel: "/nonexistent/k".into(),
-            initrd: "/nonexistent/i".into(),
+            kldstat: "/nonexistent/kldstat".into(),
+            ..HostConfig::new(
+                "/nonexistent/bhyve".into(),
+                "/nonexistent/bhyvectl".into(),
+                "/nonexistent/lib".into(),
+                std::env::temp_dir(),
+                "/nonexistent/k".into(),
+                "/nonexistent/i".into(),
+            )
         }
     }
 
+    fn stamp() -> Stamp {
+        Stamp::from_counter(1)
+    }
+
     fn spawner() -> Spawner {
-        Spawner::new(&host(), Timings::fast())
+        Spawner::new(&host(), Timings::fast(), &stamp())
     }
 
     #[test]
@@ -158,7 +184,7 @@ mod tests {
     #[test]
     fn a_command_that_is_not_the_one_asked_for_is_refused() {
         let s = spawner();
-        let name = VmName::new(&Stamp::from_counter(1), 0).unwrap();
+        let name = VmName::new(&stamp(), 1).unwrap();
         let destroy = s.commands.destroy(&name);
         let err = s.run_helper(&destroy, Approved::Checkpoint).unwrap_err();
         assert_eq!(err.kind, InfraKind::Refused);
@@ -176,8 +202,10 @@ mod tests {
 
     #[test]
     fn a_program_that_cannot_be_started_is_a_start_failure() {
-        let name = VmName::new(&Stamp::from_counter(1), 0).unwrap();
+        let name = VmName::new(&stamp(), 1).unwrap();
         let err = spawner().destroy(&name).unwrap_err();
+        assert_eq!(err.kind, InfraKind::StartFailed);
+        let err = spawner().vmm_identity().unwrap_err();
         assert_eq!(err.kind, InfraKind::StartFailed);
     }
 

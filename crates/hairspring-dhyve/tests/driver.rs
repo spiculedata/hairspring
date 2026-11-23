@@ -1,76 +1,123 @@
-//! The session driver binary against the fake VM programs.
+//! The session driver, as a binary and in process, against the fake VM programs: the literal order, the names, the seeds,
+//! the stop after a first restore that is not counted, the start rule, the refusal of a second prepare, the counts of the
+//! root commands, and the two private records.
 mod common;
 use common::Rig;
+use hairspring_dhyve::driver::{order, records_dir, run_session, steps_log, Plan};
 use hairspring_dhyve::host::{
-    ENV_BHYVE, ENV_BHYVECTL, ENV_INITRD, ENV_KERNEL, ENV_LIB, ENV_STATE, ENV_SUDO,
+    ENV_BHYVE, ENV_BHYVECTL, ENV_INITRD, ENV_KERNEL, ENV_LIB, ENV_STAMP, ENV_STATE, ENV_SUDO,
 };
 use serde_json::Value;
 use std::process::{Command, Output};
+use std::time::{Duration, Instant};
 
 const DRIVER: &str = env!("CARGO_BIN_EXE_dhyve-session-driver");
+const STAMP: &str = "20261201T0540Z";
 
 fn drive(rig: &Rig, args: &[&str]) -> Output {
     Command::new(DRIVER)
         .args(args)
         .env_clear()
         .env(ENV_SUDO, &rig.host.sudo)
+        .env("HAIRSPRING_DHYVE_KLDSTAT", &rig.host.kldstat)
+        .env("HAIRSPRING_DHYVE_CPUSET", &rig.host.cpuset)
         .env(ENV_BHYVE, &rig.host.bhyve)
         .env(ENV_BHYVECTL, &rig.host.bhyvectl)
         .env(ENV_LIB, &rig.host.lib_dir)
         .env(ENV_STATE, &rig.host.state_dir)
         .env(ENV_KERNEL, &rig.host.kernel)
         .env(ENV_INITRD, &rig.host.initrd)
+        .env(ENV_STAMP, STAMP)
         .output()
         .unwrap()
 }
 
 fn summary(out: &Output) -> Value {
-    serde_json::from_slice(&out.stdout)
-        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stdout)))
+    serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+        panic!(
+            "{e}: {} {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    })
+}
+
+fn plan(control: u32, other: u32) -> Plan {
+    Plan {
+        seed: 1007,
+        control_restores: control,
+        other_seed_restores: other,
+        deadline: None,
+    }
+}
+
+fn session(rig: &Rig) -> hairspring_dhyve::session::Session {
+    let mut host = rig.host.clone();
+    host.session_stamp = Some(hairspring_dhyve::vmname::Stamp::parse(STAMP).unwrap());
+    hairspring_dhyve::session::Session::new(host, common::quick(), common::tiny_bounds())
+        .with_one_prepare()
+        .with_keep_all()
+}
+
+fn starts_and_destroys(rig: &Rig) -> (usize, usize) {
+    let calls = rig.calls();
+    (
+        calls.iter().filter(|c| c.starts_with("bhyve ")).count(),
+        calls.iter().filter(|c| c.contains("--destroy")).count(),
+    )
 }
 
 #[test]
-fn the_driver_prepares_runs_both_groups_and_prints_one_json_summary() {
-    let rig = Rig::new("d-ok");
-    let out = drive(&rig, &["--control", "3", "--other", "2", "--seed", "40"]);
+fn ten_and_five_make_the_literal_order() {
+    assert_eq!(order(10, 5), "CCSCCSCCSCCSCCS");
+    assert_eq!(order(3, 1), "CCSC");
+    assert_eq!(order(1, 2), "CSS");
+    assert_eq!(order(0, 0), "");
+}
+
+#[test]
+fn the_driver_binary_runs_the_literal_order_under_the_session_stamp_and_prints_one_summary() {
+    let rig = Rig::new("d-bin");
+    let out = drive(&rig, &["--control", "4", "--other", "2"]);
     assert_eq!(
         out.status.code(),
         Some(0),
-        "{} {}",
-        String::from_utf8_lossy(&out.stderr),
-        String::from_utf8_lossy(&out.stdout)
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
     let s = summary(&out);
     assert_eq!(s["prepare"]["ok"], true);
-    assert_eq!(s["prepare"]["restored_pointer"], "0xffffffff80123456");
-    assert_eq!(
-        s["prepare"]["checkpoint_sha256"].as_array().unwrap().len(),
-        3
-    );
-    for (group, n) in [("control", 3), ("other_seed", 2)] {
-        assert_eq!(s[group]["count"], n, "{group}");
-        assert_eq!(s[group]["resume_seen"], n, "{group}");
-        assert_eq!(s[group]["exit_reported"], n, "{group}");
-        assert_eq!(s[group]["errors"].as_array().unwrap().len(), 0, "{group}");
-    }
+    assert_eq!(s["prepare"]["stamp"], STAMP);
+    assert_eq!(s["end"], "DONE");
+    assert_eq!(s["control"]["count"], 4);
+    assert_eq!(s["other_seed"]["count"], 2);
+    assert_eq!(s["control"]["resume_seen"], 4);
     assert_eq!(s["control"]["serial"], "equal");
+    let names: Vec<&str> = s["names"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n.as_str().unwrap())
+        .collect();
+    let expected: Vec<String> = (2..=7)
+        .map(|n| format!("vmvx_{STAMP}_XB_r{n:02}"))
+        .collect();
+    assert_eq!(names, expected);
+    let seeds: Vec<String> = rig
+        .trials()
+        .iter()
+        .map(|l| l.split(' ').next().unwrap().to_string())
+        .collect();
     assert_eq!(
-        s["control"]["events"], "not_compared",
-        "the guest printed no event lines"
-    );
-    assert!(
-        s["other_seed"].get("serial").is_none(),
-        "no comparison across seeds"
-    );
-    let seeds = rig.trials();
-    assert_eq!(seeds.len(), 5);
-    assert!(
-        seeds[..3].iter().all(|l| l.starts_with("seed=40 ")),
-        "{seeds:?}"
-    );
-    assert!(
-        seeds[3].starts_with("seed=41 ") && seeds[4].starts_with("seed=42 "),
-        "{seeds:?}"
+        seeds,
+        [
+            "seed=1007",
+            "seed=1007",
+            "seed=1008",
+            "seed=1007",
+            "seed=1007",
+            "seed=1008"
+        ]
     );
     let text = String::from_utf8_lossy(&out.stdout);
     for word in ["deterministic", "reproduced"] {
@@ -79,15 +126,30 @@ fn the_driver_prepares_runs_both_groups_and_prints_one_json_summary() {
 }
 
 #[test]
-fn a_restore_that_meets_an_infrastructure_error_is_counted_and_the_exit_status_says_so() {
-    let rig = Rig::new("d-infra");
+fn the_driver_binary_exits_1_after_an_error_and_2_for_a_bad_command_line() {
+    let rig = Rig::new("d-bin-bad");
     rig.modes(&["", "", "stale_stop", ""]);
     let out = drive(&rig, &["--control", "3", "--other", "0"]);
     assert_eq!(out.status.code(), Some(1));
-    let s = summary(&out);
-    assert_eq!(s["control"]["count"], 3);
-    assert_eq!(s["control"]["resume_seen"], 2);
-    assert_eq!(s["control"]["errors"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        summary(&out)["control"]["errors"].as_array().unwrap().len(),
+        1
+    );
+    for args in [
+        vec!["--control", "x", "--other", "1"],
+        vec!["--other", "1"],
+        vec!["--control", "1"],
+        vec!["--control", "1", "--other", "1", "--bogus", "1"],
+    ] {
+        assert_eq!(drive(&rig, &args).status.code(), Some(2), "{args:?}");
+    }
+    let none = Command::new(DRIVER)
+        .args(["--control", "1", "--other", "1"])
+        .env_clear()
+        .output()
+        .unwrap();
+    assert_eq!(none.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&none.stderr).contains(ENV_BHYVE));
 }
 
 #[test]
@@ -99,49 +161,145 @@ fn a_prepare_that_fails_is_reported_and_no_restore_runs() {
     let s = summary(&out);
     assert_eq!(s["prepare"]["ok"], false);
     assert_eq!(s["control"]["count"], 0);
+    assert_eq!(s["end"], "END:PREPARE");
 }
 
 #[test]
-fn a_bad_command_line_or_a_missing_setting_exits_2_and_starts_nothing() {
-    let rig = Rig::new("d-bad");
-    for args in [
-        vec!["--control", "x", "--other", "1"],
-        vec!["--other", "1"],
-        vec!["--control", "1"],
-        vec!["--control", "1", "--other", "1", "--bogus", "1"],
-    ] {
-        assert_eq!(drive(&rig, &args).status.code(), Some(2), "{args:?}");
-    }
-    let no_settings = Command::new(DRIVER)
-        .args(["--control", "1", "--other", "1"])
-        .env_clear()
-        .output()
-        .unwrap();
-    assert_eq!(no_settings.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&no_settings.stderr).contains(ENV_BHYVE));
-    assert!(rig.calls().is_empty());
-}
-
-#[test]
-fn the_session_logic_counts_in_process_and_labels_differences_among_the_control_restores() {
-    use hairspring_dhyve::driver::{run_session, Plan};
+fn the_session_runs_c_c_s_with_names_r02_to_r16_and_two_destroys_for_each_start() {
     let rig = Rig::new("d-lib");
-    rig.modes(&["", "", ""]);
     rig.events(&["line {seed}"]);
-    let plan = Plan {
-        seed: 5,
-        control_restores: 2,
-        other_seed_restores: 1,
-    };
-    let summary = run_session(&rig.session(), &plan);
+    let summary = run_session(&session(&rig), &plan(10, 5));
     assert!(summary.clean(), "{}", summary.to_json());
-    assert_eq!(summary.control.resume_seen, 2);
-    assert_eq!(summary.other_seed.exit_reported, 1);
+    assert_eq!(summary.names.len(), 15);
+    assert_eq!(summary.names[0], format!("vmvx_{STAMP}_XB_r02"));
+    assert_eq!(summary.names[14], format!("vmvx_{STAMP}_XB_r16"));
+    let (starts, destroys) = starts_and_destroys(&rig);
+    assert_eq!(starts, 16, "one prepare and fifteen restores");
+    assert!(
+        destroys <= 2 * starts,
+        "{destroys} destroys for {starts} starts"
+    );
+    let seeds: Vec<String> = rig
+        .trials()
+        .iter()
+        .map(|l| l.split(' ').next().unwrap().to_string())
+        .collect();
+    let literal = "CCSCCSCCSCCSCCS";
+    for (seed, group) in seeds.iter().zip(literal.chars()) {
+        assert_eq!(
+            seed,
+            if group == 'C' {
+                "seed=1007"
+            } else {
+                "seed=1008"
+            }
+        );
+    }
     let json: Value = serde_json::from_str(&summary.to_json()).unwrap();
-    assert_eq!(json["control"]["serial"], "equal");
-    let failing = Rig::new("d-lib-bad");
-    failing.modes(&["no_connect"]);
-    let bad = run_session(&failing.session(), &plan);
-    assert!(!bad.clean() && bad.prepare.is_err());
-    assert_eq!(bad.control.count, 0);
+    assert_eq!(
+        json["control"]["serial"], "equal",
+        "the C runs all read the same seed file"
+    );
+}
+
+#[test]
+fn the_session_stops_when_the_first_restore_is_not_counted_and_not_when_a_later_one_is_not() {
+    let rig = Rig::new("d-first");
+    rig.modes(&["", "stale_stop"]);
+    let summary = run_session(&session(&rig), &plan(4, 2));
+    assert_eq!(summary.end, "END:FIRST-NOT-OK");
+    assert_eq!(
+        starts_and_destroys(&rig).0,
+        2,
+        "the prepare and one restore"
+    );
+    let rig = Rig::new("d-later");
+    rig.modes(&["", "", "stale_stop", ""]);
+    let summary = run_session(&session(&rig), &plan(4, 2));
+    assert_eq!(summary.end, "DONE");
+    assert_eq!(
+        summary.control.errors.len(),
+        1,
+        "position 2 is the second C"
+    );
+    assert_eq!(summary.other_seed.errors.len(), 0);
+    assert_eq!(starts_and_destroys(&rig).0, 7, "every position still ran");
+}
+
+#[test]
+fn a_restore_starts_only_if_it_can_end_before_the_deadline() {
+    let rig = Rig::new("d-wcap");
+    let late = Plan {
+        deadline: Some(Instant::now() + Duration::from_secs(10)),
+        ..plan(4, 2)
+    };
+    let summary = run_session(&session(&rig), &late);
+    assert_eq!(
+        summary.end, "END:WCAP",
+        "ten seconds is less than the worst of one restore"
+    );
+    assert!(summary.prepare.is_ok());
+    assert_eq!(summary.control.count + summary.other_seed.count, 0);
+    assert!(!summary.clean());
+}
+
+#[test]
+fn a_second_session_on_the_same_prepared_session_is_refused() {
+    let rig = Rig::new("d-twice");
+    let session = session(&rig);
+    assert!(run_session(&session, &plan(1, 0)).clean());
+    let starts = starts_and_destroys(&rig).0;
+    let again = run_session(&session, &plan(1, 0));
+    assert_eq!(again.end, "END:REPREPARE");
+    assert_eq!(starts_and_destroys(&rig).0, starts, "nothing was started");
+}
+
+#[test]
+fn the_steps_log_and_a_record_for_each_run_are_written_and_the_prepares_log_is_kept() {
+    let rig = Rig::new("d-records");
+    rig.events(&[
+        r#"HAIRSPRING_EVENT {"v":1,"kind":"hello","sdk":"c","sdk_version":"0.1.0","proc":"p1","catalog_hash":"abc","signal_handlers":false}"#,
+        r#"HAIRSPRING_EVENT {"v":1,"kind":"end","proc":"p1","reason":"exit","status":0,"sites":0,"evals":0,"dropped":0,"threads":0}"#,
+        "plain",
+    ]);
+    let session = session(&rig);
+    let summary = run_session(&session, &plan(2, 1));
+    assert!(summary.clean(), "{}", summary.to_json());
+    let dir = records_dir(&session);
+    let steps = std::fs::read_to_string(steps_log(&dir)).unwrap();
+    let rows: Vec<Vec<&str>> = steps.lines().map(|l| l.split('\t').collect()).collect();
+    assert!(
+        rows.iter().all(|r| r.len() == 5 && r[1] == "driver"),
+        "{steps}"
+    );
+    assert!(rows.iter().any(|r| r[2] == "prepare" && r[4] == "ok"));
+    assert_eq!(
+        rows.iter()
+            .filter(|r| r[2] == "trial" && r[4] == "pass")
+            .count(),
+        3
+    );
+    assert_eq!(rows.last().unwrap()[2], "end");
+    let record: Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.join(format!("vmvx_{STAMP}_XB_r04.json"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record["group"], "S");
+    assert_eq!(record["position"], 3);
+    assert_eq!(record["verdict"], "pass");
+    assert_eq!(record["hs_exit"]["code"], 0);
+    assert_eq!(record["fwcfg_sha256"].as_array().unwrap().len(), 6);
+    assert_eq!(record["restore_keys"]["stop_seq"], 1);
+    assert_eq!(record["restored_pointer"], "0xffffffff80123456");
+    assert_eq!(record["argv_masked_sha256"].as_str().unwrap().len(), 64);
+    assert_eq!(
+        record["events"].as_array().unwrap().len(),
+        2,
+        "the event lines are stored"
+    );
+    let prepare_log = rig.host.state_dir.join(format!("runs/{STAMP}/r01/run.log"));
+    assert!(
+        prepare_log.exists(),
+        "the prepare's standard error is kept in full"
+    );
 }

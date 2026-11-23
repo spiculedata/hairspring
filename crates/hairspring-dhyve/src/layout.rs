@@ -16,6 +16,8 @@ const CHECKPOINT_FILES: [&str; 3] = ["boot", "boot.kern", "boot.meta"];
 #[derive(Debug, Clone)]
 pub struct StateLayout {
     root: PathBuf,
+    /// The session has one stamp and one prepare, so its checkpoint is `<state>/ckpt/boot*`.
+    one_checkpoint: bool,
 }
 
 /// The files of one VM run.
@@ -33,9 +35,10 @@ pub struct RunPaths {
 }
 
 impl StateLayout {
-    pub fn new(root: &Path) -> StateLayout {
+    pub fn new(root: &Path, one_checkpoint: bool) -> StateLayout {
         StateLayout {
             root: root.to_path_buf(),
+            one_checkpoint,
         }
     }
 
@@ -44,7 +47,11 @@ impl StateLayout {
     }
 
     pub fn checkpoint_dir(&self, stamp: &Stamp) -> PathBuf {
-        self.root.join("ckpt").join(stamp.as_str())
+        if self.one_checkpoint {
+            self.root.join("ckpt")
+        } else {
+            self.root.join("ckpt").join(stamp.as_str())
+        }
     }
 
     /// The three files a checkpoint is.
@@ -83,7 +90,7 @@ mod tests {
 
     #[test]
     fn paths_are_under_the_state_directory_by_stamp_and_run() {
-        let layout = StateLayout::new(Path::new("/s"));
+        let layout = StateLayout::new(Path::new("/s"), false);
         let stamp = Stamp::parse("20261123T1530Z").unwrap();
         let name = VmName::new(&stamp, 4).unwrap();
         let run = layout.run_paths(&stamp, &name);
@@ -101,13 +108,24 @@ mod tests {
     }
 
     #[test]
+    fn a_session_with_one_stamp_keeps_its_one_checkpoint_in_the_ckpt_directory() {
+        let stamp = Stamp::parse("20261123T1530Z").unwrap();
+        let layout = StateLayout::new(Path::new("/s"), true);
+        assert_eq!(layout.checkpoint_dir(&stamp), Path::new("/s/ckpt"));
+        assert_eq!(
+            layout.checkpoint_files(&stamp)[0],
+            Path::new("/s/ckpt/boot")
+        );
+    }
+
+    #[test]
     fn a_socket_path_that_is_too_long_does_not_fit() {
         let stamp = Stamp::from_counter(1);
-        let name = VmName::new(&stamp, 0).unwrap();
-        let short = StateLayout::new(Path::new("/s")).run_paths(&stamp, &name);
+        let name = VmName::new(&stamp, 1).unwrap();
+        let short = StateLayout::new(Path::new("/s"), false).run_paths(&stamp, &name);
         assert!(short.socket_path_fits());
         let long_root = format!("/{}", "d".repeat(120));
-        let long = StateLayout::new(Path::new(&long_root)).run_paths(&stamp, &name);
+        let long = StateLayout::new(Path::new(&long_root), false).run_paths(&stamp, &name);
         assert!(!long.socket_path_fits());
     }
 }

@@ -24,11 +24,18 @@ pub struct Serial {
     pub truncated: bool,
 }
 
+/// A whole number written with digits only: no sign, no space, no exponent.
+fn whole(text: &str) -> Option<i32> {
+    (!text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| text.parse().ok())
+        .flatten()
+}
+
 fn parse_exit(line: &str) -> Option<GuestExit> {
     let rest = line.strip_prefix(EXIT_PREFIX)?;
     let mut parts = rest.split(' ');
-    let code: i32 = parts.next()?.parse().ok()?;
-    let signal: i32 = parts.next()?.parse().ok()?;
+    let code = whole(parts.next()?)?;
+    let signal = whole(parts.next()?)?;
     if parts.next().is_some() {
         return None;
     }
@@ -68,7 +75,7 @@ pub fn parse(bytes: &[u8], truncated: bool) -> Serial {
 
 /// Reads the log at `path`, at most `max_bytes`. `Ok(None)` when it is not there.
 pub fn read(path: &Path, max_bytes: u64) -> std::io::Result<Option<Serial>> {
-    let file = match std::fs::File::open(path) {
+    let file = match crate::safe_open::open_regular(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e),
@@ -115,6 +122,9 @@ mod tests {
             "HS_EXIT 0 0 0",
             " HS_EXIT 0 0",
             "HS_EXIT 99999999999 0",
+            "HS_EXIT +0 0",
+            "HS_EXIT 0 +9",
+            "HS_EXIT -1 0",
             "hs_exit 0 0",
         ] {
             assert_eq!(parse(bad.as_bytes(), false).exit, None, "{bad}");
@@ -126,6 +136,16 @@ mod tests {
                 .code,
             Some(0)
         );
+    }
+
+    #[test]
+    fn a_fifo_or_a_link_at_the_log_is_refused_and_is_not_read() {
+        let dir = std::env::temp_dir().join(format!("hs-dhyve-serial-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("real"), b"HS_EXIT 0 0\n").unwrap();
+        std::os::unix::fs::symlink(dir.join("real"), dir.join("uart.log")).unwrap();
+        assert!(read(&dir.join("uart.log"), 100).is_err());
     }
 
     #[test]

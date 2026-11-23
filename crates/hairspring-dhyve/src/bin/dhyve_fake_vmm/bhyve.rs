@@ -17,6 +17,9 @@ use std::time::{Duration, Instant};
 
 const WAIT_FOR_PEER: Duration = Duration::from_secs(20);
 const IDLE_STEP: Duration = Duration::from_millis(20);
+const IGNORE_DESTROY_FOR: Duration = Duration::from_secs(3);
+/// What a hostile guest makes the VM log: option-like words, an escape sequence and bytes that are not text.
+const HOSTILE: &[u8] = b"deterministic.seed=1 \x1b[31mred\x1b[0m \xff\xfe -o x=y";
 /// What the fake's guest writes to `run.log` in one go when told to overrun.
 const OVERRUN_BYTES: usize = 1 << 20;
 /// A stop the make run reports.
@@ -31,6 +34,10 @@ const MAKE_STOP: Message = Message {
     arg2: 0,
     vcpu_id: 0,
 };
+
+extern "C" {
+    fn mkfifo(path: *const std::ffi::c_char, mode: u32) -> i32;
+}
 
 struct Parsed {
     options: BTreeMap<String, String>,
@@ -100,7 +107,7 @@ impl Vm<'_> {
     }
 
     fn uart_line(&self, text: &str) {
-        if self.has("no_uart") {
+        if self.has("no_uart") || self.has("uart_fifo") {
             return;
         }
         if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -113,6 +120,22 @@ impl Vm<'_> {
     }
 
     fn touch_uart(&self) {
+        let uart = self.uart();
+        if self.has("uart_link") {
+            let real = uart.with_file_name("real-uart");
+            let _ = std::fs::write(&real, b"");
+            let _ = std::os::unix::fs::symlink(&real, &uart);
+            return;
+        }
+        if self.has("uart_fifo") {
+            if let Ok(c) = std::ffi::CString::new(uart.display().to_string()) {
+                // SAFETY: `c` is a valid NUL-terminated path for the duration of the call.
+                unsafe {
+                    mkfifo(c.as_ptr(), 0o600);
+                }
+            }
+            return;
+        }
         if !self.has("no_uart") {
             let _ = std::fs::OpenOptions::new()
                 .create(true)
@@ -121,7 +144,21 @@ impl Vm<'_> {
         }
     }
 
+    /// Writes a det line holding raw bytes, as the VM writes the guest's serial text into its log.
+    fn det_raw(&mut self, text: &[u8]) {
+        self.counter += 1;
+        let mut line = format!("[det_counter={}] ", self.counter).into_bytes();
+        line.extend_from_slice(text);
+        line.push(b'\n');
+        let _ = std::io::stderr().write_all(&line);
+    }
+
     fn idle_until_destroyed(&self) -> i32 {
+        if self.has("ignore_destroy") {
+            // A VM that does not go when it is destroyed. It ends by itself after a short while, so a test leaves nothing.
+            sleep(IGNORE_DESTROY_FOR);
+            return 0;
+        }
         while self.fake.exists(&self.p.name) {
             sleep(IDLE_STEP);
         }
@@ -278,6 +315,30 @@ fn restore(vm: &mut Vm, conn: &mut UnixStream) -> i32 {
             stop.vtime_ns, stop.branch_count
         ));
     }
+    if vm.has("stopped_first") {
+        send(
+            conn,
+            &Message {
+                kind: Kind::Stopped.code(),
+                stop_seq: 99,
+                ..Message::default()
+            },
+        );
+        return recv(conn).map_or(4, |_| 0);
+    }
+    if vm.has("ready_differs") {
+        send(
+            conn,
+            &Message {
+                stop_seq: stop.stop_seq + 5,
+                ..stop
+            },
+        );
+        return match recv(conn) {
+            Some(_) => 0,
+            None => vm.idle_until_destroyed(),
+        };
+    }
     send(conn, &stop);
     let expected = stop.stop_seq + u64::from(vm.has("stale_stop"));
     let taken = recv(conn).is_some_and(|m| {
@@ -287,7 +348,13 @@ fn restore(vm: &mut Vm, conn: &mut UnixStream) -> i32 {
             && m.branch_count == RESUME_BRANCH_TARGET
     });
     if !taken {
-        vm.det(&format!("director stale resume stop_seq={expected}"));
+        if vm.has("hostile_line") {
+            let mut line = b"director stale resume ".to_vec();
+            line.extend_from_slice(HOSTILE);
+            vm.det_raw(&line);
+        } else {
+            vm.det(&format!("director stale resume stop_seq={expected}"));
+        }
         return vm.idle_until_destroyed();
     }
     if vm.has("drop_after_resume") {
@@ -305,7 +372,9 @@ fn restore(vm: &mut Vm, conn: &mut UnixStream) -> i32 {
         );
         return recv(conn).map_or(4, |_| 0);
     }
-    if vm.has("other_line") {
+    if vm.has("hostile_other") {
+        vm.det_raw(HOSTILE);
+    } else if vm.has("other_line") {
         vm.det("VMEXIT reason=HLT");
     } else {
         let sock = vm.option("dhyve.director.control").to_string();
@@ -343,6 +412,12 @@ fn guest(vm: &mut Vm) -> i32 {
     }
     if vm.has("hang") {
         return vm.idle_until_destroyed();
+    }
+    if vm.has("stop_then_exit") {
+        // A stop of a kind that is not the fence, then the VM ends with no exit report.
+        sleep(Duration::from_millis(50));
+        vm.det("director stop kind=1 stop_seq=5 branch_count=7 probe_id=0");
+        return 0;
     }
     for line in vm.fake.events(seed) {
         vm.uart_line(&line);

@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 pub const COMMAND_DEADLINE: Duration = Duration::from_secs(5);
 /// How long to wait between looks at a running command.
 const POLL: Duration = Duration::from_millis(10);
+/// How long to wait for a command that was killed to be reaped. A command that will not die is left, not waited for.
+const REAP_WAIT: Duration = Duration::from_secs(2);
 /// The most output kept; the commands used here print a line.
 const MAX_OUTPUT: u64 = 64 * 1024;
 
@@ -45,6 +47,19 @@ pub struct Answer {
     /// The exit status; `None` when the command was ended by a signal.
     pub code: Option<i32>,
     pub stdout: String,
+}
+
+/// Waits for `child` to be reaped for at most `limit`, and no longer: a process that cannot be killed (a root process
+/// under `sudo`, for an unprivileged caller) must never block the caller.
+pub fn reap_within(child: &mut std::process::Child, limit: Duration) -> bool {
+    let until = Instant::now() + limit;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return true,
+            Ok(None) if Instant::now() >= until => return false,
+            Ok(None) => thread::sleep(POLL),
+        }
+    }
 }
 
 /// Runs `argv` for at most `deadline` if it is one of the read-only questions the machine check asks.
@@ -86,13 +101,13 @@ pub fn run_bounded(
             Ok(Some(status)) => break status,
             Ok(None) if started.elapsed() >= deadline => {
                 let _ = child.kill();
-                let _ = child.wait();
+                reap_within(&mut child, REAP_WAIT);
                 return Err(BoundedError::TimedOut);
             }
             Ok(None) => thread::sleep(POLL),
             Err(e) => {
                 let _ = child.kill();
-                let _ = child.wait();
+                reap_within(&mut child, REAP_WAIT);
                 return Err(BoundedError::Wait(e.kind().to_string()));
             }
         }

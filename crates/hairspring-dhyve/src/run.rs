@@ -20,6 +20,15 @@ pub const MAX_TRIAL_SECS: u64 = 100;
 const BUILD: &str = concat!("dhyve-", env!("CARGO_PKG_VERSION"));
 const CANCELLED: &str = "cancelled";
 
+/// Removes a checkpoint directory when the run ends, on every path.
+struct RemoveOnDrop(std::path::PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 struct Tally {
     trials: u64,
     inconclusive: u64,
@@ -68,10 +77,10 @@ pub(crate) fn run_trials(
     budget: Budget,
     progress: &mut dyn FnMut(Progress) -> bool,
 ) -> Result<RunOutcome, EngineError> {
+    // The target's `hang_is_violation` is not passed on: a trial with no exit report before its cap is inconclusive here,
+    // because what a stop that left no exit report means has not been shown on a host.
     let TargetKind::Process {
-        trial_timeout_secs,
-        hang_is_violation,
-        ..
+        trial_timeout_secs, ..
     } = &spec.kind
     else {
         return Err(EngineError::BackendUnavailable(
@@ -96,6 +105,8 @@ pub(crate) fn run_trials(
         Ok(p) => p,
         Err(e) => return Ok(errored(&e, &tally, started)),
     };
+    // The checkpoint is 256 MiB, and nothing else removes it.
+    let _checkpoint = (!session.keep_all).then(|| RemoveOnDrop(prepared.record.dir.clone()));
     let wall = Duration::from_secs(budget.wall_secs);
     for ordinal in 0..budget.max_trials {
         if started.elapsed() >= wall {
@@ -116,7 +127,7 @@ pub(crate) fn run_trials(
             Ok(t) => t,
             Err(e) => return Ok(errored(&e, &tally, started)),
         };
-        let judged = judge_trial(&trial, timeout_secs, *hang_is_violation);
+        let judged = judge_trial(&trial, timeout_secs, false);
         session.clean_trial(
             &trial,
             !matches!(

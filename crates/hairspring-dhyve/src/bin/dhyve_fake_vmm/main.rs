@@ -18,6 +18,8 @@ fn main() {
         "bhyve" => bhyve::run(&fake, &rest),
         "bhyvectl" => ctl::bhyvectl(&fake, &rest),
         "sudo" => ctl::sudo(&fake, &rest),
+        "kldstat" => ctl::kldstat(&fake, &rest),
+        "cpuset" => ctl::cpuset(&fake, &rest),
         _ => 64,
     };
     std::process::exit(code);

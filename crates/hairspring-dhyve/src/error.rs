@@ -13,7 +13,7 @@ pub enum InfraKind {
     NoReady,
     ControlLost,
     ResumeNotTaken,
-    BranchLimit,
+    StoppedAgain,
     LogBound,
     LowSpace,
     SerialMissing,
@@ -23,6 +23,12 @@ pub enum InfraKind {
     ShutdownFailed,
     PrepareTimeout,
     FileOperation,
+    VmDidNotExit,
+    VmmNotLoaded,
+    VmmChanged,
+    SecondPrepare,
+    PinMismatch,
+    ModuleMismatch,
 }
 
 impl InfraKind {
@@ -36,7 +42,7 @@ impl InfraKind {
             InfraKind::NoReady => "the VM did not reach its first stop in time",
             InfraKind::ControlLost => "the control connection ended unexpectedly",
             InfraKind::ResumeNotTaken => "the resume command was not taken",
-            InfraKind::BranchLimit => "branch limit reached",
+            InfraKind::StoppedAgain => "the VM stopped again after it was resumed",
             InfraKind::LogBound => "log size bound reached",
             InfraKind::LowSpace => "not enough free space for the logs",
             InfraKind::SerialMissing => "the serial log is missing or empty",
@@ -46,6 +52,12 @@ impl InfraKind {
             InfraKind::ShutdownFailed => "the VM did not end cleanly after the shutdown command",
             InfraKind::PrepareTimeout => "the prepare did not finish in time",
             InfraKind::FileOperation => "a file operation failed",
+            InfraKind::VmDidNotExit => "the VM program did not exit",
+            InfraKind::VmmNotLoaded => "no vmm module is loaded",
+            InfraKind::VmmChanged => "the loaded vmm module is not the one seen at the start",
+            InfraKind::SecondPrepare => "a second prepare was refused in this session",
+            InfraKind::PinMismatch => "a program or a library does not match its pin",
+            InfraKind::ModuleMismatch => "the checkpoint was not made by the expected module",
         }
     }
 }
@@ -90,7 +102,7 @@ impl std::error::Error for InfraError {}
 mod tests {
     use super::*;
 
-    const ALL: [InfraKind; 18] = [
+    const ALL: [InfraKind; 24] = [
         InfraKind::HostBusy,
         InfraKind::Settings,
         InfraKind::Refused,
@@ -99,7 +111,7 @@ mod tests {
         InfraKind::NoReady,
         InfraKind::ControlLost,
         InfraKind::ResumeNotTaken,
-        InfraKind::BranchLimit,
+        InfraKind::StoppedAgain,
         InfraKind::LogBound,
         InfraKind::LowSpace,
         InfraKind::SerialMissing,
@@ -109,6 +121,12 @@ mod tests {
         InfraKind::ShutdownFailed,
         InfraKind::PrepareTimeout,
         InfraKind::FileOperation,
+        InfraKind::VmDidNotExit,
+        InfraKind::VmmNotLoaded,
+        InfraKind::VmmChanged,
+        InfraKind::SecondPrepare,
+        InfraKind::PinMismatch,
+        InfraKind::ModuleMismatch,
     ];
 
     #[test]
@@ -123,8 +141,11 @@ mod tests {
     }
 
     #[test]
-    fn the_two_reasons_the_design_names_read_exactly() {
-        assert_eq!(InfraKind::BranchLimit.text(), "branch limit reached");
+    fn the_reasons_the_design_names_read_exactly() {
+        assert_eq!(
+            InfraKind::StoppedAgain.text(),
+            "the VM stopped again after it was resumed"
+        );
         assert_eq!(InfraKind::LogBound.text(), "log size bound reached");
         assert_eq!(InfraKind::HostBusy.text(), "another run holds the host");
     }

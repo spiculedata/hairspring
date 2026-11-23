@@ -106,24 +106,21 @@ mod tests {
 
     fn host() -> HostConfig {
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        HostConfig {
-            sudo: "/s/sudo".into(),
-            env: "/usr/bin/env".into(),
-            bhyve: "/w/bin/bhyve".into(),
-            bhyvectl: "/w/bin/bhyvectl".into(),
-            lib_dir: "/w/lib".into(),
-            state_dir: std::env::temp_dir()
-                .join(format!("hs-dhyve-args-{}-{n}", std::process::id())),
-            kernel: "/w/img/kernel".into(),
-            initrd: "/w/img/initrd".into(),
-        }
+        HostConfig::new(
+            "/w/bin/bhyve".into(),
+            "/w/bin/bhyvectl".into(),
+            "/w/lib".into(),
+            std::env::temp_dir().join(format!("hs-dhyve-args-{}-{n}", std::process::id())),
+            "/w/img/kernel".into(),
+            "/w/img/initrd".into(),
+        )
     }
 
     fn fixtures() -> (RunPaths, Files, VmName) {
         let h = host();
         let stamp = Stamp::from_counter(1);
         let name = VmName::new(&stamp, 3).unwrap();
-        let run = StateLayout::new(&h.state_dir).run_paths(&stamp, &name);
+        let run = StateLayout::new(&h.state_dir, false).run_paths(&stamp, &name);
         let files = Inputs { seed: 1007, job: 0 }.write(&run.fwcfg_dir).unwrap();
         (run, files, name)
     }
