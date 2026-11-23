@@ -1,10 +1,11 @@
-//! `hairspring doctor --process-backend`: what the `process` backend needs from this machine, in one report.
+//! `hairspring doctor --process-backend` (and `--backend hermit`): what the `process` backend needs from this machine, in one report.
 //!
 //! The facts are read once (see `process_probe`) and judged here, so every verdict can be tested without the hardware.
 //! A blocker means the backend cannot run here; a note is worth knowing but does not stop it. Nothing here changes the
 //! host: when a kernel setting is in the way, the report names it and leaves the decision to the operator.
 use super::kernel;
 use super::LoaderHashes;
+use hairspring_engine::probe::{ProbeReport, ProbeRow, ProbeStatus};
 use std::io::Write;
 
 /// The only platform Hermit runs on.
@@ -74,16 +75,6 @@ pub enum Status {
     Ok,
     Fail,
     Note,
-}
-
-impl Status {
-    fn word(self) -> &'static str {
-        match self {
-            Status::Ok => "ok",
-            Status::Fail => "FAIL",
-            Status::Note => "note",
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -331,33 +322,37 @@ pub fn assess(facts: &ProcessBackendFacts) -> Report {
     Report { rows, blockers }
 }
 
+/// What the report says when every prerequisite is met, including what it does not show.
+const READY_NOTE: &str =
+    "a generic hardware branch counter was opened and Hermit answered --version; no program has \
+     been run under Hermit, so this does not show that Hermit works here";
+
+/// The report in the shape every backend's probe answers in. Each blocker is one sentence that says which prerequisite
+/// is missing and how to fix it.
+pub fn probe_report(report: &Report) -> ProbeReport {
+    ProbeReport {
+        subject: "process backend".to_string(),
+        rows: report.rows.iter().map(probe_row).collect(),
+        ready_note: READY_NOTE.to_string(),
+        missing: report.blockers.clone(),
+    }
+}
+
+fn probe_row(r: &Row) -> ProbeRow {
+    ProbeRow {
+        label: r.label.to_string(),
+        status: match r.status {
+            Status::Ok => ProbeStatus::Ok,
+            Status::Fail => ProbeStatus::Fail,
+            Status::Note => ProbeStatus::Note,
+        },
+        detail: r.detail.clone(),
+    }
+}
+
 /// Writes the report. The last line is `result: ok: ...` or `result: CANNOT RUN ...` followed by one line per reason.
 pub fn write_report(out: &mut dyn Write, report: &Report) -> std::io::Result<()> {
-    writeln!(out, "process backend: prerequisites on this machine")?;
-    for r in &report.rows {
-        writeln!(
-            out,
-            "  {:<14} {:<4}  {}",
-            r.label,
-            r.status.word(),
-            r.detail
-        )?;
-    }
-    if report.can_run() {
-        return writeln!(
-            out,
-            "result: ok: a generic hardware branch counter was opened and Hermit answered --version; no program has been \
-             run under Hermit, so this does not show that Hermit works here"
-        );
-    }
-    writeln!(
-        out,
-        "result: CANNOT RUN the process backend on this machine:"
-    )?;
-    report
-        .blockers
-        .iter()
-        .try_for_each(|b| writeln!(out, "  - {b}"))
+    probe_report(report).write(out)
 }
 
 #[cfg(test)]

@@ -15,6 +15,7 @@ use hairspring_engine::backend::{Backend, Progress, ReplayOptions, RunRequest};
 use hairspring_engine::backend_info::{BackendLimits, BackendVersion, Capabilities};
 use hairspring_engine::config::{Budget, TargetKind, TargetSpec, MAX_PARALLELISM};
 use hairspring_engine::confirm::{CheckResult, ConfirmRequest};
+use hairspring_engine::probe::ProbeReport;
 use hairspring_engine::report::{
     DoctorDivergence, DoctorReport, FailureReport, ReplayOutcome, RunOutcome,
 };
@@ -647,6 +648,10 @@ impl Backend for HermitBackend {
 
     fn display_name(&self) -> &'static str {
         "Hermit"
+    }
+
+    fn probe(&self) -> ProbeReport {
+        crate::host::probe_machine()
     }
 
     fn version(&self) -> BackendVersion {

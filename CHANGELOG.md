@@ -4,6 +4,11 @@
 
 ### Added
 
+- `hairspring doctor --backend NAME` runs that backend's machine check and prints what is met and what is missing, with
+  how to fix each. Exit 0 when nothing is missing, 4 when something is, 2 for a name no backend has (the error lists the
+  names). `--backend hermit` prints exactly what `--process-backend` prints, which is unchanged. Every backend now has a
+  `probe()`; the default has nothing to check, and only the Hermit backend checks anything today. The Hermit host
+  checks moved from the CLI crate into `hairspring-hermit` with their output unchanged.
 - Backends are now chosen by id. A `process` target may carry an optional `backend` key; without it the target runs
   under Hermit, as before, and every existing config means what it did. `"hermit"` is the only value accepted today; any
   other value is refused when the config is read, and, for a string value, the message does not repeat it (a value of another type gets the TOML library's snippet, as for every other key). A target is never moved to

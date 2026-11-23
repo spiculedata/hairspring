@@ -21,6 +21,7 @@ mod events;
 mod exec;
 mod head_tail;
 mod hermit_version;
+pub mod host;
 pub mod host_identity;
 pub mod interrupt;
 mod line_scan;

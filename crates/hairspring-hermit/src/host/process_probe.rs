@@ -204,7 +204,7 @@ fn probe_hermit(lookup: HermitLookup) -> HermitFact {
         HermitLookup::Missing { installed_at } => HermitFact::Missing {
             installed_at: installed_at.map(|p| p.display().to_string()),
         },
-        HermitLookup::Resolved(path) => match hairspring_hermit::probe_hermit_version(&path) {
+        HermitLookup::Resolved(path) => match crate::probe_hermit_version(&path) {
             Some(version) => HermitFact::Found {
                 path: path.display().to_string(),
                 version,
@@ -219,7 +219,7 @@ fn probe_hermit(lookup: HermitLookup) -> HermitFact {
 
 pub fn probe() -> ProcessBackendFacts {
     let lookup = resolve_hermit(
-        std::env::var_os(hairspring_hermit::HERMIT_ENV),
+        std::env::var_os(crate::HERMIT_ENV),
         std::env::var_os("PATH").as_deref(),
         default_install_path(std::env::var_os("HOME")),
     );
@@ -251,7 +251,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "hairspring-probe-{name}-{}-{}",
             std::process::id(),
-            hairspring_store::now_ms()
+            crate::host::unique_stamp()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
