@@ -230,7 +230,7 @@ fn a_changed_checkpoint_stops_the_restore_before_a_vm_starts() {
     std::fs::write(prepared.record.dir.join("boot"), b"changed").unwrap();
     let before = rig.calls().len();
     let err = session.restore_trial(&prepared, 0, INPUTS).unwrap_err();
-    assert_eq!(err.kind, InfraKind::Checkpoint);
+    assert_eq!(err.kind, InfraKind::CheckpointChanged);
     assert_eq!(rig.calls().len(), before, "nothing was started");
 }
 
