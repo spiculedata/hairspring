@@ -4,7 +4,7 @@
 //! or a build it will not run.
 //!
 //! ```text
-//! dhyve-session-driver --control N --other M [--seed S] [--deadline-secs D] [--allow-fake]
+//! dhyve-session-driver --control N --other M [--seed S] [--deadline-secs D] [--rdrand-accepted] [--allow-fake]
 //! dhyve-session-driver --build-info
 //! ```
 //!
@@ -13,6 +13,10 @@
 //! can end before the deadline. `--deadline-secs D` is seconds from this program's own start, so whoever starts it hands in
 //! what is left of the session's time (the session's end minus the time now). Every log and input file is kept in full, and
 //! a steps log and a record for each run are written under `<state>/records`. A second prepare in one session is refused.
+//!
+//! `--rdrand-accepted` lets the session go on although the prepare's standard error holds the warning that the CPU cannot
+//! trap the random-number instruction; without it that warning ends the session (`END:RDRAND`). The machine check runs
+//! first and ends the session (`END:PROBE`) when it fails; a build with the stand-in programs runs none.
 //!
 //! The settings are the `HAIRSPRING_DHYVE_*` variables the backend reads. A session needs its stamp and all three pins
 //! (`HAIRSPRING_DHYVE_STAMP`, `HAIRSPRING_DHYVE_PIN_BHYVE`, `HAIRSPRING_DHYVE_PIN_BHYVECTL`, `HAIRSPRING_DHYVE_PIN_LIB`);
@@ -59,13 +63,14 @@ fn plan(args: &[String]) -> Result<Plan, String> {
             bad.chars().take(40).collect::<String>()
         ));
     }
-    Ok(Plan {
-        seed: number(args, "--seed")?.unwrap_or(DEFAULT_SEED),
-        control_restores: number(args, "--control")?.ok_or("--control is required")?,
-        other_seed_restores: number(args, "--other")?.ok_or("--other is required")?,
-        deadline: number::<u64>(args, "--deadline-secs")?
-            .map(|s| Instant::now() + Duration::from_secs(s)),
-    })
+    let mut plan = Plan::new(
+        number(args, "--seed")?.unwrap_or(DEFAULT_SEED),
+        number(args, "--control")?.ok_or("--control is required")?,
+        number(args, "--other")?.ok_or("--other is required")?,
+    );
+    plan.deadline =
+        number::<u64>(args, "--deadline-secs")?.map(|s| Instant::now() + Duration::from_secs(s));
+    Ok(plan)
 }
 
 /// The setting a session needs that is not there, if any.
@@ -83,6 +88,11 @@ fn missing_for_a_session(host: &HostConfig) -> Option<&'static str> {
     }
 }
 
+/// The machine check of the backend, read from this machine.
+fn machine_check() -> hairspring_engine::probe::ProbeReport {
+    hairspring_dhyve::assess(&hairspring_dhyve::gather())
+}
+
 fn refuse(text: &str) -> ExitCode {
     eprintln!("{text}\n{USAGE}");
     ExitCode::from(2)
@@ -95,16 +105,24 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     let allow_fake = all.iter().any(|a| a == "--allow-fake");
-    let args: Vec<String> = all.into_iter().filter(|a| a != "--allow-fake").collect();
+    let rdrand_accepted = all.iter().any(|a| a == "--rdrand-accepted");
+    let args: Vec<String> = all
+        .into_iter()
+        .filter(|a| a != "--allow-fake" && a != "--rdrand-accepted")
+        .collect();
     if FAKE_BUILT && !allow_fake {
         return refuse(
             "this build has the stand-in programs built in; pass --allow-fake to run it",
         );
     }
-    let plan = match plan(&args) {
+    let mut plan = match plan(&args) {
         Ok(p) => p,
         Err(e) => return refuse(&e),
     };
+    plan.rdrand_accepted = rdrand_accepted;
+    if !FAKE_BUILT {
+        plan.probe = Some(machine_check);
+    }
     let host = match HostConfig::from_env() {
         Ok(h) => h,
         Err(e) => return refuse(&e.to_string()),

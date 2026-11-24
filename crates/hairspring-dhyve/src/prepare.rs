@@ -35,6 +35,8 @@ pub struct Prepared {
     /// The prepare's own files. They are kept (the VM's standard error in full among them) only in a session that keeps
     /// everything; otherwise the directory is gone.
     pub prepare_run: RunPaths,
+    /// SHA-256 of the VM program's arguments with the VM name and the run directory masked.
+    pub argv_masked_sha256: String,
 }
 
 const PREPARE_RUN: u32 = 1;
@@ -161,7 +163,7 @@ impl Session {
         self.check_space(&spawner, 0)?;
         let fwcfg = inputs
             .write(&run.fwcfg_dir)
-            .map_err(|e| InfraError::new(InfraKind::InputFiles, e.to_string()))?;
+            .map_err(crate::trial::inputs_error)?;
         spawner.destroy(&name)?;
         // A start may load a module by itself when none is loaded, so it is checked each time, just before.
         let vmm = spawner.vmm_identity()?;
@@ -215,6 +217,7 @@ impl Session {
         )
         .map_err(|e| InfraError::io("listen on the control socket", &e))?;
         let args = prepare_args(&self.host, run, fwcfg, name);
+        let argv_masked_sha256 = crate::trial::masked_hash(&args, name, run);
         let mut guard = self.start_guarded(spawner.clone(), name.clone(), &args, run, director)?;
         let watch = Watch {
             cap: self.timings.prepare_cap,
@@ -248,6 +251,7 @@ impl Session {
             elapsed: started.elapsed(),
             vmm: vmm.clone(),
             prepare_run: run.clone(),
+            argv_masked_sha256,
         })
     }
 

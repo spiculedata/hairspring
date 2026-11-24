@@ -44,7 +44,18 @@ pub struct TrialRun {
     pub argv_masked_sha256: String,
 }
 
-fn masked_hash(args: &[String], name: &VmName, run: &RunPaths) -> String {
+/// A file that reads back different from what was written is the input gate failing; one that cannot be written is a file
+/// operation failing.
+pub(crate) fn inputs_error(e: crate::fwcfg::FwcfgError) -> InfraError {
+    match e {
+        crate::fwcfg::FwcfgError::Mismatch(_) => {
+            InfraError::new(InfraKind::InputFiles, e.to_string())
+        }
+        crate::fwcfg::FwcfgError::Io(_) => InfraError::new(InfraKind::FileOperation, e.to_string()),
+    }
+}
+
+pub(crate) fn masked_hash(args: &[String], name: &VmName, run: &RunPaths) -> String {
     let dir = run.dir.display().to_string();
     let text: String = args
         .iter()
@@ -87,15 +98,10 @@ impl Session {
         let run = self.layout.run_paths(&stamp, &name);
         self.make_dirs(&run)?;
         if !prepared.record.unchanged() {
-            return Err(InfraError::new(
-                InfraKind::Checkpoint,
-                "the checkpoint changed after it was taken",
-            ));
+            return Err(InfraError::bare(InfraKind::CheckpointChanged));
         }
         self.check_space(&spawner, dir_bytes(&prepared.record.dir))?;
-        let fwcfg = inputs
-            .write(&run.fwcfg_dir)
-            .map_err(|e| InfraError::new(InfraKind::InputFiles, e.to_string()))?;
+        let fwcfg = inputs.write(&run.fwcfg_dir).map_err(inputs_error)?;
         spawner.destroy(&name)?;
         // A start may load a module by itself when none is loaded, and the module must be the one the checkpoint came
         // from, so it is checked each time, just before.

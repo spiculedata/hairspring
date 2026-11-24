@@ -8,7 +8,7 @@ use crate::hostlock::{HostLock, LockError};
 use crate::layout::{RunPaths, StateLayout};
 use crate::logs::{len_now, Bounds, Breach};
 use crate::signal::Terminator;
-use crate::spawn::Spawner;
+use crate::spawn::{SpawnLog, Spawner};
 use crate::vmname::{Stamp, VmName};
 use std::path::{Path, PathBuf};
 use std::process::Child;
@@ -57,6 +57,8 @@ pub struct Session {
     pub(crate) terminator: Terminator,
     /// When set, a second prepare in this session is refused.
     pub(crate) prepares: Option<Arc<AtomicU32>>,
+    /// Told of each root command, for a steps log.
+    pub(crate) spawn_log: Option<Arc<dyn SpawnLog>>,
     #[cfg(feature = "fake-vmm")]
     pub(crate) panic_in_wait: bool,
 }
@@ -71,6 +73,7 @@ impl Session {
             keep_all: false,
             terminator: Terminator::System,
             prepares: None,
+            spawn_log: None,
             #[cfg(feature = "fake-vmm")]
             panic_in_wait: false,
         }
@@ -107,6 +110,14 @@ impl Session {
         }
     }
 
+    /// The same session telling `log` of each root command it runs.
+    pub fn with_spawn_log(&self, log: Arc<dyn SpawnLog>) -> Session {
+        Session {
+            spawn_log: Some(log),
+            ..self.clone()
+        }
+    }
+
     /// The same session ending VMs through `terminator`. Tests stand in one that is always refused, as a root process under
     /// `sudo` refuses an unprivileged caller.
     pub fn with_terminator(&self, terminator: Terminator) -> Session {
@@ -126,7 +137,7 @@ impl Session {
     }
 
     pub(crate) fn spawner(&self, stamp: &Stamp) -> Spawner {
-        Spawner::new(&self.host, self.timings, stamp)
+        Spawner::new(&self.host, self.timings, stamp).with_log(self.spawn_log.clone())
     }
 
     /// Takes the host lock for one prepare or one trial.
@@ -307,6 +318,7 @@ impl VmGuard<'_> {
         if let Some(d) = &self.director {
             d.vm_exited();
         }
+        self.spawner.tell_ended(&self.name, code);
         Ok(code)
     }
 

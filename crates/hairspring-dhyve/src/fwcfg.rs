@@ -13,6 +13,8 @@ pub const FIELDS: [(&str, usize); 6] = [
     ("trigger", 20),
     ("runner", 20),
 ];
+/// The value of the `job` input every session gives: the guest image's fixture needs it to run.
+pub const GUEST_JOB: u64 = 1;
 /// The value of `runner` that says the guest runs under this kind of VM.
 const RUNNER: u64 = 2;
 /// The override record that overrides nothing.
@@ -168,6 +170,58 @@ mod tests {
             .map(|(x, _)| x.0)
             .collect();
         assert_eq!(differing, vec!["seed".to_string()]);
+    }
+
+    #[test]
+    fn the_inputs_of_a_session_hash_to_the_constants_of_the_run_table() {
+        let c = Inputs {
+            seed: 1007,
+            job: GUEST_JOB,
+        }
+        .write(&scratch("consts-c"))
+        .unwrap();
+        let s = Inputs {
+            seed: 1008,
+            job: GUEST_JOB,
+        }
+        .write(&scratch("consts-s"))
+        .unwrap();
+        let want = |files: &Files, field: &str| {
+            files
+                .hashes()
+                .into_iter()
+                .find(|(f, _)| f == field)
+                .unwrap()
+                .1
+        };
+        assert_eq!(
+            want(&c, "seed"),
+            "292b1fcd6c00d6ff28d8ca5cb6d02f9470e36712a39fb0135b9af7114df4ed7a"
+        );
+        assert_eq!(
+            want(&s, "seed"),
+            "0c7bbc4cb64b328d64391be1eeddf10c1af36887a32d2c47d44b10b897026e3b"
+        );
+        assert_eq!(
+            want(&c, "job"),
+            "ad8324689b78cd6e2177b4f02dec255566ae4a430a820312ee7ca567e32db079"
+        );
+        assert_eq!(
+            want(&c, "plan"),
+            "60e05bd1b195af2f94112fa7197a5c88289058840ce7c6df9693756bc6250f55"
+        );
+        assert_eq!(
+            want(&c, "override"),
+            "7875ad0b8d0084cfc3cfffc0df542140bc6bc31ad0db5b618e063040eb5cf654"
+        );
+        assert_eq!(
+            want(&c, "trigger"),
+            "a7d351f3de399c746064a53c69959ab10312a003ec63985bcd86fb6dc1c402d5"
+        );
+        assert_eq!(
+            want(&c, "runner"),
+            "720c1731450d7d8c443026e27685a7ea775e9c679783d9868bc135d393ef9e81"
+        );
     }
 
     #[test]

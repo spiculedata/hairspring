@@ -52,7 +52,7 @@ fn parse_exit(line: &str) -> Option<GuestExit> {
     })
 }
 
-/// Splits `bytes` into lines and finds the exit report.
+/// Splits `bytes` into lines and finds the exit report: the last non-empty line, when it is one.
 pub fn parse(bytes: &[u8], truncated: bool) -> Serial {
     let mut lines: Vec<Vec<u8>> = bytes
         .split(|b| *b == b'\n')
@@ -61,11 +61,13 @@ pub fn parse(bytes: &[u8], truncated: bool) -> Serial {
     if lines.last().is_some_and(Vec::is_empty) {
         lines.pop();
     }
+    // Only the last line that holds anything is the report; a target can print an exit line of its own earlier.
     let exit = lines
         .iter()
         .rev()
-        .filter_map(|l| std::str::from_utf8(l).ok())
-        .find_map(parse_exit);
+        .find(|l| !l.is_empty())
+        .and_then(|l| std::str::from_utf8(l).ok())
+        .and_then(parse_exit);
     Serial {
         exit,
         lines,
@@ -114,6 +116,22 @@ mod tests {
     }
 
     #[test]
+    fn an_exit_line_counts_only_as_the_last_line_of_the_log() {
+        // The target's own output may print an exit line early; only the one the agent prints last is the report.
+        assert_eq!(parse(b"HS_EXIT 0 0\nmore output\n", false).exit, None);
+        assert_eq!(parse(b"HS_EXIT 0 0\nHS_EXIT 3 0 extra\n", false).exit, None);
+        assert_eq!(parse(b"HS_EXIT 0 0\n\n", false).exit.unwrap().code, Some(0));
+        assert_eq!(parse(b"x\nHS_EXIT 4 0", false).exit.unwrap().code, Some(4));
+        assert_eq!(
+            parse(b"HS_EXIT 1 0\nHS_EXIT 0 0\n", false)
+                .exit
+                .unwrap()
+                .code,
+            Some(0)
+        );
+    }
+
+    #[test]
     fn a_malformed_exit_line_is_not_an_exit_report() {
         for bad in [
             "HS_EXIT",
@@ -129,13 +147,7 @@ mod tests {
         ] {
             assert_eq!(parse(bad.as_bytes(), false).exit, None, "{bad}");
         }
-        assert_eq!(
-            parse(b"HS_EXIT 0 0\nHS_EXIT zz\n", false)
-                .exit
-                .unwrap()
-                .code,
-            Some(0)
-        );
+        assert_eq!(parse(b"HS_EXIT 0 0\nHS_EXIT zz\n", false).exit, None);
     }
 
     #[test]
@@ -170,12 +182,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("uart.log");
         assert_eq!(read(&path.with_extension("none"), 100).unwrap(), None);
-        std::fs::write(&path, b"HS_EXIT 0 0\nmore lines here\n").unwrap();
+        std::fs::write(&path, b"more lines here\nHS_EXIT 0 0\n").unwrap();
         let whole = read(&path, 1000).unwrap().unwrap();
         assert!(!whole.truncated && whole.exit.is_some());
         let cut = read(&path, 12).unwrap().unwrap();
         assert!(cut.truncated);
         assert_eq!(cut.lines.len(), 1);
+        assert_eq!(cut.exit, None);
         let exact = read(&path, 28).unwrap().unwrap();
         assert!(!exact.truncated);
     }

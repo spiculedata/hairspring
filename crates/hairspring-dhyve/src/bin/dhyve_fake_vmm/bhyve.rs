@@ -239,8 +239,24 @@ pub fn run(fake: &Fake, args: &[String]) -> i32 {
     vm.finish(code)
 }
 
+/// The four state files a VM writes, each a few bytes, so a record can say their sizes.
+fn write_state_files(vm: &Vm) {
+    for key in [
+        "deterministic.state_manifest",
+        "deterministic.state_regs",
+        "deterministic.state_mem",
+        "deterministic.state_devices",
+    ] {
+        let _ = std::fs::write(vm.option(key), b"0123456789abcdef");
+    }
+}
+
 fn make(vm: &mut Vm, conn: &mut UnixStream) -> i32 {
     vm.touch_uart();
+    write_state_files(vm);
+    if vm.has("rdrand_warning") {
+        eprintln!("RDRAND exit not supported");
+    }
     vm.uart_line("boot line");
     vm.uart_line("HS_READY");
     if vm.has("drop_before_ready") {
@@ -294,6 +310,14 @@ fn checkpoint_rip(path: &str) -> Option<u64> {
 
 fn restore(vm: &mut Vm, conn: &mut UnixStream) -> i32 {
     vm.touch_uart();
+    write_state_files(vm);
+    if vm.has("tamper_ckpt") {
+        if let Some(path) = &vm.p.restore {
+            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(path) {
+                let _ = f.write_all(b"x");
+            }
+        }
+    }
     let Some(stop) = keys_of(vm) else {
         eprintln!("restore keys missing");
         return 66;
@@ -396,6 +420,15 @@ fn guest(vm: &mut Vm) -> i32 {
     let seed = seed_read(vm);
     if !vm.has("empty_uart") {
         vm.uart_line("guest started");
+    }
+    // The guest prints the seed it read from its input file, as the real one does after the stop.
+    let printed = if vm.has("wrong_seed_line") {
+        seed + 1
+    } else {
+        seed
+    };
+    if !vm.has("no_seed_line") {
+        vm.uart_line(&format!("HS_SEED {printed}"));
     }
     vm.fake
         .append("trials.log", &format!("seed={seed} name={}", vm.p.name));

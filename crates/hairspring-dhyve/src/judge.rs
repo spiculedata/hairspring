@@ -138,18 +138,35 @@ pub struct Observed {
     pub events_digest: Option<String>,
 }
 
+/// Whether a serial line is one the digests leave out: the guest's own print of the seed it read, and its long-line check.
+fn left_out_of_digests(line: &[u8]) -> bool {
+    line.starts_with(b"HS_SEED ") || line.starts_with(b"HS_LONG")
+}
+
+/// SHA-256 of the lines `keep` takes, each followed by a line feed, leaving out `HS_SEED` and `HS_LONG` lines.
+pub fn digest_lines(lines: &[Vec<u8>], keep: &dyn Fn(&[u8]) -> bool) -> String {
+    let kept: Vec<u8> = lines
+        .iter()
+        .filter(|l| !left_out_of_digests(l) && keep(l))
+        .flat_map(|l| l.iter().copied().chain(std::iter::once(b'\n')))
+        .collect();
+    sha256_hex(&kept)
+}
+
+/// The value after the first `HS_SEED ` line of a serial log, if it is one whole number.
+pub fn printed_seed(serial: &Serial) -> Option<u64> {
+    serial
+        .lines
+        .iter()
+        .find_map(|l| l.strip_prefix(b"HS_SEED "))
+        .and_then(|v| std::str::from_utf8(v).ok())
+        .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|v| v.parse().ok())
+}
+
 pub fn observe(run: &TrialRun) -> Observed {
-    let digest = |keep: &dyn Fn(&[u8]) -> bool| {
-        run.serial.as_ref().map(|s| {
-            let kept: Vec<u8> = s
-                .lines
-                .iter()
-                .filter(|l| keep(l))
-                .flat_map(|l| l.iter().copied().chain(std::iter::once(b'\n')))
-                .collect();
-            sha256_hex(&kept)
-        })
-    };
+    let digest =
+        |keep: &dyn Fn(&[u8]) -> bool| run.serial.as_ref().map(|s| digest_lines(&s.lines, keep));
     Observed {
         resume_seen: run.control.resume == ResumeResult::Seen,
         exit_reported: run.serial.as_ref().is_some_and(|s| s.exit.is_some()),

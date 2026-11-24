@@ -66,12 +66,7 @@ fn summary(out: &Output) -> Value {
 }
 
 fn plan(control: u32, other: u32) -> Plan {
-    Plan {
-        seed: 1007,
-        control_restores: control,
-        other_seed_restores: other,
-        deadline: None,
-    }
+    Plan::new(1007, control, other)
 }
 
 fn session(rig: &Rig) -> hairspring_dhyve::session::Session {
@@ -254,6 +249,7 @@ fn a_restore_starts_only_if_it_can_end_before_the_deadline() {
     let rig = Rig::new("d-wcap");
     let late = Plan {
         deadline: Some(Instant::now() + Duration::from_secs(10)),
+        prepare_worst: Duration::from_secs(1),
         ..plan(4, 2)
     };
     let summary = run_session(&session(&rig), &late);
@@ -292,17 +288,17 @@ fn the_steps_log_and_a_record_for_each_run_are_written_and_the_prepares_log_is_k
     let steps = std::fs::read_to_string(steps_log(&dir)).unwrap();
     let rows: Vec<Vec<&str>> = steps.lines().map(|l| l.split('\t').collect()).collect();
     assert!(
-        rows.iter().all(|r| r.len() == 5 && r[1] == "driver"),
+        rows.iter().all(|r| r.len() == 7 && r[1] == "driver"),
         "{steps}"
     );
-    assert!(rows.iter().any(|r| r[2] == "prepare" && r[4] == "ok"));
+    assert!(rows.iter().any(|r| r[2] == "PREPARE" && r[3] == "done"));
     assert_eq!(
         rows.iter()
-            .filter(|r| r[2] == "trial" && r[4] == "pass")
+            .filter(|r| r[2] == "TRIAL" && r[3] == "done" && r[6].ends_with("verdict=pass"))
             .count(),
         3
     );
-    assert_eq!(rows.last().unwrap()[2], "end");
+    assert_eq!(rows.last().unwrap()[2], "END");
     let record: Value = serde_json::from_str(
         &std::fs::read_to_string(dir.join(format!("vmvx_{STAMP}_XB_r04.json"))).unwrap(),
     )
@@ -311,7 +307,7 @@ fn the_steps_log_and_a_record_for_each_run_are_written_and_the_prepares_log_is_k
     assert_eq!(record["position"], 3);
     assert_eq!(record["verdict"], "pass");
     assert_eq!(record["hs_exit"]["code"], 0);
-    assert_eq!(record["fwcfg_sha256"].as_array().unwrap().len(), 6);
+    assert_eq!(record["fwcfg_sha256"].as_object().unwrap().len(), 6);
     assert_eq!(record["restore_keys"]["stop_seq"], 1);
     assert_eq!(record["restored_pointer"], "0xffffffff80123456");
     assert_eq!(record["argv_masked_sha256"].as_str().unwrap().len(), 64);

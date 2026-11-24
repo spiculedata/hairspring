@@ -104,19 +104,37 @@ cargo build -p hairspring-dhyve --features driver --bin dhyve-session-driver
 dhyve-session-driver --control 10 --other 5 --seed 1007 --deadline-secs 1410
 ```
 
-It runs one prepare, then 10 restores given the checkpointed run's own input files (group C) and 5 given another seed file
-(group S, the seed one past the first), in the order `CCSCCSCCSCCSCCS`, each cut off after 70 seconds. It stops if the
-first restore is not counted, starts a restore only if it can end before the deadline, and refuses a second prepare. It
-keeps every log and input file, and writes a steps log and a record for each run under `<state>/records`. It prints one
-JSON summary: for each group, how many restores were resumed, how many reported an exit status, and each trial's outcome;
-for group C, whether the serial output and the event lines of the restores were `equal` or `differed`. Nothing is compared
-across seeds. It exits 0 when the prepare worked, no restore met a fault of the host or the tooling and the session ran to
-its end, 1 otherwise, and 2 for a bad command line or a missing setting. It needs its stamp and all three pins
-set, and exits 2 without starting anything if one is not. `--deadline-secs` is seconds from its own start, so whoever starts
-it hands in what is left of the session's time. Every summary says whether the stand-in programs are built in
-(`fake_vmm`), a build that has them refuses to run without `--allow-fake`, and `--build-info` prints only that. It is not
-built by a default `cargo build` or by any release: it needs the `driver` feature. It runs the backend's own prepare, restore and judging functions in its own loop
-and not through the engine's `run`.
+It runs the machine check, then one prepare, then 10 restores given the checkpointed run's own input files (group C) and 5
+given another seed file (group S, the seed one past the first), in the order `CCSCCSCCSCCSCCS`, each cut off after 70
+seconds. Every run's `job` input is 1. A restore starts only if it can end before the deadline (and so does the prepare,
+with a longer worst case). The session ends early, with a code in its summary and its steps log, when:
+
+- the machine check fails (`END:PROBE`);
+- the prepare's standard error holds the warning that the CPU cannot trap the random-number instruction, unless
+  `--rdrand-accepted` was given (`END:RDRAND`);
+- a restore refuses a command (`END:ARGV-REFUSED`), finds its input files not as written (`END:FWCFG-MISMATCH`) or finds
+  the checkpoint changed (`END:CKPT-CHANGED`);
+- the first restore is not counted (`END:FIRST-NOT-OK`), or a second prepare is asked for (`END:REPREPARE`), or no run can
+  end before the deadline (`END:WCAP`).
+
+A restore is counted when it passed, its resume was seen, the guest reported its exit as the last line of its serial log and
+printed, after the stop, the seed its group gives, its name has the session's form and no log passed its bound.
+
+It keeps every log and input file, and writes under `<state>/records`: `steps.tsv`, with one row of seven TAB separated
+fields (`UTC`, writer, kind, state, reference, result, detail) for each step and for each start, destroy and checkpoint, the
+last ending in `argv=` and the command with the state directory shown as `<W>`; `prepare.json`; and one JSON record for each
+run, also for a restore that returned an error. A record keeps the events and the serial lines whole (to 4,096 bytes a
+line), the scan outcome as a word, the input hashes by field name, the restore keys, and the sizes of the VM's state files.
+The summary on standard output is one JSON object: for each group, how many restores were resumed, counted, reported an
+exit status, and each trial's outcome; for group C, whether the serial output and the event lines of the restores were `equal`
+or `differed` (the guest's own seed and long-line lines left out). Nothing is compared across seeds. It exits 0 when the
+prepare worked, no restore met a fault of the host or the tooling and the session ran to its end, 1 otherwise, and 2 for a
+bad command line or a missing setting. It needs its stamp and all three pins set, and exits 2 without starting anything if
+one is not. `--deadline-secs` is seconds from its own start, so whoever starts it hands in what is left of the session's
+time. Every summary says whether the stand-in programs are built in (`fake_vmm`), a build that has them refuses to run
+without `--allow-fake` and runs no machine check, and `--build-info` prints only that. It is not built by a default `cargo
+build` or by any release: it needs the `driver` feature. It runs the backend's own prepare, restore and judging functions in
+its own loop and not through the engine's `run`.
 
 ### Testing it on any machine
 

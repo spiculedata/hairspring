@@ -2,7 +2,7 @@
 //! infrastructure failure ends the run with an error and is never counted as a finding. Replay, bundles that can be
 //! replayed, branching and sweeps are not part of this stage.
 use crate::error::InfraError;
-use crate::fwcfg::Inputs;
+use crate::fwcfg::{Inputs, GUEST_JOB};
 use crate::judge::{judge_trial, Judged};
 use crate::session::Session;
 use crate::BACKEND_ID;
@@ -99,7 +99,7 @@ pub(crate) fn run_trials(
     };
     let inputs = Inputs {
         seed: req.seed,
-        job: 0,
+        job: GUEST_JOB,
     };
     let prepared = match session.prepare(inputs) {
         Ok(p) => p,

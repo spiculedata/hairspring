@@ -38,6 +38,7 @@ pub mod session;
 pub mod signal;
 mod spawn;
 mod startcheck;
+pub mod steps;
 pub mod trial;
 pub mod vmargs;
 pub mod vmname;

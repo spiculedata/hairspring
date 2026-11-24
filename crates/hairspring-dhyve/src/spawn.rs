@@ -20,11 +20,19 @@ pub struct Said {
     pub stdout: String,
 }
 
+/// Told of each root command as it is run: a start (R4) and its end, a destroy (R5) and a checkpoint (R6). The words are
+/// the steps log's: `kind`, `state` (`start` or `done`), the VM name, the exit status (`running` for a start that has
+/// not ended) and the command's argument list.
+pub trait SpawnLog: Send + Sync + std::fmt::Debug {
+    fn row(&self, kind: &str, state: &str, reference: &str, rc: &str, argv: &[String]);
+}
+
 /// Runs the allowed commands for one session stamp.
 #[derive(Debug, Clone)]
 pub struct Spawner {
     commands: Commands,
     timings: Timings,
+    log: Option<std::sync::Arc<dyn SpawnLog>>,
 }
 
 fn infra_of(e: BoundedError) -> InfraError {
@@ -45,7 +53,25 @@ impl Spawner {
         Spawner {
             commands: Commands::new(host, stamp),
             timings,
+            log: None,
         }
+    }
+
+    /// The same spawner telling `log` of each root command.
+    pub fn with_log(self, log: Option<std::sync::Arc<dyn SpawnLog>>) -> Spawner {
+        Spawner { log, ..self }
+    }
+
+    fn tell(&self, kind: &str, state: &str, name: &VmName, rc: &str, argv: &[String]) {
+        if let Some(log) = &self.log {
+            log.row(kind, state, name.as_str(), rc, argv);
+        }
+    }
+
+    /// Records that the VM program started under `name` has ended with `code`.
+    pub fn tell_ended(&self, name: &VmName, code: Option<i32>) {
+        let rc = code.map_or_else(|| "-".to_string(), |c| c.to_string());
+        self.tell("R4", "done", name, &rc, &[]);
     }
 
     /// The same spawner for a checkpoint kept in `dir`, which a restore under another stamp still restores.
@@ -84,13 +110,28 @@ impl Spawner {
     /// usual case before a start, and a failure while the VM is alive is judged by the caller.
     pub fn destroy(&self, name: &VmName) -> Result<Option<i32>, InfraError> {
         let argv = self.commands.destroy(name);
-        Ok(self.run_helper(&argv, Approved::Destroy)?.code)
+        let code = self.run_helper(&argv, Approved::Destroy)?.code;
+        self.tell(
+            "R5",
+            "done",
+            name,
+            &code.map_or("-".into(), |c| c.to_string()),
+            &argv,
+        );
+        Ok(code)
     }
 
     /// Checkpoints the running VM `name` into this session's checkpoint directory.
     pub fn checkpoint(&self, name: &VmName) -> Result<(), InfraError> {
         let argv = self.commands.checkpoint(name);
         let said = self.run_helper(&argv, Approved::Checkpoint)?;
+        self.tell(
+            "R6",
+            "done",
+            name,
+            &said.code.map_or("-".into(), |c| c.to_string()),
+            &argv,
+        );
         match said.code {
             Some(0) => Ok(()),
             Some(n) => Err(InfraError::new(
@@ -142,6 +183,9 @@ impl Spawner {
         let (program, rest) = argv
             .split_first()
             .ok_or_else(|| InfraError::bare(InfraKind::Refused))?;
+        if let Some(name) = args.last().and_then(|n| VmName::parse(n)) {
+            self.tell("R4", "start", &name, "running", &argv);
+        }
         Command::new(program)
             .args(rest)
             .env_clear()

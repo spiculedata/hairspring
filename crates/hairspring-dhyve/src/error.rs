@@ -29,6 +29,7 @@ pub enum InfraKind {
     SecondPrepare,
     PinMismatch,
     ModuleMismatch,
+    CheckpointChanged,
 }
 
 impl InfraKind {
@@ -58,6 +59,7 @@ impl InfraKind {
             InfraKind::SecondPrepare => "a second prepare was refused in this session",
             InfraKind::PinMismatch => "a program or a library does not match its pin",
             InfraKind::ModuleMismatch => "the checkpoint was not made by the expected module",
+            InfraKind::CheckpointChanged => "the checkpoint changed after it was taken",
         }
     }
 }
@@ -102,7 +104,7 @@ impl std::error::Error for InfraError {}
 mod tests {
     use super::*;
 
-    const ALL: [InfraKind; 24] = [
+    const ALL: [InfraKind; 25] = [
         InfraKind::HostBusy,
         InfraKind::Settings,
         InfraKind::Refused,
@@ -127,6 +129,7 @@ mod tests {
         InfraKind::SecondPrepare,
         InfraKind::PinMismatch,
         InfraKind::ModuleMismatch,
+        InfraKind::CheckpointChanged,
     ];
 
     #[test]
