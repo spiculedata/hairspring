@@ -1,16 +1,16 @@
 name: Coverage gate
 
-# Fails when coverage of the web UI drops below the thresholds in .coverage-thresholds.json (a
-# ratchet: raise the numbers as coverage grows, never lower them). The thresholds were set a few
-# points below what was measured (see "rationale" in that file).
+# Fails when coverage of the web UI or of the Rust workspace drops below the thresholds in
+# .coverage-thresholds.json (a ratchet: raise the numbers as coverage grows, never lower them). The
+# thresholds were set a few points below what was measured (see "rationale" in that file).
 #
 # Components:
 #   web      Vitest with the v8 provider over web/src, excluding test files. Gated.
 #   scripts  Node's built-in coverage over scripts/tests. Reported, not gated.
-#   rust     cargo-llvm-cov over the whole workspace. Report only, and only when started by hand
-#            (workflow_dispatch): no Rust coverage number has been measured yet, so there is no
-#            threshold to enforce, and the run is as heavy as the Rust job of ci.yml. This job has
-#            not been run; the first manual run is also its first test.
+#   rust     cargo-llvm-cov over the whole workspace. Gated on workspace line coverage, with the
+#            per-crate line numbers written to the job summary next to it. As heavy as the Rust job
+#            of ci.yml, so it runs on ubuntu-24.04 with a Swatinem/rust-cache entry; the toolchain
+#            and cargo-llvm-cov are what the manual report-only job used before it was gated.
 #
 # Advisory in the same way as the other add-on workflows: `ci` does not depend on it, and the
 # `ci-feedback` workflow comments on a pull request when it is red. The coverage provider is installed
@@ -105,10 +105,9 @@ jobs:
           retention-days: 14
 
   rust:
-    name: coverage report (rust, manual)
-    if: github.event_name == 'workflow_dispatch'
+    name: coverage gate (rust)
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 90
     permissions:
       contents: read
     steps:
@@ -121,21 +120,16 @@ jobs:
           rustup toolchain install stable --profile minimal --component llvm-tools-preview
           rustup default stable
 
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
       - name: Install cargo-llvm-cov
         run: cargo install --locked cargo-llvm-cov
 
       - name: Run the workspace tests with coverage
         run: cargo llvm-cov --workspace --no-fail-fast --json --summary-only --output-path coverage-rust.json
 
-      - name: Summary
-        run: |
-          {
-            echo "## Coverage: rust (report only, no threshold)"
-            echo
-            echo '```'
-            cargo llvm-cov report --summary-only | tail -n 40
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Enforce thresholds
+        run: node scripts/check-coverage.mjs --component rust --summary coverage-rust.json | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload coverage report
         if: always()

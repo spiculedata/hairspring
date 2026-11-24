@@ -39,13 +39,15 @@ A signal whose tool did not produce output is shown as "not available". It is ne
 ## Coverage gate
 
 `.github/workflows/coverage-gate.yml` (named `Coverage gate`) fails a pull request when web coverage
-drops below `.coverage-thresholds.json`. The thresholds are a ratchet set a few points below what was
-measured on 2026-11-20 (statements 92.23, branches 87.65, functions 90.32, lines 93.6 against 88, 83, 86
-and 89): raise them as coverage grows, never lower them. The checker validates each configured web threshold before
-comparing it with a report (a finite number greater than 0 and at most 100) and fails with exit 2 on a malformed one,
-so a typo such as `null` cannot silently disable a metric's floor. The scripts are reported, not gated. A manual,
-report-only Rust job (`cargo-llvm-cov`) exists to produce a first Rust number; a Rust threshold belongs in
-`.coverage-thresholds.json` only after that run has produced one.
+or Rust workspace line coverage drops below `.coverage-thresholds.json`. The thresholds are a ratchet set a few
+points below what was measured: web on 2026-11-20 (statements 92.23, branches 87.65, functions 90.32, lines 93.6
+against 88, 83, 86 and 89) and the Rust workspace with `cargo llvm-cov --workspace --no-fail-fast --json
+--summary-only` on 2026-11-23 (lines 87.40 against a floor of 85; the same run's per-crate numbers are printed to
+the job summary, and `hairspring-store` is the low outlier at 60% because the PostgreSQL tests are skipped when
+`HAIRSPRING_TEST_PG_URL` is unset, as in the gate): raise them as coverage grows, never lower them. The checker
+validates each configured threshold before comparing it with a report (a finite number greater than 0 and at most
+100) and fails with exit 2 on a malformed one, so a typo such as `null` cannot silently disable a metric's floor.
+The scripts are reported, not gated.
 
 ## Changing it
 

@@ -234,9 +234,9 @@ pinned to a full commit SHA and none uses `pull_request_target`:
 - `main-guard.yml`: opens an issue when a commit reaches `main` without a pull request.
 - `nightly-compliance.yml`: a daily run of the Rust and web gates and the audits on `main`; it files a
   tracking issue when `main` is red.
-- `coverage-gate.yml` (workflow name `Coverage gate`): fails a pull request when web UI coverage drops
-  below `.coverage-thresholds.json`, a ratchet set a few points under what was measured; raise it, never
-  lower it. Rust coverage is not measured and not gated (`docs/quality.md`).
+- `coverage-gate.yml` (workflow name `Coverage gate`): fails a pull request when web UI coverage or Rust workspace line
+  coverage drops below `.coverage-thresholds.json`, a ratchet set a few points under what was measured; raise it, never
+  lower it (`docs/quality.md`).
 - `quality-report.yml` and `pr-metrics.yml`: weekly reports (tests, lint, audits, coverage; pull request
   merge rate and time to merge) published as a job summary and an artifact. Nothing is committed.
 - `auto-qa.yml`: weekly retune of the advisory thresholds in `.github/auto-qa-tuning.json` from recent `ci`

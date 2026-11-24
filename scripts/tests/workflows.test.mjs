@@ -160,7 +160,11 @@ describe("pr-metrics.yml, quality-report.yml and coverage-gate.yml", () => {
     assert.match(read("ci-feedback.yml"), /workflows: \[CI, Coverage gate\]/);
   });
 
-  it("the Rust coverage job runs only when started by hand", () => {
-    assert.match(read("coverage-gate.yml"), /rust:\n[\s\S]*?if: github\.event_name == 'workflow_dispatch'/);
+  it("the rust coverage job runs on pull requests and enforces a threshold", () => {
+    const text = read("coverage-gate.yml");
+    const rust = text.slice(text.indexOf("  rust:"), text.indexOf("  rust:") + 4000);
+    assert.doesNotMatch(rust, /if: github\.event_name == 'workflow_dispatch'/);
+    assert.match(rust, /runs-on: ubuntu-24\.04/);
+    assert.match(rust, /check-coverage\.mjs --component rust/);
   });
 });

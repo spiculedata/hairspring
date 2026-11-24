@@ -1,11 +1,14 @@
 {
-  "rationale": "Ratchet, not a target: set a few points below the coverage measured on 2026-11-20 so the gate blocks regressions without failing today. Web UI (Vitest 5, v8 provider, web/src excluding test files): statements 92.23, branches 87.65, functions 90.32, lines 93.6. The Rust workspace is not gated: cargo-llvm-cov was not available where this was set up, so no number was measured and none is guessed; .github/workflows/coverage-gate.yml has a manual, report-only Rust job, and a threshold belongs here only after it has produced one. The scripts under scripts/ are reported, not gated. Raise these as coverage grows; never lower them.",
+  "rationale": "Ratchet, not a target: set a few points below the coverage measured so the gate blocks regressions without failing today. Web UI (Vitest 5, v8 provider, web/src excluding test files), measured 2026-11-20: statements 92.23, branches 87.65, functions 90.32, lines 93.6. Rust workspace (cargo-llvm-cov 0.9.2, --workspace --no-fail-fast, measured 2026-11-23 on Linux arm64 stable 1.100.0): lines 87.40 (35139/40205); the floor below is line coverage only, because this measurement config reports no branch data, and the job runs without PostgreSQL or the SDK conformance toolchains (the same skips as this measurement), so per-crate numbers move only with the code. Raise these as coverage grows; never lower them.",
   "thresholds": {
     "web": {
       "statements": 88,
       "branches": 83,
       "functions": 86,
       "lines": 89
+    },
+    "rust": {
+      "lines": 85
     }
   }
 }

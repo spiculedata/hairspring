@@ -41,6 +41,11 @@
 
 ### Changed
 
+- Rust crate coverage is now gated on pull requests. The `Coverage gate` workflow's Rust job, previously a manual,
+  report-only run, runs on every pull request: `cargo-llvm-cov --workspace --no-fail-fast --json --summary-only` over
+  the whole workspace, whose line coverage the checker in `scripts/check-coverage.mjs` compares with a new `rust`
+  threshold in `.coverage-thresholds.json` (measured 87.40 lines on 2026-11-23, floor 85, a ratchet raised as coverage
+  grows and never lowered). The job summary prints the workspace figure and the per-crate line table.
 - Replaying or confirming a bundle recorded on a different backend than the target's now runs nothing and reports a
   changed environment, instead of failing with an `invalid bundle` error. `hairspring replay` and `hairspring confirm`
   exit `3` (they exited `2`). `POST /api/replay` and the MCP `replay_bundle` tool answer with `ran` false,
