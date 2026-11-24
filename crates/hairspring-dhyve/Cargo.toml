@@ -2,9 +2,31 @@
 name = "hairspring-dhyve"
 version = "0.1.0"
 edition = "2021"
-description = "dhyve backend for Hairspring: experimental, default-off, machine check only so far"
+description = "dhyve backend for Hairspring: experimental, default-off, the smallest trial shape only"
 license = "Apache-2.0"
 
 [dependencies]
 hairspring-core = { path = "../hairspring-core" }
 hairspring-engine = { path = "../hairspring-engine" }
+hairspring-props = { path = "../hairspring-props" }
+serde_json = "1.0.154"
+
+[features]
+# A stand-in for the VM programs and the control peer, so the run path can be exercised on any machine.
+fake-vmm = []
+# The thin session driver binary. Not part of any default build.
+driver = []
+
+[[bin]]
+name = "dhyve-fake-vmm"
+path = "src/bin/dhyve_fake_vmm/main.rs"
+required-features = ["fake-vmm"]
+
+[[bin]]
+name = "dhyve-session-driver"
+path = "src/bin/dhyve_session_driver.rs"
+required-features = ["driver"]
+
+[dev-dependencies]
+# The tests build the fake peer and the driver by turning their features on for this package.
+hairspring-dhyve = { path = ".", features = ["fake-vmm", "driver"] }

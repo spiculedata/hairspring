@@ -1,0 +1,294 @@
+//! Starting programs. Every program this backend starts goes through here and through the allow-list in `commands`: a
+//! command that is not one of the allowed shapes is refused before anything is spawned. The environment of a started
+//! program is cleared (the root commands set their own library path through `env`), nothing is read from standard input,
+//! and a VM is started in its own process group.
+use crate::bounded::{run_bounded, BoundedError};
+use crate::commands::{Approved, Commands};
+use crate::error::{InfraError, InfraKind};
+use crate::host::{HostConfig, Timings};
+use crate::logs::parse_free_kib;
+use crate::vmname::{Stamp, VmName};
+use std::fs::File;
+use std::os::unix::process::CommandExt;
+use std::path::Path;
+use std::process::{Child, Command, Stdio};
+
+/// What a short helper command said.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Said {
+    pub code: Option<i32>,
+    pub stdout: String,
+}
+
+/// Told of each root command as it is run: a start (R4) and its end, a destroy (R5) and a checkpoint (R6). The words are
+/// the steps log's: `kind`, `state` (`start` or `done`), the VM name, the exit status (`running` for a start that has
+/// not ended) and the command's argument list.
+pub trait SpawnLog: Send + Sync + std::fmt::Debug {
+    fn row(&self, kind: &str, state: &str, reference: &str, rc: &str, argv: &[String]);
+}
+
+/// Runs the allowed commands for one session stamp.
+#[derive(Debug, Clone)]
+pub struct Spawner {
+    commands: Commands,
+    timings: Timings,
+    log: Option<std::sync::Arc<dyn SpawnLog>>,
+}
+
+fn infra_of(e: BoundedError) -> InfraError {
+    match e {
+        BoundedError::Refused(r) => InfraError::new(InfraKind::Refused, r.to_string()),
+        BoundedError::TimedOut => InfraError::new(
+            InfraKind::StartFailed,
+            "a helper command did not answer in time",
+        ),
+        BoundedError::Start(k) | BoundedError::Wait(k) => {
+            InfraError::new(InfraKind::StartFailed, k)
+        }
+    }
+}
+
+impl Spawner {
+    pub fn new(host: &HostConfig, timings: Timings, stamp: &Stamp) -> Spawner {
+        Spawner {
+            commands: Commands::new(host, stamp),
+            timings,
+            log: None,
+        }
+    }
+
+    /// The same spawner telling `log` of each root command.
+    pub fn with_log(self, log: Option<std::sync::Arc<dyn SpawnLog>>) -> Spawner {
+        Spawner { log, ..self }
+    }
+
+    fn tell(&self, kind: &str, state: &str, name: &VmName, rc: &str, argv: &[String]) {
+        if let Some(log) = &self.log {
+            log.row(kind, state, name.as_str(), rc, argv);
+        }
+    }
+
+    /// Records that the VM program started under `name` has ended with `code`.
+    pub fn tell_ended(&self, name: &VmName, code: Option<i32>) {
+        let rc = code.map_or_else(|| "-".to_string(), |c| c.to_string());
+        self.tell("R4", "done", name, &rc, &[]);
+    }
+
+    /// The same spawner for a checkpoint kept in `dir`, which a restore under another stamp still restores.
+    pub fn with_checkpoint_dir(self, dir: &Path) -> Spawner {
+        Spawner {
+            commands: self.commands.with_checkpoint_dir(dir),
+            ..self
+        }
+    }
+
+    fn approve(&self, argv: &[String], expected: Approved) -> Result<(), InfraError> {
+        match self.commands.check(argv) {
+            Ok(got) if got == expected => Ok(()),
+            Ok(_) => Err(InfraError::new(
+                InfraKind::Refused,
+                "not the command that was asked for",
+            )),
+            Err(r) => Err(InfraError::new(InfraKind::Refused, r.to_string())),
+        }
+    }
+
+    fn run_helper(&self, argv: &[String], expected: Approved) -> Result<Said, InfraError> {
+        self.approve(argv, expected)?;
+        let (program, args) = argv
+            .split_first()
+            .ok_or_else(|| InfraError::bare(InfraKind::Refused))?;
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let answer = run_bounded(program, &args, self.timings.helper_cap).map_err(infra_of)?;
+        Ok(Said {
+            code: answer.code,
+            stdout: answer.stdout,
+        })
+    }
+
+    /// Runs the root command `argv` of kind `kind` (R5 or R6) for `name`, and tells the log a row for it whatever came of
+    /// it: its exit status, `timeout` when it did not answer in time, or `-` when it could not be run.
+    fn run_told(
+        &self,
+        kind: &str,
+        name: &VmName,
+        argv: &[String],
+        expected: Approved,
+    ) -> Result<Said, InfraError> {
+        self.approve(argv, expected)?;
+        let (program, args) = argv
+            .split_first()
+            .ok_or_else(|| InfraError::bare(InfraKind::Refused))?;
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        match run_bounded(program, &args, self.timings.helper_cap) {
+            Ok(answer) => {
+                let rc = answer.code.map_or("-".into(), |c| c.to_string());
+                self.tell(kind, "done", name, &rc, argv);
+                Ok(Said {
+                    code: answer.code,
+                    stdout: answer.stdout,
+                })
+            }
+            Err(e) => {
+                let rc = if matches!(e, BoundedError::TimedOut) {
+                    "timeout"
+                } else {
+                    "-"
+                };
+                self.tell(kind, "done", name, rc, argv);
+                Err(infra_of(e))
+            }
+        }
+    }
+
+    /// Destroys the VM named `name`. Its exit status is returned: destroying a VM that is not there fails, which is the
+    /// usual case before a start, and a failure while the VM is alive is judged by the caller.
+    pub fn destroy(&self, name: &VmName) -> Result<Option<i32>, InfraError> {
+        let argv = self.commands.destroy(name);
+        Ok(self.run_told("R5", name, &argv, Approved::Destroy)?.code)
+    }
+
+    /// Checkpoints the running VM `name` into this session's checkpoint directory.
+    pub fn checkpoint(&self, name: &VmName) -> Result<(), InfraError> {
+        let argv = self.commands.checkpoint(name);
+        let said = self.run_told("R6", name, &argv, Approved::Checkpoint)?;
+        match said.code {
+            Some(0) => Ok(()),
+            Some(n) => Err(InfraError::new(
+                InfraKind::Checkpoint,
+                format!("the checkpoint command exited {n}"),
+            )),
+            None => Err(InfraError::new(
+                InfraKind::Checkpoint,
+                "the checkpoint command was ended by a signal",
+            )),
+        }
+    }
+
+    /// Whether the `vmm` module is loaded, and what it is: its line of the module list. A VM start may load a module on
+    /// its own when none is loaded, so this runs under the host lock before every start, and a start is refused unless
+    /// the answer is loaded.
+    pub fn vmm_identity(&self) -> Result<String, InfraError> {
+        let loaded = self.run_helper(&self.commands.kldstat(), Approved::Kldstat)?;
+        if loaded.code != Some(0) {
+            return Err(InfraError::new(
+                InfraKind::VmmNotLoaded,
+                format!("the module list answered with status {:?}", loaded.code),
+            ));
+        }
+        let said = self.run_helper(&self.commands.kldstat_identity(), Approved::KldstatIdentity)?;
+        said.stdout
+            .lines()
+            .rev()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+            .ok_or_else(|| InfraError::new(InfraKind::VmmNotLoaded, "the module list was empty"))
+    }
+
+    /// The free space under `dir`, in KiB.
+    pub fn free_kib(&self, dir: &Path) -> Result<u64, InfraError> {
+        let argv = Commands::free_space(dir);
+        let said = self.run_helper(&argv, Approved::FreeSpace)?;
+        parse_free_kib(&said.stdout)
+            .ok_or_else(|| InfraError::new(InfraKind::LowSpace, "the free space could not be read"))
+    }
+
+    /// Starts a VM with `args` (the last of which is its name), its standard error written to `run_log`, in its own
+    /// process group.
+    pub fn start_vm(&self, args: &[String], run_log: &Path) -> Result<Child, InfraError> {
+        let argv = self.commands.bhyve(args);
+        self.approve(&argv, Approved::Bhyve)?;
+        let log = File::create(run_log).map_err(|e| InfraError::io("create the run log", &e))?;
+        let (program, rest) = argv
+            .split_first()
+            .ok_or_else(|| InfraError::bare(InfraKind::Refused))?;
+        if let Some(name) = args.last().and_then(|n| VmName::parse(n)) {
+            self.tell("R4", "start", &name, "running", &argv);
+        }
+        let started = Command::new(program)
+            .args(rest)
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(log))
+            .process_group(0)
+            .spawn();
+        started.map_err(|e| {
+            // A start row is always closed, so a spawn that failed leaves a done row with no status.
+            if let Some(name) = args.last().and_then(|n| VmName::parse(n)) {
+                self.tell_ended(&name, None);
+            }
+            InfraError::new(InfraKind::StartFailed, e.kind().to_string())
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn host() -> HostConfig {
+        HostConfig {
+            sudo: "/nonexistent/sudo".into(),
+            kldstat: "/nonexistent/kldstat".into(),
+            ..HostConfig::new(
+                "/nonexistent/bhyve".into(),
+                "/nonexistent/bhyvectl".into(),
+                "/nonexistent/lib".into(),
+                std::env::temp_dir(),
+                "/nonexistent/k".into(),
+                "/nonexistent/i".into(),
+            )
+        }
+    }
+
+    fn stamp() -> Stamp {
+        Stamp::from_counter(1)
+    }
+
+    fn spawner() -> Spawner {
+        Spawner::new(&host(), Timings::fast(), &stamp())
+    }
+
+    #[test]
+    fn a_program_that_loads_a_module_is_refused_before_anything_is_spawned() {
+        let argv = vec!["/sbin/kldload".to_string(), "vmm".to_string()];
+        let err = spawner().run_helper(&argv, Approved::Destroy).unwrap_err();
+        assert_eq!(err.kind, InfraKind::Refused);
+        assert!(err.detail.contains("kernel modules"), "{err}");
+    }
+
+    #[test]
+    fn a_command_that_is_not_the_one_asked_for_is_refused() {
+        let s = spawner();
+        let name = VmName::new(&stamp(), 1).unwrap();
+        let destroy = s.commands.destroy(&name);
+        let err = s.run_helper(&destroy, Approved::Checkpoint).unwrap_err();
+        assert_eq!(err.kind, InfraKind::Refused);
+    }
+
+    #[test]
+    fn a_vm_start_with_a_name_outside_the_grammar_is_refused_and_creates_no_log() {
+        let log = std::env::temp_dir().join(format!("hs-dhyve-spawn-{}.log", std::process::id()));
+        let _ = std::fs::remove_file(&log);
+        let args = vec!["-c".to_string(), "1".to_string(), "hs_plain".to_string()];
+        let err = spawner().start_vm(&args, &log).unwrap_err();
+        assert_eq!(err.kind, InfraKind::Refused);
+        assert!(!log.exists());
+    }
+
+    #[test]
+    fn a_program_that_cannot_be_started_is_a_start_failure() {
+        let name = VmName::new(&stamp(), 1).unwrap();
+        let err = spawner().destroy(&name).unwrap_err();
+        assert_eq!(err.kind, InfraKind::StartFailed);
+        let err = spawner().vmm_identity().unwrap_err();
+        assert_eq!(err.kind, InfraKind::StartFailed);
+    }
+
+    #[test]
+    fn free_space_is_read_from_the_real_df() {
+        assert!(spawner().free_kib(&std::env::temp_dir()).unwrap() > 0);
+    }
+}

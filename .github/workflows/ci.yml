@@ -13,6 +13,25 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The dhyve backend and its session driver are built for FreeBSD, but their FreeBSD-only code (cfg(target_os)) is not
+  # compiled on Linux or macOS, so an ordinary build cannot see it break. Checking for the target does: it needs no linker
+  # or C compiler (the dependency graph has none), only the target's standard library.
+  dhyve-freebsd-check:
+    name: dhyve builds for FreeBSD
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-freebsd
+      - uses: Swatinem/rust-cache@v2
+      - name: Check the library
+        run: cargo check --locked --target x86_64-unknown-freebsd -p hairspring-dhyve
+      - name: Check the session driver
+        run: cargo check --locked --target x86_64-unknown-freebsd -p hairspring-dhyve --features driver --bin dhyve-session-driver
+      - name: Check the tests and the stand-in VM programs
+        run: cargo check --locked --target x86_64-unknown-freebsd -p hairspring-dhyve --all-targets --features fake-vmm,driver
+
   rust:
     name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -38,6 +57,12 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace --no-fail-fast
+      # A default workspace build must not turn the experimental dhyve feature on in a shared crate.
+      - name: Default features guard
+        run: bash scripts/check-default-features.sh
+      # The session driver, built the way a session builds it, must not have the stand-in programs built in.
+      - name: Driver build check
+        run: bash scripts/check-driver-build.sh
       # System-level (Hermit) tests need performance counters and are run separately on bare metal:
       #   HAIRSPRING_HERMIT_REAL=1 cargo test -p hairspring-hermit --test real_hermit
 
@@ -511,6 +536,10 @@ jobs:
           bash scripts/check-workflow-shells.sh
       - name: Embedded-UI check script tests
         run: bash scripts/test-check-embedded-ui.sh
+      - name: Default features guard script tests
+        run: bash scripts/test-check-default-features.sh
+      - name: Driver build check script tests
+        run: bash scripts/test-check-driver-build.sh
       # Offline: builds a fixture repository in a temporary directory and checks the report's parsing against it.
       - name: Hermit upstream report self-test
         run: bash scripts/hermit-upstream-report.sh --self-test
@@ -627,6 +656,7 @@ jobs:
     if: always()
     needs:
       - rust
+      - dhyve-freebsd-check
       - rust-ubuntu-container
       - c-sdk
       - rust-sdk

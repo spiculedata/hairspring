@@ -14,14 +14,13 @@ pub fn gather() -> DhyveFacts {
 
 #[cfg(target_os = "freebsd")]
 mod freebsd {
-    use crate::bounded::{run_bounded, COMMAND_DEADLINE};
+    use crate::bounded::{run_read_only, COMMAND_DEADLINE};
+    use crate::commands::Commands;
     use crate::facts::{DhyveFacts, ModuleFact};
     use crate::read::{
         binary_fact, cpu_from_boot_messages, first_line, leftover_names, parse_whole_number,
     };
 
-    const KLDSTAT: &str = "/sbin/kldstat";
-    const SYSCTL: &str = "/sbin/sysctl";
     const BOOT_MESSAGES: &str = "/var/run/dmesg.boot";
     const VMM_DEVICES: &str = "/dev/vmm";
 
@@ -43,14 +42,14 @@ mod freebsd {
     }
 
     fn sysctl(name: &str) -> Option<String> {
-        run_bounded(SYSCTL, &["-n", name], COMMAND_DEADLINE)
+        run_read_only(&Commands::sysctl(name), COMMAND_DEADLINE)
             .ok()
             .filter(|a| a.success)
             .map(|a| a.stdout)
     }
 
     fn module() -> ModuleFact {
-        match run_bounded(KLDSTAT, &["-q", "-n", "vmm"], COMMAND_DEADLINE) {
+        match run_read_only(&Commands::pinned_kldstat(), COMMAND_DEADLINE) {
             Ok(a) if a.success => ModuleFact::Loaded,
             Ok(_) => ModuleFact::NotLoaded,
             Err(e) => ModuleFact::Unanswered(format!("kldstat: {e}")),

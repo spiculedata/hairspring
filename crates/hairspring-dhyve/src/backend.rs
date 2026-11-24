@@ -1,5 +1,8 @@
 //! The `dhyve` backend as the engine sees it: an identity, an empty capability row and a machine check. It runs
 //! nothing yet; `run` and `replay` say so.
+use crate::host::{HostConfig, Timings};
+use crate::logs::Bounds;
+use crate::session::Session;
 use hairspring_core::bundle::Bundle;
 use hairspring_engine::backend::{Backend, Progress, RunRequest};
 use hairspring_engine::backend_info::{BackendLimits, BackendVersion, Capabilities};
@@ -15,12 +18,53 @@ pub const DETERMINISM_CLASS: &str = "unproven";
 /// One virtual machine at a time is the only shape this backend is designed for.
 const MAX_PARALLELISM: u32 = 1;
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct DhyveBackend;
+/// The settings a backend runs with. `new()` reads them from the environment when a run starts.
+#[derive(Debug, Clone)]
+struct Settings {
+    host: HostConfig,
+    timings: Timings,
+    bounds: Bounds,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct DhyveBackend {
+    settings: Option<Settings>,
+}
 
 impl DhyveBackend {
     pub fn new() -> DhyveBackend {
-        DhyveBackend
+        DhyveBackend::default()
+    }
+
+    /// A backend with its settings given, for a host session and for tests against the fake.
+    pub fn with_settings(host: HostConfig, timings: Timings, bounds: Bounds) -> DhyveBackend {
+        DhyveBackend {
+            settings: Some(Settings {
+                host,
+                timings,
+                bounds,
+            }),
+        }
+    }
+
+    fn session(&self) -> Result<Session, EngineError> {
+        let settings = match &self.settings {
+            Some(s) => s.clone(),
+            None => Settings {
+                host: HostConfig::from_env().map_err(|e| {
+                    EngineError::BackendUnavailable(format!(
+                        "the {BACKEND_ID} backend cannot run: {e}"
+                    ))
+                })?,
+                timings: Timings::standard(),
+                bounds: Bounds::interim(),
+            },
+        };
+        Ok(Session::new(
+            settings.host,
+            settings.timings,
+            settings.bounds,
+        ))
     }
 }
 
@@ -51,7 +95,7 @@ impl Backend for DhyveBackend {
     fn limits(&self) -> BackendLimits {
         BackendLimits {
             max_parallelism: Some(MAX_PARALLELISM),
-            max_trial_seconds: None,
+            max_trial_seconds: Some(crate::run::MAX_TRIAL_SECS),
         }
     }
 
@@ -61,12 +105,16 @@ impl Backend for DhyveBackend {
 
     fn run(
         &self,
-        _spec: &TargetSpec,
-        _req: &RunRequest,
-        _budget: Budget,
-        _progress: &mut dyn FnMut(Progress) -> bool,
+        spec: &TargetSpec,
+        req: &RunRequest,
+        budget: Budget,
+        progress: &mut dyn FnMut(Progress) -> bool,
     ) -> Result<RunOutcome, EngineError> {
-        Err(not_built_yet("run"))
+        if req.mode.is_sweep() {
+            return Err(not_built_yet("sweep"));
+        }
+        let session = self.session()?;
+        crate::run::run_trials(&session, spec, req, budget, progress)
     }
 
     fn replay(&self, _spec: &TargetSpec, _bundle: &Bundle) -> Result<ReplayOutcome, EngineError> {
@@ -107,6 +155,7 @@ mod tests {
         assert_eq!(info.display_name, "dhyve (experimental)");
         assert_eq!(info.capabilities, Capabilities::default());
         assert_eq!(info.limits.max_parallelism, Some(1));
+        assert_eq!(info.limits.max_trial_seconds, Some(100));
         assert_eq!(info.version.binary_sha256, None);
         assert_eq!(DETERMINISM_CLASS, "unproven");
     }
@@ -120,11 +169,23 @@ mod tests {
     }
 
     #[test]
-    fn run_and_replay_say_they_are_not_available_yet() {
+    fn replay_and_sweep_say_they_are_not_available_yet() {
         let b = DhyveBackend::new();
         let err = b.replay(&spec(), &Bundle::new(1, "b", vec![])).unwrap_err();
         assert!(matches!(err, EngineError::BackendUnavailable(m) if m.contains("`replay`")));
+        let sweep = RunRequest::new("t", 1).with_mode(hairspring_engine::mode::RunMode::Sweep);
         let err = b
+            .run(&spec(), &sweep, Budget::default(), &mut |_| true)
+            .unwrap_err();
+        assert!(matches!(err, EngineError::BackendUnavailable(m) if m.contains("`sweep`")));
+    }
+
+    #[test]
+    fn a_run_with_no_settings_says_which_setting_is_missing() {
+        if std::env::var_os(crate::host::ENV_BHYVE).is_some() {
+            return;
+        }
+        let err = DhyveBackend::new()
             .run(
                 &spec(),
                 &RunRequest::new("t", 1),
@@ -132,7 +193,19 @@ mod tests {
                 &mut |_| true,
             )
             .unwrap_err();
-        assert!(matches!(err, EngineError::BackendUnavailable(m) if m.contains("`run`")));
+        let EngineError::BackendUnavailable(m) = err else {
+            panic!("not unavailable");
+        };
+        assert!(m.contains(crate::host::ENV_BHYVE), "{m}");
+        assert!(!m.contains("--"), "{m}");
+    }
+
+    #[test]
+    fn every_capability_flag_is_false_including_replay() {
+        let c = DhyveBackend::new().capabilities();
+        assert_eq!(c, Capabilities::default());
+        assert!(!c.replay && !c.confirm && !c.shrink && !c.strict_verify);
+        assert!(!c.snapshot_branch && !c.fault_injection && !c.multi_process);
     }
 
     #[test]

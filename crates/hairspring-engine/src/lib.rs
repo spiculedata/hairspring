@@ -3,6 +3,7 @@
 //! MCP) talks to [`engine::Engine`].
 pub mod backend;
 pub mod backend_info;
+pub mod claim_standing;
 pub mod config;
 pub mod confirm;
 pub mod demos;
