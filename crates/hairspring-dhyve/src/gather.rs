@@ -49,7 +49,7 @@ mod freebsd {
     }
 
     fn module() -> ModuleFact {
-        match run_read_only(&Commands::kldstat(), COMMAND_DEADLINE) {
+        match run_read_only(&Commands::pinned_kldstat(), COMMAND_DEADLINE) {
             Ok(a) if a.success => ModuleFact::Loaded,
             Ok(_) => ModuleFact::NotLoaded,
             Err(e) => ModuleFact::Unanswered(format!("kldstat: {e}")),

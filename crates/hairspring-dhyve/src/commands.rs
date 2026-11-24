@@ -173,6 +173,12 @@ impl Commands {
         argv
     }
 
+    /// Whether the `vmm` module is loaded, asked of the pinned `kldstat`. The machine check has no host settings to take
+    /// a path from, and `check_read_only` accepts exactly this question for the pinned program.
+    pub fn pinned_kldstat() -> Vec<String> {
+        [KLDSTAT, "-q", "-n", "vmm"].map(String::from).to_vec()
+    }
+
     /// Whether the `vmm` module is loaded.
     pub fn kldstat(&self) -> Vec<String> {
         vec![
@@ -253,6 +259,17 @@ impl Commands {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The machine check's question is built without host settings, and it is one the read-only check approves. (The
+    /// machine check itself is compiled only for FreeBSD, so this is what a build on another system can pin.)
+    #[test]
+    fn the_machine_checks_module_question_is_approved_for_the_pinned_program() {
+        assert_eq!(
+            check_read_only(&Commands::pinned_kldstat()),
+            Ok(Approved::Kldstat)
+        );
+        assert_eq!(Commands::pinned_kldstat()[0], KLDSTAT);
+    }
 
     fn host() -> HostConfig {
         HostConfig::new(

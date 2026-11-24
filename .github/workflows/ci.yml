@@ -13,6 +13,23 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The dhyve backend and its session driver are built for FreeBSD, but their FreeBSD-only code (cfg(target_os)) is not
+  # compiled on Linux or macOS, so an ordinary build cannot see it break. Checking for the target does: it needs no linker
+  # or C compiler (the dependency graph has none), only the target's standard library.
+  dhyve-freebsd-check:
+    name: dhyve builds for FreeBSD
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-freebsd
+      - uses: Swatinem/rust-cache@v2
+      - name: Check the library
+        run: cargo check --locked --target x86_64-unknown-freebsd -p hairspring-dhyve
+      - name: Check the session driver
+        run: cargo check --locked --target x86_64-unknown-freebsd -p hairspring-dhyve --features driver --bin dhyve-session-driver
+
   rust:
     name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
