@@ -228,7 +228,7 @@ fn a_probe_that_passes_is_recorded_with_the_rows_it_does_not_gate_on() {
     let probe = rows.iter().find(|r| r[2] == "PROBE").unwrap();
     assert_eq!(
         probe[6],
-        "gate=PASS cpu=ok module_kind=note access=note nmi=ok"
+        "gate=PASS cpu=ok space=na module_kind=note access=note nmi=ok"
     );
 }
 
@@ -336,7 +336,8 @@ fn the_codes_of_the_stops_that_end_a_session_are_named_for_the_faults_that_cause
         (InfraKind::Refused, Some("END:ARGV-REFUSED")),
         (InfraKind::NoConnect, None),
         (InfraKind::ResumeNotTaken, None),
-        (InfraKind::VmmChanged, None),
+        (InfraKind::VmmChanged, Some("END:VMM-CHANGED")),
+        (InfraKind::VmmNotLoaded, Some("END:VMM-CHANGED")),
     ] {
         assert_eq!(end_code(&InfraError::bare(kind)), code, "{kind:?}");
     }
@@ -473,4 +474,89 @@ fn the_serial_and_event_digests_leave_out_the_seed_and_long_line_lines() {
         .collect();
     assert_eq!(digest_lines(&a, &|_| true), digest_lines(&b, &|_| true));
     assert_ne!(digest_lines(&a, &|_| true), digest_lines(&c, &|_| true));
+}
+
+// ---- the probe row and the argv of a start in the steps log -------------------------------------------------------------
+
+fn probe_report(
+    rows: &[(&str, hairspring_engine::probe::ProbeStatus)],
+) -> hairspring_engine::probe::ProbeReport {
+    use hairspring_engine::probe::{ProbeReport, ProbeRow, ProbeStatus};
+    let missing: Vec<String> = rows
+        .iter()
+        .filter(|(_, s)| *s == ProbeStatus::Fail)
+        .map(|(l, _)| format!("{l} missing"))
+        .collect();
+    ProbeReport {
+        subject: "dhyve".into(),
+        rows: rows
+            .iter()
+            .map(|(l, s)| ProbeRow {
+                label: (*l).into(),
+                status: *s,
+                detail: String::new(),
+            })
+            .collect(),
+        ready_note: String::new(),
+        missing,
+    }
+}
+
+#[test]
+fn the_probe_row_records_the_space_row_and_any_fail_row_gates_cpu_included() {
+    use hairspring_dhyve::driver::probe_row;
+    use hairspring_engine::probe::ProbeStatus::{Fail, Note, Ok};
+    let (pass, text) = probe_row(&probe_report(&[
+        ("cpu", Ok),
+        ("space", Note),
+        ("module kind", Ok),
+        ("access", Ok),
+        ("nmi", Ok),
+    ]));
+    assert!(pass);
+    assert_eq!(
+        text,
+        "gate=PASS cpu=ok space=note module_kind=ok access=ok nmi=ok"
+    );
+    let (pass, text) = probe_row(&probe_report(&[
+        ("cpu", Fail),
+        ("space", Note),
+        ("module kind", Ok),
+        ("access", Ok),
+        ("nmi", Ok),
+    ]));
+    assert!(!pass);
+    assert!(
+        text.starts_with("gate=FAIL:cpu cpu=fail space=note"),
+        "{text}"
+    );
+    let (pass, _) = probe_row(&probe_report(&[
+        ("cpu", Ok),
+        ("space", Fail),
+        ("module kind", Ok),
+        ("access", Ok),
+        ("nmi", Ok),
+    ]));
+    assert!(!pass, "a space row that fails gates too");
+}
+
+#[test]
+fn an_argv_word_with_spaces_stays_recoverable_from_the_r4_row() {
+    let rig = common::Rig::new("spec-argv-spaces");
+    let session = rig.session().with_one_prepare().with_keep_all();
+    run_session(&session, &Plan::new(1007, 1, 0));
+    let log = std::fs::read_to_string(steps_log(&records_dir(&session))).unwrap();
+    let start = log
+        .lines()
+        .map(|l| l.split('\t').collect::<Vec<_>>())
+        .find(|f| f[2] == "R4" && f[3] == "start")
+        .expect("an R4 start row");
+    let argv = start[6].strip_prefix("argv=").unwrap();
+    let cmdline = "linux.cmdline=console=ttyS0 nokaslr";
+    assert!(argv.contains(cmdline), "{argv}");
+    // Cutting the one known word out leaves words that hold no space, so the row is exact when read with that rule.
+    let rest = argv.replacen(cmdline, "CMDLINE", 1);
+    let before_tail = rest.split(" -o ").count();
+    assert!(before_tail > 1);
+    assert!(!rest.contains("  "), "no empty word");
 }

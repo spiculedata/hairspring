@@ -129,8 +129,43 @@ impl Rig {
         let root = self.root.display().to_string();
         self.read_lines("args.log")
             .into_iter()
-            .map(|l| l.replace(&root, "ROOT"))
+            .map(|l| l.replace(&root, "ROOT").replace('\u{1f}', " "))
             .collect()
+    }
+
+    /// The arguments of each `bhyve` start as separate words, with this rig's directory masked.
+    pub fn start_words(&self) -> Vec<Vec<String>> {
+        let root = self.root.display().to_string();
+        self.read_lines("args.log")
+            .into_iter()
+            .map(|l| {
+                l.replace(&root, "ROOT")
+                    .split('\u{1f}')
+                    .map(String::from)
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The six input files each guest read, one line for each.
+    pub fn inputs(&self) -> Vec<String> {
+        self.read_lines("inputs.log")
+    }
+
+    /// Forgets what the fake recorded and what the state directory holds, to run another session in the same rig.
+    pub fn reset(&self) {
+        for f in [
+            "calls.log",
+            "args.log",
+            "trials.log",
+            "inputs.log",
+            "vms",
+            "bhyve.count",
+            "kld.count",
+        ] {
+            let _ = std::fs::remove_file(self.fake.join(f));
+        }
+        let _ = std::fs::remove_dir_all(&self.host.state_dir);
     }
 
     pub fn trials(&self) -> Vec<String> {

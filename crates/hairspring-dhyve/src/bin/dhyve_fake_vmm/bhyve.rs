@@ -196,7 +196,8 @@ fn send(conn: &mut UnixStream, m: &Message) {
 /// Runs one start of the fake `bhyve`; returns its exit status.
 pub fn run(fake: &Fake, args: &[String]) -> i32 {
     fake.log_call(&format!("bhyve {}", args.last().map_or("", String::as_str)));
-    fake.append("args.log", &args.join(" "));
+    // The unit separator, because one argument (the kernel command line) holds spaces.
+    fake.append("args.log", &args.join("\u{1f}"));
     if let Err(why) = environment_ok(fake) {
         eprintln!("{why}");
         return 70;
@@ -432,6 +433,16 @@ fn guest(vm: &mut Vm) -> i32 {
     }
     vm.fake
         .append("trials.log", &format!("seed={seed} name={}", vm.p.name));
+    let inputs: Vec<String> = ["seed", "job", "plan", "override", "trigger", "runner"]
+        .iter()
+        .map(|f| {
+            vm.p.fwcfg
+                .get(*f)
+                .and_then(|p| std::fs::read_to_string(p).ok())
+                .unwrap_or_default()
+        })
+        .collect();
+    vm.fake.append("inputs.log", &inputs.join(" "));
     if vm.has("log_overrun") {
         let chunk = "x".repeat(1024);
         for _ in 0..OVERRUN_BYTES / chunk.len() {

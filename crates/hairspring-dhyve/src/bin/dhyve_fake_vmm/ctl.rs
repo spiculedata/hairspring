@@ -21,13 +21,23 @@ pub const FAKE_RIP: u64 = 0xffff_ffff_8012_3456;
 /// `kldstat -q -n vmm` (exit status only) and `kldstat -n vmm` (the module's line). `kld=absent` says it is not loaded.
 pub fn kldstat(fake: &Fake, args: &[String]) -> i32 {
     fake.log_call(&format!("kldstat {}", args.join(" ")));
-    if fake.setting("kld") == Some("absent".into()) {
+    // `kld_after=N` and `kld_line_after=N`: the module is there for the first N asks, then gone or changed.
+    let asks = fake.count_ask();
+    let after = |key: &str| {
+        fake.setting(key)
+            .and_then(|v| v.parse::<usize>().ok())
+            .is_some_and(|n| asks > n)
+    };
+    if fake.setting("kld") == Some("absent".into()) || after("kld_after") {
         return 1;
     }
     if args.first().map(String::as_str) != Some("-q") {
-        let line = fake
+        let mut line = fake
             .setting("kld_line")
             .unwrap_or_else(|| KLD_LINE.to_string());
+        if after("kld_line_after") {
+            line = " 9    1 0xffffffff83000000 4b000 vmm.ko".to_string();
+        }
         println!("Id Refs Address                Size Name\n{line}");
     }
     0
@@ -67,6 +77,9 @@ fn checkpoint(fake: &Fake, vm: &str, target: &Path) -> i32 {
     if !fake.exists(vm) || fake.setting("checkpoint") == Some("fail".into()) {
         return 1;
     }
+    if fake.setting("checkpoint") == Some("hang".into()) {
+        sleep(Duration::from_secs(20));
+    }
     let (meta, kern) = match fake.setting("checkpoint").as_deref() {
         Some("undecodable") => ("{}".to_string(), vec![0u8; 8]),
         Some("old_module") => {
@@ -97,6 +110,10 @@ pub fn sudo(fake: &Fake, args: &[String]) -> i32 {
     let Some((program, program_args)) = rest.split_first() else {
         return 64;
     };
+    if fake.sudo_mode().as_deref() == Some("vanish") {
+        // After this one command the `sudo` link is gone, so the next program started through it cannot be.
+        let _ = std::fs::remove_file(std::env::args().next().unwrap_or_default());
+    }
     if fake.sudo_mode().as_deref() == Some("ignore_term") {
         return sudo_that_ignores_term(program, program_args);
     }

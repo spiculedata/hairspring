@@ -106,32 +106,52 @@ impl Spawner {
         })
     }
 
+    /// Runs the root command `argv` of kind `kind` (R5 or R6) for `name`, and tells the log a row for it whatever came of
+    /// it: its exit status, `timeout` when it did not answer in time, or `-` when it could not be run.
+    fn run_told(
+        &self,
+        kind: &str,
+        name: &VmName,
+        argv: &[String],
+        expected: Approved,
+    ) -> Result<Said, InfraError> {
+        self.approve(argv, expected)?;
+        let (program, args) = argv
+            .split_first()
+            .ok_or_else(|| InfraError::bare(InfraKind::Refused))?;
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        match run_bounded(program, &args, self.timings.helper_cap) {
+            Ok(answer) => {
+                let rc = answer.code.map_or("-".into(), |c| c.to_string());
+                self.tell(kind, "done", name, &rc, argv);
+                Ok(Said {
+                    code: answer.code,
+                    stdout: answer.stdout,
+                })
+            }
+            Err(e) => {
+                let rc = if matches!(e, BoundedError::TimedOut) {
+                    "timeout"
+                } else {
+                    "-"
+                };
+                self.tell(kind, "done", name, rc, argv);
+                Err(infra_of(e))
+            }
+        }
+    }
+
     /// Destroys the VM named `name`. Its exit status is returned: destroying a VM that is not there fails, which is the
     /// usual case before a start, and a failure while the VM is alive is judged by the caller.
     pub fn destroy(&self, name: &VmName) -> Result<Option<i32>, InfraError> {
         let argv = self.commands.destroy(name);
-        let code = self.run_helper(&argv, Approved::Destroy)?.code;
-        self.tell(
-            "R5",
-            "done",
-            name,
-            &code.map_or("-".into(), |c| c.to_string()),
-            &argv,
-        );
-        Ok(code)
+        Ok(self.run_told("R5", name, &argv, Approved::Destroy)?.code)
     }
 
     /// Checkpoints the running VM `name` into this session's checkpoint directory.
     pub fn checkpoint(&self, name: &VmName) -> Result<(), InfraError> {
         let argv = self.commands.checkpoint(name);
-        let said = self.run_helper(&argv, Approved::Checkpoint)?;
-        self.tell(
-            "R6",
-            "done",
-            name,
-            &said.code.map_or("-".into(), |c| c.to_string()),
-            &argv,
-        );
+        let said = self.run_told("R6", name, &argv, Approved::Checkpoint)?;
         match said.code {
             Some(0) => Ok(()),
             Some(n) => Err(InfraError::new(
@@ -186,15 +206,21 @@ impl Spawner {
         if let Some(name) = args.last().and_then(|n| VmName::parse(n)) {
             self.tell("R4", "start", &name, "running", &argv);
         }
-        Command::new(program)
+        let started = Command::new(program)
             .args(rest)
             .env_clear()
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::from(log))
             .process_group(0)
-            .spawn()
-            .map_err(|e| InfraError::new(InfraKind::StartFailed, e.kind().to_string()))
+            .spawn();
+        started.map_err(|e| {
+            // A start row is always closed, so a spawn that failed leaves a done row with no status.
+            if let Some(name) = args.last().and_then(|n| VmName::parse(n)) {
+                self.tell_ended(&name, None);
+            }
+            InfraError::new(InfraKind::StartFailed, e.kind().to_string())
+        })
     }
 }
 

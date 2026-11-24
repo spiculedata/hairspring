@@ -64,6 +64,14 @@ impl Fake {
             .map(String::from)
     }
 
+    /// Counts the module list's questions (`kldstat -q`, one of each pair) and returns how many have been asked, this one
+    /// included.
+    pub fn count_ask(&self) -> usize {
+        let n: usize = self.read("kld.count").trim().parse().unwrap_or(0) + 1;
+        let _ = std::fs::write(self.dir.join("kld.count"), n.to_string());
+        n
+    }
+
     pub fn expected_lib(&self) -> Option<String> {
         let text = self.read("lib");
         let text = text.trim();

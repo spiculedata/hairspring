@@ -114,6 +114,8 @@ with a longer worst case). The session ends early, with a code in its summary an
   `--rdrand-accepted` was given (`END:RDRAND`);
 - a restore refuses a command (`END:ARGV-REFUSED`), finds its input files not as written (`END:FWCFG-MISMATCH`) or finds
   the checkpoint changed (`END:CKPT-CHANGED`);
+- the `vmm` module is gone or is not the one the session started with, before the prepare or before a restore
+  (`END:VMM-CHANGED`): nothing more is started, and the module is left alone for the person running the session to look at;
 - the first restore is not counted (`END:FIRST-NOT-OK`), or a second prepare is asked for (`END:REPREPARE`), or no run can
   end before the deadline (`END:WCAP`).
 

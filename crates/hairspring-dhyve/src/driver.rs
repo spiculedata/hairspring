@@ -126,6 +126,8 @@ pub fn end_code(e: &InfraError) -> Option<&'static str> {
         InfraKind::CheckpointChanged => Some("END:CKPT-CHANGED"),
         InfraKind::InputFiles => Some("END:FWCFG-MISMATCH"),
         InfraKind::Refused => Some("END:ARGV-REFUSED"),
+        // Stop rule 19: the module this session loaded is gone or changed, so cleanup runs without R3 and Tom is asked.
+        InfraKind::VmmChanged | InfraKind::VmmNotLoaded => Some("END:VMM-CHANGED"),
         _ => None,
     }
 }
@@ -424,7 +426,7 @@ fn start_allowed(plan: &Plan, worst: Duration) -> bool {
 }
 
 /// The row of the probe: the gate and the rows it does not gate on.
-fn probe_row(report: &ProbeReport) -> (bool, String) {
+pub fn probe_row(report: &ProbeReport) -> (bool, String) {
     let failing: Vec<&str> = report
         .rows
         .iter()
@@ -451,8 +453,9 @@ fn probe_row(report: &ProbeReport) -> (bool, String) {
     (
         pass,
         format!(
-            "gate={gate} cpu={} module_kind={} access={} nmi={}",
+            "gate={gate} cpu={} space={} module_kind={} access={} nmi={}",
             status("cpu"),
+            status("space"),
             status("module kind"),
             status("access"),
             status("nmi")
@@ -547,6 +550,9 @@ pub fn run_session(session: &Session, plan: &Plan) -> Summary {
             );
             let end = if e.kind == InfraKind::SecondPrepare {
                 "END:REPREPARE"
+            } else if e.kind == InfraKind::VmmNotLoaded {
+                // The probe passed moments ago, so this is also a module that went away; no R3 without Tom.
+                "END:VMM-CHANGED"
             } else {
                 end_code(&e).unwrap_or("END:PREPARE")
             };
