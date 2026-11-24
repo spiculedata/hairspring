@@ -29,6 +29,8 @@ jobs:
         run: cargo check --locked --target x86_64-unknown-freebsd -p hairspring-dhyve
       - name: Check the session driver
         run: cargo check --locked --target x86_64-unknown-freebsd -p hairspring-dhyve --features driver --bin dhyve-session-driver
+      - name: Check the tests and the stand-in VM programs
+        run: cargo check --locked --target x86_64-unknown-freebsd -p hairspring-dhyve --all-targets --features fake-vmm,driver
 
   rust:
     name: Rust (${{ matrix.os }})
@@ -654,6 +656,7 @@ jobs:
     if: always()
     needs:
       - rust
+      - dhyve-freebsd-check
       - rust-ubuntu-container
       - c-sdk
       - rust-sdk
